@@ -195,6 +195,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def output_content(request):
         from urllib.parse import quote
         record=service.outputs.store.read(request.match_info['identity'])
+        if record.get('kind') == 'media':
+            raise AppError('Use the exact client/session/message media route.',403)
         data=service.outputs.content(record)
         if data is None:
             raise AppError('This output is an external reference without saved content.',404)
@@ -202,6 +204,44 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.Response(body=data,content_type='application/octet-stream',headers={
             'Content-Disposition': "attachment; filename*=UTF-8''"+quote(filename,safe=''),
             'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox"})
+
+    async def output_media_metadata(request):
+        result = await service.outputs.media.describe(request.query['sessionId'], request.query['messageId'])
+        return web.json_response(result)
+
+    async def output_media_bytes(request):
+        from .output_media import byte_range, MediaRangeError
+        from urllib.parse import quote
+        values = {key: request.query[key] for key in ('sessionId', 'messageId', 'version', 'sha256')}
+        values['id'] = request.match_info['identity']
+        record = await service.outputs.media.guarded(values)
+        # Auth middleware and tuple/client guards precede body and Range parsing.
+        if request.method == 'HEAD':
+            size = await service.outputs.media.head(values)
+            data = None
+        else:
+            data = await service.outputs.media.bytes(values)
+            size = len(data)
+        headers = {'Accept-Ranges':'bytes','ETag':'"' + record['sha256'] + '"'}
+        try:
+            interval = byte_range(request.headers.get('Range'), size)
+        except MediaRangeError as exc:
+            if exc.status == 416:
+                headers['Content-Range'] = 'bytes */' + str(size)
+            return web.Response(status=exc.status, headers=headers)
+        status = 200
+        if interval is not None:
+            start, end = interval
+            headers['Content-Range'] = f'bytes {start}-{end}/{size}'
+            if data is not None:
+                data = data[start:end + 1]
+            size = end - start + 1
+            status = 206
+        if request.query.get('download') == '1':
+            headers['Content-Disposition'] = "attachment; filename*=UTF-8''" + quote(record['filename'], safe='')
+        headers['Content-Length'] = str(size)
+        return web.Response(body=data if request.method != 'HEAD' else b'', status=status,
+                            content_type=record['media']['mimeType'], headers=headers)
 
     async def output_image(request):
         import base64
@@ -509,6 +549,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/canvas/{identity}/source", canvas_source_text)
     app.router.add_get("/api/attachments/{identity}", attachment)
     app.router.add_get("/api/outputs/{identity}/content", output_content)
+    app.router.add_get("/api/outputs/media", output_media_metadata)
+    app.router.add_get("/api/outputs/{identity}/media", output_media_bytes)
     app.router.add_get("/api/outputs/{identity}/image", output_image)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)
@@ -534,7 +576,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             validate(client_id, IDENTITY)
         except ValidationError:
             raise AppError('A valid shell clientId is required.') from None
-        result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1')
+        # inspect may initialize a client and persist appearance defaults.
+        # It must not commit another operation's resource savepoints.
+        async with service.lock:
+            result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1')
         if request.query.get('compact') == '1':
             from .shell_wire import compact
             result = compact(result)
@@ -542,8 +587,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def shell_package(request):
         digest = request.match_info['digest']
-        service.shell.manifest(digest)
-        return web.Response(text=service.shell.source(digest), content_type='text/javascript', headers={'Cache-Control': 'no-store'})
+        async with service.lock:
+            service.shell.manifest(digest)
+            source = service.shell.source(digest)
+        return web.Response(text=source, content_type='text/javascript', headers={'Cache-Control': 'no-store'})
 
     app.router.add_get('/api/shell', shell_state)
     app.router.add_get('/api/shell/packages/{digest}.mjs', shell_package)

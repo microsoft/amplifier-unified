@@ -194,7 +194,9 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             # Storage projection only: live lists and borrowed nested aliases
             # remain mutable. Re-encode every save so equal-length edits cannot
             # reuse an obsolete reference. Existing cold readers/GC own the blob.
-            value[MARKER] = {**value.get(MARKER, {}), 'messages': put(db, messages)}
+            from .media_saved_aliases import binding_hint
+            value[MARKER] = {**value.get(MARKER, {}),
+                             'messages': binding_hint(session, put(db, messages), messages)}
             value['_coldMessageCount'] = len(messages)
             value['_coldNotifications'] = notifications(session)
             value.pop('messages')

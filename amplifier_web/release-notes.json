@@ -2,6 +2,80 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.120",
+      "title": "Inline media and timely peer results",
+      "changes": [
+        "Assistant messages can retain and play GIF and MP4 snapshots, with explicit playback controls and saved-content identity preserved across reloads and forks.",
+        "Active goals consume qualified peer responses before scheduling another continuation. Pause, stop, task revision and capacity checks still govern delivery."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.119",
+      "title": "Themes shape the whole workspace",
+      "changes": [
+        "Aurora, Atelier and Graphite now vary panel gaps, interior corners, borders and subtle surface artwork across the main screen. Screen edges stay anchored and narrow layouts remain compact.",
+        "Theme changes immediately recalculate panel space. Background artwork can be hidden independently, and custom themes retain their shapes and spacing through save, export and import."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.118",
+      "title": "Responsive storage and consistent settings help",
+      "changes": [
+        "Storage opens immediately and fills in sizes in the background. Bounded scans retain completed folder measurements across drill-downs; Refresh starts a new snapshot.",
+        "Folder names appear before their size calculations finish. Slow or very large locations show partial totals, and leaving Storage stops further scanning.",
+        "Settings beside a help chat now receives the same connection scope, operation status and page data as the Settings modal."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.117",
+      "title": "Automatic public repository access recovery",
+      "changes": [
+        "Repair and in-app downloads retry anonymously when GitHub rejects configured credentials, without changing your saved sign-in or Git settings.",
+        "Public terminal releases, update reconciliation and feedback metadata can be read without GitHub sign-in. Explicit anonymous mode remains available."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.116",
+      "title": "Repair without the GitHub release API",
+      "changes": [
+        "Repair and update checks fall back to the public latest-release link when the GitHub API is rate limited or unavailable, before trying account access.",
+        "Repair errors distinguish HTTP rate limits, DNS, timeouts and certificate failures. Exact published commits remain the installation source."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.115",
+      "title": "Public downloads without GitHub sign-in",
+      "changes": [
+        "Repair and update release checks try public access first, so a restricted signed-in account does not block public release metadata.",
+        "The installer and repair command support --anonymous to bypass personal Git credentials and URL rewrites for public downloads. The background service can retain the same policy for updates and bundle preparation."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.114",
+      "title": "Subtle shape and spacing for each theme",
+      "changes": [
+        "Aurora uses softer corners and a little more breathing room; Atelier uses paper-like edges; Graphite uses crisper borders and slightly tighter spacing.",
+        "Composer, message bubbles, output cards and controls now reflect their theme. Exact stock themes update automatically; customized skins are preserved."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.112",
+      "title": "Clearer delegate activity and recording settings",
+      "changes": [
+        "Delegate calls stay grouped by agent and model when work continues after a message or crosses a detail page.",
+        "Diagnostic recording shows the saved value separately from unsaved edits, with a nearby recording-only save action.",
+        "Chat controls use the sliders icon and Canvas has one header toggle. Saved turn failures show when they were recorded and explain temporary token-counting service failures."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.111",
       "title": "More room for your conversation and your work",
       "changes": [

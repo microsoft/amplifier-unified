@@ -78,12 +78,36 @@ export function usageLabel(usage){
  return {text:pieces.join(' · '),title:breakdown};
 }
 export function treeForTurn(data,turnId){
- const nodes=data.nodes.filter(node=>node.turnId===turnId),byId=new Map(nodes.map(node=>[node.id,node]));
- const children=new Map();for(const node of nodes){const parent=node.parentId&&node.parentId!==node.id&&byId.has(node.parentId)?node.parentId:null;if(!children.has(parent))children.set(parent,[]);children.get(parent).push(node)}
+ const nodes=data.nodes.filter(node=>node.turnId===turnId).map(node=>({...node}));
+ const workers=new Map(data.nodes.filter(node=>node.kind==='worker'&&node.sessionId).map(node=>[node.sessionId,node]));
+ const groups=new Map();
+ for(const node of nodes){
+  if(node.kind==='worker')continue;
+  const owner=node.delegate?{...workers.get(node.sessionId),...node.delegate}:workers.get(node.sessionId);if(!owner)continue;
+  const id=`delegate:${turnId}:${owner.id}`;
+  if(!groups.has(id))groups.set(id,{...owner,id,kind:'worker',label:`Delegate · ${owner.label||'Worker'}`,turnId,parentId:null,members:[]});
+  groups.get(id).members.push(node);node.parentId=id;
+ }
+ // Delegate headers repeat in each message gap; their usage and timing cover
+ // only calls displayed here, never the delegate's entire historical total.
+ for(const group of groups.values()){
+  const members=group.members;delete group.members;
+  const models=[...new Set(members.filter(node=>node.kind==='llm').map(node=>[node.provider,node.model].filter(Boolean).join(' · ')).filter(Boolean))];
+  if(models.length){group.provider=undefined;group.model=models.join(', ')}
+  const starts=members.map(node=>node.startedAt).filter(Number.isFinite),ends=members.map(node=>node.endedAt).filter(Number.isFinite);
+  const running=members.some(isRunning);group.startedAt=starts.length?Math.min(...starts):undefined;
+  group.endedAt=running?undefined:ends.length?Math.max(...ends):undefined;
+  group.status=undefined;group.phase=running?'running':'completed';group.aggregateUsage=segmentUsage(members);
+ }
+ const groupedOwners=new Set([...groups.values()].map(group=>group.sessionId));
+ const visible=nodes.filter(node=>node.kind!=='worker'||!groupedOwners.has(node.sessionId));
+ visible.push(...groups.values());
+ const byId=new Map(visible.map(node=>[node.id,node]));
+ const children=new Map();for(const node of visible){const parent=node.parentId&&node.parentId!==node.id&&byId.has(node.parentId)?node.parentId:null;if(!children.has(parent))children.set(parent,[]);children.get(parent).push(node)}
  // Orphan and malformed cyclic source records remain inspectable without recursion.
  const roots=children.get(null)||[],covered=new Set();
  const mark=node=>{if(covered.has(node.id))return;covered.add(node.id);for(const child of children.get(node.id)||[])mark(child)};
- roots.forEach(mark);for(const node of nodes)if(!covered.has(node.id)){roots.push(node);mark(node)}
+ roots.forEach(mark);for(const node of visible)if(!covered.has(node.id)){roots.push(node);mark(node)}
  return {roots,children};
 }
 

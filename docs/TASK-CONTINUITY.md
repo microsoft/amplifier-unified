@@ -27,6 +27,29 @@ Legacy goal setters cannot replace an unfinished saved task. Completion requires
 the exact current objective/revision and nonempty evidence; a model turn ending
 or the goal judge stopping never automatically completes the saved task.
 
+Before a generic goal re-prompt, a transport-bound root may yield to an already
+sealed, qualified saved peer continuation. This is a read-only eligibility check,
+not admission: the existing queue still claims durably and rechecks task, Stop,
+owner and budget at a real completion/idle boundary. The goal is replaced with an
+exact state copy at streaming's host-supersession check; its objective, revision,
+turn cap and accumulated progress are retained, and the peer's next generation
+can continue it. The boolean live continuation guard is not used for this yield
+because rejection clears a goal. Ordinary queues and unknown/submitting receipts
+do not trigger it. Native integration tests protect this runtime compatibility
+boundary; accepted steering and active jobs retain their normal idle rules.
+At admission, the sealed, qualified saved peer result is prioritized ahead of
+older ordinary queued peer input to the same chat.
+
+The coordination workflow's locked development environment runs the service
+contracts; it does not qualify optional native loops. The release workflow keeps
+its ordinary native-runtime selection and separately runs the 35 peer-continuation
+and 8 task-goal cases against its resolved Core/live/streaming graph, including the
+app's declared dependencies. `scripts/check_goal_peer_junit.py` requires every
+expected identity exactly once with zero skips, failures or errors. The workflow
+retains that JUnit report and the scripted native ordering traces.
+That runtime qualification includes the app dependency closure for test
+composition; it does not establish production worker dependency-graph parity.
+
 For `context-managed` with `engine: boundary`, Unified opts into optional durable
 checkpoints (an explicit `durable_checkpoints: false` remains respected). The host
 adapter writes `context-checkpoint.json` beside control state and uses the

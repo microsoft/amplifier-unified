@@ -43,6 +43,21 @@ message.reply {sessionId,messageId,clientId?} places an immutable excerpt above 
 Root bundles are selected through the shared bundle actions. bundle.preview {sessionId,bundle} shows changes in that session's bundlePreview; bundle.switch and bundle.fork {sessionId,bundle} can apply directly without preview. If a preview was reviewed, include its previewId and the same bundle to reject changed configuration. These actions require idle work, preserve history, and do not replay tools. An unavailable model pin requires explicit resetModel:true. Root changes reset old module edits, modes, and budget overrides. bundle.default {scope:app|workspace|shared,bundle:string|null,workspace?:path} sets a new-conversation default or clears that override. Inspect bundleDefaults for the effective choice: explicit conversation, workspace, Unified app, then shared Amplifier defaults. Do not change a shared default when the user requests only this app. Read final bundleChange state; an accepted receipt alone is not completion.
 '''
 
+CANVAS_GUIDANCE += '''
+For GIF/MP4 inside an assistant article, emit brief commentary first, then inspect
+the actual saved assistant message ID with app_control get_state. Do not invent
+an ID or choose a later turn after a file read. Discover outputs.attachMedia and
+pass sessionId, that explicit messageId, title, workspace path and inspected
+expectedSha256. Any saved assistant message in your own chat is a valid explicit
+target; generation/input provenance is host-owned, not request arguments.
+The 32MiB media-only snapshot survives source deletion and reload; generic files
+remain limited to8MiB. Saving/attachment receipts do not prove browser decoding
+or playback. outputs.read distinguishes saved/attached from exact-client UI
+reports of loading/ready/error and paused/playing/ended. Those authenticated
+reports are observations, not model attestation; missing reports stay unknown.
+Original download uses the same guarded immutable tuple, never a local path.
+'''
+
 
 def _app_control_input_error(value, operations):
     """Validate the public envelope before reaching delivery or the host bridge."""

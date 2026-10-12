@@ -17,7 +17,7 @@ export function DiagnosticsSettings({state,act}){
  const change=patch=>act('view.update',{patch:{diagnosticsDraft:{...draft,...patch}}});
  const config=patch=>change({config:{...cfg,...patch}}),selected=cfg.destinations.find(d=>d.id===draft.destinationId);
  const update=patch=>config({destinations:cfg.destinations.map(d=>d.id===selected.id?{...d,...patch}:d)});
- const save=async(value=cfg,removeId=null)=>{
+ const save=async(value=cfg,removeId=null,recordingOnly=false)=>{
   if(sending.current)return;
   sending.current=true;setSaving(removeId?'remove':'save');setSaveError('');
   const submitted=JSON.stringify(draft.config);
@@ -27,7 +27,7 @@ export function DiagnosticsSettings({state,act}){
    // A later draft or a reopened panel must not be cleared by this receipt.
    const current=latestDraft.current;
    if(alive.current&&JSON.stringify(current.config)===submitted){
-    await act('view.update',{patch:{diagnosticsDraft:{...current,config:null,...(removeId&&current.destinationId===removeId?{destinationId:null}:{})}}});
+    await act('view.update',{patch:{diagnosticsDraft:{...current,config:recordingOnly&&current.config?{...current.config,providerRequests:value.providerRequests}:null,...(removeId&&current.destinationId===removeId?{destinationId:null}:{})}}});
    }
   }catch{
    if(alive.current)setSaveError('Could not save diagnostics settings. Your entries are kept. Try again.');
@@ -56,8 +56,10 @@ export function DiagnosticsSettings({state,act}){
  </ActivityRegion>:<><fieldset className="a-diagnostics-fields" disabled={saveBusy}><label className="a-inline-checkbox"><input type="checkbox" data-action="view.update" checked={cfg.enabled} onChange={e=>config({enabled:e.target.checked})}/>Collect app diagnostics and enable selected forwarding</label>
  <p className="a-caption">Sessions use the community Context Intelligence hook and shared files. The choices below control this app’s metadata index and forwarding; they do not disable the hook.</p>
  <h4>Model request & response details</h4>
+ <p role="status"><strong>Saved recording setting: {info.config?.providerRequests?'On':'Off'}</strong>{(cfg.providerRequests===true)!==(info.config?.providerRequests===true)&&' · Unsaved change'}</p>
  <label className="a-inline-checkbox"><input type="checkbox" data-action="view.update" checked={cfg.providerRequests===true} onChange={e=>config({providerRequests:e.target.checked})}/>Record provider requests and responses for troubleshooting</label>
- <p className="a-caption">Choose Save capture settings below to apply this choice. Recording starts when a supported conversation runtime next prepares; it does not change an already-running runtime. Start a new chat to check recording without interrupting current work. Explicit provider opt-outs are kept. Earlier calls cannot be recovered.</p>
+ {(cfg.providerRequests===true)!==(info.config?.providerRequests===true)&&<button type="button" className="a-primary" data-action="diagnostics.configure" disabled={saveBusy} onClick={()=>save({...info.config,providerRequests:cfg.providerRequests},null,true)}><WorkingLabel active={saving==='save'} working="Saving…">Save recording setting</WorkingLabel></button>}
+ <p className="a-caption">Save this choice to apply it. Recording starts when a supported conversation runtime next prepares; it does not change an already-running runtime. Start a new chat to check recording without interrupting current work. Explicit provider opt-outs are kept. Earlier calls cannot be recovered.</p>
  <p className="a-caption">Saved records can contain private messages, instructions, tool inputs, and attachments. Recognizable credentials are redacted and each record is size limited. Request and response availability depends on the provider; some adapters expose only a summary. Records stay in the existing session logs; any configured bundle exporters still apply.</p>
  <h4>Streams to index and make available for forwarding</h4>{pickStreams(cfg.streams,values=>config({streams:values,destinations:cfg.destinations.map(d=>({...d,streams:d.streams.filter(s=>values.includes(s))}))}),true)}
  <div className="a-form-grid"><label>Index days<input type="number" min="1" max="365" value={cfg.retentionDays} data-action="view.update" onChange={e=>config({retentionDays:Number(e.target.value)})}/></label><label>Maximum indexed records<input type="number" min="100" max="100000" value={cfg.maxRecords} data-action="view.update" onChange={e=>config({maxRecords:Number(e.target.value)})}/></label></div>

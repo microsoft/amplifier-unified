@@ -53,7 +53,7 @@
 #amp-one .a-smart-tools[data-simple=true]>.a-collection>.a-collection-detail{display:none}
 #amp-one .a-smart-tools[data-simple=true]>.a-collection.detail-open>.a-collection-list{display:none}
 #amp-one .a-smart-tools[data-simple=true]>.a-collection.detail-open>.a-collection-detail{display:block}
-#amp-one [data-appearance-advanced=true]>.a-appearance-intro,#amp-one [data-appearance-advanced=true]>.a-appearance-gallery,#amp-one [data-appearance-advanced=true]>.a-appearance-options{display:none}
+#amp-one [data-appearance-advanced=true]>.a-appearance-intro,#amp-one [data-appearance-advanced=true]>.a-appearance-options{display:none}
 /* Everyday collections use one page scroll and one full-width view. */
 #amp-one .a-settings-experience .a-smart-tools[data-simple=true] .a-collection{grid-template-columns:minmax(0,1fr)}
 #amp-one .a-settings-experience .a-smart-tools[data-simple=true] .a-collection-list,

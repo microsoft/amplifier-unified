@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -28,9 +29,24 @@ class TerminalRelease:
 
 
 async def github(endpoint: str, *, maximum: int, binary: bool = False) -> bytes:
-    """Bound authenticated downloads; never expose gh credentials or response bodies."""
-    if not shutil.which('gh'):
-        raise ValueError('The server needs GitHub release access to prepare terminal setup.')
+    """Bound public-first downloads; private releases may use existing sign-in."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
+            async with client.stream('GET', 'https://api.github.com/' + endpoint,
+                headers={'Accept': 'application/octet-stream' if binary else 'application/vnd.github+json',
+                         'User-Agent': 'amplifier-unified-terminal'}) as response:
+                response.raise_for_status()
+                result = bytearray()
+                async for chunk in response.aiter_bytes():
+                    result.extend(chunk)
+                    if len(result) > maximum:
+                        raise ValueError('The terminal release exceeds the supported download size.')
+                return bytes(result)
+    except httpx.HTTPError:
+        pass
+    if os.environ.get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous' or not shutil.which('gh'):
+        raise ValueError('The public terminal release could not be reached. Check network access and retry.')
     process = await asyncio.create_subprocess_exec(
         'gh', 'api', '--hostname', 'github.com', endpoint, '-H',
         'Accept: application/octet-stream' if binary else 'Accept: application/vnd.github+json',

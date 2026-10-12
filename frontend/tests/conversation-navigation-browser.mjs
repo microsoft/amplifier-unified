@@ -22,6 +22,8 @@ try{
    previews.push(id);return route.fulfill({json:{id,text:full[index].text,reply:full[index+1].text}});
   }
   if(path==='/api/state')return route.fulfill({json:state});
+  if(path==='/api/outputs/media'&&route.request().method()==='GET')
+   return route.fulfill({json:{items:[],overflow:false,mediaRevision:0}});
   if(path==='/api/shell')return route.fulfill({json:shellFor(state,()=>{}).data});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path==='/api/actions'){

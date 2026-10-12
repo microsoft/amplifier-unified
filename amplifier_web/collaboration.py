@@ -326,17 +326,62 @@ class Collaboration:
         except Exception as exc:
             return str(exc)
 
+    def pending_continuation(self, sid):
+        """Read a qualified, unsubmitted exact wait; never claim or publish."""
+        for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                AND json_extract(receipt,'$.target.sessionId')=?
+                AND json_extract(receipt,'$.delivery')='queued'
+                AND json_extract(receipt,'$.mode')='queue'
+                AND json_extract(receipt,'$.dependencyRequestId') IS NOT NULL
+                ORDER BY rowid""", (sid,)):
+            receipt = json.loads(encoded)
+            if self.guard(receipt):
+                continue
+            row = self.service.db.execute("SELECT receipt FROM commands WHERE id=?",
+                                          (receipt["dependencyRequestId"],)).fetchone()
+            request = json.loads(row[0]) if row else {}
+            wait, response = request.get("subscription") or {}, request.get("response") or {}
+            if (request.get("protocol") == PROTOCOL and request.get("senderSessionId") == sid
+                    and request.get("target", {}).get("sessionId") == receipt.get("senderSessionId")
+                    and wait.get("status") == "claimed" and wait.get("continuationId") == receipt.get("inputId") == receipt.get("requestId")
+                    and response.get("status") == "sealed" and response.get("qualified") is True
+                    and any(m.get("id") == receipt.get("messageId") and m.get("inputId") == receipt["inputId"]
+                            and m.get("inputOrigin") == "peer"
+                            for m in self.service._session(sid).get("messages", []))):
+                return receipt
+
+    def continuation_ready(self, sid, args):
+        source = self.source({}, "agent", sid)
+        self.active_binding(source)  # Missing/foreign root or stale generation fails closed.
+        task = source.get("task") or self.service.coordination.task(sid)
+        if (task.get("id"), task.get("revision")) != (args.get("taskId"), args.get("taskRevision")):
+            return {"ready": False}
+        from .capacity import saved_policy, usage_snapshot, evaluate
+        if not evaluate(saved_policy(self.service, sid), usage_snapshot(source))["allowed"]:
+            return {"ready": False}
+        return {"ready": self.pending_continuation(sid) is not None}
+
     async def drain(self, sid):
         if sid in self.draining:
             return
         self.draining.add(sid)
         try:
-            for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
+            rows = self.service.db.execute("""SELECT id,receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'
                 AND json_extract(receipt,'$.target.sessionId')=?
-                AND json_extract(receipt,'$.delivery')='queued' ORDER BY rowid LIMIT 32""", (sid,)).fetchall():
+                AND json_extract(receipt,'$.delivery')='queued' ORDER BY rowid LIMIT 32""", (sid,)).fetchall()
+            # A valid saved dependency must not sit behind unrelated or stale
+            # queues (including more than one drain page of suppressed input).
+            continuation = self.pending_continuation(sid)
+            if continuation:
+                identity = continuation["requestId"]
+                rows = [(identity, None), *[row for row in rows if row[0] != identity]]
+            for identity, encoded in rows:
                 async with self.service.lock:
                     receipt = self.receipt(identity)
+                    if receipt.get("delivery") != "queued":
+                        continue
                     target = self.service._session(sid)
                     if target.get("status") in BUSY:
                         break

@@ -226,6 +226,8 @@ jobs:
           python -m pip install maturin
           python "$RUNNER_TEMP/release-tools/release_qualification.py" runtime-project --runtime "$RUNNER_TEMP/surface-runtime"
           uv add --project "$RUNNER_TEMP/surface-runtime" --frozen --editable "$GITHUB_WORKSPACE/.ci/loop-live"
+          # The native peer regression composes AppService with the real Worker.
+          uv add --project "$RUNNER_TEMP/surface-runtime" --frozen --editable "$GITHUB_WORKSPACE"
           uv add --project "$RUNNER_TEMP/surface-runtime" --frozen pytest pytest-asyncio 'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
           uv lock --project "$RUNNER_TEMP/surface-runtime" --refresh --upgrade
       - name: Identify exact sources, Python ABI, platform and build toolchain
@@ -255,6 +257,21 @@ jobs:
       - name: Verify surface context and recipe children through Core and loop-live
         run: |
           UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_child_image_policy.py tests/test_child_resume_admission.py tests/test_host_components.py tests/test_runtime_module_cache.py tests/test_steering_runtime.py tests/test_worker_background_naming.py -q
+      - name: Require native goal and peer continuation regressions without skips
+        env:
+          UNIFIED_RUNTIME_PYTHON: ${{ runner.temp }}/surface-runtime/.venv/bin/python
+          GOAL_PEER_EVIDENCE: ${{ runner.temp }}/goal-peer/traces
+        run: |
+          mkdir -p "$RUNNER_TEMP/goal-peer"
+          "$UNIFIED_RUNTIME_PYTHON" -m pytest tests/test_goal_peer_continuation.py tests/test_task_goal_runtime.py -q --junitxml="$RUNNER_TEMP/goal-peer/results.xml"
+          python scripts/check_goal_peer_junit.py "$RUNNER_TEMP/goal-peer/results.xml"
+      - name: Retain native goal and peer JUnit and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: goal-peer-regression
+          path: ${{ runner.temp }}/goal-peer
+          if-no-files-found: error
       - name: Record the unchanged runtime graph and selected candidate
         run: |
           uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"

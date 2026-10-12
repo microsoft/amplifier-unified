@@ -1,4 +1,4 @@
-"""Private GitHub release channel; candidate tool installation is isolated."""
+"""Public GitHub release channel; candidate tool installation is isolated."""
 import asyncio
 import json
 import os
@@ -115,13 +115,8 @@ def version_tuple(value):
     return tuple(map(int,match.groups())) if match else None
 
 def git_environment():
-    env={**os.environ,'GIT_TERMINAL_PROMPT':'0'}
-    if shutil.which('gh'):
-        # Use the existing authenticated GitHub credential helper; never read or
-        # transmit tokens through application state or command arguments.
-        count=int(env.get('GIT_CONFIG_COUNT','0'))
-        env.update({f'GIT_CONFIG_KEY_{count}':'credential.https://github.com.helper',f'GIT_CONFIG_VALUE_{count}':'!gh auth git-credential','GIT_CONFIG_COUNT':str(count+1)})
-    return env
+    from .reset import repository_environment
+    return repository_environment()
 
 def installed_extras():
     """Retain known optional features without loading clients or desktop backends."""
@@ -155,12 +150,7 @@ def application_state():
             'releaseNotes':history()}
 
 async def github_read(path, *, raw=False, timeout=30):
-    """Public installs do not require GitHub CLI; authenticated installs still work."""
-    if shutil.which('gh'):
-        try:
-            return await process('gh', 'api', *(['-H', 'Accept: application/vnd.github.raw+json'] if raw else []), path, timeout=timeout)
-        except (RuntimeError, TimeoutError):
-            pass
+    """Read public metadata first, even when a signed-in account is restricted."""
     import httpx
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -172,6 +162,17 @@ async def github_read(path, *, raw=False, timeout=30):
                 raise ValueError('Release metadata is too large')
             return response.text
     except httpx.HTTPError as exc:
+        if path == f'repos/{REPOSITORY}/releases/latest' and not raw:
+            from .reset import public_release_link
+            try:
+                return json.dumps(await asyncio.to_thread(public_release_link, timeout))
+            except (OSError, ValueError):
+                pass
+        if os.environ.get('AMPLIFIER_GITHUB_ACCESS') != 'anonymous' and shutil.which('gh'):
+            try:
+                return await process('gh', 'api', *(['-H', 'Accept: application/vnd.github.raw+json'] if raw else []), path, timeout=timeout)
+            except (RuntimeError, TimeoutError, OSError):
+                pass
         raise RuntimeError('The release channel could not be reached') from exc
 
 
