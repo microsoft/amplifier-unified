@@ -142,3 +142,16 @@ the command reports failure and retains evidence rather than claiming success.
 ### Linux: background service manager unavailable
 
 Reset reconnects to your existing user service manager when a terminal is missing its login environment. If Linux reports “Failed to connect to bus” or “No medium found” and no user service manager is available, sign in directly as the account that installed Unified and retry. On a machine without a desktop login, an administrator may need to enable background services for that account with `sudo loginctl enable-linger ACCOUNT`, then have that user sign in again. Run reset as the original user, never with `sudo`. Reset leaves the installation unchanged when it cannot safely stop the service.
+
+If release discovery fails, repair tries both the anonymous GitHub release API
+and GitHub's public latest-release link before optional account access. The
+error distinguishes HTTP failures (including reported rate limits), DNS,
+timeouts and TLS certificate verification. It never disables TLS verification.
+Use the private repair report for more detail.
+
+If Git downloads work but release discovery is unavailable, you can bypass the
+lookup with `amplifier-unified reset --anonymous --source git+https://github.com/microsoft/amplifier-unified@FULL_RELEASE_COMMIT`.
+Replace `FULL_RELEASE_COMMIT` with the exact commit of a verified published
+release; do not use a moving branch. This performs the normal repair, including
+its backup and service restart. `--anonymous` alone does not bypass network,
+certificate or rate-limit failures.

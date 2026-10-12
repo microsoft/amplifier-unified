@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.116",
+      "title": "Repair without the GitHub release API",
+      "changes": [
+        "Repair and update checks fall back to the public latest-release link when the GitHub API is rate limited or unavailable, before trying account access.",
+        "Repair errors distinguish HTTP rate limits, DNS, timeouts and certificate failures. Exact published commits remain the installation source."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.115",
       "title": "Public downloads without GitHub sign-in",
       "changes": [
