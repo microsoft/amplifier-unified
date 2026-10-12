@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.112",
+      "title": "Process ready peer results before continuing a goal",
+      "changes": [
+        "An active goal now makes room for an already-qualified saved peer result before sending another automatic goal prompt. The result is admitted once in a new generation, with goal progress and budgets preserved.",
+        "Stop, pause, task revisions, ownership and capacity checks still govern continuation. Ordinary queued input does not gain priority from this change."
+      ],
+      "notices": [
+        "Verified with scripted providers through the native runtime. Real-model workflows and platform installation checks are not covered by this regression qualification."
+      ]
+    },
+    {
       "version": "0.20.111",
       "title": "More room for your conversation and your work",
       "changes": [
