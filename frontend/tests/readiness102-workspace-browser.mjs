@@ -65,7 +65,7 @@ try{
  await storage.getByRole('button',{name:'Review backup contents',exact:true}).click();
  await expect(storage.getByText(/The newest backup is kept/)).toBeVisible();
  await storage.getByRole('button',{name:'Permanently delete backup',exact:true}).click();
- await expect(storage.getByRole('status')).toHaveText(/Backup removed/);
+ await expect(storage.getByRole('status').filter({hasText:/Backup removed/})).toHaveText(/Backup removed/);
  let stored=await page.evaluate(async()=>await(await fetch('/api/fixture/readiness')).json());
  assert.equal(stored.oldBackupExists,false);assert.equal(stored.newBackupExists,true);
  await storage.getByRole('button',{name:'Close',exact:true}).click();
