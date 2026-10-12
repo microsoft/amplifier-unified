@@ -18,7 +18,7 @@ function validateMediaMetadata(value,sessionId){
    !Number.isSafeInteger(item.version)||item.version<1||
    typeof item.sha256!=='string'||!/^[a-f0-9]{64}$/.test(item.sha256))
    malformed('invalid or duplicate media identity, session, version or SHA-256');
-  if(!text(item.title,200)||!text(item.filename,4000))malformed('invalid media title or filename');
+  if(typeof item.title!=='string'||[...item.title].length>200||!text(item.filename,4000))malformed('invalid media title or filename');
   if(!object(item.media)||!['image/gif','video/mp4'].includes(item.media.mimeType))
    malformed('expected GIF or MP4 metadata');
   if(item.media.mimeType==='image/gif'&&item.media.loopCount!==null&&

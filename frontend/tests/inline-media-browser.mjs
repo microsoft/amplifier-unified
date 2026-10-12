@@ -492,7 +492,45 @@ try{
      assert.ok(requests.length>=2);assert.ok(requests.every(row=>row.clientId===clientId));
      assert.deepEqual(pageErrors,[]);
      await article.screenshot({path:join(evidenceDir,'metadata-recovered.png')});
+     // The fixture hardcodes titles: these are response-shape witnesses, not
+     // server-produced custom titles. The genuine malformed/retry proof above
+     // and the original-body/auth/full-scenario checks remain untouched.
+     const titleCompatibility=[],titleClient=await newClient(),titlePage=titleClient.page;
+     try{
+      for(const title of ['', '\u{1D400}'.repeat(101)]){
+       let replacements=0;
+       const titleHandler=async route=>{
+        if(!exact(route.request()))return route.continue();
+        const response=await route.fetch();assert.equal(response.status(),200);
+        const value=await response.json(),item=value.items.find(item=>item.id===saved.id);
+        assert.ok(item);
+        for(const key of ['id','sessionId','version','sha256'])assert.equal(item[key],saved[key]);
+        replacements++;
+        await route.fulfill({response,json:{...value,items:value.items.map(item=>
+         item.id===saved.id?{...item,title}:item)}});
+       };
+       await titlePage.route(pattern,titleHandler);
+       try{
+        const pending=titlePage.waitForResponse(response=>exact(response.request()));
+        await titlePage.reload();await titlePage.waitForSelector('#amp-one');
+        const response=await pending;
+        assert.equal(response.status(),200);assert.equal(await response.finished(),null);
+        assert.equal((await response.json()).items.find(item=>item.id===saved.id).title,title);
+        assert.equal(response.request().headers()['x-amplifier-client'],
+         await titlePage.evaluate(()=>window.amplifier.getState().client.id));
+        const titled=await readyFigure(titlePage,saved.id);
+        assert.equal(await titled.locator('figcaption').textContent(),title);
+        assert.deepEqual(await canvasPixels(titled),pixels);
+        await expect(titleClient.article.locator('.a-inline-media [role="alert"]')).toHaveCount(0);
+        await expect(titleClient.article.getByRole('button',{name:'Retry media metadata',exact:true})).toHaveCount(0);
+        assert.ok(replacements>0);assert.deepEqual(pageErrors,[]);
+        titleCompatibility.push({kind:'response-shape-validation',serverProducedTitle:false,
+         title,codePoints:[...title].length,utf16Units:title.length,rendered:true,originalPixels:true});
+       }finally{await titlePage.unroute(pattern,titleHandler)}
+      }
+     }finally{await unmountAndClose(titleClient)}
      return {malformed:{ok:true},corruptedResponses:corrupted,requests,descriptor,pixels,
+      titleCompatibility,
       explicitAlert:true,retryRemoved:true,sameMountedArticle:true,mainFrameNavigations:navigations,
       pageErrors:[...pageErrors],canvasClosed:true};
     }finally{page.off('framenavigated',navigated);await mounted.dispose()}
