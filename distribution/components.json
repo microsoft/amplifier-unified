@@ -146,10 +146,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-resources-capability": {
-      "artifact": "vendor/unified-resources-capability-aa3b96fb8d87.tgz",
-      "repository": "microsoft/amplifier-unified-capability-resources",
-      "revision": "428d29643a5613a7493ecf938c0380a4db7a3918",
-      "sha256": "aa3b96fb8d8704625ae6360da08583b765c2cb51537f9884905ac39845dec8fa",
+      "artifact": "vendor/unified-resources-capability-1a67fa888a44.tgz",
+      "repository": "microsoft/amplifier-unified-resources-capability",
+      "revision": "0ae08e1dca4bf4a644bd970fdf04eabea8c8b8b0",
+      "sha256": "1a67fa888a4417cc24332ddf43c8c7c080b516c535726865e366c23959d2807c",
       "version": "0.1.0"
     },
     "@amplifier/unified-workspace-capability": {
