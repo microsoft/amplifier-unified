@@ -1,0 +1,53 @@
+{
+  "schema": "main112-parity-increment-v1",
+  "referenceMain": "933b423a2434a8038720524551bb4730b9da4178",
+  "referenceVersion": "0.20.112",
+  "components": [
+    {
+      "kind": "npm",
+      "revision": "f094746b7db1d1dbf60c2b0fe428dcf77049f738",
+      "sha256": "55b0680b4c79e3095f1fc0a03d357269fdec9feb88ed925b177d51e92334085c"
+    },
+    {
+      "kind": "npm",
+      "revision": "cc196ecb4d7ab79097259f888531ce95be079684",
+      "sha256": "9d1d265c757120d193f3303fbe99c12a5bc6c0f781e0607d3f475cea6e4e9990"
+    },
+    {
+      "kind": "wheel",
+      "revision": "b769bf23812d89074da8d7946a548ac76b6f14cc",
+      "sha256": "9b5167b9b10c6b970d0ea2883c0af5090f8024576574a9c4be2376a31014f5cc"
+    }
+  ],
+  "sourceTests": {
+    "nativeDelegateMetadata": 4,
+    "hostDelegateMetadataAndRestart": 5,
+    "webFocused": 38,
+    "webBuild": "passed",
+    "hostBuild": "passed"
+  },
+  "browser": {
+    "environment": "inert local fixture, actual Web components",
+    "delegateIntervals": [
+      50,
+      75
+    ],
+    "groupsExpand": true,
+    "toolContentRenders": true,
+    "recordingSavedVersusUnsaved": true,
+    "lostAcknowledgementPreservedAfterReload": true,
+    "originalReceiptRecovered": true,
+    "providerEffects": false,
+    "screenshotSha256": "5d10329ff8b2b0ee5de4dcc5e932c8fab527858e52bd9e72e63bf42faa1e43ff"
+  },
+  "installedConsumer": {
+    "archiveSha256": "0661aa9c0da6420124ba939688197dfd974732b012890734101d472219759a54",
+    "passed": true,
+    "components": 22
+  },
+  "limits": [
+    "Native, Host, Web and installed-consumer evidence are separate checks.",
+    "The production DTU has not yet adopted this increment.",
+    "Browser fixture does not prove real-account recording or actual delegate inference."
+  ]
+}
