@@ -1,0 +1,42 @@
+{
+  "schema": "delegate-report-parity-increment-v1",
+  "referenceMain": "933b423a2434a8038720524551bb4730b9da4178",
+  "components": [
+    {
+      "kind": "npm",
+      "name": "@amplifier/unified-host",
+      "revision": "69b8f35c43aa3cb69634dd1fe898786fe338f816",
+      "sha256": "a86fe2eb0c8953ab3380cba67ca5448999068139f47eed80ca1f3e94d27c5ff1"
+    },
+    {
+      "kind": "npm",
+      "name": "@amplifier/unified-client-web",
+      "revision": "b4400ea4ece3fa3f9a10119e23e0975781eafb43",
+      "sha256": "d86de256f72916529ed6018c5812dc57541ecc99deea2373e3d8a4f27e894a04"
+    },
+    {
+      "kind": "wheel",
+      "revision": "de8225286e112434cd483130187ae932e46ab285",
+      "sha256": "d33d1b6d07640953c567c45e94e7f65b9c77266c36d1091cc7434b8a7222a4cb"
+    }
+  ],
+  "tests": {
+    "nativeNegotiation": 6,
+    "hostReportsAndBoundedOrdering": 15,
+    "hostControlAndDuplexRegressions": 24,
+    "webReportsTimelineAndDetailReader": 24
+  },
+  "browser": {
+    "environment": "inert local component fixture",
+    "formattedReport": true,
+    "separateIntervalUsage": [
+      50,
+      75
+    ],
+    "screenshotSha256": "f9fadb3b9241dba251b19fa4a334f256a6182ad4179597b237a6038b4d9e7c4a"
+  },
+  "limits": [
+    "Independent Native, wire-peer Host and component browser checks; no real delegate inference in this increment.",
+    "Installed preview adoption follows package qualification."
+  ]
+}

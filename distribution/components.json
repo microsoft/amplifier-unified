@@ -8,10 +8,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-client-web": {
-      "artifact": "vendor/unified-client-web-9d1d265c7571.tgz",
+      "artifact": "vendor/unified-client-web-d86de256f729.tgz",
       "repository": "microsoft/amplifier-unified-client-web",
-      "revision": "cc196ecb4d7ab79097259f888531ce95be079684",
-      "sha256": "9d1d265c757120d193f3303fbe99c12a5bc6c0f781e0607d3f475cea6e4e9990",
+      "revision": "b4400ea4ece3fa3f9a10119e23e0975781eafb43",
+      "sha256": "d86de256f72916529ed6018c5812dc57541ecc99deea2373e3d8a4f27e894a04",
       "version": "0.1.0"
     },
     "@amplifier/unified-coordination-capability": {
@@ -55,10 +55,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-host": {
-      "artifact": "vendor/unified-host-55b0680b4c79.tgz",
+      "artifact": "vendor/unified-host-a86fe2eb0c89.tgz",
       "repository": "microsoft/amplifier-unified-host",
-      "revision": "f094746b7db1d1dbf60c2b0fe428dcf77049f738",
-      "sha256": "55b0680b4c79e3095f1fc0a03d357269fdec9feb88ed925b177d51e92334085c",
+      "revision": "69b8f35c43aa3cb69634dd1fe898786fe338f816",
+      "sha256": "a86fe2eb0c8953ab3380cba67ca5448999068139f47eed80ca1f3e94d27c5ff1",
       "version": "0.1.0"
     },
     "@amplifier/unified-maintenance-capability": {
