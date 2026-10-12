@@ -143,6 +143,246 @@ async def test_delayed_output_rejects_changed_authority_without_mutating_saved_c
         await target.close()
 
 
+@pytest.fixture
+async def cold_fence_task(tmp_path, monkeypatch):
+    """Real retirement, with all four display fields unconsumed by admission."""
+    import json
+    from amplifier_web import cold_display, resource_files
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    host_env(monkeypatch, tmp_path)
+    app = AppService(tmp_path / 'app', workspace=tmp_path, runtime=Runtime())
+    try:
+        await app.dispatch('session.create', {'title': 'Cold fence admission'})
+        session = app._session()
+        session.update(
+            messages=[{'id': 'fence-assistant', 'role': 'assistant', 'text': 'Exact saved body ' + 'm' * 20000}],
+            execution={'nodes': [{'id': 'saved-tool', 'kind': 'tool', 'output': 'e' * 20000}], 'turns': []},
+            historyActivity={'retained': 'h' * 20000},
+            configuration={'plan': {'tools': []}, 'provenance': {}, 'retained': 'c' * 20000})
+        app._state['selectedSessionId'] = None
+        monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+        assert session['id'] in app.cold_display.retire(force=True)
+        references = copy.deepcopy(dict.get(session, '_coldFields'))
+        assert set(references) == cold_display.SESSION_FIELDS
+        assert cold_display.load(app.db, references['messages']) == [
+            {'id': 'fence-assistant', 'role': 'assistant', 'text': 'Exact saved body ' + 'm' * 20000}]
+        reference_bytes = json.dumps(references, sort_keys=True).encode()
+        bodies = {resource_files.root(app.db) / (ref['$resource'] + '.json') for ref in references.values()}
+        saved_bytes = {path: path.read_bytes() for path in bodies}
+        touches = []
+        original_touch, original_open = session.touch, Path.open
+
+        def touched():
+            touches.append(True)
+            original_touch()
+
+        def no_load(*args, **kwargs):
+            pytest.fail('Transfer admission hydrated a saved display field')
+
+        def no_body_open(path, *args, **kwargs):
+            if path in bodies:
+                pytest.fail('Transfer admission opened a saved display body')
+            return original_open(path, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(session, 'touch', touched)
+            patch.setattr(cold_display, 'load', no_load)
+            patch.setattr(Path, 'open', no_body_open)
+            yield app, session
+            assert json.dumps(dict.get(session, '_coldFields'), sort_keys=True).encode() == reference_bytes
+            assert all(not dict.__contains__(session, field) for field in cold_display.SESSION_FIELDS)
+            assert not touches, 'Metadata-only fence inspection must not touch cold display demand'
+        assert {path: path.read_bytes() for path in bodies} == saved_bytes
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('workspace', ['present', 'missing', 'absent'])
+def test_retained_fence_and_write_context_leave_exact_cold_fields_unread(
+        cold_fence_task, tmp_path, workspace):
+    from amplifier_web.portability import retained_native_fence
+    app, session = cold_fence_task
+    session.update(nativeProject='synthetic-native-project', nativeIdentity='legacy_worker__01',
+                   runtimeSessionId='runtime-alias')
+    original_workspace = session['workspace']
+    try:
+        if workspace == 'missing':
+            session['workspace'] = str(tmp_path / 'disappeared-workspace')
+        elif workspace == 'absent':
+            session.pop('workspace')
+        assert retained_native_fence(session) is False
+        assert app.portability.write_context(session['id']) is None
+    finally:
+        session['workspace'] = original_workspace
+
+
+@pytest.mark.parametrize('project_anchor', ['native', 'workspace'])
+@pytest.mark.parametrize('identity_anchor', ['native', 'runtime'])
+@pytest.mark.parametrize('marker_kind', ['malformed', 'unreadable', 'dangling'])
+def test_each_retained_fence_anchor_denies_without_content_or_display_reads(
+        cold_fence_task, tmp_path, monkeypatch, project_anchor, identity_anchor, marker_kind):
+    from amplifier_web.portability import retained_native_fence
+    from amplifier_web.session_files import amplifier_home, project_slug
+    app, session = cold_fence_task
+    session.update(nativeProject='synthetic-native-project', nativeIdentity='legacy_worker__01',
+                   runtimeSessionId='runtime-alias', workspace=str(tmp_path / 'disappeared-workspace'))
+    project = session['nativeProject'] if project_anchor == 'native' else project_slug(session['workspace'])
+    identity = session['nativeIdentity'] if identity_anchor == 'native' else session['runtimeSessionId']
+    marker = amplifier_home() / 'projects' / project / 'sessions' / identity / 'transfer-fence.json'
+    marker.parent.mkdir(parents=True)
+    if marker_kind == 'dangling':
+        marker.symlink_to(marker.parent / 'missing-evidence')
+    else:
+        marker.write_bytes(b'not valid transfer evidence')
+        if marker_kind == 'unreadable':
+            marker.chmod(0)
+    original_open = Path.open
+
+    def no_marker_content(path, *args, **kwargs):
+        if path.name == 'transfer-fence.json':
+            if marker_kind == 'unreadable':
+                raise PermissionError('Synthetic unreadable marker contents')
+            pytest.fail('Retained fence admission read marker contents')
+        return original_open(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'open', no_marker_content)
+        assert retained_native_fence(session) is True
+        with pytest.raises(ValueError, match='fenced for transfer'):
+            app.portability.write_context(session['id'])
+
+
+def test_retained_fence_lstat_oserror_is_not_permission(cold_fence_task, monkeypatch):
+    from amplifier_web.portability import retained_native_fence
+    app, session = cold_fence_task
+    session.update(nativeProject='synthetic-native-project', nativeIdentity='legacy_worker__01')
+    original = Path.lstat
+
+    def inaccessible(path, *args, **kwargs):
+        if path.name == 'transfer-fence.json':
+            raise PermissionError('Synthetic lstat refusal')
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'lstat', inaccessible)
+    for check in (lambda: retained_native_fence(session),
+                  lambda: app.portability.write_context(session['id'])):
+        with pytest.raises(ValueError, match="Cannot inspect this task's transfer fence") as caught:
+            check()
+        assert isinstance(caught.value.__cause__, PermissionError)
+
+
+@pytest.mark.parametrize(('metadata', 'identities', 'error'), [
+    ({'nativeIdentity': 'legacy_worker__01'}, {'legacy_worker__01'}, None),
+    ({'runtimeSessionId': 'runtime-alias'}, {'runtime-alias'}, None),
+    ({'nativeIdentity': 'legacy_worker__01', 'runtimeSessionId': 'runtime-alias'},
+     {'legacy_worker__01', 'runtime-alias'}, None),
+    ({'nativeIdentity': False, 'runtimeSessionId': 'runtime-alias'}, {'runtime-alias'}, None),
+    ({'nativeIdentity': 0, 'runtimeSessionId': 'runtime-alias'}, {'runtime-alias'}, None),
+    ({'nativeIdentity': '', 'runtimeSessionId': 'runtime-alias'}, {'runtime-alias'}, None),
+    ({'nativeIdentity': None, 'runtimeSessionId': None, 'id': 'web-fallback'}, {'web-fallback'}, None),
+    ({'nativeIdentity': False, 'id': 'web-fallback'}, {'web-fallback'}, None),
+    ({'nativeIdentity': 0, 'runtimeSessionId': False, 'id': 'web-fallback'}, {'web-fallback'}, None),
+    ({'nativeIdentity': False}, set(), KeyError),
+    ({'nativeIdentity': None, 'runtimeSessionId': ''}, set(), KeyError),
+    ({'nativeIdentity': 7}, set(), ValueError),
+    ({'nativeIdentity': False, 'id': None}, set(), ValueError),
+    ({'runtimeSessionId': False, 'id': ''}, set(), ValueError),
+])
+def test_retained_fence_metadata_preserves_directory_fallbacks_without_eager_id(
+        cold_fence_task, monkeypatch, metadata, identities, error):
+    from amplifier_web import automatic_history
+    from amplifier_web.cold_display import ColdRecord
+    from amplifier_web.portability import retained_native_fence
+    app, session = cold_fence_task
+    # Standalone inputs include legacy callers with no web id. Never substitute
+    # these for the live app record, or consume its four cold fields.
+    row = ColdRecord({'nativeProject': 'synthetic-native-project', **metadata,
+                      '_coldFields': copy.deepcopy(dict.get(session, '_coldFields'))}, app.db)
+    paths = []
+    original = automatic_history.directory
+
+    def directory(value):
+        assert set(value) <= {'nativeProject', 'nativeIdentity', 'runtimeSessionId', 'id'}
+        assert ('id' in value) == ('id' in metadata)
+        path = original(value)
+        paths.append(path.name)
+        return path
+
+    monkeypatch.setattr(automatic_history, 'directory', directory)
+    if error:
+        with pytest.raises(error):
+            retained_native_fence(row)
+    else:
+        assert retained_native_fence(row) is False
+        assert set(paths) == identities
+    assert dict.get(row, '_coldFields') == dict.get(session, '_coldFields')
+    assert all(not dict.__contains__(row, field) for field in dict.get(row, '_coldFields'))
+
+
+@pytest.mark.parametrize(('field', 'invalid'), [
+    ('nativeProject', '../outside'), ('nativeProject', '.'), ('nativeProject', 7),
+    ('nativeIdentity', '../outside'), ('nativeIdentity', '..'),
+    ('nativeIdentity', 'bad\\identity'), ('nativeIdentity', '\x00invalid'),
+])
+def test_retained_fence_invalid_path_metadata_still_refuses(cold_fence_task, field, invalid):
+    from amplifier_web.portability import retained_native_fence
+    app, session = cold_fence_task
+    session.update(nativeProject='synthetic-native-project', nativeIdentity='legacy_worker__01')
+    session[field] = invalid
+    for check in (lambda: retained_native_fence(session),
+                  lambda: app.portability.write_context(session['id'])):
+        with pytest.raises(ValueError, match='Invalid native'):
+            check()
+
+
+def test_retained_fence_project_symlink_cannot_escape_shared_root(cold_fence_task, tmp_path):
+    from amplifier_web.portability import retained_native_fence
+    from amplifier_web.session_files import amplifier_home
+    app, session = cold_fence_task
+    session.update(nativeProject='synthetic-native-project', nativeIdentity='legacy_worker__01')
+    projects = amplifier_home() / 'projects'
+    projects.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / 'outside-projects'
+    outside.mkdir()
+    (projects / session['nativeProject']).symlink_to(outside, target_is_directory=True)
+    for check in (lambda: retained_native_fence(session),
+                  lambda: app.portability.write_context(session['id'])):
+        with pytest.raises(ValueError, match='inside the shared projects folder'):
+            check()
+
+
+def test_transfer_node_still_denies_cold_task_writes(cold_fence_task, tmp_path):
+    from amplifier_portability import TransferNode
+    from amplifier_worktrees.git import atomic
+    app, session = cold_fence_task
+    peer = TransferNode(tmp_path / 'paired-node', 'synthetic-peer')
+    atomic(app.portability.node.directory / 'peers.json', {peer.identity['id']: peer.identity})
+    row = app.portability.node.begin(session['id'], peer.identity['id'], 'cold-transfer', {})
+    assert row['phase'] == 'preparing' and app.portability.node.fenced(session['id'])
+    with pytest.raises(ValueError, match='fenced for transfer'):
+        app.portability.write_context(session['id'])
+
+
+def test_shared_session_store_still_denies_cold_task_writes(cold_fence_task):
+    import uuid
+    from amplifier_foundation.session import SharedSessionStore
+    app, session = cold_fence_task
+    # Ordinary runtime row intentionally has no indexed nativeProject; this
+    # exercises the unchanged runtime-store branch rather than retained lstat.
+    assert not session.get('nativeProject')
+    store = SharedSessionStore(session['workspace'], session['id'])
+    held = store.acquire(app='synthetic-fence-test')
+    try:
+        held.fence_transfer(str(uuid.uuid4()), app.portability.node.identity['id'], role='source')
+    finally:
+        held.release()
+    assert store.transfer_fence() is not None
+    assert not app.portability.node.fenced(session['id'])
+    with pytest.raises(ValueError, match='fenced for transfer'):
+        app.portability.write_context(session['id'])
+
+
 async def attach_saved_media(app, sid, workspace, *, large=False):
     import hashlib
     from test_output_media import gif

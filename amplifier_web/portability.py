@@ -52,7 +52,11 @@ def retained_native_fence(session):
     # Both anchors matter when a history row and its runtime alias differ.
     for project in projects:
         for identity in identities:
-            marker = directory({**session, 'nativeProject': project, 'nativeIdentity': identity}) / 'transfer-fence.json'
+            marker = directory({
+                'nativeProject': project, 'nativeIdentity': identity,
+                'runtimeSessionId': session.get('runtimeSessionId'),
+                **({'id': session['id']} if 'id' in session else {}),
+            }) / 'transfer-fence.json'
             try:
                 marker.lstat()
             except FileNotFoundError:

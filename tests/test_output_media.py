@@ -2349,3 +2349,94 @@ async def test_legacy_inline_alias_fresh_hashing_runs_off_owner_thread_on_warm_m
             assert (await app.outputs.media.describe(sid, requested))['items'] == []
     assert len(threads) == 4 and owner not in threads
     assert dict.get(chilled, '_coldFields') == markers and not dict.__contains__(chilled, 'messages')
+
+
+@pytest.mark.parametrize('boundary', ['commit', 'post-file-fence', 'final-fence'])
+async def test_cold_saved_alias_attach_reaches_all_fences_without_display_hydration(
+        media_app, monkeypatch, boundary):
+    import copy
+    import json
+    from amplifier_web import cold_display, output_media, resource_files
+    app = media_app
+    session, _, _, directory, _ = cold_alias_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': 'saved-web-assistant'}
+    session.update(
+        execution={'nodes': [{'id': 'retained-tool', 'kind': 'tool', 'output': 'e' * 20000}], 'turns': []},
+        historyActivity={'retained': 'h' * 20000},
+        configuration={'plan': {'tools': []}, 'provenance': {}, 'retained': 'c' * 20000})
+    app._state['selectedSessionId'] = None
+    monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+    assert session['id'] in app.cold_display.retire(force=True)
+    markers = copy.deepcopy(dict.get(session, '_coldFields'))
+    assert set(markers) == cold_display.SESSION_FIELDS
+    reference_bytes = json.dumps(markers, sort_keys=True).encode()
+    transcript = (directory / 'transcript.jsonl').read_bytes()
+    marker = directory / 'transfer-fence.json'
+    assert not marker.exists()
+    checkpoints = []
+    completed = {'file': False, 'resource': False}
+    real_read, real_put = output_media.read_verified, resource_files.put_prepared_async
+    real_context = app.portability.write_context
+
+    def assert_cold():
+        assert app._session(session['id'], hydrate=False) is session
+        assert json.dumps(dict.get(session, '_coldFields'), sort_keys=True).encode() == reference_bytes
+        assert all(not dict.__contains__(session, field) for field in cold_display.SESSION_FIELDS)
+
+    def no_hydration(*args, **kwargs):
+        pytest.fail('Media attachment hydrated a cold display field')
+
+    def read(*values):
+        result = real_read(*values)
+        completed['file'] = True
+        return result
+
+    async def put(db, prepared):
+        result = await real_put(db, prepared)
+        completed['resource'] = True
+        return result
+
+    def write_context(sid):
+        assert sid == session['id'] and app.lock.locked()
+        assert_cold()
+        checkpoints.append((completed['file'], completed['resource'], app.db.in_transaction))
+        if ((boundary == 'post-file-fence' and len(checkpoints) == 2)
+                or (boundary == 'final-fence' and len(checkpoints) == 3)):
+            marker.write_bytes(b'malformed but present transfer evidence')
+        try:
+            return real_context(sid)
+        finally:
+            assert_cold()
+
+    command = 'cold-fence-attach'
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(cold_display, 'load', no_hydration)
+            patch.setattr(app.cold_display, 'hydrate', no_hydration)
+            patch.setattr(output_media, 'read_verified', read)
+            patch.setattr(resource_files, 'put_prepared_async', put)
+            patch.setattr(app.portability, 'write_context', write_context)
+            if boundary == 'commit':
+                result = await app.outputs.media.attach(args, 'ui', command)
+                assert result['accepted']
+                record = app.outputs.record(session['id'], result['result']['id'])
+                assert record['origin'] == {'source': 'ui', 'messageId': 'saved-web-assistant'}
+                assert record['sha256'] == args['expectedSha256'] and record['bytes'] == len(gif())
+                assert session['mediaRevision'] == 1
+                assert app.db.execute('SELECT COUNT(*) FROM output_records WHERE session_id=?',
+                                      (session['id'],)).fetchone()[0] == 1
+                assert app.db.execute('SELECT COUNT(*) FROM output_receipts WHERE id=?',
+                                      (command,)).fetchone()[0] == 1
+            else:
+                with pytest.raises(ValueError, match='fenced for transfer'):
+                    await app.outputs.media.attach(args, 'ui', command)
+                assert session.get('mediaRevision', 0) == 0
+                assert app.outputs.store.list(session['id'])['items'] == []
+                assert app.db.execute('SELECT 1 FROM output_receipts WHERE id=?', (command,)).fetchone() is None
+            expected = [(False, False, False), (True, False, False), (True, True, True)]
+            assert checkpoints == (expected[:2] if boundary == 'post-file-fence' else expected)
+            assert_cold()
+            assert not app.db.in_transaction
+        assert (directory / 'transcript.jsonl').read_bytes() == transcript
+    finally:
+        marker.unlink(missing_ok=True)
