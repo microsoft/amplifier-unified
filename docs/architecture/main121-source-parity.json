@@ -19,8 +19,9 @@
   },
   "evidenceLimits": [
     "The earlier real DTU attempt on P75ae could not discover a saved message and attached no media.",
-    "The new real Native integration proves discovery, capture and idle visible-history identity. Final installed DTU browser replay remains pending.",
+    "Installed P75af real-provider discovery and capture passed; both inline formats rendered, GIF play/pause and MP4 completion passed, and both browser downloads matched exact source bytes after reload.",
     "Passive discovery never starts a worker or writes native history; only an existing execution boundary checkpoints its context."
   ],
-  "releaseStatus": "source-qualified-awaiting-installed-acceptance"
+  "releaseStatus": "source-and-owned-dtu-qualified",
+  "installedAcceptance": "installed-media-parity-20261012.json"
 }

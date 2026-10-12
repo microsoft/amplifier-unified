@@ -1,17 +1,17 @@
 {
   "components": {
     "@amplifier/ahp-client-kit": {
-      "artifact": "vendor/ahp-client-kit-6f0048c2d1ba.tgz",
+      "artifact": "vendor/ahp-client-kit-1793479e08a2.tgz",
       "repository": "microsoft/amplifier-ahp-client-kit",
-      "revision": "fa71f43c93002fab135fe24fed2e7acf6745e842",
-      "sha256": "6f0048c2d1baeb14e90748402c106ef7d8f3b21c49f39c3b4aed6dc0b46bf5f8",
+      "revision": "2ff8972c2ae987ade8048e7509df0c78d767cf81",
+      "sha256": "1793479e08a299fdf16c88c8cfd46193ef0b446a023efc3440961e12dc28bd0a",
       "version": "0.1.0"
     },
     "@amplifier/unified-client-web": {
-      "artifact": "vendor/unified-client-web-ce7befa68a54.tgz",
+      "artifact": "vendor/unified-client-web-ba95adfffc88.tgz",
       "repository": "microsoft/amplifier-unified-client-web",
-      "revision": "0a01cf8fcc315d21c0515ae3d743f7facf948f64",
-      "sha256": "ce7befa68a54af6ddd93953fa3b68e8ab51114e23001921c15a28f3165eb8ba4",
+      "revision": "2099ab7a7945dd83c1c41582bc6ecdcc428bd66d",
+      "sha256": "ba95adfffc88667a76ab274da4a44bc17d985c735cdd836a94cf7377af9a398f",
       "version": "0.1.0"
     },
     "@amplifier/unified-coordination-capability": {

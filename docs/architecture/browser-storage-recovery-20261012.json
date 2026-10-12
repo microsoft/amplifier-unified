@@ -1,0 +1,45 @@
+{
+  "schema": "private-storage-recovery-qualification-v1",
+  "observedProblem": "A long-idle browser tab attempted to use a closing IndexedDB connection for later private writes.",
+  "change": "Reopen once when transaction creation raises InvalidStateError before admitting requests. Clear closed or superseded handles. Never retry an admitted transaction.",
+  "scope": [
+    "shared client kit IndexedDB adapter",
+    "Web private reads, writes, indexed pages, batches and atomic changes"
+  ],
+  "source": {
+    "clientKit": "2ff8972c2ae987ade8048e7509df0c78d767cf81",
+    "web": "2099ab7a7945dd83c1c41582bc6ecdcc428bd66d"
+  },
+  "validation": {
+    "clientKit": {
+      "passed": 64,
+      "optionalIntegrationSkipped": 6
+    },
+    "packedStorageConsumer": {
+      "passed": 10
+    },
+    "web": {
+      "passed": 1534,
+      "skipped": 0
+    },
+    "realBrowser": {
+      "syntheticFixture": true,
+      "closedConnectionRecovered": true,
+      "savedQuotedDraftPreserved": true,
+      "unknownSubmissionIdentityAndTextPreserved": true,
+      "otherTabIsolated": true,
+      "atomicAbortNotRetried": true,
+      "savedRecordsRetainedAfterReload": true,
+      "hostConnectionPresent": false
+    },
+    "composition": {
+      "passed": 15,
+      "skipped": 0
+    }
+  },
+  "limits": [
+    "Does not recover deleted browser data or browser storage eviction.",
+    "The earlier unresolved draft discrepancy has not been attributed to this connection error.",
+    "Installed DTU acceptance is recorded separately from the source and synthetic browser checks."
+  ]
+}
