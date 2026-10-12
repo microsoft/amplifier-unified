@@ -202,4 +202,3 @@ def validate(session, message_id, proof, saved=None):
             if count != 1:
                 raise ValueError(ERROR)
     return {'id': message_id, 'role': 'assistant'}
-
