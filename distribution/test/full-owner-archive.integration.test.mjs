@@ -20,7 +20,7 @@ const fullJourney=process.env.FULL_OWNER_JOURNEY==='1';
 const activateRestore=process.env.FULL_OWNER_RESTORE==='1';
 async function files(root){const result=[];async function walk(p=''){for(const name of await readdir(join(root,p))){const path=p?p+'/'+name:name,st=await lstat(join(root,path));if(st.isDirectory())await walk(path);else{assert.ok(st.isFile());result.push({path,bytes:st.size,mode:st.mode&0o777,sha256:hash(await readFile(join(root,path)))});}}}await walk();return result.sort((a,b)=>a.path.localeCompare(b.path));}
 function connect(config,env){const child=spawn(python,['-I','-B','-m','amplifier_acp','--config',config],{env:{...process.env,...env},stdio:['pipe','pipe','pipe']});let id=0,stderr='';const pending=new Map();child.stderr.on('data',v=>stderr+=v);const ended=new Promise(resolve=>child.once('exit',code=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error(stderr));}pending.clear();resolve(code);}));const lines=createInterface({input:child.stdout});lines.on('line',line=>{const row=JSON.parse(line),p=pending.get(row.id);if(!p)return;pending.delete(row.id);clearTimeout(p.timer);row.error?p.reject(Error(JSON.stringify(row.error))):p.resolve(row.result);});return {request:(method,params)=>new Promise((resolve,reject)=>{const key=++id,timer=setTimeout(()=>{pending.delete(key);reject(Error('Native fixture timeout'));},60000);pending.set(key,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:key,method,params})+'\n');}),close:async()=>{child.stdin.end();assert.equal(await ended,0,stderr);lines.close();}};}
-test('actual signed 21-owner stopped capture and inactive restore retain native, message, media and original receipts',{skip:!python||!operationsPython||process.env.FULL_OWNER_ARCHIVE!=='1',timeout:600000},async t=>{
+test('actual signed 21-owner stopped capture and inactive restore retain native, message, media and original receipts',{skip:!python||!operationsPython||process.env.FULL_OWNER_ARCHIVE!=='1',timeout:process.env.FULL_OWNER_JOURNEY_DRIVER==='external'?7200000:600000},async t=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),legacySwitch?'legacy-continuation-full-owner-':'full-owner-archive-'))),directory=join(root,'installation'),state=join(directory,'application'),workspace=join(root,'workspace'),home=join(root,legacySwitch?'candidate-native':'native-home'),appHome=join(root,legacySwitch?'candidate-app':'native-app'),web=join(root,'web');
  let seed;
  const legacyHelper=fileURLToPath(new URL('./legacy-switch-fixture.py',import.meta.url));
@@ -83,8 +83,10 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  installed=await installProductionDistribution({schema:'unified-installation-v1',directory,dataScope:'full-recovery-owned',serviceLifecycle:{enabled:true},release:{channelUrl:origin+'/channel.json',trustedKeys:keys,accessScope:'owned-fixture',allowedArtifactOrigins:[origin],allowLoopbackHttp:true},sourceTracking:{sources:[{repository:git.repository,ref:'main'}],env:git.env},application});
  const ready=JSON.parse(await readFile(join(root,'archive-ready.json'),'utf8'));assert.equal(ready.owners.length,21);assert.equal(ready.agents,0);assert.equal(ready.staged.status,'sealed');
  if(fullJourney){
-  const {openBrowserJourney}=await import('./full-owner-browser-journey.mjs');
-  browserJourney=await openBrowserJourney({root,url:ready.url,session:ready.continuation.session,playwright:process.env.REHEARSAL_PLAYWRIGHT});
+  const open=process.env.FULL_OWNER_JOURNEY_DRIVER==='external'
+   ?(await import('./full-owner-external-journey.mjs')).openExternalJourney
+   :(await import('./full-owner-browser-journey.mjs')).openBrowserJourney;
+  browserJourney=await open({root,url:ready.url,session:ready.continuation.session,playwright:process.env.REHEARSAL_PLAYWRIGHT});
   console.log('Journey: migrated records and browser drafts ready');
   // A distinct signed successor assembled from the same candidate closes the
   // lifecycle, without claiming compatibility with a different storage schema.
