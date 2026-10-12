@@ -39,7 +39,7 @@ test('assembled app-local reset uses actual registered owners, complete recovery
   const bundle=join(directory,'metadata-only.yaml');await writeFile(bundle,'bundle:\n  name: reset-metadata-only\n  version: 1.0.0\nproviders: []\n');
   const nativeConfig=join(directory,'native.json');await writeFile(nativeConfig,JSON.stringify({home,appHome,bundle,managedSessionRoots:[join(workspace,'.managed')],adminWorkspaceRoots:[workspace],adminMaintenance:true,workerCommand:['/impossible-reset-worker'],transferAuthorityDirectory:join(state,'capabilities/portability'),transferWorkspaceRoots:[workspace]}));
   const noUpdate=async()=>{throw Error('Reset cannot invoke a release or service effect');};
-  supervisor=new DistributionUpdateOwner({directory:join(directory,'supervisor'),dataScope:'reset-owned',preferences:originalPreferences,verifyRecoveryFence:async fence=>{await hostClient.verifyRecoveryFence(fence);const held=app.host.inspectQuiescence();assert.equal(held.intakeClosed,true);assert.equal(held.activeMaintenance,1);assert.deepEqual([...held.fence.owners].sort(),[...app.quiescence.requiredOwners].sort());assert.equal(held.fence.owners.length,20);assert.equal(held.fence.fenceId,fence.fenceId);verifiedFences.push(structuredClone(held.fence));},releases:{check:noUpdate,prepare:noUpdate,verify:noUpdate},lifecycle:{inspect:noUpdate,admitRestart:noUpdate,restart:noUpdate}});
+  supervisor=new DistributionUpdateOwner({directory:join(directory,'supervisor'),dataScope:'reset-owned',preferences:originalPreferences,verifyRecoveryFence:async fence=>{await hostClient.verifyRecoveryFence(fence);const held=app.host.inspectQuiescence();assert.equal(held.intakeClosed,true);assert.equal(held.activeMaintenance,1);assert.deepEqual([...held.fence.owners].sort(),[...app.quiescence.requiredOwners].sort());assert.equal(held.fence.owners.length,21);assert.equal(held.fence.fenceId,fence.fenceId);verifiedFences.push(structuredClone(held.fence));},releases:{check:noUpdate,prepare:noUpdate,verify:noUpdate},lifecycle:{inspect:noUpdate,admitRestart:noUpdate,restart:noUpdate}});
   supervisorServer=await serveSupervisor({owner:supervisor,token:'b'.repeat(64)});supervisorClient=new SupervisorClient({url:supervisorServer.url,token:'b'.repeat(64)});
   gate=await createManualIngressGate({directory:join(directory,'ingress'),id:'manual-preview-ingress'});
   access=await createCountedIngress(gate);
@@ -52,7 +52,7 @@ test('assembled app-local reset uses actual registered owners, complete recovery
    client=await peer(access);
   };
   await open();
-  assert.equal(app.quiescence.requiredOwners.length,20);assert.equal(app.quiescence.participants.length,20);
+  assert.equal(app.quiescence.requiredOwners.length,21,JSON.stringify(app.quiescence.requiredOwners));assert.equal(app.quiescence.participants.length,21);
   await client.action('notifications','notifications.save',{expectedRevision:0,patch:{enabled:true,preview:true,topic:'private-notification-topic',token:'private-notification-token'}});
   const parts=['native.app-bundle-default','notifications.settings','notifications.credentials','updates.preferences'];
   const prepare=async extra=>client.settled((await client.action('recovery','recovery.appReset.prepare',{parts,privateContentReviewed:true,credentialsReviewed:true,...extra})).id);
