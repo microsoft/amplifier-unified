@@ -23,6 +23,11 @@ test('packaged headless entrypoint authenticates through the public gateway and 
   const result=JSON.parse(first.stdout);assert.equal(result.status,'completed');assert.equal(result.output,'Echo: public gateway input');
   const recovered=JSON.parse((await execute(process.execPath,[entry,'inspect',...common])).stdout);assert.equal(recovered.session,result.session);assert.equal(recovered.output,result.output);
   assert.equal((await readFile(log,'utf8')).trim().split('\n').length,1);
+  const unified=fileURLToPath(new URL('../src/cli.js',import.meta.url));
+  const continued=JSON.parse((await execute(process.execPath,[unified,'continue','continued through Unified','--resume',result.session,...common.filter((arg,index)=>arg!=='--command'&&common[index-1]!=='--command'),'--command','continued'])).stdout);
+  assert.equal(continued.output,'Echo: continued through Unified');assert.equal(continued.session,result.session);
+  const inspected=JSON.parse((await execute(process.execPath,[unified,'inspect',...common])).stdout);assert.equal(inspected.output,result.output);
+  assert.equal((await readFile(log,'utf8')).trim().split('\n').length,2);
   await writeFile(token,'different-token');await assert.rejects(execute(process.execPath,[entry,'inspect',...common]));
  }finally{await app?.close();await rm(directory,{recursive:true,force:true});}
 });

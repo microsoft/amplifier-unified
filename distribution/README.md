@@ -65,6 +65,24 @@ trusted CA without disabling certificate checks. Input journals stay on the clie
 remain available in an interactive client. `--help` documents bounded waits,
 machine-readable output, explicit private traces and exit statuses.
 
+The ordinary `amplifier-unified` command also exposes this client:
+
+```sh
+amplifier-unified run "Review the project" --server wss://host/ahp --token-file token
+amplifier-unified continue "Check the tests too" --resume ahp-session:/ID --server wss://host/ahp --token-file token
+amplifier-unified tool NAME --args '{"key":"value"}' --session ahp-session:/ID --server wss://host/ahp --token-file token --command original-tool
+amplifier-unified inspect --server wss://host/ahp --token-file token --command original-tool --output-format json
+```
+
+Direct tool commands use the selected session's advertised runtime control. Its
+native owner validates arguments and enforces the mounted tool's hooks and policy;
+the client does not prompt a model or bypass approval. A completed tool result is
+saved in the private command journal. Inspecting the original ID recovers that
+result without executing again. A lost result stays unknown even if a host receipt
+confirms that the request completed. `continue` requires an explicit session URI;
+it never guesses the latest conversation. `--output-format` and `--timeout`
+(seconds) are compatible aliases for the client's existing output and wait options.
+
 Adapt `examples/distribution.json` to owned existing workspace directories and
 installed executable paths. The native adapter configuration is separate; its
 `home` owns native history and its `appHome` owns native application settings.

@@ -7,6 +7,10 @@ import {connectInstalledService,readInstalledServiceConfiguration} from './servi
 export const help=`Amplifier Unified
 
   amplifier-unified serve --config /path/to/distribution.json
+  amplifier-unified run "prompt" --server wss://host/ahp [--workspace /path]
+  amplifier-unified continue "prompt" --server wss://host/ahp --resume ahp-session:/ID
+  amplifier-unified tool NAME --args '{}' --server wss://host/ahp [--session ahp-session:/ID]
+  amplifier-unified inspect --server wss://host/ahp --command REQUEST
   amplifier-unified doctor --data-dir /path/to/installation [--json]
   amplifier-unified service status --data-dir /path/to/installation [--wait 30] [--json]
   amplifier-unified service start|stop|restart --data-dir /path/to/installation [--wait 60] [--json]
@@ -15,11 +19,13 @@ export const help=`Amplifier Unified
 Use AMPLIFIER_UNIFIED_INSTALLATION instead of --data-dir for an installed service.
 Start resumes an existing, confirmed stopped installation. It never creates or adopts one.
 An unconfirmed request is inspected by its request ID; it is never sent again automatically.
-Run amplifier-ahp --help for task commands, and use Settings > Terminal for terminal setup.
+Run amplifier-unified run --help for authentication and task options.
+Use Settings > Terminal for terminal setup.
 `;
 
 const failure=message=>Object.assign(Error(message),{code:'invalid_arguments'});
 export function parseCommandLine(args,env=process.env){
+ if(['run','continue','tool','inspect'].includes(args[0]))return {command:'headless',args:[...args]};
  if(!args.length||args.includes('--help')||args[0]==='help')return {command:'help'};
  if(args.length===1&&args[0]==='--version')return {command:'version'};
  const values=[...args];let command=values.shift();
@@ -102,6 +108,7 @@ export async function manageService(options,{connect=connectInstalledService,onR
 }
 
 export async function runCommandLine(options,{out=value=>process.stdout.write(value),error=value=>process.stderr.write(value)}={}){
+ if(options.command==='headless'){process.argv=[...process.argv.slice(0,2),...options.args];await import('@amplifier/ahp-client-kit/cli');return process.exitCode??0;}
  if(options.command==='help'){out(help);return 0;}
  if(options.command==='version'){const p=JSON.parse(await readFile(new URL('../package.json',import.meta.url)));out('amplifier-unified '+p.version+'\n');return 0;}
  try{
