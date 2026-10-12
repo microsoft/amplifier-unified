@@ -20,6 +20,7 @@ class Scan:
     task: object = None
     paused: bool = False
     inputs: tuple = ()
+    workspace_scope: object = None
 
     def publish(self, result):
         with self.lock:
@@ -36,12 +37,14 @@ class StorageScans:
         self.entries = {}
         self.worker = asyncio.Semaphore(1)
 
-    async def read(self, home, workspaces, args, sessions, installation):
+    async def read(self, home, workspaces, args, sessions, installation, *, workspace_scope=None):
         identity = args.get('scanId')
         selection = {k: v for k, v in args.items() if k not in {'scanId', 'fromScanId', 'progressive', 'cancel'}}
         if identity:
             scan = self.entries.get(identity)
-            if not scan or scan.args != selection:
+            if not scan or scan.args != selection or scan.workspace_scope != workspace_scope:
+                if scan and scan.workspace_scope != workspace_scope:
+                    scan.stopped.set()
                 raise ValueError('Storage measurement expired. Refresh storage to measure again.')
             scan.touched = time.monotonic()
             if args.get('cancel'):
@@ -54,13 +57,16 @@ class StorageScans:
             # Only bounded, transient observations survive a visit. An explicit
             # refresh creates a new observation; it never restarts deletion.
             parent = self.entries.get(args.get('fromScanId'))
+            if parent and parent.workspace_scope != workspace_scope:
+                parent.stopped.set()
+                parent = None
             for key, old in list(self.entries.items()):
                 if time.monotonic() - old.touched > 30 or len(self.entries) >= 8:
                     old.stopped.set()
                     del self.entries[key]
             initial = (summary([], {c[0] for c in CATEGORIES}) if not selection.get('category')
                        else {'rows': [], 'bytes': None, 'incomplete': True})
-            scan = Scan(selection, initial, observation=parent.observation if parent else {})
+            scan = Scan(selection, initial, observation=parent.observation if parent else {}, workspace_scope=workspace_scope)
             scan.inputs = (home, workspaces, sessions, installation)
             identity = uuid.uuid4().hex
             self.entries[identity] = scan

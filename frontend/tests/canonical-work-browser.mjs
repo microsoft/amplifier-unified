@@ -2,6 +2,7 @@ import {openSettingsPage} from './browser-settings.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe']});
 let log='';fixture.stderr.on('data',chunk=>log+=chunk);
@@ -36,7 +37,8 @@ try{
  assert.equal(await read15.getByRole('button',{name:/Show all/}).count(),0);
  assert.equal(await read16.locator('pre').innerText(),Array.from({length:10},(_,i)=>'Line '+(i+1)).join('\n'));
  await read16.getByRole('button',{name:'Show all 16 lines'}).click();assert.match(await read16.innerText(),/Line 16/);
- assert.equal(await page.locator('.a-execution-content details').count(),0);
+ assert.equal(await read15.locator('.a-execution-payload details').count(),0);
+ assert.equal(await read16.locator('.a-execution-payload details').count(),0);
  await action('owned').locator('button.a-execution-action-line').click();
  assert.match(await action('owned').innerText(),/Bearer owner-recorded-value/);
  assert.equal((await action('owned').innerText()).split('The full result is already here').length-1,1);
@@ -74,6 +76,16 @@ try{
 
  await model.getByRole('button',{name:'Copy raw request',exact:true}).click();const copied=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));
  assert.equal(copied.input.length,100);assert.equal(copied.instructions,'Owner-recorded instructions');assert.equal(requestReads.length,2);
+ const exportRecord=async(container,field)=>{
+  const pending=page.waitForEvent('download');
+  await container.getByRole('button',{name:`Download recorded ${field} (JSON)`,exact:true}).click();
+  const saved=await pending;return {filename:saved.suggestedFilename(),record:JSON.parse(await readFile(await saved.path(),'utf8'))};
+ };
+ const requestExport=await exportRecord(model,'request');
+ assert.deepEqual(requestExport.record.payload,copied);assert.equal(requestExport.record.kind,'provider.request');
+ const responseExport=await exportRecord(model,'response');
+ assert.equal(responseExport.record.payload.output[0].content[0].text,'Recorded response content');
+ assert.equal(requestReads.length,2);assert.equal(responseReads.length,1);
  await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
  await expect(model.getByRole('button',{name:/^View request/})).toBeVisible();assert.equal(responseReads.length,1);
  const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No provider request was recorded/);
@@ -91,6 +103,8 @@ try{
  await small.getByRole('button',{name:/^View request/}).click();
  await small.getByRole('button',{name:/^Request Object/}).click();await expect(small).toContainText('Small recorded request');assert.equal(requestReads.length,3);
  await small.getByRole('button',{name:/^View response/}).click();await expect(small).toContainText('This recording is text rather than complete JSON');await expect(small).toContainText('Small recorded response');await expect(small).toContainText('part of the response is omitted');assert.equal(responseReads.length,2);
+ const partialExport=await exportRecord(small,'response');
+ assert.equal(partialExport.record.capture.truncated,true);assert.match(partialExport.filename,/-partial.json$/);assert.match(partialExport.record.payload,/Small recorded response/);
  await openSettingsPage(page,'appearance');
  await expect(page.getByRole('radio',{name:/^Balanced /})).toBeChecked();
  await page.getByRole('radio',{name:/^Focused /}).check();await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','minimal');

@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.123",
+      "title": "Focused workspace storage and downloadable model recordings",
+      "changes": [
+        "Workspace storage counts registered projects beneath the configured workspace root and app-managed files. Running a chat in a home folder no longer makes unrelated personal files part of the workspace total.",
+        "Recorded model requests and responses can be downloaded as JSON from model-call details, including call identity and available redaction and truncation metadata."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.122",
       "title": "Storage measurements keep making progress",
       "changes": [
