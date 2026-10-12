@@ -32,6 +32,7 @@ import {createManagedFilesCapabilities} from './managed-files.js';
 import {createManagedFilesProtection} from './managed-files-protection.js';
 import {bindRuntimeOwners,runtimeOwnerProvenance} from './runtime-owners.js';
 import {composeWorkspaces} from './workspaces.js';
+import {configurationContext} from './configuration-target.js';
 import {composeNotifications} from './notifications.js';
 import {composeQuiescence,recoveryReleaseVerifier} from './quiescence.js';
 import {composeRecovery} from './recovery.js';
@@ -120,6 +121,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   // exists. Carry that approved cwd through the existing trusted context;
   // session-scoped requests retain their canonical session binding.
   const nativeAdmin=async(operation,args,context)=>{
+   if(args.configurationTarget)return admin.perform(operation,args,await configurationContext(args.configurationTarget,args,context,{catalog,host,defaultWorkspace:config.defaultWorkspace}));
    if(context.session||args.workspace===undefined)return admin.perform(operation,args,context);
    let workingDirectory;
    try{
@@ -132,6 +134,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear','session.naming','session.naming.generate'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin,onInvalidate:invalidate,
    nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
    nativeProviderSignIn:()=>admin.providerSignInCapabilities?.(),
+   nativeConfigurationTargets:()=>admin.configurationTargetCapabilities?.(),
    nativeImageSetup:()=>admin.imageSetupCapabilities?.(),
    ...(typeof AmplifierHost.prototype.readCapacity==='function'&&typeof AmplifierHost.prototype.admitNativeCapacity==='function'?{nativeCapacity:()=>admin.capacityCapabilities?.(),readCapacity:(scope,input)=>host.readCapacity(scope,input)}:{}),
    nativeContextClear:()=>admin.contextClearCapabilities(),
@@ -156,6 +159,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   await nativeCapabilities.negotiateBundleCommands();
   await nativeCapabilities.negotiateContextClear?.();
   await nativeCapabilities.negotiateProviderSignIn?.();
+  await nativeCapabilities.negotiateConfigurationTargets?.();
   // Reuse the validated negotiation. Probing a second time would turn an
   // unavailable optional admin peer into an application startup failure.
   imageGeneration=(await nativeCapabilities.negotiateImageSetup?.())===true;
@@ -336,7 +340,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
     if(input.id!==undefined&&(typeof input.id!=='string'||!input.id||input.id.length>256))throw Error('Native command identity must be a bounded string');
     const commandId=input.id?'native:'+context.nativeSessionId+':'+input.id:randomUUID();
     if(commandId.length>256)throw Error('Namespaced native command identity exceeds the advertised limit');
-    const channel=capabilities.manifest.topics[advertised.topic]?.scope==='host'?'ahp-root://':context.session;
+    const channel=args.configurationTarget||capabilities.manifest.topics[advertised.topic]?.scope==='host'?'ahp-root://':context.session;
     return host.invokeCapability({channel,topic:advertised.topic,operation:advertised.operation,version:1,args,commandId},{actorId:'agent:'+context.nativeSessionId,origin:'agent',session:context.session});
    }
   });
