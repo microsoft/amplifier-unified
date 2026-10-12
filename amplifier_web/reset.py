@@ -19,6 +19,8 @@ import sys
 import time
 import traceback
 import uuid
+import urllib.request
+import urllib.error
 
 REPOSITORY = "microsoft/amplifier-unified"
 REGENERABLE = ("updates", "runtime", "foundation", "source-store")
@@ -32,6 +34,7 @@ def options(parser):
     parser.add_argument("--dry-run", action="store_true", help="Show what would be repaired without changing anything")
     parser.add_argument("--source", help="Override the latest published release with a trusted wheel or Git source")
     parser.add_argument("--no-start", action="store_true", help="Leave the managed service stopped after repair")
+    parser.add_argument("--anonymous", action="store_true", help="Download public sources without GitHub sign-in or personal Git configuration")
     # Also accept the customary post-command spelling, retaining a global value.
     parser.add_argument("--data-dir", default=argparse.SUPPRESS, help="Unified data directory to repair")
 
@@ -149,7 +152,36 @@ def command(*args, env=None, capture=False, check=True, timeout=120):
     return result
 
 
-def environment():
+def repository_environment(env=None, *, anonymous=False):
+    """Scope download policy to children; never edit the user's Git configuration.
+
+    Kept here so the emergency repair script remains dependency-free.
+    """
+    env = dict(os.environ if env is None else env)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    anonymous = anonymous or env.get("AMPLIFIER_GITHUB_ACCESS") == "anonymous"
+    if anonymous:
+        env["AMPLIFIER_GITHUB_ACCESS"] = "anonymous"
+        # Personal config can rewrite public HTTPS URLs to authenticated SSH,
+        # inject Authorization headers, or use an account blocked by org policy.
+        for key in list(env):
+            if key.startswith("GIT_CONFIG_") or key in {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GIT_ASKPASS", "SSH_ASKPASS"}:
+                env.pop(key, None)
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+        settings = [("credential.helper", ""), ("http.extraHeader", ""),
+                    ("http.cookieFile", ""), ("core.askPass", "")]
+    else:
+        settings = [("credential.https://github.com.helper", "!gh auth git-credential")] if shutil.which("gh") else []
+    count = int(env.get("GIT_CONFIG_COUNT", "0"))
+    for key, value in settings:
+        env[f"GIT_CONFIG_KEY_{count}"] = key
+        env[f"GIT_CONFIG_VALUE_{count}"] = value
+        count += 1
+    env["GIT_CONFIG_COUNT"] = str(count)
+    return env
+
+
+def environment(*, anonymous=False):
     env = os.environ.copy()
     # Never inherit a worker's generation, a development Python path, or uv's
     # project overrides into a recovery installation. Keep tool/bin ownership.
@@ -162,18 +194,30 @@ def environment():
         env.pop(key, None)
     env["UV_NO_CONFIG"] = "1"
     env["UV_NO_CACHE"] = "1"
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    if shutil.which("gh"):
-        count = int(env.get("GIT_CONFIG_COUNT", "0"))
-        env.update({f"GIT_CONFIG_KEY_{count}": "credential.https://github.com.helper",
-                    f"GIT_CONFIG_VALUE_{count}": "!gh auth git-credential",
-                    "GIT_CONFIG_COUNT": str(count + 1)})
-    return env
+    return repository_environment(env, anonymous=anonymous)
+
+
+def release_metadata(env):
+    request = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORY}/releases/latest",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "amplifier-unified-reset"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = response.read(2_000_001)
+        if len(data) > 2_000_000:
+            raise ValueError("Release metadata is too large")
+        return json.loads(data)
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        if env.get("AMPLIFIER_GITHUB_ACCESS") != "anonymous" and shutil.which("gh"):
+            try:
+                return json.loads(command("gh", "api", f"repos/{REPOSITORY}/releases/latest",
+                    env=env, capture=True, timeout=30).stdout)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        raise RuntimeError("The public release could not be downloaded. Check network access to GitHub, or use --source with a trusted release wheel.") from error
 
 
 def release_source(env):
-    release = json.loads(command("gh", "api", f"repos/{REPOSITORY}/releases/latest",
-                                 env=env, capture=True, timeout=30).stdout)
+    release = release_metadata(env)
     tag = release.get("tag_name", "")
     if release.get("draft") or release.get("prerelease") or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         raise ValueError("No supported published release was found; use --source with a trusted release wheel.")
@@ -523,7 +567,7 @@ def perform(args, home, service):
     uv = shutil.which("uv")
     if not uv:
         raise ValueError("uv is required. Install uv, then run reset again.")
-    env = environment()
+    env = environment(anonymous=getattr(args, "anonymous", False))
     progress("Checking the installation location")
     tool_root = Path(command(uv, "tool", "dir", env=env, capture=True).stdout.strip()).resolve()
     bin_root = Path(command(uv, "tool", "dir", "--bin", env=env, capture=True).stdout.strip()).resolve()

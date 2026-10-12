@@ -104,6 +104,9 @@ async def test_release_check_requires_real_tag_revision(monkeypatch):
         if args[0]=='gh':return json.dumps({'tag_name':'v99.0.0','html_url':'https://github.com/example/release'})
         return 'a'*40+'\trefs/tags/v99.0.0\n'+'b'*40+'\trefs/tags/v99.0.0^{}'
     monkeypatch.setattr(app_updates,'process',process)
+    async def metadata(path, **kwargs):
+        return await app_updates.process('gh', 'api', path)
+    monkeypatch.setattr(app_updates, 'github_read', metadata)
     result=await app_updates.check()
     assert result['status']=='update' and result['revision']=='b'*40
     assert len(calls)==3
@@ -397,6 +400,9 @@ async def test_installed_ahead_of_release_is_explicit_and_never_tracks_main(monk
         if args[0]=='gh':return json.dumps({'tag_name':'v0.0.1','published_at':'2026-01-01T00:00:00Z'})
         return 'a'*40+'\trefs/tags/v0.0.1'
     monkeypatch.setattr(app_updates,'process',process)
+    async def metadata(path, **kwargs):
+        return await app_updates.process('gh', 'api', path)
+    monkeypatch.setattr(app_updates, 'github_read', metadata)
     result=await app_updates.check()
     assert result['status']=='current' and result['releaseBehind'] is True
     assert result['latest']=='v0.0.1' and 'newer than' in result['detail']

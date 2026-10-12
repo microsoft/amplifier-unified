@@ -247,8 +247,9 @@ def test_latest_release_resolves_annotated_tag_to_immutable_commit(monkeypatch):
             return SimpleNamespace(stdout=json.dumps({"tag_name": "v1.2.3", "draft": False, "prerelease": False}))
         return SimpleNamespace(stdout=f"{'b' * 40}\trefs/tags/v1.2.3\n{commit}\trefs/tags/v1.2.3^{{}}\n")
     monkeypatch.setattr(reset, "command", run)
+    monkeypatch.setattr(reset, "release_metadata", lambda env: {"tag_name": "v1.2.3"})
     assert reset.release_source({}) == f"git+https://github.com/{reset.REPOSITORY}@{commit}"
-    assert calls[0][:2] == ("gh", "api")
+    assert calls[0][:2] == ("git", "ls-remote")
 
 
 def test_launchd_service_uses_exact_owner_and_generated_marker(monkeypatch, tmp_path):

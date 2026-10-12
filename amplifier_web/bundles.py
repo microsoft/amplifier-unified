@@ -80,6 +80,9 @@ def validate_uri(uri: str) -> str:
 
 async def git(*args: str, cwd: Path | None = None, timeout: int = 60) -> bytes:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
+    if env.get("AMPLIFIER_GITHUB_ACCESS") == "anonymous":
+        from .reset import repository_environment
+        env = repository_environment(env)
     process = await asyncio.create_subprocess_exec("git", "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never", *args,
         cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:

@@ -153,7 +153,9 @@ amplifier-unified reset
 
 Reset reinstalls Unified while keeping your chats, settings, sign-ins, and files.
 It handles stopping and restarting the app, then runs the installation and service
-checks for you. Allow a few minutes. [More recovery options](docs/RESET.md).
+checks for you. Allow a few minutes. Public releases do not require GitHub sign-in.
+Use `reset --anonymous` if personal Git configuration or organization sign-in
+policy prevents public downloads. [More recovery options](docs/RESET.md).
 
 </details>
 

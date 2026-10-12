@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.115",
+      "title": "Public downloads without GitHub sign-in",
+      "changes": [
+        "Repair and update release checks try public access first, so a restricted signed-in account does not block public release metadata.",
+        "The installer and repair command support --anonymous to bypass personal Git credentials and URL rewrites for public downloads. The background service can retain the same policy for updates and bundle preparation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.114",
       "title": "Subtle shape and spacing for each theme",
       "changes": [
