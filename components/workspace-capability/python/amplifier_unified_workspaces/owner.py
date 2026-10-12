@@ -507,7 +507,7 @@ class Owner:
             self.library_query_enabled=self.library_query_enabled or params.get('libraryQueryVersion')==1
             self.missing_workspace_history=self.missing_workspace_history or self.library_query_enabled and params.get('missingWorkspaceHistory') is True
             return {'protocolVersion':1,'workspaceCleanup':{'version':1},'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
-        if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'pins':navigation.summary(self),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+        if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'pins':navigation.summary(self),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix','storageMeasurements':{'version':1,'progressive':True}}
         if method!='action':raise WorkspaceError('Unknown owner method')
         operation=params.get('operation');args=params.get('args') or {};client=text(params.get('clientId') or 'agent','client ID',512)
         if not isinstance(args,dict):raise WorkspaceError('Workspace arguments must be an object')
@@ -517,7 +517,7 @@ class Owner:
         allowed.update({key:{'id','expectedRevision'} for key in archives.WRITES})
         allowed.update(self.starter_fields())
         allowed.update({'locations.list':{'path','directoriesOnly','controlId','limit','cursor'},'locations.create':{'path','name','controlId'}})
-        allowed['storage.inspect']={'scope','categoryId','workspaceId','rootId','path'}
+        allowed['storage.inspect']={'scope','categoryId','workspaceId','rootId','path','progressive','scanId','fromScanId','cancel'}
         if operation not in allowed or set(args)-allowed[operation]:raise WorkspaceError('Unknown workspace operation or arguments')
         if operation=='storage.inspect':return await storage_usage.read(self,args,client)
         if (operation in archives.WRITES or operation=='workspace.list' and 'archive' in args) and not self.workspace_archive:raise WorkspaceError('Workspace archiving is unavailable')
@@ -585,6 +585,7 @@ class Owner:
     async def close(self):
         if self.closed:return
         self.closed=True
+        if getattr(self,'storage_scans',None):await self.storage_scans.close()
         if self.setup_tasks:await asyncio.gather(*list(self.setup_tasks.values()),return_exceptions=True)
         self.intake.close()
         if not self.lease.closed:fcntl.flock(self.lease.fileno(),fcntl.LOCK_UN);self.lease.close()
