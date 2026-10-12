@@ -7,15 +7,19 @@ import tracemalloc
 from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from amplifier_web.client_observations import Observations
+from amplifier_web.state_projections import StateProjections
 
 rows = [{'id': str(i), 'title': 'Synthetic chat', 'status': 'idle',
          'completion': {'id': str(i), 'at': i}, 'approvals': [{'id': str(i)}]} for i in range(10000)]
 service = SimpleNamespace(_state={'sessions': rows, 'pinnedSessionIds': [r['id'] for r in rows]},
-                          instance_id='synthetic-benchmark', projections=SimpleNamespace(observation_generation=1))
+                          instance_id='synthetic-benchmark', projections=StateProjections())
 observations = Observations(service)
 tracemalloc.start()
 started = time.perf_counter()
 latencies, count_requests = [], 0
+cold_started = time.perf_counter()
+observations.refresh()
+cold_seconds = time.perf_counter() - cold_started
 while True:
     before = time.perf_counter()
     value = observations.activity()
@@ -37,10 +41,26 @@ for collection in ('sessions', 'attention'):
         if cursor is None:
             break
     results[collection] = {'items': total, 'requests': requests}
+started = time.perf_counter()
+observations.invalidate()
+observations.refresh()
+broad_seconds = time.perf_counter() - started
+started = time.perf_counter()
+for _ in range(1000):
+    observations.invalidate(session_ids={'0'}, detail_only=True)
+    observations.refresh()
+transcript_seconds = time.perf_counter() - started
+started = time.perf_counter()
+rows[0]['status'] = 'working'
+observations.invalidate(session_ids={'0'})
+observations.refresh()
+scoped_seconds = time.perf_counter() - started
 _, peak = tracemalloc.get_traced_memory()
 tracemalloc.stop()
 assert results['sessions']['items'] == 10000 and results['attention']['items'] == 20000
 assert value['attentionCount'] == 20000 and value['requiresActionCount'] == 10000
 print(json.dumps({'catalogSessions': 10000, 'countRequests': count_requests,
-                  'countsSeconds': counts_seconds, 'maxRequestSeconds': max(latencies),
+                  'countsSecondsIncludingColdIndex': counts_seconds, 'coldIndexSeconds': cold_seconds,
+                  'maxWarmRequestSeconds': max(latencies), 'broadReconciliationSeconds': broad_seconds,
+                  'scopedReconciliationSeconds': scoped_seconds, 'thousandTranscriptInvalidationsSeconds': transcript_seconds,
                   'incrementalPeakBytes': peak, 'tracemallocEnabled': True, 'collections': results}, indent=2))

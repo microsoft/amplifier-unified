@@ -40,11 +40,22 @@ cursor when a selective query reaches its scan budget; it is not the end.
 Order is retained catalog order, then canonical per-session notice order
 (questions, manual unread, completion, session error, approvals). It is stable
 within a revision. Cursors are signed and bound to the collection, complete
-normalized query, page size, host instance and projection generation. Any saved
-projection invalidation, including saves without a global revision change,
-invalidates continuation conservatively. Return `409` with
-`code:snapshot_changed`; discard the accumulated pages and restart. No retained
-old snapshots, unnoticed gaps or duplicate continuation records are promised.
+normalized query, page size, host instance and a coherent public-facts snapshot.
+Sessions, attention and activity have independent semantic revisions. Drafts,
+layout and transcript-only publications preserve those revisions and ETags.
+Membership/filter/lifecycle changes update sessions; notice content, fingerprints
+and acknowledgements update attention; changes to roles or actual counts update
+activity. A new first-page request sees current facts.
+
+A continuation reads its original snapshot even during sustained real changes.
+Its revision describes that snapshot, not a guarantee that the host is unchanged.
+Snapshots that issue cursors have a fixed ten-minute lease from construction;
+reads do not extend it. Expired continuation returns `409 snapshot_changed`:
+discard accumulated pages and restart. At most eight snapshots are retained
+across collections, shared by all clients/queries. Completed cursor-free snapshots
+can be replaced; leased snapshots are never evicted to admit a newer revision.
+When every slot is occupied, a new snapshot returns `503 observation_busy`;
+existing readers can still finish. Back off and retry only the observation.
 Malformed, tampered, cross-query, or old-instance cursors return `400
 invalid_cursor`; restart discovery and the collection. Unsupported/repeated
 parameters and invalid limits are rejected, not silently ignored.
@@ -86,10 +97,11 @@ busy presentation for preparation, but the public execution count remains exact.
 Large count scans inspect at most 4096 catalog/notice slots per request. Until
 finished they return HTTP 202 with `{revision,status:"collecting",nextCursor}`
 and **no partial numeric totals**. Continue with `cursor` and the same scope.
-A single host-wide accumulator shares work across authenticated readers. It
-retains ten counters and two positions, not a second catalog. A changed revision
-restarts the scan; an old continuation receives 409. Ready counts are reused
-until invalidated. No background scan runs for hosts without an observer.
+Each retained activity snapshot shares its on-demand accumulator across readers.
+Drafts and transcript deltas neither discard partial counts nor restart them.
+Genuine changes start a new revision for new readers; old cursors finish their
+original exact totals. Ready counts are reused for that snapshot. No background
+scan runs for hosts without an observer.
 
 All resources return private, revalidated ETags. Send `If-None-Match` and retain
 your observation on 304. Poll at most once per second while actively showing work;
@@ -100,12 +112,23 @@ re-authenticate; on 409 replace the observation. Reconnection never replays
 commands. Ordinary browser use adds no observation polling. A lightweight
 invalidation subscription is a future extension, not a requirement of v1.
 
-Collection requests inspect at most 1024 candidate slots and materialize only
-one page. Continuation seeks directly to a session/notice slot, including within
-a chat with thousands of approvals. Pages are not cached by arbitrary queries.
-The pinned-ID set is a single current-generation shared lookup, O(number of
-pins); it is not retained per client/query or across generations. Existing
-canonical host catalog/read receipts remain owned by their existing stores.
+Page selection inspects at most 1024 candidate slots and materializes at most
+one page. Continuation seeks directly into a session/notice array, including
+within a chat with thousands of approvals. Arbitrary query keys are not cached.
+
+Coherent continuation has an explicit resource cost: the first observation builds
+one shared allowlisted public-facts index in O(sessions + notice slots) time and
+O(sessions + emitted notices) memory. This cold construction is **not** included
+in the 1024/4096 page/count budgets. Unknown/broad saves reconcile the same
+index; scoped saves reconcile only affected rows, while the existing verified
+transcript-only publication path does no reconciliation. Unchanged row facts are
+reused by identity. Pin/read-receipt changes currently require broad reconciliation.
+The current pin lookup/read receipts are shared, not copied per query. A snapshot
+retains one tuple of row references; revisions share unchanged row bodies. At
+most eight such snapshots plus the current index are retained, never whole
+transcripts or private prompt/tool/error bodies. Expired leases are reclaimed on
+the next observation request, without a background timer. See the acceptance
+report for cold/reconciliation costs measured separately from warm continuation.
 
 ## Notices, acknowledgement, and commands
 

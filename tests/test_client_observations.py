@@ -112,7 +112,7 @@ async def test_lifecycle_and_delegate_semantics_shared_with_navigation(observati
     assert legacy['workingCount'] == 1
 
 
-async def test_cursors_reject_changed_revision_query_and_malformed_parameters(observation_host):
+async def test_cursors_preserve_snapshots_and_reject_changed_query_and_malformed_parameters(observation_host):
     app, client = observation_host
     catalog(app['service'], 3)
     params = {'view': 'observation', 'limit': '1'}
@@ -124,8 +124,10 @@ async def test_cursors_reject_changed_revision_query_and_malformed_parameters(ob
     app['service'].state['sessions'][0]['status'] = 'working'
     app['service'].projections.invalidate()  # Even saves without a global revision invalidate cursors.
     response = await client.get('/api/sessions', params={**params, 'cursor': cursor})
-    assert response.status == 409
-    assert (await response.json())['code'] == 'snapshot_changed'
+    assert response.status == 200
+    assert (await response.json())['revision'] == page['revision']
+    fresh = await (await client.get('/api/sessions', params=params)).json()
+    assert fresh['revision'] != page['revision'] and fresh['items'][0]['status'] == 'working'
     for path in ['/api/attention?offset=200', '/api/activity?offset=0', '/api/sessions?view=observation&offset=1',
                  '/api/attention?limit=no', '/api/attention?limit=201', '/api/attention?limit=1&limit=2',
                  '/api/sessions?bogus=1', '/api/sessions?offset=no']:
@@ -140,7 +142,7 @@ async def test_etags_auth_and_no_new_work_for_web_clients(observation_host, monk
     assert observations.counts_cache is None
     with service.clients.bind('generic-api'):
         service.browser_state()
-    assert observations.counts_cache is None
+    assert observations.counts_cache is None and observations.facts is None and not observations.dirty
     response = await client.get('/api/activity')
     etag = response.headers['ETag']
     cached = observations.counts_cache
@@ -150,7 +152,7 @@ async def test_etags_auth_and_no_new_work_for_web_clients(observation_host, monk
         response = await client.get(endpoint)
         assert (await client.get(endpoint, headers={'If-None-Match': response.headers['ETag']})).status == 304
     service.projections.invalidate()
-    assert (await client.get('/api/activity', headers={'If-None-Match': etag})).status == 200
+    assert (await client.get('/api/activity', headers={'If-None-Match': etag})).status == 304
     for endpoint in ['/api/activity', '/api/attention', '/api/sessions?view=observation']:
         assert (await client.get(endpoint, headers={'Origin': 'https://evil.invalid'})).status == 403
         assert (await client.get(endpoint, headers={'Authorization': 'Bearer invalid'})).status == 401
@@ -190,11 +192,14 @@ async def test_pages_have_bounded_construction_and_no_query_cache_growth(tmp_pat
             calls += 1
             return original(*args)
         monkeypatch.setattr(module, 'session_item_at', observed)
+        observations.refresh()  # One cold public-facts index, shared across queries.
+        calls = 0
         for limit in range(1, 201):
             page = observations.page('attention', {'limit': str(limit)})
             assert len(page['items']) == limit
-        assert calls <= 200 * SCAN_BUDGET
-        assert observations.counts_cache is None and observations.pins_cache is None
+        assert calls == 0
+        assert len(observations.snapshots) == 1
+        assert observations.counts_cache is None
         calls = 0
         # Resuming a dense single-session collection must seek, not rebuild its prefix.
         service.state['sessions'] = [dict(id='large', title='Large', approvals=[{'id': str(i)} for i in range(10000)])]
@@ -202,7 +207,7 @@ async def test_pages_have_bounded_construction_and_no_query_cache_growth(tmp_pat
         first = observations.page('attention', {'limit': '200'})
         calls = 0
         second = observations.page('attention', {'limit': '200', 'cursor': first['nextCursor']})
-        assert calls == 200 and second['items'][0]['id'] == 'approval:200'
+        assert calls == 0 and second['items'][0]['id'] == 'approval:200'
         # Sparse filters can return empty progress pages, still bounded and traversable.
         catalog(service, 3000)
         service.state['sessions'][-1]['status'] = 'working'
@@ -220,7 +225,7 @@ async def test_pages_have_bounded_construction_and_no_query_cache_growth(tmp_pat
         await service.close()
 
 
-async def test_large_counts_progress_is_bounded_and_restart_is_explicit(observation_host, monkeypatch):
+async def test_large_counts_progress_survives_unrelated_invalidation(observation_host, monkeypatch):
     import amplifier_web.client_observations as module
     app, client = observation_host
     service = app['service']
@@ -232,13 +237,15 @@ async def test_large_counts_progress_is_bounded_and_restart_is_explicit(observat
         calls += 1
         return original(*args)
     monkeypatch.setattr(module, 'session_item_at', observed)
+    app['observations'].refresh()
+    calls = 0
     response = await client.get('/api/activity')
     assert response.status == 202
     pending = await response.json()
     assert 'executionCount' not in pending and pending['nextCursor']
     assert calls <= module.COUNT_BUDGET
     service.projections.invalidate()
-    assert (await client.get('/api/activity', params={'cursor': pending['nextCursor']})).status == 409
+    assert (await client.get('/api/activity', params={'cursor': pending['nextCursor']})).status == 202
     params = {}
     for _ in range(30):
         calls = 0
@@ -288,3 +295,165 @@ async def test_generic_commands_keep_explicit_target_after_navigation_and_safe_r
     assert approvals == [(target, 'approval-target', 'allow')]
     assert (await client.post(endpoint, json={'id': 'stop-target', 'action': 'conversation.stop', 'args': {}})).status == 200
     assert service.runtime.stopped == [target]
+
+
+async def test_busy_host_keeps_semantic_revisions_and_finishes_large_reads(observation_host, monkeypatch):
+    app, client = observation_host
+    service, observations = app['service'], app['observations']
+    catalog(service, 10000)
+    session_params = {'view': 'observation', 'limit': '200'}
+    notice_params = {'limit': '200'}
+    first = await client.get('/api/sessions', params=session_params)
+    session_etag = first.headers['ETag']
+    page = await first.json()
+    notice_first = await client.get('/api/attention', params=notice_params)
+    notice_etag = notice_first.headers['ETag']
+    notices = await notice_first.json()
+    activity = await (await client.get('/api/activity')).json()
+    revisions = (page['revision'], notices['revision'], activity['revision'])
+    sessions, notice_ids = [r['id'] for r in page['items']], [r['id'] for r in notices['items']]
+    calls = 0
+    original = observations.row_facts
+    def observed(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+    monkeypatch.setattr(observations, 'row_facts', observed)
+    for step in range(110):
+        # Real command/save path, not a simulated generation increment. Continue
+        # through several full count batches while browser drafts are changing.
+        if step < 8:
+            with service.clients.bind('generic-api'):
+                await service.dispatch('view.update', {'patch': {'draft': f'Draft {step}'}}, include_state=False)
+            assert (await client.get('/api/sessions', params=session_params,
+                headers={'If-None-Match': session_etag})).status == 304
+            assert (await client.get('/api/attention', params=notice_params,
+                headers={'If-None-Match': notice_etag})).status == 304
+        # A proven transcript-only publication costs no catalog reconciliation.
+        calls = 0
+        service._state['sessions'][0]['messages'] = [{'role': 'assistant', 'content': f'Token {step}'}]
+        service.projections.invalidate(state=service._state, session_ids={'s0'}, detail_only=True)
+        if page['nextCursor']:
+            page = await (await client.get('/api/sessions', params={**session_params, 'cursor': page['nextCursor']})).json()
+            assert page['revision'] == revisions[0]
+            sessions.extend(r['id'] for r in page['items'])
+        if notices['nextCursor']:
+            notices = await (await client.get('/api/attention', params={**notice_params, 'cursor': notices['nextCursor']})).json()
+            assert notices['revision'] == revisions[1]
+            notice_ids.extend(r['id'] for r in notices['items'])
+        if activity['nextCursor']:
+            activity = await (await client.get('/api/activity', params={'cursor': activity['nextCursor']})).json()
+            assert activity['revision'] == revisions[2]
+        assert calls == 0
+        if not any((page['nextCursor'], notices['nextCursor'], activity['nextCursor'])):
+            break
+    else:
+        pytest.fail('Busy host did not finish traversal')
+    assert len(sessions) == len(set(sessions)) == 10000
+    assert len(notice_ids) == len(set(notice_ids)) == 20000
+    assert activity['attentionCount'] == 20000 and activity['requiresActionCount'] == 10000
+    response = await client.get('/api/activity')
+    with service.clients.bind('generic-api'):
+        await service.dispatch('view.update', {'patch': {'draft': 'Final draft'}}, include_state=False)
+    assert (await client.get('/api/activity', headers={'If-None-Match': response.headers['ETag']})).status == 304
+
+
+async def test_independent_dependencies_and_coherent_snapshots_during_real_changes(observation_host):
+    app, client = observation_host
+    service, observations = app['service'], app['observations']
+    catalog(service, 30)
+    params = {'limit': '1'}
+    sessions = observations.page('sessions', params)
+    notices = observations.page('attention', params)
+    activity = observations.activity()
+    row = service._state['sessions'][0]
+    row['status'] = 'working'
+    service.projections.invalidate(state=service._state, session_ids={'s0'})
+    assert observations.page('sessions', params)['revision'] != sessions['revision']
+    assert observations.page('attention', params)['revision'] == notices['revision']
+    assert observations.activity()['executionCount'] == 1
+    session_revision = observations.page('sessions', params)['revision']
+    completion = notices['items'][0]
+    service._state['attentionRead'] = {completion['id']: completion['fingerprint']}
+    service.projections.invalidate(state=service._state, session_ids=set())
+    assert observations.page('sessions', params)['revision'] == session_revision
+    assert observations.page('attention', params)['revision'] != notices['revision']
+    assert observations.activity()['attentionCount'] == 59
+    notice_revision = observations.page('attention', params)['revision']
+    activity_revision = observations.activity()['revision']
+    service._state['pinnedSessionIds'] = []
+    service.projections.pins_changed(service._state)
+    assert not observations.page('sessions', params)['items'][0]['pinned']
+    assert observations.page('attention', params)['revision'] == notice_revision
+    assert observations.activity()['revision'] == activity_revision
+    # Every continuation still refers to its immutable original catalog, even
+    # when a row is deleted and another row changes between every request.
+    ids = [sessions['items'][0]['id']]
+    while sessions['nextCursor']:
+        service._state['sessions'][-1]['status'] = 'running' if len(ids) % 2 else 'idle'
+        if len(ids) == 2:
+            service._state['sessions'].pop(0)
+        service.projections.invalidate()
+        sessions = observations.page('sessions', {**params, 'cursor': sessions['nextCursor']})
+        ids.extend(r['id'] for r in sessions['items'])
+    assert ids == [f's{i}' for i in range(30)]
+    assert observations.page('sessions', params)['items'][0]['id'] == 's1'
+
+
+async def test_snapshot_capacity_preserves_existing_readers_and_expiry_is_explicit(observation_host, monkeypatch):
+    import amplifier_web.client_observations as module
+    app, client = observation_host
+    service, observations = app['service'], app['observations']
+    catalog(service, 20)
+    now = 1000
+    monkeypatch.setattr(module.time, 'monotonic', lambda: now)
+    cursors = []
+    for i in range(module.MAX_SNAPSHOTS):
+        service._state['sessions'][0]['title'] = f'Chat {i}'
+        service.projections.invalidate()
+        cursors.append(observations.page('sessions', {'limit': '1'})['nextCursor'])
+    service._state['sessions'][0]['title'] = 'One more'
+    service.projections.invalidate()
+    with pytest.raises(AppError) as error:
+        observations.page('sessions', {'limit': '1'})
+    assert error.value.code == 'observation_busy'
+    for cursor in cursors:
+        assert observations.page('sessions', {'limit': '1', 'cursor': cursor})['items'][0]['id'] == 's1'
+    now += module.SNAPSHOT_SECONDS
+    with pytest.raises(AppError) as error:
+        observations.page('sessions', {'limit': '1', 'cursor': cursors[0]})
+    assert error.value.code == 'snapshot_changed'
+    assert observations.page('sessions', {'limit': '1'})['items'][0]['title'] == 'One more'
+
+
+async def test_large_count_finishes_original_totals_during_sustained_changes(observation_host, monkeypatch):
+    app, client = observation_host
+    service, observations = app['service'], app['observations']
+    catalog(service, 10000)
+    counts = observations.activity()
+    original_revision = counts['revision']
+    original = observations.row_facts
+    calls = 0
+    def observed(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+    monkeypatch.setattr(observations, 'row_facts', observed)
+    for step in range(30):
+        if not counts['nextCursor']:
+            break
+        calls = 0
+        row = service._state['sessions'][step]
+        row.update(status='working', completion={'id': f'changed-{step}', 'at': step + 1})
+        service.projections.invalidate(state=service._state, session_ids={row['id']})
+        counts = observations.activity(cursor=counts['nextCursor'])
+        assert calls == 1  # Scoped changes never rescan the catalog.
+        assert counts['revision'] == original_revision
+    else:
+        pytest.fail('Real changes starved count continuation')
+    assert counts['executionCount'] == 0
+    assert counts['attentionCount'] == 20000 and counts['requiresActionCount'] == 10000
+    current = observations.activity()
+    while current['nextCursor']:
+        current = observations.activity(cursor=current['nextCursor'])
+    assert current['revision'] != original_revision and current['executionCount'] > 0

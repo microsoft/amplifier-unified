@@ -1,15 +1,20 @@
 # Shared client observations: review acceptance
 
-The review identified unreachable items after fixed cutoffs and history loading
-being counted as agent execution. The revised observation slice replaces those
-implementations with generic cursor resources and shared lifecycle/attention
-helpers. See [the public contract](../clients/observations.md).
+The second review reproduced continuation resets after unrelated browser drafts
+and transcript deltas. Observation revisions now follow public facts separately
+for sessions, notices and activity. Leased lightweight snapshots preserve coherent
+continuation even while the live catalog changes. Browser links were refreshed
+against main and production assets rebuilt from the merged frontend source.
+See [the public contract](../clients/observations.md).
 
 ## Owned environment and checks
 
-Final combined-source validation on main `cb8946ac1` (Unified 0.20.122):
-302 host tests passed, along with the chat-link parser, both browser acceptance
-checks and the independent browser-link production build.
+Validation on main `af1d453c8` (Unified 0.20.123), restacked on browser-link
+commit `188035616`: 308 host tests passed in the focused combined suite; the final
+13 observation regressions also passed, including one added sustained-change
+count test (309 distinct host tests total). Chat-link and provider-record-export
+parser tests, both combined-stack browser acceptance checks, the independent
+browser-link build and its browser acceptance all passed.
 
 Checks run on spark-2 in the owned DTU `unified-macos-companion`. Observation
 source/dependencies are isolated at `/opt/tempo-main-integration`; independent
@@ -20,7 +25,7 @@ Ownership, revisions, evidence and exact cleanup are in the workspace manifest.
 
 - The host regression suite covers generic API and legacy adapter traversal beyond
   50 sessions and 200 notices, including 205 approvals in one chat; bounded and
-  sparse pages; query/revision/tamper rejection; incremental large counts; ETags;
+  sparse pages; query/tamper/expiry rejection; incremental large counts; ETags;
   authentication/origin/client requirements; no history hydration; correct
   idle/loading/preparation/root/delegate semantics; shared read/fingerprint races;
   acknowledgement without approval; and explicit reply/stop/approval targets
@@ -30,13 +35,27 @@ Ownership, revisions, evidence and exact cleanup are in the workspace manifest.
   through login, unavailable/deleted targets, reload and multiple windows.
 - A real web client creates a manual unread marker, reads the generic summary and
   catalogs, acknowledges the exact fingerprint and verifies selection is retained.
-- The synthetic construction benchmark traverses 10,000 sessions and 20,000
-  notices. On this DTU, with allocation tracing enabled, it required 13 count
-  batches, 50 session pages and 100 attention pages; the maximum measured request
-  was 53 ms, total count construction 0.64 s, and additional traced peak memory
-  807,666 bytes. These measure projection construction on synthetic metadata,
-  excluding the preexisting catalog and network. They are not native idle usage
-  measurements or an end-to-end latency guarantee.
+- New authenticated-host regression traverses 10,000 sessions and 20,000 notices
+  while interleaving real `view.update` saves and transcript-only invalidations.
+  It verifies unchanged ETags/revisions, exact totals, no duplicate/missing IDs,
+  and no public-index reconciliation for transcript deltas. Additional tests
+  cover independent lifecycle/read/pin dependencies, deletion during traversal,
+  continuous real changes during count continuation, lease expiry and admission
+  backpressure without evicting existing readers.
+- The synthetic construction benchmark traverses the same 10,000-session /
+  20,000-notice catalog: 8 count batches, 50 session pages and 100 notice pages.
+  With allocation tracing enabled, cold public-index construction was 0.505 s,
+  maximum warm request 0.017 s, broad reconciliation 0.493 s, one scoped change
+  including cold canonical SessionIndex setup 0.096 s, and 1,000 transcript-only
+  invalidations together 0.0044 s. Additional traced peak memory was 22,797,243
+  bytes. These are synthetic projection measurements excluding the preexisting
+  catalog/network, not native idle usage or an end-to-end latency guarantee.
+- **Tradeoff:** retained public facts and snapshot references use more memory
+  than the prior live-state scanner (~22.8 MB versus ~0.81 MB in these runs).
+  Cold construction and broad reconciliation remain O(catalog + notice slots),
+  outside the bounded page/count loops. Warm continuation avoids reconstruction;
+  transcript-only saves do not scan the catalog. Eight fixed ten-minute snapshot
+  leases bound retained generations and protect progress under genuine changes.
 
 ## Reproduce inside an owned DTU
 
@@ -47,7 +66,7 @@ uv sync --locked --group dev
   tests/test_disconnected_attention.py tests/test_active_client_projections.py \
   tests/test_chat_navigation.py tests/test_navigation_summary.py \
   tests/test_pinned_chats.py tests/test_questions.py tests/test_observations.py \
-  tests/test_server_auth.py
+  tests/test_server_auth.py tests/test_storage_workspace_scope.py
 .venv/bin/python tests/fixtures/client_observation_benchmark.py
 cd frontend
 npm ci
