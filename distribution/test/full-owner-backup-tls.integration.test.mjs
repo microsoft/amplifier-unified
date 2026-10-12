@@ -116,7 +116,7 @@ export async function createBackupAdapters({getSupervisor}){return {readComposit
  // Seed a private browser draft only after installation created its namespace.
  // It has no session action and cannot trigger execution.
  const drafts=join(state,'saved-draft-fixture.sqlite'),db=new DatabaseSync(drafts);db.exec('CREATE TABLE drafts(id TEXT PRIMARY KEY, body TEXT)');db.prepare('INSERT INTO drafts VALUES(?,?)').run(sid,'Keep this unsent cobalt draft');db.close();const draftBytes=await readFile(drafts);
- const ca=await readFile(join(root,'cert.pem'));beforePeer=await peer(tlsOrigin,ca,await login(tlsOrigin,ca,code));
+ const ca=await readFile(join(root,'cert.pem')),originalCookie=await login(tlsOrigin,ca,code);beforePeer=await peer(tlsOrigin,ca,originalCookie);
  const reviewed=await beforePeer.action('review'),args={reviewId:reviewed.id,reviewDigest:reviewed.digest,privateContentReviewed:true,credentialsReviewed:true};assert.equal(reviewed.owners.length,21);
  const submitted=await beforePeer.action('create',args,'backup-production-tls');assert.equal(submitted.receipt.status,'accepted');
  let completed;for(let i=0;i<1200;i++){completed=await controller.receipt('backup-production-tls');if(['succeeded','failed','unknown'].includes(completed.status))break;await new Promise(r=>setTimeout(r,100));}if(captureFailure){
@@ -135,7 +135,7 @@ export async function createBackupAdapters({getSupervisor}){return {readComposit
  const launchIds=captured.manifest.installedEvidence.launchInputRootIds;assert.equal(launchIds.length,5);
  for(const id of launchIds){const r=captured.manifest.inventory.roots.find(r=>r.id===id),entry=captured.manifest.entries.find(e=>e.name==='roots/'+id);assert.equal(entry.sha256,sha(await readFile(r.path)));}
  const after=await supervisor.service.inspect();assert.equal(after.state,'running');assert.notEqual(after.identity.instanceId,reviewed.expected.instanceId);
- afterPeer=await peer(tlsOrigin,ca,await login(tlsOrigin,ca,code));const original=(await afterPeer.action('receipt',{commandId:'backup-production-tls'})).receipt;assert.equal(original.status,'succeeded');
+ afterPeer=await peer(tlsOrigin,ca,originalCookie);const original=(await afterPeer.action('receipt',{commandId:'backup-production-tls'})).receipt;assert.equal(original.status,'succeeded');
  // The host rejects an already admitted mutation before dispatch. Recovery is
  // the read-only receipt path; neither layer repeats the original capture.
  await assert.rejects(afterPeer.action('create',args,'backup-production-tls'),/Command already admitted: completed/);
