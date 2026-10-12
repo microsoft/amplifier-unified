@@ -1207,15 +1207,19 @@ def test_media_root_default_is_only_missing_not_falsey():
 
 @pytest.mark.parametrize('producer', ['cold-display', 'session-projection'])
 async def test_real_cold_alias_producers_and_reopen(media_app, monkeypatch, producer):
+    from contextlib import closing
     import copy
+    import sqlite3
     from amplifier_web import cold_display, state_records
     from amplifier_web.service import AppService
     from test_service import Runtime
     app = media_app
     session, _, _, directory, canonical = cold_alias_corpus(app, native_message_id=False)
+    original_messages = copy.deepcopy(dict.get(session, 'messages'))
     sid = session['id']
     raw = (directory / 'transcript.jsonl').read_bytes()
     home, workspace = app.data_dir, session['workspace']
+    database = next(row[2] for row in app.db.execute('PRAGMA database_list') if row[1] == 'main')
     if producer == 'cold-display':
         # Real retirement must release the list, not just create a descriptor.
         app._state['selectedSessionId'] = None
@@ -1230,6 +1234,8 @@ async def test_real_cold_alias_producers_and_reopen(media_app, monkeypatch, prod
         saved = cold_display.load(app.db, pointer)
         reference = saved['_coldFields']['messages']
         assert dict.__contains__(session, 'messages'), 'storage projection must not evict live aliases'
+        assert dict.get(session, 'messages') == original_messages
+    assert cold_display.load(app.db, reference) == original_messages
     hint = reference['mediaBindings']
     assert hint['resource'] == reference['$resource'] and hint['scope'] == session['nativeIdentity']
     assert hint['revision'] == session['nativeRevision']
@@ -1237,12 +1243,45 @@ async def test_real_cold_alias_producers_and_reopen(media_app, monkeypatch, prod
     assert all('text' not in row for row in hint['bindings'])
     assert any(row['id'] == 'saved-web-assistant' and row['nativeIndex'] == 1 for row in hint['bindings'])
     app._save(session_ids={sid}, record_only=True)
+    pointer = next(row['$viewPayload'] for row in state_records.load(app.db)['sessions']
+                   if row['id'] == sid)
+    saved = cold_display.load(app.db, pointer)
+    assert saved['_coldFields']['messages'] == reference
+    assert cold_display.load(app.db, saved['_coldFields']['messages']) == original_messages
     await app.close()
+    # The committed SQLite pointer, not view.json or a reconstructed expected
+    # reference, owns the complete producer body across shutdown.
+    with closing(sqlite3.connect(database)) as saved_db:
+        pointer = next(row['$viewPayload'] for row in state_records.load(saved_db)['sessions']
+                       if row['id'] == sid)
+        saved = cold_display.load(saved_db, pointer)
+        assert saved['_coldFields']['messages'] == reference
+        assert cold_display.load(saved_db, saved['_coldFields']['messages']) == original_messages
     reopened = AppService(home, workspace=workspace, runtime=Runtime())
     try:
         reopened.clients.attach('producer-reopen-browser')
         reopened.clients.records['producer-reopen-browser']['selectedSessionId'] = sid
         source = reopened._session(sid, hydrate=False)
+        # Startup legitimately consumes messages for delivery reconciliation.
+        # Prove its entire resident body and durable reference before re-cooling.
+        assert dict.__contains__(source, 'messages')
+        assert dict.get(source, 'messages') == original_messages
+        assert dict.get(source, '_coldFields', {}).get('messages') is None
+        pointer = next(row['$viewPayload'] for row in state_records.load(reopened.db)['sessions']
+                       if row['id'] == sid)
+        saved = cold_display.load(reopened.db, pointer)
+        assert saved['_coldFields']['messages'] == reference
+        assert cold_display.load(reopened.db, saved['_coldFields']['messages']) == original_messages
+        assert source['nativeIdentity'] == hint['scope']
+        assert source['nativeRevision'] == hint['revision']
+        assert source['nativeProject'] == hint['project']
+        # Deep-copy baselines/inline comparisons above borrow no mutable live
+        # messages or nested rows. Preserve all normal ownership/protection gates.
+        reopened._state['selectedSessionId'] = None
+        monkeypatch.setattr(reopened.cold_display, 'RECENT_LIMIT', 0)
+        assert sid in reopened.cold_display.retire(force=True), (
+            'Real reopened retirement must pass ownership, demand, persisting, '
+            'progress and minimum-body-size gates without overriding them')
         markers = copy.deepcopy(dict.get(source, '_coldFields'))
         assert markers['messages'] == reference
         with reopened.clients.bind('producer-reopen-browser'):
@@ -2089,3 +2128,224 @@ def test_large_legacy_inline_saved_alias_warm_requests_require_no_body_reads(mon
         assert value['coldMessages'] == reference and 'messages' not in value
     finally:
         db.close()
+
+
+@pytest.mark.parametrize('file_backed', [False, True])
+@pytest.mark.parametrize('message_spelling', ['canonical', 'retained'])
+def test_legacy_inline_alias_warm_cache_fresh_evidence_rejects_same_length_suffix_corruption(
+        tmp_path, monkeypatch, file_backed, message_spelling):
+    import sqlite3
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web import media_saved_aliases, resource_files
+    db = sqlite3.connect(tmp_path / 'legacy.sqlite' if file_backed else ':memory:')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        value = {'id': 'synthetic-inline-scope'}
+        text = 'Exact inline saved text 雪😀\n' * 5000
+        canonical = display_identity(value, 1, 'assistant', text)
+        prepared = resource_files.prepare([
+            {'id': 'legacy-inline-alias', 'role': 'assistant', 'nativeIndex': 1, 'text': text},
+            {'id': 'unrelated-suffix', 'role': 'user', 'text': 'tail-original'}])
+        # Legacy SQLite inline rows also exist in file-backed databases. Do not
+        # replace this discriminator with put()'s file-backed pointer form.
+        db.execute('INSERT INTO state_resources VALUES (?, ?)', (prepared.identity, prepared.text))
+        db.commit()
+        reference = {'$resource': prepared.identity, 'bytes': prepared.size}
+        value['coldMessages'] = reference
+        source = resource_files.detach(db, prepared.identity)
+        assert (source.directory is not None) == file_backed and len(source.indexed) > 1024
+        fact = (canonical, 'assistant', True, 1, None)
+        requested = canonical if message_spelling == 'canonical' else 'legacy-inline-alias'
+        aliases = media_saved_aliases.SavedAliases()
+        assert aliases.resolve(source, value, requested, [1, 2], [fact])[0] == fact
+        assert len(aliases.cache) == 1
+        key = next(iter(aliases.cache))
+        assert key[:4] == (source.directory, prepared.identity, prepared.identity, prepared.size)
+        assert source.indexed not in repr(aliases.cache) and text not in repr(aliases.cache)
+        keys = tuple(aliases.cache)
+        fingerprints = []
+        real = media_saved_aliases._indexed_evidence
+
+        def fingerprint(indexed):
+            assert aliases.lock.locked()
+            evidence = real(indexed)
+            fingerprints.append(evidence)
+            return evidence
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Warm inline identity must not stream or decode the saved body')
+
+        monkeypatch.setattr(media_saved_aliases, '_indexed_evidence', fingerprint)
+        monkeypatch.setattr(resource_files._InlineStream, 'read', forbidden)
+        monkeypatch.setattr(media_saved_aliases.DisplayJSON, 'rows', forbidden)
+        for _ in range(2):
+            fresh = resource_files.detach(db, prepared.identity)
+            assert aliases.resolve(fresh, value, requested, [1, 2], [fact])[0] == fact
+        assert fingerprints == [(prepared.identity, prepared.size)] * 2
+        # Alter only a trailing, unrelated row; requested canonical facts and
+        # resource ID, byte count, scope and revision all remain unchanged.
+        changed = prepared.text.replace('tail-original', 'tail-tampered')
+        assert changed != prepared.text and len(changed) == len(prepared.text)
+        assert len(changed.encode('utf-8')) == prepared.size
+        db.execute('UPDATE state_resources SET value=? WHERE id=?', (changed, prepared.identity))
+        db.commit()
+        fresh = resource_files.detach(db, prepared.identity)
+        with pytest.raises(ValueError, match='Artifact content conflicts with its identity'):
+            aliases.resolve(fresh, value, requested, [1, 2], [fact])
+        assert len(fingerprints) == 3 and fingerprints[-1][0] != prepared.identity
+        assert fingerprints[-1][1] == prepared.size and tuple(aliases.cache) == keys
+        assert value['coldMessages'] == reference and 'messages' not in value
+    finally:
+        db.close()
+
+
+def test_saved_alias_indexed_evidence_bounds_temporary_utf8_encoding():
+    import tracemalloc
+    from amplifier_web.media_saved_aliases import _indexed_evidence
+    text = ('雪😀\\\n' * 300000) + 'complete trailing suffix'
+    encoded = text.encode('utf-8')
+    expected = (hashlib.sha256(encoded).hexdigest(), len(encoded))
+    del encoded
+    chunks = []
+
+    class BoundedText(str):
+        def encode(self, *args, **kwargs):
+            raise AssertionError('The full indexed body must not be encoded at once')
+
+        def __getitem__(self, key):
+            assert isinstance(key, slice) and 0 < key.stop - key.start <= 8192
+            chunk = super().__getitem__(key)
+            chunks.append(len(chunk))
+            return chunk
+
+    indexed = BoundedText(text)
+    del text
+    # This measures temporary Python allocations after the captured string
+    # exists, not SQLite capture or native heap use.
+    tracemalloc.start()
+    try:
+        evidence = _indexed_evidence(indexed)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert evidence == expected
+    assert sum(chunks) == len(indexed) and max(chunks) == 8192
+    assert peak < 256 * 1024
+    with pytest.raises(UnicodeEncodeError):
+        _indexed_evidence('invalid lone surrogate \ud800')
+
+
+@pytest.mark.parametrize('file_backed', [False, True])
+def test_large_legacy_inline_alias_cache_coalesces_and_evicts_without_retaining_body(
+        tmp_path, monkeypatch, file_backed):
+    from concurrent.futures import ThreadPoolExecutor
+    import sqlite3
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web import media_saved_aliases, resource_files
+    db = sqlite3.connect(tmp_path / 'legacy-cache.sqlite' if file_backed else ':memory:')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        value = {'id': 'synthetic-inline-scope'}
+        text = 'full text 雪😀' * 64
+        rows = [{'id': 'alias-' + str(i), 'role': 'assistant', 'nativeIndex': i, 'text': text}
+                for i in range(40)]
+        facts = [(display_identity(value, i, 'assistant', text), 'assistant', True, i, None)
+                 for i in range(40)]
+        prepared = resource_files.prepare(rows)
+        db.execute('INSERT INTO state_resources VALUES (?, ?)', (prepared.identity, prepared.text))
+        db.commit()
+        value['coldMessages'] = {'$resource': prepared.identity, 'bytes': prepared.size}
+        source = resource_files.detach(db, prepared.identity)
+        assert len(source.indexed) > 1024 and (source.directory is not None) == file_backed
+        aliases = media_saved_aliases.SavedAliases()
+        real_projection, real_fingerprint = media_saved_aliases.project_detached, media_saved_aliases._indexed_evidence
+        projections, fingerprints = [], []
+
+        def project(*args):
+            projections.append(True)
+            return real_projection(*args)
+
+        def fingerprint(indexed):
+            assert aliases.lock.locked()
+            fingerprints.append(True)
+            return real_fingerprint(indexed)
+
+        monkeypatch.setattr(media_saved_aliases, 'project_detached', project)
+        monkeypatch.setattr(media_saved_aliases, '_indexed_evidence', fingerprint)
+        captures = [resource_files.detach(db, prepared.identity) for _ in range(8)]
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            futures = [workers.submit(aliases.resolve, captured, value, 'alias-0', [1, 2], facts)
+                       for captured in captures]
+            assert all(future.result()[0] == facts[0] for future in futures)
+        assert len(projections) == 1 and len(fingerprints) == 8
+        for i in range(1, 40):
+            fresh = resource_files.detach(db, prepared.identity)
+            assert aliases.resolve(fresh, value, 'alias-' + str(i), [1, 2], facts)[0] == facts[i]
+        assert len(aliases.cache) == aliases.LIMIT == 32
+        assert len(projections) == 40 and len(fingerprints) == 47
+
+        def compact(item):
+            assert not isinstance(item, resource_files.Detached)
+            if isinstance(item, str):
+                assert len(item) <= 1024, 'Cache retained an inline body rather than compact evidence'
+            elif isinstance(item, dict):
+                for key, value in item.items():
+                    compact(key)
+                    compact(value)
+            elif isinstance(item, (tuple, list)):
+                for value in item:
+                    compact(value)
+
+        compact(aliases.cache)
+        assert prepared.text not in repr(aliases.cache)
+        # alias-0 is actually evicted, not merely hidden by a reported cap.
+        assert aliases.resolve(source, value, 'alias-0', [1, 2], facts)[0] == facts[0]
+        assert len(projections) == 41 and len(fingerprints) == 48
+        assert len(aliases.cache) == 32
+    finally:
+        db.close()
+
+
+async def test_legacy_inline_alias_fresh_hashing_runs_off_owner_thread_on_warm_media(
+        media_app, monkeypatch):
+    import copy
+    import threading
+    from amplifier_web import media_saved_aliases, resource_files
+    app = media_app
+    session, _, _, _, canonical = cold_alias_corpus(app, native_message_id=False)
+    sid = session['id']
+    prepared = resource_files.prepare(dict.get(session, 'messages'))
+    chilled, reference = await freeze_alias_display(app, session)
+    assert reference['$resource'] == prepared.identity
+    async with app.lock:
+        # An unchanged content-addressed body in the legacy inline representation.
+        app.db.execute('UPDATE state_resources SET value=? WHERE id=?', (prepared.text, prepared.identity))
+        app.db.commit()
+    source = resource_files.detach(app.db, prepared.identity)
+    assert source.directory is not None and source.indexed == prepared.text
+    markers = copy.deepcopy(dict.get(chilled, '_coldFields'))
+    owner, threads = threading.get_ident(), []
+    real = media_saved_aliases._indexed_evidence
+
+    def fingerprint(indexed):
+        thread = threading.get_ident()
+        assert thread != owner, 'Fresh body-sized hashing must remain in the existing worker'
+        threads.append(thread)
+        return real(indexed)
+
+    monkeypatch.setattr(media_saved_aliases, '_indexed_evidence', fingerprint)
+    for requested in (canonical, 'saved-web-assistant'):
+        assert (await app.outputs.media.identity(sid, requested))['fact'][0] == canonical
+    assert len(threads) == 2
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Warm media must not stream/decode the legacy inline saved body')
+
+    monkeypatch.setattr(resource_files._InlineStream, 'read', forbidden)
+    monkeypatch.setattr(media_saved_aliases.DisplayJSON, 'rows', forbidden)
+    app.clients.attach('inline-worker-browser')
+    with app.clients.bind('inline-worker-browser'):
+        for requested in (canonical, 'saved-web-assistant'):
+            assert (await app.outputs.media.describe(sid, requested))['items'] == []
+    assert len(threads) == 4 and owner not in threads
+    assert dict.get(chilled, '_coldFields') == markers and not dict.__contains__(chilled, 'messages')

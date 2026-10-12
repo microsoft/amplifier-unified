@@ -313,6 +313,20 @@ def discover(stream, value, message_id, facts):
     return fact, tuple(aliases)
 
 
+def _indexed_evidence(text):
+    """Fresh UTF-8 fingerprint without a body-sized encoded copy.
+
+    The owner-thread SQLite capture still holds the full inline string. This
+    worker-only loop is O(N), with at most 8192 characters encoded per chunk.
+    """
+    digest, size = hashlib.sha256(), 0
+    for start in range(0, len(text), 8192):
+        chunk = text[start:start + 8192].encode('utf-8')
+        digest.update(chunk)
+        size += len(chunk)
+    return digest.hexdigest(), size
+
+
 class SavedAliases:
     """Small instance-local cache; worker lock coalesces concurrent discovery."""
     LIMIT = 32
@@ -322,13 +336,20 @@ class SavedAliases:
         self.lock = threading.Lock()
 
     def resolve(self, source, value, message_id, revision, facts):
-        # Exact captured index/reference/scope, not path/hash alone. No DB/cursor
-        # is stored here. A changed file signature forces complete rediscovery.
-        cache_key = (source, message_id, json.dumps(
-            {name: item for name, item in value.items() if name not in ('rows', 'claimants')},
-            sort_keys=True, ensure_ascii=False), tuple(revision))
         with self.lock:
+            # Validate pointer/path evidence even on a hit. Inline classification
+            # comes from indexed content, not whether SQLite is file-backed.
             signature = detached_signature(source)
+            indexed_hash, indexed_bytes = _indexed_evidence(source.indexed)
+            if signature == ('inline', source.identity) and indexed_hash != source.identity:
+                raise ValueError('Artifact content conflicts with its identity.')
+            # Fresh compact evidence links only a previously complete projection.
+            # Never retain the Detached read or its potentially large inline body.
+            cache_key = (source.directory, source.identity, indexed_hash, indexed_bytes,
+                         message_id, json.dumps(
+                             {name: item for name, item in value.items()
+                              if name not in ('rows', 'claimants')},
+                             sort_keys=True, ensure_ascii=False), tuple(revision))
             cached = self.cache.get(cache_key)
             if cached and cached[1] == signature:
                 fact = cached[0]
@@ -341,10 +362,6 @@ class SavedAliases:
             projection, signature = project_detached(
                 source, lambda stream: discover(stream, value, message_id, facts))
             fact, alias_ids = projection
-            if len(source.indexed) > 1024:
-                # File-backed pointers are tiny; do not retain arbitrarily
-                # large inline SQLite bodies in this small descriptor cache.
-                return fact, signature
             self.cache[cache_key] = (fact, signature, alias_ids)
             while len(self.cache) > self.LIMIT:
                 self.cache.popitem(last=False)
