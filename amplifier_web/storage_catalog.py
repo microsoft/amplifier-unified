@@ -96,7 +96,7 @@ def measure(path, boundaries, seen, budget, *, deadline=None, stopped=None, cach
         return dict(cache[path])
     def expired():
         return (deadline is not None and time.monotonic() >= deadline) or (stopped is not None and stopped.is_set())
-    limited = 'Time or scan limit reached; open a folder for a closer measurement'
+    limited = 'Scan limit or time budget reached; open a folder for a closer measurement'
     empty = {'bytes': None, 'files': 0, 'incomplete': True, 'directory': True, 'measurementNote': limited}
     if expired():
         return empty
