@@ -60,11 +60,13 @@ test('native state paths match advertised pointer syntax without reading foreign
   await peer.request('createSession',{channel:session,provider:'fixture',workingDirectories:[pathToFileURL(f.workspace).href]});
   const context={session,nativeSessionId:'fixture'},read=path=>f.app.host.config.nativeHostRequest(context,{operation:'get_state',args:path===undefined?{}:{path}});
   assert.deepEqual(await read('/session'),await read());assert.deepEqual(await read('/clients'),{clients:[]});
+  assert.ok((await read('/session')).availableStatePaths.includes('/messages'));
+  const messages=await read('/messages');assert.equal(messages.sessionId,session);assert.deepEqual(messages.messages,[]);assert.equal(messages.execution,false);
   const created=await peer.request('x-amplifier/capabilityAction',{channel:session,topic:'canvas',operation:'canvas.show',version:1,args:{kind:'text',content:'Scoped artifact'},commandId:randomUUID()});
   for(const path of ['canvas','/canvas']){const result=await read(path);assert.equal(result.scope,session);assert.equal(result.data.canvasArtifacts[0].id,created.result.artifact.id);}
   for(const path of ['/session/other','/__proto__','constructor','/not-advertised',{},'//clients'])await assert.rejects(read(path),error=>error.code===-32602);
   assert.equal(f.app.host.diagnostics().activeAgents,1,'reads reuse the created agent and do not start additional work');
-  const guidance=f.app.host.config.nativeHostCapabilities.appControl.guidance;assert.match(guidance,/path:"\/clients"/);assert.match(guidance,/clients.invoke/);assert.match(guidance,/not tool_exec functions/);
+  const guidance=f.app.host.config.nativeHostCapabilities.appControl.guidance;assert.match(guidance,/path:"\/clients"/);assert.match(guidance,/clients.invoke/);assert.match(guidance,/not tool_exec functions/);assert.match(guidance,/path:"\/messages"/);assert.match(guidance,/outputs.attachMedia/);assert.match(guidance,/outputs.mediaReadReport/);
  }finally{peer?.close();await f.close();}
 });
 test('capability owner collisions fail before any authority is ambiguous',()=>{

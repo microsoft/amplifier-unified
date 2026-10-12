@@ -1,0 +1,26 @@
+{
+  "schema": "main-catchup-source-disposition-v1",
+  "main": {
+    "version": "0.20.121",
+    "revision": "55e8afe6e844fa66e014f8b1e15285178936d8dc"
+  },
+  "changes": [
+    "Retry one metadata-only saved-history race; preserve transcript conflicts and inconsistent-source refusal.",
+    "Expose bounded canonical saved assistant IDs through app_control /messages, with a checkpoint at the already-running discovery tool boundary."
+  ],
+  "sourceValidation": {
+    "host": {
+      "passed": 475,
+      "skippedOptionalIntegration": 55
+    },
+    "nativeAffected": 74,
+    "realNativeMediaWorkflow": 1,
+    "compositionStatePaths": 1
+  },
+  "evidenceLimits": [
+    "The earlier real DTU attempt on P75ae could not discover a saved message and attached no media.",
+    "The new real Native integration proves discovery, capture and idle visible-history identity. Final installed DTU browser replay remains pending.",
+    "Passive discovery never starts a worker or writes native history; only an existing execution boundary checkpoints its context."
+  ],
+  "releaseStatus": "source-qualified-awaiting-installed-acceptance"
+}

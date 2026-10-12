@@ -68,7 +68,7 @@
     "test:release": "python3 scripts/qualify-release.py"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-af8a9a002913.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-b307e00d8f69.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-e6afd7cec864.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-b4eb2a090773.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-62ca90a2954f.tgz",
