@@ -109,3 +109,18 @@ def test_workspace_settings_resources_and_global_dialog_have_distinct_demand():
     assert project(copy.deepcopy(state))['registry'] == state['registry']
     state['view'].update(panel='settings', settingsExpanded=['updates'])
     assert 'registry' not in project(copy.deepcopy(state))
+
+
+async def test_image_discovery_survives_other_owner_and_late_provider_list(app):
+    from amplifier_web.configuration_target import state_for
+    global_args = {'configurationTarget': {'kind': 'global'}}
+    workspace_args = {'configurationTarget': {'kind': 'workspace', 'workspaceId': 'edited'}}
+    global_catalog = {'one': {'models': [{'id': 'global-image'}], 'supported': True}}
+    state_for(app, 'setup', global_args)['imageCatalogs'] = copy.deepcopy(global_catalog)
+    state_for(app, 'setup', workspace_args)['imageCatalogs'] = {'one': {'models': [{'id': 'workspace-image'}]}}
+    # A late list must not erase already-completed discovery, even when there
+    # was no providersWorkspace yet in that owner's partial snapshot.
+    await run(app, 'providers.list', global_args)
+    assert app.state['setup']['imageCatalogs'] == global_catalog
+    restored = state_for(app, 'setup', workspace_args)
+    assert restored['imageCatalogs']['one']['models'] == [{'id': 'workspace-image'}]

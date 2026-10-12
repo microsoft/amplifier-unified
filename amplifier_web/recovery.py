@@ -153,6 +153,7 @@ async def _reset(manager,args):
             await service.replace_runtime(candidate)
             for setup in manager.workspace_setup_managers.values():await setup.close()
             manager.workspace_setup_managers.clear()
+            service._configuration_snapshots = {}
             for key in ("setup_manager", "global_setup_manager"):
                 setup=getattr(manager,key,None)
                 if setup:await setup.close();setattr(manager,key,None)

@@ -307,7 +307,7 @@ class Management:
                 if result is not None and (revision is None or revision==state.get('configurationRevision',0)):
                     from .configuration_target import state_for
                     setup=state_for(self.service,'setup',args)
-                    if setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']:
+                    if not args.get('configurationTarget') and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
                         setup.update(modelCatalogs={},providerCatalogs={},imageCatalogs={},metadata={},models=[],modelsProviderId=None)
                     setup.update(result)
             if phase in {'ready','error'}:self._record_completion(command_id,phase,error)
@@ -621,7 +621,7 @@ class Management:
                     if setup.get('operations',{}).get(operation_key(args,key),{}).get('commandId')!=command_id:return
                 from .configuration_target import state_for
                 setup=state_for(self.service,'setup',args)
-                if action=='providers.list' and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
+                if not target and action=='providers.list' and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
                     setup.update(modelCatalogs={},providerCatalogs={},imageCatalogs={},metadata={},models=[],modelsProviderId=None)
                 if result.get('messageTest'):
                     setup.setdefault('messageTests',{})[args['id']]=result['messageTest']

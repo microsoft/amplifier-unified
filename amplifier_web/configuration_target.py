@@ -1,4 +1,6 @@
 """Explicit configuration ownership for global and workspace control surfaces."""
+import copy
+import json
 from pathlib import Path
 
 PREFIXES = ('providers.', 'routing.', 'modules.', 'sources.')
@@ -30,7 +32,23 @@ def state_for(service, field, args):
     target = args.get('configurationTarget')
     if state.get('configurationTarget') != target:
         operations = state.get('operations', {})
+        # Composer and multiple settings surfaces can finish reads out of order.
+        # Restore only this owner's snapshot; keep partial catalog results when
+        # another surface briefly owns the published setup state.
+        caches = getattr(service, '_configuration_snapshots', None)
+        if caches is None:
+            caches = service._configuration_snapshots = {}
+        cache = caches.setdefault(field, {})
+        previous = state.get('configurationTarget')
+        if previous:
+            key = json.dumps(previous, sort_keys=True)
+            cache.pop(key, None)
+            cache[key] = copy.deepcopy({k: v for k, v in state.items() if k != 'operations'})
+        restored = cache.pop(json.dumps(target, sort_keys=True), {}) if target else {}
+        while len(cache) > 32:
+            cache.pop(next(iter(cache)))
         state.clear()
+        state.update(restored)
         if field == 'setup':
             state['operations'] = operations
     state['configurationTarget'] = target
