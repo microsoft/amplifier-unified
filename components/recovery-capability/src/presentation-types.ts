@@ -11,7 +11,7 @@ export interface PresentationEffectReceipt {
  status:'completed'|'refused'|'unknown';executed?:false;preservesCanonical:true;preservesAuthority:true;reason?:string;
 }
 export interface PresentationReceipt {commandId:string;effect:PresentationEffectReceipt;projection:{status:'pending'|'ready'|'unknown';source:string;revision?:number};}
-export interface PresentationReadiness {enabled:boolean;ready:boolean;revision:number;source?:string;projectionRevision?:number;phase:'disabled'|'checking'|'ready'|'applying'|'unknown'|'rebuilding';reason?:string;}
+export interface PresentationReadiness {enabled:boolean;ready:boolean;revision:number;source?:string;projectionRevision?:number;acknowledgedIndexIncarnation?:string;phase:'disabled'|'checking'|'ready'|'applying'|'unknown'|'rebuilding';reason?:string;}
 export interface PresentationRebuildReceipt {commandId:string;status:'completed'|'unknown';revision:number;source:string;count:number;bytes:number;markerCount:number;manifestHash:string;phase:'capturing'|'metadata'|'projection'|'ready'|'unknown';targetCheckpoint?:number;}
 export interface ConversationPresentationPort {
  /** Visibility never revokes exact-ID reads, execution, receipts or owner authority. */

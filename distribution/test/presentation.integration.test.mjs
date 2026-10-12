@@ -88,6 +88,10 @@ async function crashFactory(f,operation,args,commandId,stage){
 test('JSON presentation-only launcher binds explicit local account and performs visibility without native maintenance',{skip:!python,timeout:60000},async()=>{
  const f=await fixture(1,{launcher:true});try{
   assert.equal(f.app.quiescence,undefined);assert.equal(f.config.nativeAdmin,undefined);assert.equal(f.config.recovery,undefined);
+  const readiness=await f.call('recovery.presentation.inspect');
+  assert.equal(readiness.enabled,true);assert.equal(readiness.ready,true);
+  assert.match(readiness.acknowledgedIndexIncarnation,/^[0-9a-f-]{36}$/);
+  assert.deepEqual(readiness,f.app.host.inspectConversationPresentation());
   const review=await f.prepare([f.records[0].uri]),effect=await f.apply(review);
   assert.equal(effect.state,'succeeded');assert.equal(effect.result.receipt.effect.status,'completed');
   assert.equal(f.app.host.diagnostics().activeAgents,0);await f.verify();

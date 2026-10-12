@@ -20,7 +20,7 @@ export class PresentationResets {
  constructor(readonly port:ConversationPresentationPort){}
  async inspect():Promise<PresentationReadiness>{
   const v=await this.port.inspectConversationPresentation();
-  if(!exactKeys(v,['enabled','ready','revision','source','projectionRevision','phase','reason'])||typeof v.enabled!=='boolean'||typeof v.ready!=='boolean'||!natural(v.revision)||!['disabled','checking','ready','applying','unknown','rebuilding'].includes(v.phase)||v.source!==undefined&&!text(v.source)||v.projectionRevision!==undefined&&!natural(v.projectionRevision)||v.reason!==undefined&&!text(v.reason))throw Error('Invalid host presentation readiness');
+  if(!exactKeys(v,['enabled','ready','revision','source','projectionRevision','acknowledgedIndexIncarnation','phase','reason'])||typeof v.enabled!=='boolean'||typeof v.ready!=='boolean'||!natural(v.revision)||!['disabled','checking','ready','applying','unknown','rebuilding'].includes(v.phase)||v.source!==undefined&&!text(v.source)||v.projectionRevision!==undefined&&!natural(v.projectionRevision)||v.reason!==undefined&&!text(v.reason)||v.acknowledgedIndexIncarnation!==undefined&&(typeof v.acknowledgedIndexIncarnation!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v.acknowledgedIndexIncarnation)))throw Error('Invalid host presentation readiness');
   return structuredClone(v);
  }
  private reviewPage(job:Job,value:PresentationReviewPage,limit=50):PresentationReviewPage{
