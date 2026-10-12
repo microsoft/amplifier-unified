@@ -14,6 +14,7 @@ export async function composeNotifications(config,context){
   owner=configuredOwnerLaunch(config,'amplifier_unified_notifications.server',path);
  }
  const capability=createNotificationsCapability({...context,owner});
+ if(context.readAttention)await capability.enableAttention();
  capability.notifySchedule=async(session,run)=>{
   if(run?.notificationDecision?.notify!==true)return {accepted:false,executed:false};
   const text=[run.phase,run.detail].filter(value=>typeof value==='string').map(value=>value.slice(0,1000)).join(': ').slice(0,1000);

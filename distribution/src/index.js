@@ -1,3 +1,4 @@
+import {attentionSources,createHostAttentionReader} from './host-attention.js';
 import {sharedHistoryCleanupPort} from './shared-history-cleanup.js';
 import {storageRoots as declaredStorageRoots} from './storage-roots.js';
 import {workspaceCleanupPort} from './workspace-cleanup.js';
@@ -69,6 +70,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.catalogProcess)catalog=new StdioCatalog(config.catalogProcess);
  const inspectSession=uri=>host.inspectSession(uri),invalidate=(topic,scope)=>{
   host?.invalidateCapability(topic,scope);
+  if(attentionSources.includes(topic))host?.invalidateCapability('attention','host');
   if(['questions','runtime-control'].includes(topic)&&scope?.startsWith('ahp-session:/'))coordination?.changed(scope);
  };
  const admit=(method,...args)=>{if(stopping)throw Error('Distribution is stopping; new work was not admitted');return host[method](...args);};
@@ -179,7 +181,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.applicationUpdates)owners.push(remember(createApplicationUpdateCapabilities({supervisor:applicationUpdateSupervisor,directory:config.quiescence?join(config.stateDirectory,'capabilities','application-updates'):undefined,onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Application update account mismatch');await authorizeMaintenance?.(context);}}),'unified-distribution-update-owner','applicationUpdates'));
  if(config.media){media=await composeMedia(config.media,ownerContext,{nativeAdmin:admin});owners.push(remember(media,'unified-media-capability','media'));}
  if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(remember(mcp,'unified-mcp-capabilities','mcp'));ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
- if(config.notifications){notifications=await composeNotifications(config.notifications,ownerContext);owners.push(remember(notifications,'unified-notifications-capability','notifications'));ownerContext.notifySchedule=notifications.notifySchedule;}
+ if(config.notifications){notifications=await composeNotifications(config.notifications,{...ownerContext,readAttention:createHostAttentionReader(()=>owners)});owners.push(remember(notifications,'unified-notifications-capability','notifications'));ownerContext.notifySchedule=notifications.notifySchedule;}
  if(config.terminal){
   if(typeof config.terminal!=='object'||Array.isArray(config.terminal)||Object.keys(config.terminal).some(key=>!['origin','artifacts'].includes(key)))throw Error('Unexpected Terminal configuration fields');
   if(config.terminal.origin!==config.gateway?.origin)throw Error('Terminal origin must match the configured public gateway origin');

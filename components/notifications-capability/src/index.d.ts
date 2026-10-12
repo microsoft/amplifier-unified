@@ -30,20 +30,22 @@ export interface NotificationsOptions {
   owner: { command: string; args?: string[]; cwd?: string; env?: Record<string,string> };
   inspectSession(session: string): Promise<{session?: string; uri?: string; title?: string}>;
   waitForTurn(session: string, commandId: string, timeout?: number): Promise<{completed?: boolean; workContinues?: boolean; text?: string}>;
-  onInvalidate?(topic: 'notifications', scope: 'host'): void | Promise<void>;
+  readAttention?(context?: Record<string,any>): Promise<{items:Record<string,any>[];coverage:Record<string,any>}>;
+  onInvalidate?(topic: 'notifications' | 'attention', scope: 'host'): void | Promise<void>;
   onMayBeIdle?(): void | Promise<void>;
 }
-export interface TopicSnapshot { topic: 'notifications'; scope: 'host'; revision: number; data: {notificationSettings: NotificationSettings} }
+export interface TopicSnapshot { topic: 'notifications' | 'attention'; scope: 'host'; revision: number; data: {notificationSettings?: NotificationSettings;hostAttention?: Record<string,any>} }
 export interface ActionRequest { channel: string; topic: string; version: number; operation: string; args?: Record<string,unknown>; commandId: string }
 export interface NotificationsCapability {
   /** Trusted recovery composition only; mutations require the exact acquired recovery context. */
   appReset: {id:'notifications';parts:string[];perform(operation:'prepare'|'apply'|'inspect'|'restore',args:Record<string,unknown>,context?:QuiescenceContext):Promise<Record<string,any>>};
   manifest: {version: number; topics: Record<string,{uri: string;version: number;scope: string;watch: boolean}>;actions: Record<string,{topic: string;operation: string;method: string}>};
+  enableAttention(): Promise<boolean>;
   actionSchemas(): Promise<typeof notificationActions>;
   quiescenceAccess: Record<string,'read'>;
   quiescenceParticipant: {id: string; serviceStop: {version: 1}; acquire(context: QuiescenceContext): Promise<null|{ownerId: string;fenceId: string;release(outcome: string,proof: unknown): Promise<void>}>;abortAdmission(input: QuiescenceContext & {proof: {kind:'distribution-admission-abort';verified:true;purpose:'distribution-update';commandId:string;fenceId:string;instanceId:string;dataScope:string;receiptId:string}}): Promise<{ownerId:string;status:'released'|'not-acquired';receiptId:string;commandId:string;fenceId:string;instanceId:string;dataScope:string}>;reconcileRelease(input: QuiescenceContext & {outcome: string;proof?: unknown}): Promise<void>};
   inspectQuiescence(): Promise<{intakeClosed: boolean;fence: QuiescenceContext|null;calls: number;background: number}>;
-  read(input: {topic: string;scope: string;uri: string}): Promise<TopicSnapshot>;
+  read(input: {topic: string;scope: string;uri: string;clientId?:string},context?:Record<string,any>): Promise<TopicSnapshot>;
   action(input: ActionRequest, context: {session?: string|{uri?: string};clientId?: string;origin?: string}): Promise<{accepted: boolean;result: NotificationReceipt|NotificationSettings;updates: TopicSnapshot[];invalidate: string[]}>;
   turnSettled(event: {session: string;commandId: string;status: string;inputOrigin: string}): Promise<NotificationReceipt>;
   notifyAttention(input: {session: string;eventId: string;text: string}): Promise<NotificationReceipt>;
