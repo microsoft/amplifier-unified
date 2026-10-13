@@ -1,5 +1,61 @@
 # Implementation and evidence
 
+## Cooperative resource reservations — 2026-10-13
+
+The existing workspace resource owner now provides explicit reservations in
+addition to advisory inventory. Exact keys share atomic admission across all
+workspace registrations in one app data home. Exclusive claims conflict;
+shared claims require each holder to opt in. Authenticated root/child owners
+are distinct, with a combined per-root bound. User reconciliation uses the
+same revision-aware actions available to an owning agent. Uncertain claims
+remain held, and nothing expires or tears down infrastructure automatically.
+
+An indexed SQLite ledger under `workspace-resources` retains claims and exact
+command outcomes. Claim and receipt commit together. Reads page current claims
+without loading released history or waking conversations. Old acquisition
+receipts cannot resurrect released resources. Workspace Details exposes these
+actions under Resource reservations; draft text remains client-local and stale
+updates retain it. `coordination.context` includes a bounded current page.
+
+Local evidence: 323 focused Python checks pass, including actual concurrent
+process acquisition, rollback on receipt failure, old retries, nested owner
+boundaries and native child mounting. All 668 frontend tests pass. Nine browser
+scenarios exercise exclusive conflicts, uncertainty, stale revisions, explicit
+reconciliation, another owner's acquisition, reload, mobile layout and retained
+private drafts. The browser uses a scripted runtime and sends no model input.
+Seven unrelated workspace-starter tests fail identically on the pre-change
+macOS baseline because of its existing directory-descriptor Git handling;
+they are excluded from the focused pass count.
+
+The full local Python run at the initial packaged reservation revision completed
+with 6,798 passes, six passing subtests, 209 skips and 28 failures. All 28 failed
+cases reproduce on unchanged main `0dcc211` in the same environment. They include
+macOS path/case/installer behavior, an absent optional loop module, existing
+storage tests and a workflow-source policy assertion. This is not a green full
+suite; subsequent compact-receipt changes have separate focused and installed
+package checks, plus the live journeys below.
+
+All 16 reservation checks also pass against an installed wheel outside the
+source checkout. A two-round real-provider run using fresh worker processes
+confirmed a conflict against an independent owner's claim, preserved that
+claim, and then acquired, marked uncertain and released the resource after
+the owner explicitly relinquished it. Agent replies carry compact domain
+receipts instead of repeating unrelated application state.
+
+An earlier live attempt failed at its second prompt. A repeat with captured
+runtime errors identified the actual cause: full app-state replies made required
+context exceed the local input budget. The pre-fix package reproduces that error;
+the compact-reply package passes the same immediate-follow-up journey as well as
+the idle-to-idle journey. Both failed runs are retained as regression evidence.
+These are bounded protocol checks, not qualification of every steering race or
+general multi-agent efficacy.
+
+This completes cooperative reservation admission, not managed provisioning or
+an OS resource lock. Different aliases and separate app installations remain
+outside its domain. Per-repository bindings, actual command/import/preview
+provenance, write-intent awareness, supported stale-file writes and the remaining
+assignment/integration gates below still require implementation and evidence.
+
 ## Coherent commissioned-task operation — 2026-10-13
 
 New `coordination.create` operations retain one public handle and a private
@@ -110,7 +166,7 @@ competing stores.
 | --- | --- | --- |
 | Equivalent authority across supported routes | Host, runtime adapters, configuration controls | Explicit capability grants and revocation across schedules, recipes and background admission; preserve authorized configuration changes |
 | Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Later correlated replies, question/deferral revisions, expiring one-shot watches and fair bounded delivery; no duplicate continuation or false dependency success |
-| Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Bind two child repositories under a non-Git workspace; reject duplicate exclusive resource acquisition; verify actual commands, imports and previews against bindings |
+| Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations delivered above. Remaining: bind two child repositories under a non-Git workspace; integrate managed resource provisioning; verify actual commands, imports and previews against bindings |
 | Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context for user-created and commissioned peers; overlap warnings and supported stale-write conflicts without leaking drafts or loading dormant agents |
 | Assignment control | Existing task, capacity and interruption owners | Aggregate reservations and scoped Stop across commissioned roots and nested work, while unrelated project chats keep running |
 | Durable results and integration | Artifact/resource owner and worktree integration | Retain exact versions before mutable sources disappear; validate the combined candidate and preserve uncertain cleanup effects |
