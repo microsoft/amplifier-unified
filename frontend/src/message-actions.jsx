@@ -83,7 +83,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    {!localDelivery&&<label className="a-inline-checkbox"><input type="checkbox" checked={!!edit?.fork} disabled={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch({...edit,text,fork:e.target.checked})}}/>Create a separate chat (fork)</label>}
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={editLocked} data-action="view.update" onClick={()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch(null)}}>Cancel</button><button className="a-primary" type="submit" disabled={editLocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':!localDelivery&&edit?.fork?'Create edited chat':'Save & regenerate'}</button></div>
   </form>:<MessageText text={m.text|| (working?'…':'')} reference={m.textDetail} role={m.role} sessionId={session.id} messageId={m.id} workspace={session.workspace} act={act}/>}
-  {m.role==='assistant'&&!editing&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} dispatch={dispatch}/>}
+  {m.role==='assistant'&&!editing&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} dispatch={dispatch} artifactRows={state.canvasArtifacts}/>}
   </div>
   {attribution&&<p className="a-message-attribution">{attribution}</p>}
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
