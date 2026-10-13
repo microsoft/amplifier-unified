@@ -671,6 +671,357 @@ def canonical_corpus(app):
     return session, corpus, store, directory(session), old
 
 
+def invalidate_media_indexes(monkeypatch, change, *, fail_at=(1,), boundary='before-projection'):
+    """Invalidate real Foundation indexes; never manufacture the retry error."""
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_foundation.session.jsonl import TranscriptIndex
+    acquired, conflicts = [], []
+    real_index, real_project, real_check = (
+        SessionHistoryStore.indexed_messages, TranscriptIndex.project, TranscriptIndex.check)
+
+    def indexed(reader):
+        rows = real_index(reader)
+        assert isinstance(rows, TranscriptIndex)
+        acquired.append(rows)
+        if len(acquired) in fail_at and boundary != 'during-projection':
+            change(len(acquired))
+            if boundary == 'acquisition':
+                rows.check()
+        return rows
+
+    def project(rows, key, projector):
+        changed = False
+
+        def racing(value, position):
+            nonlocal changed
+            fact = projector(value, position)
+            if not changed:
+                changed = True
+                change(len(acquired))
+            return fact
+
+        return real_project(rows, key, racing if (
+            boundary == 'during-projection' and len(acquired) in fail_at) else projector)
+
+    def check(rows):
+        try:
+            return real_check(rows)
+        except ValueError as exc:
+            conflicts.append(exc)
+            raise
+
+    monkeypatch.setattr(SessionHistoryStore, 'indexed_messages', indexed)
+    monkeypatch.setattr(TranscriptIndex, 'project', project)
+    monkeypatch.setattr(TranscriptIndex, 'check', check)
+    return acquired, conflicts
+
+
+def append_media_unrelated(directory, attempt):
+    import json
+    with (directory / 'transcript.jsonl').open('ab') as stream:
+        stream.write(json.dumps({'role': 'user', 'content': f'Unrelated append {attempt}.'}).encode() + b'\n')
+
+
+@pytest.mark.parametrize('boundary', ['acquisition', 'before-projection', 'during-projection'])
+@pytest.mark.parametrize('shape', ['canonical', 'cold-alias'])
+async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
+        media_app, monkeypatch, boundary, shape):
+    import asyncio
+    import copy
+    import threading
+    from amplifier_foundation.session import history as foundation_history
+    from amplifier_foundation.session.jsonl import TranscriptIndex
+    from amplifier_web import automatic_history, media_message_identity, media_saved_aliases
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    if shape == 'cold-alias':
+        session, corpus, _, directory, old = cold_alias_corpus(app)
+        session, _ = await freeze_alias_display(app, session)
+        requested = 'saved-web-assistant'
+    else:
+        session, corpus, _, directory, old = canonical_corpus(app)
+        requested = old
+    resident = copy.deepcopy(dict.get(session, 'messages'))
+    initial = automatic_history.revision(session)
+    owner = threading.get_ident()
+    revisions, hashes, proofs = [], [], []
+    real_revision, real_hash, real_resolve = (
+        automatic_history.revision, automatic_history.display_identity, media_message_identity.resolve)
+
+    def revision(value):
+        assert threading.get_ident() != owner
+        result = real_revision(value)
+        revisions.append(result)
+        return result
+
+    def display_identity(*args):
+        assert threading.get_ident() != owner
+        hashes.append(threading.get_ident())
+        return real_hash(*args)
+
+    def resolve(*args):
+        proof = real_resolve(*args)
+        proofs.append(proof)
+        return proof
+
+    def no_bodies(*args, **kwargs):
+        pytest.fail('Media read/hydrated whole transcript or display bodies')
+
+    acquired, conflicts = invalidate_media_indexes(
+        monkeypatch, lambda attempt: append_media_unrelated(directory, attempt), boundary=boundary)
+    monkeypatch.setattr(automatic_history, 'revision', revision)
+    monkeypatch.setattr(automatic_history, 'display_identity', display_identity)
+    monkeypatch.setattr(media_message_identity, 'resolve', resolve)
+    monkeypatch.setattr(automatic_history, 'read_transcript', no_bodies)
+    monkeypatch.setattr(TranscriptIndex, 'read_positions', no_bodies)
+    monkeypatch.setattr(app.cold_display, 'hydrate', no_bodies)
+    app.clients.attach('index-recovery-browser')
+    with app.clients.bind('index-recovery-browser'):
+        assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
+        assert len(acquired) == 2 and acquired[0] is not acquired[1]
+        assert len(conflicts) == 1
+        assert type(conflicts[0]) is ValueError
+        assert conflicts[0].args == ('Session history changed during indexed read',)
+        fresh = await asyncio.to_thread(real_revision, session)
+        appended_id = await asyncio.to_thread(real_hash, session, 240, 'user', 'Unrelated append 1.')
+        assert revisions[:2] == [initial, fresh] and initial != fresh
+        proof = proofs[0]
+        assert proof['revision'] == fresh
+        assert proof['fact'] == (old, 'assistant', True, 1, None)
+        assert len(proof['canonicalIds']) == 241 and appended_id in proof['canonicalIds']
+        assert proof['snapshot']['nativeRevision'] == initial
+        # Canonical and detached display caches remain lazy on the next lookup.
+        with monkeypatch.context() as warm:
+            warm.setattr(foundation_history, '_decode', no_bodies)
+            warm.setattr(media_saved_aliases.DisplayJSON, 'string', no_bodies)
+            assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
+        assert len(acquired) == 3 and acquired[2] is acquired[1] and len(conflicts) == 1
+        assert proofs[1] == proof
+    assert hashes and owner not in hashes
+    assert dict.get(session, 'messages') == resident
+    assert corpus[1]['role'] == 'assistant'
+
+
+@pytest.mark.parametrize('boundary', ['descriptor', 'attach', 'final-attach', 'final-comparison'])
+async def test_media_index_conflict_budget_and_attachment_publication_fail_closed(
+        media_app, monkeypatch, boundary):
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    session, _, _, directory, old = canonical_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': old}
+    tables = ('output_records', 'output_receipts', 'state_resources')
+    before = [app.db.execute(f'SELECT * FROM {table} ORDER BY id').fetchall() for table in tables]
+    initial_revision = session.get('mediaRevision', 0)
+    publications, writes = [], []
+    real_publish = app._publish_changes
+
+    def publish(*args, **kwargs):
+        publications.append((args, kwargs))
+        return real_publish(*args, **kwargs)
+
+    fail_at = (3,) if boundary == 'final-comparison' else (
+        (3, 4) if boundary == 'final-attach' else (1, 2))
+    acquired, conflicts = invalidate_media_indexes(
+        monkeypatch, lambda attempt: append_media_unrelated(directory, attempt), fail_at=fail_at)
+    monkeypatch.setattr(app, '_publish_changes', publish)
+    if boundary.startswith('final-'):
+        from amplifier_web import resource_files
+        real_put = resource_files.put_prepared_async
+
+        async def put(db, prepared):
+            assert app.lock.locked() and db.in_transaction
+            result = await real_put(db, prepared)
+            writes.append(result)
+            return result
+
+        monkeypatch.setattr(resource_files, 'put_prepared_async', put)
+    app.clients.attach('index-refusal-browser')
+    with app.clients.bind('index-refusal-browser'):
+        with pytest.raises(ValueError) as error:
+            if boundary == 'descriptor':
+                await app.outputs.media.describe(session['id'], old)
+            else:
+                await app.outputs.media.attach(args, 'ui', 'index-refusal-attach')
+    assert len(acquired) == (4 if boundary.startswith('final-') else 2)
+    assert len(conflicts) == len(fail_at)
+    assert acquired[-1] is not acquired[-2]
+    assert all(type(exc) is ValueError and exc.args == (
+        'Session history changed during indexed read',) for exc in conflicts)
+    if boundary == 'final-comparison':
+        assert 'identity changed before media commit' in str(error.value)
+    else:
+        assert error.value is conflicts[-1]
+    assert bool(writes) == boundary.startswith('final-')
+    assert publications == [] and not app.db.in_transaction
+    assert session.get('mediaRevision', 0) == initial_revision
+    assert [app.db.execute(f'SELECT * FROM {table} ORDER BY id').fetchall() for table in tables] == before
+
+
+@pytest.mark.parametrize('defect', [
+    'remove', 'replace', 'role', 'observation', 'duplicate-claimant', 'namespace-collision', 'corrupt-resource',
+])
+@pytest.mark.parametrize('boundary', ['descriptor', 'attach'])
+async def test_media_index_retry_never_rescues_unsafe_second_snapshot(
+        media_app, monkeypatch, defect, boundary):
+    from amplifier_web.automatic_history import display_message
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    session, corpus, store, directory, old = canonical_corpus(app)
+    claimant = {**display_message(corpus[1], 1, session),
+                'id': 'retained-index-assistant', 'source': 'amplifier', 'nativeMessageId': old}
+    if defect == 'corrupt-resource':
+        from amplifier_web.resource_files import root
+        session.update(historyManaged=False, messages=[claimant, *session['messages']])
+        session, reference = await freeze_alias_display(app, session)
+        path = root(app.db) / (reference['$resource'] + '.json')
+    args = {**media_args_without_hydration(session), 'messageId': old}
+    records = app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall()
+    receipts = app.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall()
+    publications = []
+    real_publish = app._publish_changes
+
+    def publish(*args, **kwargs):
+        publications.append((args, kwargs))
+        return real_publish(*args, **kwargs)
+
+    def change(attempt):
+        if defect in ('remove', 'replace', 'role', 'observation'):
+            if defect == 'remove':
+                del corpus[1]
+            elif defect == 'replace':
+                corpus[1]['content'] = 'A different saved assistant.'
+            elif defect == 'role':
+                corpus[1]['role'] = 'user'
+            else:
+                corpus[1]['metadata'] = {'amplifier_input': {
+                    'version': 1, 'kind': 'service', 'id': 'synthetic-observation', 'source': 'local'}}
+            store.save(session['id'], corpus, {}, preserve_system=True)
+        else:
+            append_media_unrelated(directory, attempt)
+            if defect == 'duplicate-claimant':
+                session['messages'].extend([claimant, {**claimant, 'id': 'competing-index-assistant'}])
+            elif defect == 'namespace-collision':
+                session['messages'].append({**claimant, 'id': display_message(corpus[0], 0, session)['id']})
+            else:
+                path.write_bytes(b'[]')  # Valid JSON, wrong exact resource identity.
+
+    acquired, conflicts = invalidate_media_indexes(monkeypatch, change)
+    monkeypatch.setattr(app, '_publish_changes', publish)
+    app.clients.attach('unsafe-index-browser')
+    with app.clients.bind('unsafe-index-browser'):
+        with pytest.raises(ValueError):
+            if boundary == 'descriptor':
+                await app.outputs.media.describe(session['id'], old)
+            else:
+                await app.outputs.media.attach(args, 'ui', 'unsafe-index-attach')
+    assert len(acquired) == 2 and acquired[0] is not acquired[1] and len(conflicts) == 1
+    assert type(conflicts[0]) is ValueError
+    assert conflicts[0].args == ('Session history changed during indexed read',)
+    assert publications == [] and not app.db.in_transaction
+    assert session.get('mediaRevision', 0) == 0
+    assert app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall() == records
+    assert app.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall() == receipts
+
+
+@pytest.mark.parametrize('kind', ['other-value', 'substring', 'extra-arg', 'subclass', 'os-error'])
+async def test_media_index_retry_requires_exact_plain_source_error(media_app, monkeypatch, kind):
+    from amplifier_web import conversation_navigation
+    session, _, _, _, old = canonical_corpus(media_app)
+
+    class DerivedValueError(ValueError):
+        pass
+
+    message = 'Session history changed during indexed read'
+    failure = {'other-value': ValueError('Different failure'),
+               'substring': ValueError(message + ' later'),
+               'extra-arg': ValueError(message, 'extra'),
+               'subclass': DerivedValueError(message),
+               'os-error': OSError(message)}[kind]
+    calls = []
+
+    def source(value):
+        calls.append(value)
+        raise failure
+
+    monkeypatch.setattr(conversation_navigation, 'source', source)
+    with pytest.raises(type(failure)) as error:
+        await media_app.outputs.media.identity(session['id'], old)
+    assert error.value is failure and len(calls) == 1
+
+
+@pytest.mark.parametrize('boundary', ['revision', 'claimants', 'aliases', 'complete', 'validate'])
+async def test_media_index_retry_does_not_catch_later_or_revision_errors(
+        media_app, monkeypatch, boundary):
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_web import automatic_history, media_message_identity
+    app = media_app
+    session, _, _, _, old = cold_alias_corpus(app) if boundary == 'aliases' else canonical_corpus(app)
+    if boundary == 'aliases':
+        session, _ = await freeze_alias_display(app, session)
+    failure = ValueError('Session history changed during indexed read')
+    acquired = []
+    real_index = SessionHistoryStore.indexed_messages
+
+    def indexed(reader):
+        rows = real_index(reader)
+        acquired.append(rows)
+        return rows
+
+    def rejected(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(SessionHistoryStore, 'indexed_messages', indexed)
+    if boundary == 'revision':
+        monkeypatch.setattr(automatic_history, 'revision', rejected)
+    elif boundary == 'aliases':
+        monkeypatch.setattr(app.outputs.media.saved_aliases, 'resolve', rejected)
+    else:
+        monkeypatch.setattr(media_message_identity,
+                            'check_claimants' if boundary == 'claimants' else boundary, rejected)
+    with pytest.raises(ValueError) as error:
+        await app.outputs.media.identity(session['id'], old)
+    assert error.value is failure and len(acquired) == (0 if boundary == 'revision' else 1)
+
+
+async def test_media_index_retry_does_not_retry_changes_after_projection(media_app, monkeypatch):
+    from amplifier_web import conversation_navigation
+    app = media_app
+    session, _, _, directory, old = canonical_corpus(app)
+    calls = []
+    real_source = conversation_navigation.source
+
+    def source(value):
+        result = real_source(value)
+        calls.append(result)
+        append_media_unrelated(directory, 1)
+        return result
+
+    monkeypatch.setattr(conversation_navigation, 'source', source)
+    with pytest.raises(ValueError, match='assistant'):
+        await app.outputs.media.identity(session['id'], old)
+    assert len(calls) == 1
+
+
+def test_media_index_retry_leaves_ui_only_identity_source_free(monkeypatch):
+    from amplifier_web import automatic_history, conversation_navigation, media_message_identity
+
+    def forbidden(*args):
+        pytest.fail('UI-only identity attempted canonical filesystem work')
+
+    monkeypatch.setattr(automatic_history, 'revision', forbidden)
+    monkeypatch.setattr(conversation_navigation, 'source', forbidden)
+    session = {'id': 'synthetic-ui', 'messages': [{'id': 'saved-ui', 'role': 'assistant', 'text': 'Saved'}]}
+    value = media_message_identity.snapshot(session, 'saved-ui')
+    assert media_message_identity.resolve(value, 'saved-ui') == {
+        'snapshot': value, 'fact': ('saved-ui', 'assistant'), 'revision': None}
+
+
 async def test_canonical_240_tail_100_old_window_empty_attach_http_and_body_bounds(
         authenticated_client, tmp_path, monkeypatch):
     import copy
