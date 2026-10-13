@@ -183,20 +183,54 @@ class Outputs:
         # Canvas has already applied the canonical cutoff. Only its surviving,
         # exact admitted publications can bring an originally unanchored output.
         # Do not fabricate an origin or carry arbitrary library/future records.
-        from .artifact_presentation import output_binding, generation_binding
+        from .artifact_presentation import output_binding, generation_binding, check_output, output_bytes
+
+        def library_dependencies(record):
+            """Follow only exact retained snapshot references, never the library."""
+            seen, required = set(), set()
+            while record.get('canvasSource'):
+                if record['id'] in seen:
+                    raise ValueError('Cyclic retained output snapshot dependency.')
+                seen.add(record['id'])
+                body = self.app.state_resource(record['canvasSource']['$resource'])
+                if json.loads(output_bytes(self.app.db, record)) != body:
+                    raise ValueError('Output snapshot differs from its admitted source.')
+                if not isinstance(body, dict) or 'outputReference' not in body:
+                    break
+                if set(body) != {'outputReference'}:
+                    raise ValueError('Ambiguous output snapshot dependency.')
+                binding = body['outputReference']
+                dependency = originals_by_id.get(binding.get('outputId')) if isinstance(binding, dict) else None
+                if dependency is None or not dependency.get('linked'):
+                    raise ValueError('Output snapshot dependency is unavailable.')
+                check_output(binding, dependency, source_id)
+                # Anchored dependencies still go through the normal cutoff and
+                # assistant-media guards. Only null provenance needs this route.
+                if dependency.get('origin', {}).get('messageId') is None:
+                    required.add(dependency['id'])
+                record = dependency
+            return required
+
         for row in self.app.state.get('canvasArtifacts', []):
             if row.get('sessionId') != target['id'] or row.get('id') not in copied_canvases:
                 continue
             source_row = source_canvases[copied_canvases[row['id']]]
             for link in row.get('publications', []):
                 record = originals_by_id.get(link.get('outputId'))
-                if not record or record.get('origin', {}).get('messageId') is not None or link.get('messageId') not in kept:
+                if not record or not record.get('linked') or link.get('messageId') not in kept:
                     continue
                 entry = next((v for v in row.get('versions', []) if v.get('version') == link.get('version')), None)
                 if entry and (entry.get('outputBinding') == output_binding(record)
                               or ('outputBinding' not in entry and generation_binding(
                                   record, source_row, link['version']))):
-                    published_library_outputs.add(record['id'])
+                    try:
+                        dependencies = library_dependencies(record)
+                    except (ValueError, KeyError, TypeError, OSError) as exc:
+                        skipped.append({'outputId': record['id'], 'reason': str(exc)})
+                        continue
+                    published_library_outputs.update(dependencies)
+                    if record.get('origin', {}).get('messageId') is None:
+                        published_library_outputs.add(record['id'])
 
         def clone(original, value):
             value['parentId']=mapping.get(original.get('parentId'))

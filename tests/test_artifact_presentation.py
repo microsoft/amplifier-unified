@@ -427,7 +427,8 @@ async def test_nested_canvas_snapshot_reuses_original_source_body(app):
     assert app.clients.records['one']['canvas']['content'] == 'Exact original writing'
 
 
-async def test_restore_output_backed_version_preserves_body_owner_and_exact_publication(app):
+@pytest.mark.parametrize('unlinked', [False, True])
+async def test_restore_output_backed_version_preserves_body_owner_and_exact_publication(app, unlinked):
     session = owner(app)
     writing = (await call(app, 'outputs.write', {'sessionId': session['id'], 'title': 'Restore original',
         'content': 'Exact retained writing', 'variant': 'document',
@@ -438,24 +439,35 @@ async def test_restore_output_backed_version_preserves_body_owner_and_exact_publ
     row = artifact(app, placed['id'])
     body = copy.deepcopy(row['body'])
     await call(app, 'canvas.versions.revise', {'id': row['id'], 'expectedRevision': 1, 'content': 'Ordinary revision'})
+    if unlinked:
+        record = app.outputs.record(session['id'], writing['id'])
+        await call(app, 'outputs.unlink', {'sessionId': session['id'], 'id': record['id'],
+                                          'expectedRevision': record['revision']})
     restored = (await call(app, 'canvas.versions.restore', {'id': row['id'], 'expectedRevision': 2,
                                                         'version': 1}))['result']
     assert restored['version'] == 3 and row['body'] == body
     assert row['versions'][0]['body'] == row['versions'][2]['body'] == body
     assert app.clients.records['one']['canvas']['content'] == 'Exact retained writing'
     assert row['versions'][2]['outputBinding'] == row['versions'][0]['outputBinding']
-    restored_link = next(link for link in row['publications'] if link['version'] == 3)
-    assert restored_link['outputId'] == writing['id']
+    restored_links = [link for link in row['publications'] if link['version'] == 3]
+    if unlinked:
+        assert restored_links == []
+        assert app.outputs.record(session['id'], writing['id'])['linked'] is False
+        assert all(link.get('chat') == 'none' for link in row['publications'] if link.get('outputId') == writing['id'])
+    else:
+        assert len(restored_links) == 1 and restored_links[0]['outputId'] == writing['id']
 
 
-async def test_nested_output_fork_remaps_both_bindings_and_never_leaks_future_or_source_ids(app):
+@pytest.mark.parametrize('library_owner', [False, True])
+async def test_nested_output_fork_remaps_both_bindings_and_never_leaks_future_or_source_ids(app, library_owner):
     session = owner(app)
     mid = session['messages'][0]['id']
     writing = (await call(app, 'outputs.write', {'sessionId': session['id'], 'title': 'Fork original',
-        'content': 'Exact original fork writing', 'variant': 'document', 'messageId': mid}))['result']
+        'content': 'Exact original fork writing', 'variant': 'document',
+        **({} if library_owner else {'messageId': mid})}))['result']
     placed = (await call(app, 'canvas.present', {'sessionId': session['id'], 'outputId': writing['id'],
-        'version': 1, 'messageId': mid,
-        'presentation': {'chat': 'compact', 'canvas': 'unchanged'}}))['result']
+        'version': 1, **({} if library_owner else {'messageId': mid}),
+        'presentation': {'chat': 'none' if library_owner else 'compact', 'canvas': 'unchanged'}}))['result']
     snapshot = (await call(app, 'outputs.attach', {'sessionId': session['id'], 'kind': 'canvas',
         'title': 'Fork snapshot', 'canvasId': placed['id'], 'messageId': mid}))['result']
     adapted = (await call(app, 'canvas.present', {'sessionId': session['id'], 'outputId': snapshot['id'],
@@ -473,9 +485,10 @@ async def test_nested_output_fork_remaps_both_bindings_and_never_leaks_future_or
     records = app.outputs.store.list(target_id)['items']
     assert {r['forkSource']['outputId'] for r in records} == {writing['id'], snapshot['id']}
     mapped = {r['forkSource']['outputId']: r for r in records}
+    assert mapped[writing['id']]['origin']['messageId'] == (None if library_owner else mid)
     clones = [r for r in app._state['canvasArtifacts'] if r['sessionId'] == target_id]
-    assert len(clones) == 2
-    for original, output in ((placed, writing), (adapted, snapshot)):
+    assert len(clones) == (1 if library_owner else 2)
+    for original, output in ([(adapted, snapshot)] if library_owner else [(placed, writing), (adapted, snapshot)]):
         clone = next(row for row in clones if row['outputBinding']['outputId'] == mapped[output['id']]['id'])
         assert mapped[output['id']]['presentationArtifact']['id'] == clone['id']
         assert clone['id'] != original['id']

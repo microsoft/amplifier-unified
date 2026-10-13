@@ -155,7 +155,7 @@ def command(service, action, args, origin):
     if owner.get('historyReadOnlyReason') or owner.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
         raise AppError('This conversation is read-only here.', 409)
     if row.get('kind') in {'gif', 'mp4'}:
-        raise AppError('Retained GIF references are immutable. Open the original GIF instead.', 409)
+        raise AppError('Retained media references are immutable. Open the original instead.', 409)
     if row.get('app') or row.get('kind') in {'mcp-app', 'browser'}:
         raise AppError('Use the surface or tool presentation contract to revise this artifact.', 409)
     if args['expectedRevision'] != latest(row):
@@ -183,12 +183,16 @@ def command(service, action, args, origin):
         canvas['contentResource'] = copy.deepcopy(selected['body'])
     canvas.update(id=row['id'], sessionId=sid, workspaceId=row.get('workspaceId'), createdAt=row.get('createdAt'), _versionWrite=True, _forceVersion=True)
     scoped = {**state, 'canvas': canvas}
-    remember(scoped, service.db)
+    output = None
     if canvas.get('outputBinding'):
         from .artifact_presentation import check_output, generation_binding
         binding = canvas['outputBinding']
         output = service.outputs.record(sid, binding['outputId'])
         check_output(binding, output, sid)
+    # Restoration is a new retained version, not permission to reactivate an
+    # unlinked relationship. Qualify before saving and leave it library-only.
+    remember(scoped, service.db, **({'message': None} if output and not output.get('linked') else {}))
+    if output:
         for link in row.get('publications', []):
             if link.get('version') != row['revision']:
                 continue
