@@ -51,28 +51,36 @@ try{
  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const stableText=await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).messages.find(row=>row.id==='message-79').text);
  const counts=()=>page.evaluate(text=>({apps:renderProbe.apps,stableParses:renderProbe.parses.filter(value=>value===text).length}),stableText);
- // Action acknowledgement precedes React's commit and outstanding startup
- // reads. Measure the local clock only after those independent updates settle.
+ const settleRender=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ // A state receipt precedes React's draft effect and its scheduled layout work.
+ // Observe the visible draft and drain frames before measuring timer-only work.
  await action('view.update',{patch:{draft:'Ready'}});
  await expect(composer).toHaveDraft('Ready');
+ await expect(composer).toHaveText('Ready');
+ // Startup observations are independent of the local activity clock.
  await page.waitForLoadState('networkidle');
- await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ await settleRender();
  let before=await counts(),elapsed=await page.getByRole('timer').innerText();
  for(let i=0;i<3;i++){
   await page.evaluate(()=>window.tickActivity());
   await expect(page.getByRole('timer')).not.toHaveText(elapsed);elapsed=await page.getByRole('timer').innerText();
  }
+ // Count delayed work as well; do not let the final tick escape the assertion.
+ await settleRender();
  let after=await counts();evidence.clock={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses,ticks:3};
  before=await counts();
  await composer.fill('Private draft');
  await action('view.update',{patch:{draft:'Private draft'}});
- after=await counts();evidence.draft={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses};
  await expect(composer).toHaveDraft('Private draft');
+ await expect(composer).toHaveText('Private draft');
+ await settleRender();
+ after=await counts();evidence.draft={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses};
  before=await counts();
  for(let i=0;i<3;i++){
   await change({workers:[{id:'active-child',kind:'session',callId:'active-call',status:'working',detail:'Progress '+i}]});
   await page.waitForFunction(i=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).workers[0]?.detail==='Progress '+i,i);
  }
+ await settleRender();
  after=await counts();evidence.workerUpdates={stableParses:after.stableParses-before.stableParses,updates:3};
  await change({workers:[]});
  // Changed body and streaming remain live; these are positive controls.
