@@ -341,8 +341,10 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
     """Host write boundaries cover file, patch and image tools, including snapshots."""
     settings = config.settings
     # A managed checkout can differ from the immutable history/config workspace.
-    # Resolve only relative write policies against the actual execution folder.
+    # Repository paths follow execution; unrelated explicitly allowed paths stay.
     workspace = str(Path(execution_workspace or config.workspace).expanduser().resolve())
+    history_root = Path(config.workspace).expanduser().resolve()
+    execution_root = Path(workspace)
     policy_keys = {"allowed_write_paths", "denied_write_paths", "allowed_read_paths", "denied_read_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -350,7 +352,11 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
         result = []
         for value in values:
             path = Path(value).expanduser()
-            result.append((path if path.is_absolute() else Path(workspace) / path).resolve())
+            path = (path if path.is_absolute() else execution_root / path).resolve()
+            if (execution_root != history_root and path.is_relative_to(history_root)
+                    and not path.is_relative_to(execution_root)):
+                path = execution_root / path.relative_to(history_root)
+            result.append(path)
         return result
 
     # Settings support both legacy module lists and current config/overrides.
@@ -410,12 +416,16 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
             if row["module"] == "tool-filesystem":
                 identity = row.get("id") or row.get("instance_id") or "tool-filesystem"
                 policy = policies.get(identity, policies["tool-filesystem"])
-                # Keep the existing instance-override semantics for snapshots.
-                specific = overrides.get(identity, {}).get("config", {})
-                policy = merge(policy, expand_environment({key: value for key, value in specific.items() if key in policy_keys}))
-                row["config"] = merge(current, policy)
-                row["config"]["allowed_write_paths"] = list(dict.fromkeys([workspace,
-                    *(str(path) for path in paths(row["config"].get("allowed_write_paths", [])))]))
+                # Instance overrides were resolved above before normalizing the
+                # shared policy. Reapplying raw values here drops its defaults.
+                # A declaration may deliberately be read-only or narrower than
+                # the workspace. Defaults must not turn that into a new grant.
+                row["config"] = restrict(current, policy)
+                if "allowed_write_paths" not in row["config"]:
+                    row["config"]["allowed_write_paths"] = [workspace]
+                else:
+                    row["config"]["allowed_write_paths"] = list(dict.fromkeys(
+                        str(path) for path in paths(row["config"]["allowed_write_paths"])))
                 # Shared settings may add restrictions, but must not erase
                 # the declaration's explicitly denied directories.
                 for key in ('denied_write_paths', 'denied_read_paths'):
@@ -429,6 +439,9 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
                     if policy:
                         current = restrict(current, policy)
                 row["config"] = current
+            if execution_root != history_root:
+                for key in policy_keys & row['config'].keys():
+                    row['config'][key] = list(dict.fromkeys(str(path) for path in paths(row['config'][key])))
     def agents(values):
         for agent in values.values():
             if isinstance(agent, dict):
@@ -436,21 +449,21 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
                 agents(agent.get("agents", {}))
     apply(bundle.tools)
     agents(bundle.agents)
-    # Image API calls can create files without using the filesystem tool.
+    # Patch and image APIs can create files without the filesystem tool.
     # Carry declaration-level restrictions as well as shared settings into
     # every image writer, including inherited child configurations.
-    def image_policies(rows, children, inherited):
+    def writer_policies(rows, children, inherited):
         local = [{key: row.get('config', {})[key] for key in policy_keys & row.get('config', {}).keys()}
             for row in rows if isinstance(row, dict) and row.get('module') == 'tool-filesystem']
         effective = [*inherited, *local]
         for row in rows:
-            if isinstance(row, dict) and row.get('module') == 'tool-image':
+            if isinstance(row, dict) and row.get('module') in {'tool-image', 'tool-apply-patch'}:
                 for policy in effective:
                     row['config'] = restrict(row.get('config', {}), policy)
         for child in children.values():
             if isinstance(child, dict):
-                image_policies(child.get('tools', []), child.get('agents', {}), effective)
-    image_policies(bundle.tools, bundle.agents, [])
+                writer_policies(child.get('tools', []), child.get('agents', {}), effective)
+    writer_policies(bundle.tools, bundle.agents, [])
     return bundle
 
 
