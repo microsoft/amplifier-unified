@@ -1,4 +1,4 @@
-// Packaged UI, real HTTP/SSE and synthetic discovery; no disabled production effects.
+// Packaged UI, real HTTP/state stream and synthetic discovery; no disabled effects.
 import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -7,16 +7,22 @@ import {fileURLToPath} from 'node:url';
 import {writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url)),measureOnly=process.argv.includes('--measure-only');
+const expectedTransport=process.argv.includes('--transport=sse')?'sse':'websocket';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/chat_demand_server.py'],{stdio:['ignore','pipe','pipe']});
 let browser,peerBrowser,log='';fixture.stderr.on('data',x=>log+=x);
-const evidence={measureOnly};
+const evidence={measureOnly,expectedTransport};
 try{
  const meta=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),60000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
  const headers={Authorization:'Bearer fixture-demand-token','Content-Type':'application/json'};
  const api=async(path,body)=>{const r=await fetch(meta.url+path,{headers,...body===undefined?{}:{method:'POST',body:JSON.stringify(body)}});assert.equal(r.status,200,await r.clone().text());return r.json()};
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote']:[]});
  const context=await browser.newContext({viewport:{width:1400,height:1000},extraHTTPHeaders:{Authorization:headers.Authorization}});
- await context.addInitScript(()=>{const ES=EventSource;window.demandStreams=[];window.demandFrames=[];window.EventSource=class extends ES{constructor(...args){super(...args);if(String(args[0]).includes('/api/events')){demandStreams.push(this);for(const name of ['state','state-delta'])this.addEventListener(name,e=>demandFrames.push({name,bytes:new TextEncoder().encode(e.data).length}))}}}});
+ await context.addInitScript(()=>{
+  window.demandStreams=[];window.demandFrames=[];
+  const record=(stream,transport,url)=>{stream.demandIdentity={streamId:demandStreams.length,transport,path:new URL(url,location.href).pathname};demandStreams.push(stream)};
+  const ES=EventSource;window.EventSource=class extends ES{constructor(...args){super(...args);if(String(args[0]).includes('/api/events')){record(this,'sse',args[0]);for(const name of ['state','state-delta'])this.addEventListener(name,e=>demandFrames.push({...this.demandIdentity,name,revision:JSON.parse(e.data).revision,bytes:new TextEncoder().encode(e.data).length}))}}};
+  const WS=WebSocket;window.WebSocket=class extends WS{constructor(...args){super(...args);if(String(args[0]).includes('/api/events')){record(this,'websocket',args[0]);this.addEventListener('message',e=>{const frame=JSON.parse(e.data);if(['state','state-delta'].includes(frame.event))demandFrames.push({...this.demandIdentity,name:frame.event,revision:frame.data?.revision,bytes:new TextEncoder().encode(e.data).length})})}}};
+ });
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  const pending=new Set();let lastRequest=performance.now();
  page.on('request',r=>{if(r.url().includes('/api/')&&!r.url().includes('/api/events')){pending.add(r);lastRequest=performance.now()}});
@@ -25,7 +31,11 @@ try{
  await page.goto(meta.url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  const action=(name,args={})=>page.evaluate(([n,a])=>window.amplifier.dispatch(n,a),[name,args]);
  const settle=async()=>{await expect.poll(async()=>{const m=await api('/fixture/demand');return m.pending+m.catalogPending+pending.size+(performance.now()-lastRequest<500?1:0)},{timeout:30000}).toBe(0)};
- await settle();await action('view.update',{patch:{draft:'Source private draft'}});await settle();
+ await settle();
+ await page.waitForFunction(transport=>demandFrames.some(f=>f.name==='state'&&f.transport===transport),expectedTransport);
+ evidence.initialTransport=await page.evaluate(()=>demandStreams.at(-1).demandIdentity);
+ assert.equal(evidence.initialTransport.path,expectedTransport==='websocket'?'/api/events/ws':'/api/events');
+ await action('view.update',{patch:{draft:'Source private draft'}});await settle();
  const client=await page.evaluate(()=>window.amplifier.shellClientId);
  const snapshot=()=>api('/api/state?clientId='+client);
  evidence.initialBytes=Buffer.byteLength(JSON.stringify(await snapshot()));
@@ -86,12 +96,16 @@ try{
  await peer.goto(meta.url);await peer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await expect(peer.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('');await peerBrowser.close();peerBrowser=null;
  // Reconnect uses a fresh full baseline without replay or draft loss.
- const streams=await page.evaluate(()=>demandStreams.length);
- await page.evaluate(()=>{const stream=demandStreams.at(-1);stream.close();stream.dispatchEvent(new Event('error'))});
- await expect.poll(()=>page.evaluate(()=>demandStreams.length),{timeout:10000}).toBeGreaterThan(streams);
- await page.waitForFunction(()=>demandStreams.at(-1).readyState===EventSource.OPEN);
- await expect.poll(()=>page.evaluate(()=>demandFrames.filter(f=>f.name==='state').length)).toBeGreaterThan(0);
- evidence.reconnectFrameBytes=await page.evaluate(()=>demandFrames.filter(f=>f.name==='state').at(-1).bytes);
+ await settle();const beforeReconnect=await api('/fixture/demand');
+ const reconnectStart=await page.evaluate(()=>({streams:demandStreams.length,frames:demandFrames.length,streamId:demandStreams.at(-1).demandIdentity.streamId}));
+ await page.evaluate(()=>{const stream=demandStreams.at(-1);stream.close();if(stream instanceof EventSource)stream.dispatchEvent(new Event('error'))});
+ await expect.poll(()=>page.evaluate(()=>demandStreams.length),{timeout:10000}).toBeGreaterThan(reconnectStart.streams);
+ await page.waitForFunction(()=>demandStreams.at(-1).readyState===1);
+ await page.waitForFunction(({start,transport})=>demandFrames.slice(start.frames).some(f=>f.name==='state'&&f.streamId>start.streamId&&f.transport===transport),{start:reconnectStart,transport:expectedTransport});
+ const fresh=await page.evaluate(start=>demandFrames.slice(start.frames).find(f=>f.name==='state'&&f.streamId>start.streamId),reconnectStart);
+ await page.waitForFunction(revision=>window.amplifier.getState().revision>=revision,fresh.revision);
+ evidence.reconnectFrameBytes=fresh.bytes;evidence.reconnectBaseline=fresh;
+ await settle();assert.deepEqual((await api('/fixture/demand')).actions,beforeReconnect.actions,'Reconnect must not replay actions');
  await expect(composer).toHaveDraft('Target private draft');
  await action('session.select',{id:meta.ids[0]});await expect(composer).toHaveDraft('Source private draft');
  await action('session.select',{id:meta.ids[1]});await expect(composer).toHaveDraft('Target private draft');

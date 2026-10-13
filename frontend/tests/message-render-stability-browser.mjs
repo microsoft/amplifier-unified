@@ -20,7 +20,7 @@ try{
  const headers={Authorization:'Bearer fixture-browser-control-token','Content-Type':'application/json'};
  const change=async data=>{const response=await fetch(url+'/fixture/render',{method:'POST',headers,body:JSON.stringify(data)});assert.equal(response.status,200);return response.json()};
  vite=await createServer({root:root+'frontend',configFile:root+'frontend/vite.config.js',server:{host:'127.0.0.1',port:0,hmr:false,
-  proxy:{'/api':{target:url,changeOrigin:true,configure(proxy){proxy.on('proxyReq',req=>req.setHeader('Origin',url))}},'/branding':url}},
+  proxy:{'/api':{target:url,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,req=>req.setHeader('Origin',url))}},'/branding':url}},
   plugins:[{name:'render-test-counts',enforce:'pre',transform(code,id){
    if(id.endsWith('/src/main.jsx')){
     const needle='function App(){';assert.equal(code.split(needle).length,2);

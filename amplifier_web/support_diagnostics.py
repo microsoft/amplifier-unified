@@ -1,0 +1,84 @@
+"""Small allowlisted support facts; never export arbitrary exception payloads."""
+import platform
+from pathlib import Path
+import re
+
+
+def environment():
+    from . import __version__
+    return {'applicationVersion': __version__, 'pythonVersion': platform.python_version(),
+            'system': platform.system(), 'machine': platform.machine(),
+            'kernel': platform.release(), 'wsl': 'microsoft' in platform.release().lower()}
+
+
+def runtime_versions():
+    from importlib.metadata import PackageNotFoundError, version
+    result = {}
+    for name in ('amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
+                 'amplifier-module-provider-openai', 'amplifier-module-provider-anthropic'):
+        try:
+            result[name] = version(name)
+        except PackageNotFoundError:
+            pass
+    return {'environment': environment(), 'packages': result}
+
+
+def exception_chain(error):
+    import traceback
+    chain, seen = [], set()
+    while error is not None and id(error) not in seen and len(chain) < 5:
+        seen.add(id(error))
+        # File basenames/functions/line numbers only: no source code or locals.
+        frames = [{'file': Path(frame.filename).name[:160],
+                   'line': frame.lineno, 'function': frame.name[:160]}
+                  for frame in traceback.extract_tb(error.__traceback__)[-12:]]
+        chain.append({'errorType': type(error).__name__, 'frames': frames})
+        error = error.__cause__ or error.__context__
+    return chain
+
+
+def event_detail(row):
+    result = {}
+    for key in ('event', 'timestamp', 'ts', 'at', 'generation_id', 'session_id', 'sessionId',
+                'rootSessionId', 'runtimeSessionId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
+                'error_type', 'error_stage', 'error_category', 'disposition', 'operation',
+                'bridgeId', 'action', 'errorType', 'phase', 'type', 'id', 'turnId', 'parentId', 'kind', 'startedAt', 'endedAt'):
+        value = row.get(key)
+        if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:/+ -]{1,200}', value):
+            result[key] = value
+        elif type(value) in (int, float):
+            result[key] = value
+    for key in ('duration_ms', 'timeoutSeconds', 'elapsedSeconds', 'attempts', 'retryable'):
+        if type(row.get(key)) in (int, float, bool):
+            result[key] = row[key]
+    error = row.get('error')
+    if isinstance(error, dict):
+        kind = error.get('type')
+        if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind):
+            result['errorType'] = kind
+        message = error.get('msg', error.get('message', ''))
+    else:
+        message = error
+    # Preserve this known application-generated diagnostic verbatim, never an
+    # arbitrary SDK message which could embed private prompts or credentials.
+    if isinstance(message, str):
+        match = re.fullmatch(r'App bridge response timed out after ([0-9.]{1,10}) seconds '
+            r'\(transport timeout, not normal coordination.wait expiry\)\.', message)
+        if match:
+            result['message'] = message
+            result['timeoutSeconds'] = float(match[1])
+    return result
+
+
+def execution_detail(row):
+    result = event_detail(row)
+    failure = row.get('failure')
+    if isinstance(failure, dict):
+        result['failure'] = {key: failure[key] for key in
+            ('category', 'errorType', 'stage', 'code', 'retryable') if key in failure}
+        result['failure']['exceptionChain'] = [
+            {'errorType': item.get('errorType'), 'frames': [
+                {key: frame[key] for key in ('file', 'line', 'function') if key in frame}
+                for frame in item.get('frames', [])[-12:] if isinstance(frame, dict)]}
+            for item in failure.get('exceptionChain', [])[:5] if isinstance(item, dict)]
+    return result
