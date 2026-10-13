@@ -137,13 +137,16 @@ def refresh_usage(tree):
     # own accumulated totals, preventing double counting at every ancestor.
     calls=[n for n in tree['nodes'] if n.get('kind')=='llm']
     descendants={n['id']:[] for n in tree['nodes']}
+    by_turn={}
     for call in calls:
+        by_turn.setdefault(call.get('turnId'),[]).append(call)
         cursor=call;seen=set()
         while cursor and cursor['id'] not in seen:
             seen.add(cursor['id']);descendants[cursor['id']].append(call)
             cursor=lookup.get(cursor.get('parentId'))
     for candidate in tree['nodes']:candidate['aggregateUsage']=rollup(descendants[candidate['id']])
-    for turn in tree['turns']:turn['aggregateUsage']=rollup([c for c in calls if c.get('turnId')==turn['id']])
+    # A live event must not rescan every historical call for every old turn.
+    for turn in tree['turns']:turn['aggregateUsage']=rollup(by_turn.get(turn['id'],[]))
     tree['aggregateUsage']=rollup(calls)
 
 
