@@ -116,7 +116,11 @@ try{
   if(name==='Model & tools'){await expect(page.getByRole('heading',{name:'Tools',exact:true})).toBeVisible();await expect(page.getByText('Conversation modules',{exact:true})).toBeVisible()}
   if(name==='Context & recovery'){await expect(page.getByRole('button',{name:'Clear context',exact:true})).toBeDisabled();await expect(page.getByText('Recovery & recorded errors',{exact:true})).toBeVisible()}
   await page.getByRole('button',{name:'Back to Advanced',exact:true}).click();
-  assert.ok(await page.evaluate(()=>!!document.activeElement?.getClientRects().length),'Focus must remain on a visible control');
+  await expect(page.locator('#panel-title')).toHaveText('Advanced');
+  await expect.poll(()=>page.evaluate(()=>{
+   const active=document.activeElement;
+   return !!active?.closest('[role=dialog]')&&!!active.getClientRects().length;
+  }),{message:'Focus must return to a visible control in the updated dialog'}).toBe(true);
  }
  await close();
  // Existing agent navigation must still reveal the requested computer section.

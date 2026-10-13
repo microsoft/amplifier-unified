@@ -93,3 +93,21 @@
  #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-canvas-panel,
  #amp-one.a-approachable-shell .a-nav-slot .a-nav-rail{border:0;border-radius:0;box-shadow:none}
 }
+
+/* The live status shares the composer's reading column and interior padding. */
+#amp-one.a-approachable-shell .a-live-activity{box-sizing:border-box;max-width:var(--a-reading-width);width:calc(100% - 48px);padding:0 14px;gap:10px;align-items:flex-start}
+#amp-one.a-approachable-shell .a-live-activity>div{flex:1;min-width:0}
+#amp-one.a-approachable-shell .a-live-activity strong{display:block;overflow-wrap:anywhere}
+#amp-one.a-approachable-shell .a-live-activity .a-activity-pulse{margin-top:9px}
+#amp-one.a-approachable-shell .a-live-activity .a-activity-elapsed{padding-top:2px}
+@container conversation (max-width:520px){#amp-one.a-approachable-shell .a-live-activity{width:calc(100% - 28px)}}
+
+/* Transparent tracks keep scroll affordances without permanent opaque rails.
+   Native keyboard, touch and OS scrollbar behavior are retained. */
+:where(#amp-one,#amp-one *){scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--a-muted) 38%,transparent) transparent}
+:where(#amp-one,#amp-one *):hover{scrollbar-color:color-mix(in srgb,var(--a-muted) 65%,transparent) transparent}
+:where(#amp-one,#amp-one *)::-webkit-scrollbar{width:8px;height:8px}
+:where(#amp-one,#amp-one *)::-webkit-scrollbar-track,:where(#amp-one,#amp-one *)::-webkit-scrollbar-corner{background:transparent}
+:where(#amp-one,#amp-one *)::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--a-muted) 38%,transparent);border:2px solid transparent;background-clip:padding-box;border-radius:8px}
+:where(#amp-one,#amp-one *)::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,var(--a-muted) 65%,transparent)}
+@media(forced-colors:active){:where(#amp-one,#amp-one *){scrollbar-color:auto;scrollbar-width:auto}}
