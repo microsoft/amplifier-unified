@@ -337,8 +337,16 @@ class CanvasViews:
                    'selectedVersion': None if follow else args['version'], 'followLatest': follow,
                    'messageId': args['messageId'], 'sessionId': row['sessionId'], 'previewId': args['previewId']}
         identity = next((key for key, value in inline.items()
-            if all(value.get(field) == binding[field] for field in ('resourceId', 'messageId', 'sessionId', 'previewId'))
-            and value.get('publishedVersion', value.get('selectedVersion')) == args['version']), None)
+            if value.get('previewId') == args['previewId'] and value.get('sessionId') == row['sessionId']), None)
+        if identity is not None:
+            existing = inline[identity]
+            if (any(existing.get(field) != binding[field] for field in ('resourceId', 'messageId'))
+                    or existing.get('publishedVersion', existing.get('selectedVersion')) != args['version']):
+                # One mount cannot acquire a second lease to sidestep an old
+                # view's dirty guard or replace its original published number.
+                if record['preferences'].get(identity + ':' + existing['resourceId'], {}).get('dirty'):
+                    fail('Finish or cancel this preview edit before replacing its publication.', 409)
+                fail('Release this preview before binding its mount to another publication.', 409)
         if identity is None:
             if len(inline) >= 8:
                 fail('Close a preview to open another here, or open this artifact in Canvas.', 409)

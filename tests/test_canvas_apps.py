@@ -348,3 +348,48 @@ async def test_present_latest_number_is_still_exact_and_readonly(app):
                 await app.dispatch('canvas.apps.state', {**cas(row), **target, 'patch': {'note': 'readonly'}})
         finally:
             app.unsubscribe(queue)
+
+
+@pytest.mark.parametrize('replacement', ['version', 'message', 'artifact'])
+async def test_repeated_mount_cannot_allocate_around_dirty_publication(app, replacement):
+    row = await create(app)
+    row = await edit(app, row, 'revise', content='Second published definition')
+    publication = next(item for item in app.state['canvasArtifacts'] if item['id'] == row['id'])['publications'][0]
+    incoming = {'resourceId': row['id'], 'version': 1, 'messageId': publication['messageId'],
+                'previewId': 'fixed-mount'}
+    if replacement == 'version':
+        incoming['version'] = 2
+    elif replacement == 'message':
+        message = app._message(app._session(), 'user', 'Another publication anchor')
+        await dispatch(app, 'canvas.present', {'sessionId': row['sessionId'], 'id': row['id'],
+            'version': 1, 'messageId': message['id'],
+            'presentation': {'chat': 'compact', 'canvas': 'unchanged'}})
+        incoming['messageId'] = message['id']
+    else:
+        other = await create(app)
+        other_publication = next(item for item in app.state['canvasArtifacts']
+            if item['id'] == other['id'])['publications'][0]
+        incoming.update(resourceId=other['id'], messageId=other_publication['messageId'])
+    original = await inline(app, row, 'fixed-mount', follow=True)
+    await dispatch(app, 'canvas.views.dirty', {**view_target(original), 'dirty': True})
+    before = deepcopy(app.clients.records['one']['canvasViews'])
+    artifacts = deepcopy(app.state['canvasArtifacts'])
+    with pytest.raises(AppError, match='Finish or cancel'):
+        await dispatch(app, 'canvas.views.inline', incoming)
+    assert app.clients.records['one']['canvasViews'] == before
+    assert app.state['canvasArtifacts'] == artifacts
+    # Even a clean mount must release explicitly, preserving its immutable
+    # publishedVersion and the stale-release boundary until that point.
+    await dispatch(app, 'canvas.views.dirty', {**view_target(original), 'dirty': False})
+    with pytest.raises(AppError, match='Release this preview'):
+        await dispatch(app, 'canvas.views.inline', incoming)
+    with app.clients.bind('one'):
+        retained = app.canvas_views.summary(original['viewId'])
+    assert retained['publishedVersion'] == 1 and retained['viewId'] == original['viewId']
+    await dispatch(app, 'canvas.views.release', view_target(retained))
+    accepted = (await dispatch(app, 'canvas.views.inline', incoming))['result']
+    assert accepted['viewId'] != original['viewId']
+    with pytest.raises(AppError):
+        await dispatch(app, 'canvas.views.release', view_target(original))
+    with app.clients.bind('one'):
+        assert app.canvas_views.summary(accepted['viewId'])['resourceId'] == incoming['resourceId']

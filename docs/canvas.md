@@ -425,7 +425,10 @@ read-only, including a number equal to the current Latest.
 `canvas.views.follow {viewId, resourceId, resourceRevision, generation,
 followLatest, clientId?}` switches the **same** view between Latest and its
 original published number. Dirty input blocks a switch; a repeated mount cannot
-allocate another view to evade that guard. Projections distinguish
+allocate another view to evade that guard. Reusing a `previewId` for a different
+artifact, message or published number requires explicit release of its previous
+view, even when clean; it never changes that view's original publication.
+Projections distinguish
 `publishedVersion`, `selectedVersion`, `followLatest`, and `latestRevision`.
 Definition changes invalidate old generations; shared CanvasApp state updates do
 not replace private edits. Switching never publishes a version, executes a tool
