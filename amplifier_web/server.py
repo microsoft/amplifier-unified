@@ -20,14 +20,22 @@ from .tls import ca_bytes
 from .request_timing import request_timing
 
 
-def _set_response_headers(response: web.StreamResponse, path: str) -> web.StreamResponse:
+def _set_response_headers(response: web.StreamResponse, request: web.Request) -> web.StreamResponse:
+    path = request.path
+    # Some browsers do not include ws/wss in CSP self. Name only this validated
+    # authority; allow either scheme for deployments terminating TLS upstream.
+    try:
+        authority = urlsplit(validate_origin(f"{request.scheme}://{request.host}")).netloc
+        sockets = f"ws://{authority} wss://{authority}"
+    except ValueError:
+        sockets = ""
     response.headers["X-Content-Type-Options"] = "nosniff"
     # Chromium sends Origin: null on navigation POSTs from a no-referrer
     # document. Keep the login form same-origin without leaking referrers to
     # other sites; do not weaken the Origin check to accept opaque origins.
     response.headers["Referrer-Policy"] = "same-origin" if path == "/login" else "no-referrer"
     response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/")) or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
+    response.headers.setdefault("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' {sockets} https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     return response
 
 
@@ -43,13 +51,13 @@ async def boundaries(request, handler):
     try:
         response = await handler(request)
     except web.HTTPException as exc:
-        _set_response_headers(exc, request.path)
+        _set_response_headers(exc, request)
         raise
     except RuntimeOperationPending as exc:
         payload = {'error': str(exc), 'code': 'runtime_pending'}
         if exc.operation == 'send':
             payload['delivery'] = 'unknown'
-        return _set_response_headers(web.json_response(payload, status=504), request.path)
+        return _set_response_headers(web.json_response(payload, status=504), request)
     except AppError as exc:
         payload = {"error": str(exc), "accepted": False}
         if exc.code:
@@ -58,10 +66,10 @@ async def boundaries(request, handler):
             payload['receipt'] = exc.receipt
         if exc.code == 'session_busy':
             payload['state'] = getattr(exc, 'client_state', None) or request.app['service'].browser_state()
-        return _set_response_headers(web.json_response(payload, status=exc.status), request.path)
+        return _set_response_headers(web.json_response(payload, status=exc.status), request)
     except (json.JSONDecodeError, ValueError, KeyError) as exc:
-        return _set_response_headers(web.json_response({"error": "Invalid request: " + str(exc), "accepted": False}, status=400), request.path)
-    return _set_response_headers(response, request.path)
+        return _set_response_headers(web.json_response({"error": "Invalid request: " + str(exc), "accepted": False}, status=400), request)
+    return _set_response_headers(response, request)
 
 
 async def create_app(data_dir, workspace=None, runtime=None, voice=True, background_updates=True,
@@ -190,7 +198,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                 'Content-Disposition': f'attachment; filename="provider-{field}-{info["sha256"][:16]}{suffix}.json"',
                 'Content-Length': str(len(prefix) + info['bytes'] + 1),
             })
-            _set_response_headers(response, request.path)
+            _set_response_headers(response, request)
             await response.prepare(request)
             await response.write(prefix)
             while chunk := await asyncio.to_thread(stream.read, 64 * 1024):

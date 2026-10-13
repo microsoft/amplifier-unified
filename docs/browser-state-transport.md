@@ -112,6 +112,8 @@ starts workers, retries model requests or replays commands.
 
 The handshake passes the same Host, Origin and authentication gates as HTTP and
 requires an attached client. Transport close releases the subscriber promptly.
+The page's connection policy explicitly names only its validated socket authority
+for browsers that do not include WebSocket schemes in CSP `self`.
 Reconnect uses bounded backoff and a fresh snapshot, preserving private drafts
 and mounted Canvas state. SSE is a compatibility path for hosts that do not
 advertise WebSocket support, not an automatic response to a broken socket.
