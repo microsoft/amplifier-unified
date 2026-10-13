@@ -10,18 +10,17 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('..
 let browser,log='';fixture.stderr.on('data',chunk=>log+=chunk);
 try{
  const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);resolve(JSON.parse(line).port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))})});
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-detail-token'}}),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(`http://127.0.0.1:${port}`);
  await page.waitForSelector('#amp-one');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsExpanded:['diagnostics']}}));
  await openSettingsPage(page,'diagnostics');
- const recording=page.getByLabel('Record provider requests for troubleshooting',{exact:true});
+ const recording=page.getByLabel('Record provider requests and responses for troubleshooting',{exact:true});
  await expect(recording).not.toBeChecked();
  await expect(page.getByText(/Earlier calls cannot be recovered/)).toBeVisible();
  await recording.check();
- await page.getByRole('button',{name:'Save capture settings',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().diagnostics.config.providerRequests===true);
  assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().diagnostics.config.destinations),[]);
  await page.reload();
@@ -35,7 +34,6 @@ try{
  await openSettingsPage(page,'diagnostics');
  await expect(recording).toBeChecked();
  await recording.uncheck();
- await page.getByRole('button',{name:'Save capture settings',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().diagnostics.config.providerRequests===false);
  await page.reload();
  await page.locator('.a-settings-experience').waitFor({state:'visible'});

@@ -7,7 +7,8 @@ from amplifier_web.server import create_app
 from amplifier_web.bundle_selection import catalog_entry
 from amplifier_web.bundles import BundleManager
 from amplifier_web.host.storage import SessionStore
-from amplifier_web.host.config import PRECONFIGURED_BUNDLES
+from amplifier_web.host.config import PRECONFIGURED_BUNDLES, write_private
+import yaml
 class Runtime:
     def __init__(self):self.tokens={}
     async def start(self,session,emit):
@@ -34,6 +35,7 @@ async def perform(self,action,args,**kwargs):
 BundleManager.perform=perform
 async def main(home):
     os.environ.update(AMPLIFIER_HOME=str(home/'shared'),AMPLIFIER_WEB_HOME=str(home))
+    write_private(home/'shared/settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':'fixture','module':'provider-openai','config':{'default_model':'fixture-model'}}]}}))
     workspace=home/'workspace';workspace.mkdir()
     app=await create_app(home,workspace=workspace,runtime=Runtime(),voice=False,background_updates=False)
     app['control_token']='bundle-fixture-control';app['allowed_origins']|={'http://127.0.0.1:8963'}

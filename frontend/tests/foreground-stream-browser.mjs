@@ -16,8 +16,8 @@ try {
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote']:[]});
  const context=await browser.newContext({viewport:{width:1500,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  await context.addInitScript(()=>{
-  const Native=window.EventSource;window.fixtureStreams=[];
-  window.EventSource=class extends Native{constructor(...args){super(...args);if(String(args[0]).includes('/api/events'))window.fixtureStreams.push(this)}};
+  const Native=window.WebSocket;window.fixtureStreams=[];
+  window.WebSocket=class extends Native{constructor(...args){super(...args);if(String(args[0]).includes('/api/events')){window.fixtureStreams.push(this);if(window.fixtureRejectNext){window.fixtureRejectNext=false;this.addEventListener('open',()=>this.close(),{once:true})}}}};
  });
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
@@ -37,13 +37,13 @@ try {
  const count=()=>page.evaluate(()=>window.fixtureStreams.length);
  const assertRecovered=async before=>{
   await expect.poll(count,{timeout:10000}).toBeGreaterThan(before);
-  await page.waitForFunction(()=>window.fixtureStreams.at(-1).readyState===EventSource.OPEN);
+  await page.waitForFunction(()=>window.fixtureStreams.at(-1).readyState===WebSocket.OPEN);
   await expect(composer).toHaveDraft('UNSAVED COMPOSER EDIT');await expect(editor).toHaveValue('LOCAL CANVAS EDIT');
   assert.equal(await page.evaluate(()=>window.amplifier.shellClientId),clientId,'No page reload or new client');assert.deepEqual(mutations,[]);
  };
  // A permanently CLOSED native stream cannot retry itself.
- let rejectedStream=0;await page.route('**/api/events*',route=>{if(rejectedStream++===0)return route.fulfill({status:204,body:''});return route.continue()});
- let before=await count();await page.evaluate(()=>{const stream=window.fixtureStreams.at(-1);stream.close();stream.dispatchEvent(new Event('error'))});await assertRecovered(before);await page.unroute('**/api/events*');assert.ok(rejectedStream>=2,'A failed replacement must also recover');
+ let before=await count();await page.evaluate(()=>{window.fixtureRejectNext=true;window.fixtureStreams.at(-1).close()});
+ await expect.poll(count,{timeout:15000}).toBeGreaterThan(before+1);await assertRecovered(before);
  // A foreground wake also replaces an apparently OPEN but stale connection.
  before=await count();await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));await assertRecovered(before);
  // A visibility event while already visible is not a new foreground episode.

@@ -42,8 +42,7 @@ try{
  await openSettingsPage(page,'diagnostics');
  await expect(page.getByText('Saved recording setting: Off',{exact:true})).toBeVisible();
  await page.getByRole('checkbox',{name:'Record provider requests and responses for troubleshooting'}).check();
- await expect(page.getByText(/Unsaved change/)).toBeVisible();
- await page.getByRole('button',{name:'Save recording setting',exact:true}).click();
+ await expect(page.getByText(/Unsaved change/)).toHaveCount(0);
  await expect(page.getByText('Saved recording setting: On',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Save recording setting',exact:true})).toHaveCount(0);
  await page.reload();

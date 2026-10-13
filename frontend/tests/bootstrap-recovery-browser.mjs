@@ -31,10 +31,9 @@ try{
 
  // The event stream can bootstrap the UI even when the initial state read stalls.
  const streamed=await context.newPage();await streamed.route('**/api/state',()=>{});await streamed.goto(base);await streamed.getByRole('button',{name:'Settings',exact:true}).waitFor({timeout:5000});await streamed.close();
- // With neither state source responding, show a finite retry and recover via HTTP.
+ // With the first state stream unavailable, show a finite retry and reconnect.
  const retry=await context.newPage();let first=true;
- await retry.route('**/api/state',route=>{if(first){first=false;return}return route.continue()});
- await retry.route('**/api/events*',route=>route.abort());
+ await retry.routeWebSocket('**/api/events/ws?**',socket=>{if(first){first=false;socket.close()}else socket.connectToServer()});
  await retry.goto(base);await retry.getByRole('button',{name:'Retry connection',exact:true}).waitFor({timeout:13000});await retry.getByRole('button',{name:'Retry connection',exact:true}).click();await retry.getByRole('button',{name:'Settings',exact:true}).waitFor();await retry.close();
  const retained=await control({op:'patch'});assert.equal(retained.retainedMessages,1159);assert.equal(retained.retainedSessions,10);assert.deepEqual(errors,[]);
  const result={sessions:10,messages:1159,canonicalBytes:seeded.canonicalBytes,browserBytes:Buffer.byteLength(compact),initialMessages:60,loadedMessages:120,shellMs,maintenanceDuringSlowDetail:true,recoveredDetailFailure:true,stateStreamFallback:true,startupRetry:true,historyRetained:true};

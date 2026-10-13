@@ -17,17 +17,17 @@ test('late catalog preserves selection and shared actions target the explicit co
  await renderAct(async()=>root.update(render()));await renderAct(async()=>root.root.findByProps({'data-action':'bundle.switch'}).props.onClick());assert.deepEqual(calls.find(row=>row.name==='bundle.switch').args,{sessionId:'chat',bundle:'work',previewId:'token',resetModel:false});
  session={...session,bundleChange:{phase:'error',error:'Failed mount'}};await renderAct(async()=>root.update(render()));assert.equal(root.root.findAllByProps({id:'conversation-bundle'}).find(n=>n.type==='select').props.value,'work');assert.equal(root.root.findByProps({role:'alert'}).findByType('strong').children.join(''),'Failed mount');await renderAct(async()=>root.unmount());
 });
-test('default selection remains a draft until saved with an explicit scope',async()=>{
+test('registered default selection saves immediately with an explicit scope',async()=>{
  const calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}},state={view:{},bundleDefaults:{app:null,shared:'anchors',effective:'anchors',source:'shared',workspacePath:'/workspace'},registeredBundles:[{name:'work',value:'work'}]};
- let root;await renderAct(async()=>{root=create(React.createElement(BundleDefaults,{state,act}))});await renderAct(async()=>root.root.findAllByProps({id:'default-bundle'}).find(n=>n.type==='select').props.onChange({target:{value:'work'}}));assert.equal(calls.filter(row=>row.name==='bundle.default').length,0);
- await renderAct(async()=>root.root.findAllByProps({'data-action':'bundle.default'})[0].props.onClick());assert.deepEqual(calls.find(row=>row.name==='bundle.default').args,{scope:'app',bundle:'work'});await renderAct(async()=>root.unmount());
+ let root;await renderAct(async()=>{root=create(React.createElement(BundleDefaults,{state,act}))});await renderAct(async()=>root.root.findAllByProps({id:'default-bundle'}).find(n=>n.type==='select').props.onChange({target:{value:'work'}}));assert.equal(calls.filter(row=>row.name==='bundle.default').length,1);
+ assert.deepEqual(calls.find(row=>row.name==='bundle.default').args,{scope:'app',bundle:'work'});await renderAct(async()=>root.unmount());
 });
 test('global Settings refuses a retained workspace scope draft',async()=>{
  const calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}},state={view:{bundleDefaultsDraft:{scope:'workspace',bundle:'private'}},bundleDefaults:{app:'anchors',workspace:'private',workspacePath:'/private'},registeredBundles:[{value:'anchors'}]};
  let root;await renderAct(async()=>{root=create(React.createElement(BundleDefaults,{state,act}))});
  assert.equal(root.root.findByProps({id:'bundle-default-scope'}).props.value,'app');
  assert.equal(root.root.findAllByType('option').some(row=>row.props.value==='workspace'),false);
- await renderAct(async()=>root.root.findAllByProps({'data-action':'bundle.default'})[0].props.onClick());
+ await renderAct(async()=>root.root.findAllByProps({id:'default-bundle'}).find(n=>n.type==='select').props.onChange({target:{value:'anchors'}}));
  assert.deepEqual(calls.find(row=>row.name==='bundle.default').args,{scope:'app',bundle:'anchors'});
  await renderAct(async()=>root.unmount());
 });

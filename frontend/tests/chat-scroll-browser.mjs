@@ -52,7 +52,7 @@ let vite,browser,page;
 try{
  const port=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Scroll fixture did not start')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
- vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
+ vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
  await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
@@ -141,9 +141,14 @@ try{
  await page.waitForFunction(()=>document.querySelector('.a-user:last-of-type')?.textContent.includes('New multiline message')||[...document.querySelectorAll('.a-user')].at(-1)?.textContent.includes('New multiline message'));
  await expect.poll(()=>readComposerDraft(input)).toBe('');
  await atBottom();
- const message=await page.locator('.a-user').last().boundingBox(),composer=await page.locator('.a-composer').boundingBox();
- assert.ok(message.y+message.height<=composer.y,`submitted message ends at ${message.y+message.height}, composer starts at ${composer.y}`);
- assert.ok(message.y>=(await pane.boundingBox()).y,'submitted message is visible without scrolling');
+ // The receipt replaces the optimistic row. Read all geometry in one frame
+ // and wait for the submitted row to remain visible through that replacement.
+ await expect.poll(()=>page.evaluate(()=>{
+  const row=[...document.querySelectorAll('.a-user')].at(-1);
+  if(!row?.textContent.includes('New multiline message'))return false;
+  const message=row.getBoundingClientRect(),composer=document.querySelector('.a-composer').getBoundingClientRect(),pane=document.querySelector('.a-messages').getBoundingClientRect();
+  return message.bottom<=composer.top&&message.top>=pane.top;
+ })).toBe(true);
 
  // The response may grow, but the start stays visible once there is enough
  // content to position the submitted message near the top of the viewport.

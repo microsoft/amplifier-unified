@@ -62,6 +62,7 @@ try{
  page.on('response',response=>{if(measured&&response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions')responses.push(response.body().then(body=>({action:response.request().postDataJSON().action,bytes:body.length})))});
  cdp=await context.newCDPSession(page);await cdp.send('Network.enable');await cdp.send('Performance.enable');
  cdp.on('Network.eventSourceMessageReceived',event=>{if(measured)frames.push({kind:event.eventName,bytes:Buffer.byteLength(event.data)})});
+ cdp.on('Network.webSocketFrameReceived',event=>{if(measured)try{const frame=JSON.parse(event.response.payloadData);frames.push({kind:frame.event,bytes:Buffer.byteLength(event.response.payloadData)})}catch{}});
  await page.goto(url);await page.getByRole('button',{name:'App options',exact:true}).waitFor();
  evidence.stage='baseline';const initialBytes=await page.evaluate(()=>JSON.stringify(window.amplifier.getState()).length);evidence.initialBytes=initialBytes;await persist();
  assert.ok(initialBytes<1_000_000,`Chat baseline should omit settings history: ${initialBytes}`);

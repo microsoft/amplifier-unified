@@ -3618,3 +3618,33 @@ def test_full_resolution_gif_admission_keeps_format_and_budgets():
     oversized = mp4() + b'x' * MAX_MP4_BYTES
     with pytest.raises(ValueError, match='MP4.*32 MiB'):
         validate_media(oversized)
+
+
+async def test_media_discovery_requalifies_transient_revision_race(media_app, monkeypatch):
+    from amplifier_web.media_message_identity import StaleMediaIdentityError
+    from unittest.mock import AsyncMock
+    session = media_app._session()
+    media_app.clients.attach('race-browser')
+    media = media_app.outputs.media
+    original = media.identity
+    calls = 0
+    async def racing(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise StaleMediaIdentityError('The saved assistant identity changed during media access.')
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(media, 'identity', racing)
+    with media_app.clients.bind('race-browser'):
+        assert (await media.describe(session['id'], session['messages'][0]['id']))['items'] == []
+        assert calls == 2
+        failed = AsyncMock(side_effect=StaleMediaIdentityError('still changing'))
+        monkeypatch.setattr(media, 'identity', failed)
+        with pytest.raises(StaleMediaIdentityError):
+            await media.describe(session['id'], session['messages'][0]['id'])
+        assert failed.await_count == 3
+        denied = AsyncMock(side_effect=ValueError('identity collision'))
+        monkeypatch.setattr(media, 'identity', denied)
+        with pytest.raises(ValueError, match='collision'):
+            await media.describe(session['id'], session['messages'][0]['id'])
+        assert denied.await_count == 1

@@ -27,5 +27,5 @@ export default defineConfig({
   for(const name of ['mermaid','dompurify','highlight.js','katex'])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${name}.txt`);
  }}],
  build:{outDir:'../amplifier_web/static',emptyOutDir:true,rollupOptions:{input:{app:fileURLToPath(new URL('./index.html',import.meta.url)),shellValidation:fileURLToPath(new URL('./shell-validation.html',import.meta.url))}}},
- server:{proxy:{'/api':'http://127.0.0.1:8765'}},
+ server:{proxy:{'/api':{target:'http://127.0.0.1:8765',ws:true}}},
 });

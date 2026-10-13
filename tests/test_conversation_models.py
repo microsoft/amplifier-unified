@@ -120,3 +120,27 @@ async def test_configuration_change_recomposes_before_reusing_old_mounted_catalo
     monkeypatch.setattr(draft_defaults,'resolve_defaults',resolve)
     await browse(app.management,session)
     assert app.state['runtimeControl'][session['id']]['configuration.catalog']['providers']==[{'id':'new'}]
+    await browse(app.management,session)
+    assert app.state['runtimeControl'][session['id']]['configuration.catalog']['providers']==[{'id':'new'}]
+
+
+async def test_inflight_catalog_keeps_new_revision_and_refresh_demand(app,monkeypatch):
+    from amplifier_web import draft_defaults
+    entered=asyncio.Event();finish=asyncio.Event();calls=[]
+    async def resolve(*args,**kwargs):
+        calls.append((app.state.get('configurationRevision',0),kwargs['refresh']))
+        if len(calls)==1:
+            entered.set()
+            await finish.wait()
+        return {'providers':[{'id':str(calls[-1][0])}],'catalogs':{}}
+    monkeypatch.setattr(draft_defaults,'resolve_defaults',resolve)
+    session=app._session()
+    await request_browse(app.management,session)
+    await asyncio.wait_for(entered.wait(),1)
+    app.state['configurationRevision']=1
+    await request_browse(app.management,session,refresh=True)
+    finish.set()
+    await asyncio.wait_for(asyncio.gather(*app.management.conversation_catalog_requests.values()),2)
+    assert calls==[(0,False),(1,True)]
+    result=app.state['runtimeControl'][session['id']]['configuration.catalog']
+    assert result['configurationRevision']==1 and result['providers']==[{'id':'1'}]

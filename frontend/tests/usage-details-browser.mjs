@@ -66,7 +66,7 @@ try{
  await presentation({interfaceDetail:'standard',executionDetail:'standard'});
  await call.getByRole('button',{name:'Open recording settings'}).click();
  await expect(page.getByRole('checkbox',{name:'Record provider requests and responses for troubleshooting'})).toBeVisible();
- await expect(page.getByRole('button',{name:'Save capture settings',exact:true})).toBeVisible();
+ await expect(page.getByLabel('Record provider requests and responses for troubleshooting',{exact:true})).toBeVisible();
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
  const totals=page.getByRole('region',{name:'Conversation totals',exact:true});
  await expect(value(totals,'Input tokens')).toHaveText('100,00080% cached');await expect(value(totals,'Session cost (USD)')).toHaveText('$1.62');

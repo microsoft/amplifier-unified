@@ -60,7 +60,7 @@ try{
  await openSettingsPage(page,'notifications');await page.getByText('Set up phone notifications',{exact:true}).click();
  await page.getByRole('button',{name:'Create a name',exact:true}).click();await expect(page.getByLabel(/^Topic name/)).toHaveValue(/^amplifier-/);
  await page.getByText('Server & account',{exact:true}).click();await page.getByLabel(/^Access token/).fill('fixture-ntfy-token');
- await page.getByRole('button',{name:'Save notifications',exact:true}).click();await expect(page.getByText('Notification preferences saved.',{exact:true})).toBeVisible();await expect(page.getByLabel(/^Access token/)).toHaveValue('');
+ await page.getByRole('button',{name:'Save phone connection',exact:true}).click();await expect(page.getByText('Notification preferences saved.',{exact:true})).toBeVisible();await expect(page.getByLabel(/^Access token/)).toHaveValue('');
  await page.screenshot({path:out+'/notifications-dark.png'});
  await openSettingsPage(page,'updates');
  const navCount=Number(await page.locator('[data-settings-section=updates] .a-attention-badge').innerText());

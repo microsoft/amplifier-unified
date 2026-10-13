@@ -51,7 +51,7 @@ def setup_routes(app, streams):
                 return web.json_response({"clientId": identity, "protocolVersion": 1,
                     "hostInstanceId": service.instance_id, "reconnect": "snapshot",
                     **discovery(service),
-                    "transports": ["http", "sse"],
+                    "transports": ["http", "sse", "websocket"],
                     **({} if payload.get('includeState') is False or request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
                        else {"state": service.browser_state()})})
 
