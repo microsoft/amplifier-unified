@@ -123,7 +123,7 @@ async def test_handoff_cannot_outlive_scope_or_human_correction(tmp_path, monkey
 
 
 @pytest.mark.parametrize('new_task', [False, True])
-@pytest.mark.parametrize('change', ['stop', 'edit', 'missing'])
+@pytest.mark.parametrize('change', ['stop', 'edit', 'missing', 'ui', 'user', 'voice'])
 async def test_later_correction_wins_actual_schedule_admission(tmp_path, monkeypatch, new_task, change):
     app, runtime, now, source, target, human, record, value = await setup(tmp_path, monkeypatch, new_task=new_task)
     try:
@@ -134,6 +134,8 @@ async def test_later_correction_wins_actual_schedule_admission(tmp_path, monkeyp
         def correct():
             if change == 'stop': source['interruptionRevision'] = 1
             elif change == 'edit': human['text'] = 'Do not run this.'
+            elif change in {'ui', 'user', 'voice'}:
+                app._message(source, 'user', 'Wait; do not run this.', 'chat', inputOrigin=change)
             else: source['messages'].remove(human)
         runtime.before_admission = correct
         now[0] += 61
@@ -141,6 +143,29 @@ async def test_later_correction_wins_actual_schedule_admission(tmp_path, monkeyp
         assert not runtime.inputs
         assert app.schedules.store.runs(target['id'])[0]['phase'] == 'skipped'
         assert app.schedules.store.get(target['id'],record['id'])['status'] == 'needs_review'
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('new_task', [False, True])
+@pytest.mark.parametrize('origin', ['ui', 'user', 'voice', 'peer'])
+async def test_due_recheck_distinguishes_new_human_input_from_peer_updates(tmp_path, monkeypatch, new_task, origin):
+    app, runtime, now, source, target, human, record, value = await setup(tmp_path, monkeypatch, new_task=new_task)
+    try:
+        await handoff(app, source, target, value)
+        await resume(app, target, record, human)
+        revision = source.get('interruptionRevision', 0)
+        app._message(source, 'user', 'Later input', 'chat', inputOrigin=origin)
+        assert source.get('interruptionRevision', 0) == revision
+        assert human in source['messages'] and human['text'] == 'Repair this existing schedule.'
+        await app.on_runtime_event('runtime.status', {'sessionId':target['id'],'status':'idle'})
+        runtime.inputs.clear(); now[0] += 61
+        await app.schedules.tick()
+        accepted = origin == 'peer'
+        assert len(runtime.inputs) == int(accepted)
+        assert app.schedules.store.runs(target['id'])[0]['phase'] == ('accepted' if accepted else 'skipped')
+        if not accepted:
+            assert app.schedules.store.get(target['id'], record['id'])['status'] == 'needs_review'
     finally:
         await app.close()
 
