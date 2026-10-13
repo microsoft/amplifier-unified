@@ -24,7 +24,7 @@ export function createConversationNavigation(limit=32){
   const {id,row}=Array.from(pending.values()).at(-1);
   if(state.selectedSessionId===id)return {...state,navigationPending:true};
   const saved=cache.get(id),summary=state.sessions?.find(row=>row.id===id)||row;
-  const {messages,workers,approvals,execution,streaming,historyActivity,messageWindow,executionWindow,runtimeEvents,generations,messageAnnotations,messageQuotes,...metadata}=summary;
+  const {messages,workers,workerSummary,approvals,execution,streaming,historyActivity,messageWindow,executionWindow,runtimeEvents,generations,messageAnnotations,messageQuotes,...metadata}=summary;
   const session={...metadata,draft:saved?.session.draft??summary.draft,historyLoading:true,messages:[],workers:[],approvals:[]};
   return {...state,selectedSessionId:id,selectedWorkspaceId:session.workspaceId??state.selectedWorkspaceId,navigationPending:true,
    sessions:[...(state.sessions||[]).filter(row=>row.id!==id),session],

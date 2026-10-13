@@ -1,7 +1,7 @@
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdir,mkdtemp} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -140,6 +140,7 @@ try{
   const id='browser-create-'+index,args={title:'Fixture implementation '+(index+1),text:'Root '+(index+1)+' round one'};
   const created=await agent('source','coordination.create',args,id);
   assert.equal(created.accepted,true);assert.ok(created.sessionId);assert.ok(created.initialInputId);
+  assert.equal(created.subscription.status,'reserved');
   assert.equal(created.result.sourceGenerationId,humanContext.generationId);
   assert.deepEqual(created.result.sourceInputIds,[human.inputId]);
   assert.equal(Object.hasOwn(created.result,'grantId'),false);
@@ -157,7 +158,7 @@ try{
   assert.deepEqual(task.collaboration.sourceInputIds,[human.inputId]);
   assert.equal(task.collaboration.configurationHash,created.result.configurationHash);
   assert.equal((await agent('source','coordination.create',args,id)).duplicate,true);
-  tasks.push({...task,brief:created.initialInputId,actor:index===0?'recipient':'recipient2'});
+  tasks.push({...task,operation:created.requestId,brief:created.initialInputId,actor:index===0?'recipient':'recipient2'});
  }
  assert.notEqual(tasks[0].id,tasks[1].id);
  assert.notEqual(tasks[0].collaboration.outputNamespace,tasks[1].collaboration.outputNamespace);
@@ -218,12 +219,14 @@ try{
    assert.equal(declaration.result.status,'staged');assert.equal(declaration.result.qualified,false);
    binding(await inspect(),requestId+':reply',task.id,context);
    const sourceContext=(await inspect()).contexts[current.selected];
-   const wait=await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait');
+   const wait=round===0
+    ?{accepted:true,result:(await agent('source','coordination.result',{requestId:task.operation},task.operation+':return')).result.initialRequest.subscription}
+    :await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait');
    assert.equal(wait.accepted,true);assert.equal(wait.result.status,'waiting');
-   binding(await inspect(),requestId+':wait',current.selected,sourceContext);
+   if(round===1)binding(await inspect(),requestId+':wait',current.selected,sourceContext);
    const continuation=wait.result.continuationId;
    assert.ok(continuation);assert.equal(continuations.has(continuation),false);continuations.add(continuation);
-   assert.equal((await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait')).duplicate,true);
+   if(round===1)assert.equal((await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait')).duplicate,true);
    const staged=await agent('source','coordination.result',{requestId},requestId+':staged');
    assert.equal(staged.result.qualified,false);assert.equal(staged.result.qualificationSupported,true);
    assert.deepEqual(staged.result.results,[]);
@@ -237,7 +240,7 @@ try{
    assert.equal(anchor.textDigest,sha256(JSON.stringify(terminal.text)));
    const canonical='['+[task.id,anchor.nativeIndex,'assistant',terminal.text].map(value=>JSON.stringify(value)).join(', ')+']';
    assert.equal(anchor.messageId,sha256(canonical).slice(0,32));
-   const qualified=await agent('source','coordination.result',{requestId},requestId+':result');
+   const qualified=await agent('source','coordination.result',{requestId:round===0?task.operation:requestId},requestId+':result');
    assert.equal(qualified.result.qualified,true);assert.equal(qualified.result.qualificationSupported,true);
    assert.equal(qualified.result.results.length,1);
    const exact=qualified.result.results[0];
@@ -290,6 +293,8 @@ try{
    const opened=uiActions.filter(call=>call.action==='canvas.openFile').at(-1);
    assert.equal(opened.args.sessionId,current.selected);assert.equal(opened.args.workspace,peerState.workspace);
    assert.equal(opened.args.path,candidate.path);
+   assert.equal(opened.args.expectedSha256,candidate.sha256);
+   assert.equal(opened.args.referenceRequestId,requestId);
    await preserve();
    await page.getByRole('button',{name:'Close panel',exact:true}).click();
    await expect(page.locator('[data-part="canvas"] .a-canvas-plain')).toContainText(candidate.text);
@@ -362,6 +367,16 @@ try{
   await preserve();
  }
  peerState=await inspect();
+ await expect(related).toContainText('Other conversation');
+ const changed=rounds[0];
+ const previousCanvas=await page.evaluate(()=>window.amplifier.getState().canvas?.content);
+ await writeFile(changed.candidate.path,'Changed after the result was reported');
+ try{
+  await related.locator('[data-request-id="'+changed.requestId+'"]').getByRole('button',{name:'Open referenced artifact',exact:true}).click();
+  await expect(related.getByRole('alert')).toContainText('not the reported artifact version');
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas?.content),previousCanvas);
+  await preserve();
+ }finally{await writeFile(changed.candidate.path,changed.candidate.text)}
  for(const {requestId} of rounds)assert.equal(peerState.sent.filter(row=>row.inputId===requestId).length,1);
  for(const continuation of continuations)assert.equal(peerState.sent.filter(row=>row.inputId===continuation).length,1);
  assert.equal(continuations.size,4);assert.equal(peerState.tasks.length,2);

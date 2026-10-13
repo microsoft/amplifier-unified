@@ -39,7 +39,12 @@ class Worktrees:
             record = json.loads(path.read_text())
             session = next((s for s in service.state['sessions'] if s['id'] == record['sessionId']), {})
             inconsistent = record['phase'] == 'applied' and (session.get('executionRevision', 0) <= record['executionRevision'] or (session.get('executionRevision', 0) == record['executionRevision'] + 1 and session.get('workingDirectory') != record['target']))
-            if record['phase'] == 'pending' or inconsistent:
+            if record['phase'] == 'pending' and record.get('step') == 'preflight':
+                record.update(phase='rejected', revision=record['revision']+1,
+                    detail='The app restarted before runtime release began. The source execution folder is unchanged.')
+                session['configurationBusy'] = False
+                self.save(record)
+            elif record['phase'] == 'pending' or inconsistent:
                 record.update(phase='unknown', revision=record['revision']+1, detail='The app restarted during handoff. No input was replayed; inspect and reconcile explicitly.')
                 self.save(record)
         self.sync()
@@ -75,7 +80,7 @@ class Worktrees:
 
     @staticmethod
     def operation_shape(row):
-        return {'id': 'worktree:' + row['id'], 'sessionId': row['sessionId'], 'source': 'worktree', 'kind': 'checkout-handoff', 'state': {'pending': 'running', 'applied': 'completed', 'reconciled': 'completed', 'unknown': 'outcome_unknown'}[row['phase']], 'revision': row['revision'], 'createdAt': row['createdAt'], 'updatedAt': row.get('updatedAt', row['createdAt']), 'controlAvailable': False, 'evidence': copy.deepcopy(row)}
+        return {'id': 'worktree:' + row['id'], 'sessionId': row['sessionId'], 'source': 'worktree', 'kind': 'checkout-handoff', 'state': {'pending': 'running', 'applied': 'completed', 'reconciled': 'completed', 'rejected': 'failed', 'unknown': 'outcome_unknown'}[row['phase']], 'revision': row['revision'], 'createdAt': row['createdAt'], 'updatedAt': row.get('updatedAt', row['createdAt']), 'controlAvailable': False, 'evidence': copy.deepcopy(row)}
 
     def receipts(self, sid):
         records = [json.loads(path.read_text()) for path in sorted(self.receipt_dir.glob('*.json'))]
@@ -212,6 +217,7 @@ class Worktrees:
                 target = self.record(sid, args['id'])['path'] if args.get('id') else session['workspace']
                 if args.get('id') and self.record(sid, args['id'])['status'] != 'ready': raise ValueError('The checkout is not ready; inspect its conflicts first')
             record = {'id': identity, 'sessionId': sid, 'signature': signature, 'revision': 1, 'phase': 'pending', 'executionHost': local_host_identity(), 'source': session.get('workingDirectory') or session['workspace'], 'target': target, 'historyHome': session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'createdAt': time.time(), 'inputsReplayed': False, 'origin': origin, 'detail': 'Saving and releasing the old runtime before changing its execution folder.', 'preserved': {'messageIds': [m['id'] for m in session['messages']], 'taskId': session.get('task', {}).get('id') if session.get('task') else None}, 'reconciles': previous['id'] if previous else None, 'evidence': args.get('evidence')}
+            record['step'] = 'preflight'
             self.save(record)
             session['configurationBusy'] = True
             self.changed()
@@ -221,6 +227,8 @@ class Worktrees:
 
     async def finish(self, record, session):
         try:
+            record['step'] = 'preflight'
+            self.save(record)
             # The pending receipt is durable independently of bridge delivery.
             # Quiescence never waits on a model-held command lock.
             await asyncio.sleep(0)
@@ -229,6 +237,10 @@ class Worktrees:
             home = await asyncio.to_thread(self.git.inspect, record['historyHome'])
             if checked['repository'] != home['repository']: raise ValueError('The target is no longer in the original repository')
             if not self.app.runtime or not hasattr(self.app.runtime, 'quiesce_for_handoff'): raise ValueError('This runtime cannot confirm safe handoff')
+            # Persist before crossing the effect boundary. A lost release
+            # response is uncertain; a failed read-only preflight is not.
+            record['step'] = 'releasing'
+            self.save(record)
             evidence = await self.app.runtime.quiesce_for_handoff(session, record['id'])
             self.check_host(evidence)
             if not evidence.get('quiesced'): raise RuntimeError('Runtime release was not confirmed')
@@ -247,7 +259,12 @@ class Worktrees:
                 self.changed()
         except BaseException as exc:
             async with self.app.lock:
-                record.update(phase='unknown', revision=record['revision']+1, detail='Handoff did not reach a confirmed boundary. Inspect and reconcile; no input was replayed. ' + str(exc)[:1000])
+                if record.get('step') == 'preflight':
+                    record.update(phase='rejected', revision=record['revision']+1,
+                        detail='Handoff was rejected before runtime release. The source execution folder is unchanged. ' + str(exc)[:1000])
+                    self.app._session(record['sessionId'])['configurationBusy'] = False
+                else:
+                    record.update(phase='unknown', revision=record['revision']+1, detail='Handoff did not reach a confirmed boundary. Inspect and reconcile; no input was replayed. ' + str(exc)[:1000])
                 self.save(record); self.changed()
             if isinstance(exc, asyncio.CancelledError): raise
 

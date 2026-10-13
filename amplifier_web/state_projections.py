@@ -134,7 +134,7 @@ class StateProjections:
         No client draft/selection is retained in this shared body cache.
         """
         fields = ('messages', 'messageWindow', 'sharedHistoryUserTurnOffset',
-                  'execution', 'executionWindow', 'workers', 'generations', 'historyActivity')
+                  'execution', 'executionWindow', 'workers', 'workerSummary', 'generations', 'historyActivity')
         body = self.detail_bodies.pop(row['id'], None)
         if body is None:
             from .browser_state import project

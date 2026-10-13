@@ -1,5 +1,126 @@
 # Implementation and evidence
 
+## Coherent commissioned-task operation — 2026-10-13
+
+New `coordination.create` operations retain one public handle and a private
+captured configuration. The host reserves the requester's return capacity before
+creating a root and commits the initial request, saved wait and completed
+creation receipt together before execution can be admitted. Explicitly independent
+work can use `returnNotification:false`. Result inspection through the creation
+handle includes its exact initial request, without caller-generated subordinate IDs.
+
+Restart resumes committed plans and reconciles root creation only through its
+existing committed command receipt. It can then finish the known-unperformed
+initial-input step. A missing acknowledgment leaves root effects unknown and
+retained. Lost acknowledgment after input commit keeps the committed outcome.
+Recorded Stop, changed assignment or changed execution placement suppresses
+remaining preparation. Root identity and captured configuration are checked
+before the initial brief. These are local preparation guarantees, not an
+exactly-once promise for arbitrary tool effects or external systems.
+
+The private preparation record contains configuration rather than transcripts,
+uses existing provider credential references, and is removed when input commits.
+Public receipts and ambient context never include that private record. Legacy
+operations remain read-only evidence and are not retroactively made resumable.
+Automatic preparation and refused/uncertain admission notices are host observations; they do not claim
+an uncreated peer produced a report, satisfy a dependency, or authorize replay.
+
+Local validation: 283 focused coordination, creation, recovery and inheritance
+tests pass. All 19 new operation/recovery checks also pass against the built
+wheel imported outside the source checkout. Three actual Core guidance probes
+pass. The production-service Chromium journey completes two rounds for two
+peers, using automatic first-request returns and creation-handle result reads;
+its runtime and terminal evidence remain scripted. Wheel and source distribution
+builds pass.
+
+Two bounded real-provider scenarios were then run twice using actual worker
+processes and installed candidate wheels: a successful helper result and a
+declined request. Each run created exactly one helper, committed creation,
+returned automatically without a manual subscription and preserved the correct
+dependency outcome. The final package's 304 installed Python files matched its
+source revision. These checks qualify the narrow creation/return protocol;
+they do not establish general task efficacy, shared-host adoption, publication,
+or the broader multi-client assignment experience.
+
+## Initial repair tranche — 2026-10-13
+
+The implementation program starts with reproduced defects and established
+coordination mechanisms. It does not make the broader assignment/resource
+architecture a release prerequisite. The baseline is `be1f1d3`; nine isolated
+review probes reproduced the reported defects without touching live services.
+
+| Owner | Implemented behavior | Evidence boundary |
+| --- | --- | --- |
+| Worker and native children | Each mounted child receives its own app adapter and transport principal, including finite/custom loops, persistent children, resumes and nested delegation. Nested children retain the assigning input context. Root-only controls reject a child principal. | Real Core/Foundation mounting with a deterministic orchestrator; no provider call |
+| Host file policy | Filesystem/patch child allow lists intersect across parent, spawn, overlay and retained plans; denies accumulate. Explicit read-only declarations stay read-only. Repository paths follow the execution folder; unrelated external paths remain. Image boundaries remain covered. | Composition and host-policy regressions; no claim of shell or OS sandbox enforcement |
+| Shared dispatch | Agent permission writes require an explicit existing scope. Root agents can still perform scoped configuration actions; settings are not made categorically human-only. | Direct-dispatch and app-bridge rejection tests; this is not a general capability-grant system |
+| Collaboration | Sealed negative reports and host-observed failed generations notify the exact waiter once without satisfying dependencies. Queue admission reserves space for saved replies. A destination has 64 pending/reserved slots; each ordered sender/recipient pair admits 32 messages per minute. Retries retain their identities. | Deterministic admission, failure, duplicate, reservation and Stop tests |
+| Creation and worktrees | A commissioned peer uses the creator's actual execution folder and keeps canonical history grouping. A failed read-only handoff preflight is rejected without fencing the source; uncertainty after release still fences it. | Temporary Git repositories and restart/failure injection; no shared host changes |
+| Canvas and related work | Referenced bytes are hashed before presentation in the recorded producer execution folder. A changed or unavailable source is explicit. A verified preview retains its bytes independently of the source. User-created peers are visible alongside commissioned peers. | Actual service/Chromium journey with scripted runtime; no real-provider evidence |
+
+The changed writer class was inspected across filesystem, patch and image
+configuration, prepared plans, retained child plans and mounted app controls.
+Arbitrary shell programs, third-party tools, and other agent engines remain
+outside these configuration guarantees. Older artifact references without a
+recorded execution folder remain inspectable as receipts but cannot silently
+open guessed source bytes. Files are not automatically archived at reply time;
+if they change before first opening, the exact-result view reports a mismatch.
+
+The coherent-creation candidate also integrates the existing bridge-cleanup
+commit from PR #616, preserving its original history. Diagnostics remain
+best-effort inside cleanup, pending futures are cancelled and bridge effects
+are never replayed. The combined candidate passes 66 focused transport, worker
+authority and creation checks, including the real 60-second wait. All generated
+web assets must be rebuilt when combined frontend source changes.
+
+Local candidate validation: 797 Python tests and two subtests passed across the
+affected coordination, runtime, storage, settings, worktree and Canvas families;
+638 frontend tests passed. The production-service Chromium journey passed two
+rounds with two commissioned peers, reconnect and exact artifact inspection,
+including rejection after changing a reported source file while retaining the
+existing view and draft. The native child tests used real Core/Foundation with
+scripted orchestration. None of these checks claims provider efficacy, publication,
+installed-worker adoption, or live-host acceptance.
+
+A subsequent native-loop re-preparation probe reproduced reassignment of a
+nested child's context to an unrelated later root input. Keeping the
+coordinator's existing bridge and child installer fixes that path; 104 focused
+identity, worker, surface-context and file-policy checks pass. The broad browser
+gate also needed two fixture corrections: an attachment selector matched both
+Open and Remove, and a timer measurement could count a delayed host render.
+The corrected timer probe passes repeated runs and detects a deliberately
+introduced parent render on every tick. Production rendering behavior is unchanged.
+
+Follow-up scope remains explicit: multi-repository resource bindings;
+assignment budgets and scoped Stop across independent roots; full capability
+grants; expiry/fair scheduling beyond the initial inbox bounds; and full
+multi-round, multi-repository and multi-client qualification. The narrow
+installed-package and real-provider creation checks above do not complete
+those broader acceptance journeys.
+
+## Program delivery gates
+
+The approved program remains staged. The two implementation slices above are
+bounded deliveries, not completion of every workstream in the program.
+Existing native history, command receipts, worktree records and usage receipts
+remain the owners; the remaining work must extend them rather than create
+competing stores.
+
+| Next outcome | Canonical owners | Remaining acceptance gate |
+| --- | --- | --- |
+| Equivalent authority across supported routes | Host, runtime adapters, configuration controls | Explicit capability grants and revocation across schedules, recipes and background admission; preserve authorized configuration changes |
+| Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Later correlated replies, question/deferral revisions, expiring one-shot watches and fair bounded delivery; no duplicate continuation or false dependency success |
+| Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Bind two child repositories under a non-Git workspace; reject duplicate exclusive resource acquisition; verify actual commands, imports and previews against bindings |
+| Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context for user-created and commissioned peers; overlap warnings and supported stale-write conflicts without leaking drafts or loading dormant agents |
+| Assignment control | Existing task, capacity and interruption owners | Aggregate reservations and scoped Stop across commissioned roots and nested work, while unrelated project chats keep running |
+| Durable results and integration | Artifact/resource owner and worktree integration | Retain exact versions before mutable sources disappear; validate the combined candidate and preserve uncertain cleanup effects |
+| Complete supported user journeys | Shared action/API layer, browser and terminal clients | Repeated two-round real-provider work, failure and Stop variants, independent and commissioned peers, disconnect/restart, private client state and measured responsiveness |
+| Release and adoption | Existing package/release and instance owners | Qualify the combined package, migrate retained records, activate fresh workers in an owned candidate instance, and separately verify intended release adoption |
+
+Each gate needs evidence at its own layer. A successful narrow provider handoff
+does not substitute for several repositories, assignment limits or client
+parity, and a merged change does not imply a published or adopted release.
+
 ## Collaborative-workspaces candidate
 
 The approved same-host cooperation loop is **qualified for PR review**,

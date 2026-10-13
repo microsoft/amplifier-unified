@@ -39,6 +39,11 @@ async def create(*args, **kwargs):
                 session["status"] = data["status"]
             if "streaming" in data:
                 session["streaming"] = data["streaming"]
+            if "workers" in data:
+                session["workers"] = data["workers"]
+                session["execution"] = {"nodes": [{"id": "worker-test", "kind": "tool",
+                    "turnId": "worker-turn", "phase": "completed", "anchorMessageId": "message-78"}],
+                    "turns": [{"id": "worker-turn", "phase": "completed"}]}
             service._publish_changes(sessions={session["id"]}, detail_only=True)
         return web.json_response({"id": session["id"], "messages": len(session["messages"])})
 

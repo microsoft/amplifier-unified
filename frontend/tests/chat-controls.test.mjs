@@ -63,8 +63,36 @@ test('late catalogs preserve selector choices and shared provider actions',async
  state={...state,runtimeControl:{chat:{...state.runtimeControl.chat,'configuration.providers':{...state.runtimeControl.chat['configuration.providers'],pinned:true,effective:{instance:'openai',model:'agent-choice'}}}}};
  await renderAct(async()=>root.update(render()));
  assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/openai · agent-choice/);
- assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('Loading model settings…')));
+ assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('openai · agent-choice')));
  await renderAct(async()=>root.unmount());
+});
+
+for(const isDraft of [false,true])test('authoritative empty refresh replaces cached options, not the saved selection: '+(isDraft?'draft':'chat'),async()=>{
+ const calls=[],providers=[{id:'one',sharedCatalogKey:'account-one',info:{defaults:{model:'saved'}}}];
+ let entry={phase:'ready',models:['saved','retired']},root;
+ const render=()=>{
+  const state={configurationRevision:1,view:{composerModel:{open:true,sessionId:isDraft?null:'chat',instance:'one',model:'saved'},newSessionDraft:{workspace:'/trial',selection:{instance:'one',model:'saved'}}},
+   modelCatalogs:{'account-one':entry},runtimeControl:{chat:{'configuration.catalog':{configurationRevision:1,providers,effective:{instance:'one',model:'saved'}}}},
+   setup:{providersRequestedWorkspace:'/trial',providers,providerCatalogs:{one:entry}},
+   draftDefaults:{'["/trial",""]':{phase:'ready',providers,effective:{instance:'one',model:'saved'}}}};
+  return React.createElement(ModelControl,{state,session:isDraft?null:{id:'chat'},act:async(name,args)=>calls.push({name,args})});
+ };
+ const values=()=>root.root.findByProps({id:'chat-model'}).findAllByType('option').map(n=>n.props.value);
+ try{
+  await renderAct(async()=>root=create(render()));assert.deepEqual(values(),['saved','retired']);
+  for(const transient of [{phase:'working'},{phase:'error'},{phase:'ready',modelsDeferred:true}]){
+   entry=transient;await renderAct(async()=>root.update(render()));assert.ok(values().includes('retired'));
+  }
+  const refresh=root.root.findAllByType('button').find(n=>n.children.includes('Refresh models'));
+  await renderAct(async()=>refresh.props.onClick());
+  assert.equal(isDraft?calls.at(-1).args.refresh:calls.at(-1).args.args.refresh,true);
+  entry={phase:'ready',models:[]};await renderAct(async()=>root.update(render()));
+  assert.deepEqual(values(),['saved']);assert.equal(root.root.findByProps({id:'chat-model'}).props.value,'saved');
+  entry={phase:'ready',modelsDeferred:true};await renderAct(async()=>root.update(render()));assert.deepEqual(values(),['saved']);
+  entry={phase:'ready',models:['saved','fresh']};await renderAct(async()=>root.update(render()));assert.deepEqual(values(),['saved','fresh']);
+  assert.equal(calls.some(c=>c.args?.operation==='provider.queueSelection'),false);
+  assert.equal(calls.some(c=>c.name==='view.update'&&c.args?.patch?.newSessionDraft),false);
+ }finally{await renderAct(async()=>root?.unmount())}
 });
 
 
@@ -175,6 +203,27 @@ test('runtime report supplies readable provider before opening the selector',asy
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state:{view:{}},session,act:async()=>({accepted:true}),working:false}))});
  assert.deepEqual(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children,['GitHub Copilot SDK · same-model (high)']);
  await renderAct(async()=>root.unmount());
+});
+test('closed conversation and optimistic navigation never browse catalogs',async()=>{
+ const calls=[],session={id:'chat',selection:{instance:'private',model:'saved-model'}},act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ let root,state={view:{},navigationPending:true};
+ await renderAct(async()=>root=create(React.createElement(ModelControl,{state,session,act})));
+ assert.equal(calls.length,0);
+ assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.join(''),/saved-model/);
+ state={view:{},configurationRevision:2};await renderAct(async()=>root.update(React.createElement(ModelControl,{state,session,act})));
+ assert.equal(calls.length,0);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.onClick());
+ assert.equal(calls.filter(c=>c.args?.operation==='configuration.catalog').length,1);
+ await renderAct(async()=>root.unmount());
+});
+for(const shared of [{},{open:false}])test('embedded picker retains server demand after initialization: '+JSON.stringify(shared),async()=>{
+ const calls=[],state={view:{composerModel:shared},runtimeControl:{chat:{'configuration.catalog':{configurationRevision:0,providers:[],effective:{}}}}};
+ let root;
+ await renderAct(async()=>root=create(React.createElement(ModelControl,{state,session:{id:'chat'},embedded:true,act:async(name,args)=>calls.push({name,args})})));
+ const updates=calls.filter(c=>c.name==='view.update');
+ assert.ok(updates.length);assert.ok(updates.every(c=>c.args.patch.composerModel.open&&c.args.patch.composerModel.sessionId==='chat'));
+ await renderAct(async()=>root.unmount());
+ assert.equal(calls.at(-1).args.patch.composerModel.open,false);
 });
 test('an empty resolved provider catalog offers setup instead of loading forever',async()=>{
  const calls=[],state={view:{newSessionDraft:{workspace:'/trial'},composerModel:{open:true,sessionId:null}},draftDefaults:{'["/trial",""]':{phase:'ready',providers:[],effective:{}}}};

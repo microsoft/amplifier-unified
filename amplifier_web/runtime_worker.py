@@ -1,6 +1,7 @@
 """Private JSON-lines worker. Runs only inside the configured runtime environment."""
 from __future__ import annotations
 import asyncio
+import copy
 import json
 import os
 import re
@@ -108,34 +109,53 @@ class Worker:
         action = args.get('action')
         if isinstance(action, str) and re.fullmatch(r'[a-z][a-z0-9_.]{0,79}', action):
             facts['action'] = action
-        publish({**facts, 'phase': 'requested'})
+        def diagnostic(phase, **extra):
+            # Observability must not change a bridge result or mask its error.
+            try:
+                publish({**facts, 'phase': phase, **extra})
+            except Exception:
+                pass
+
         try:
+            diagnostic('requested')
             publish({"op": "bridge", "id": identity, "operation": operation, "args": args})
             result = await asyncio.wait_for(future, timeout)
-            publish({**facts, 'phase': 'completed', 'elapsedSeconds': round(time.monotonic() - started, 3)})
+            diagnostic('completed', elapsedSeconds=round(time.monotonic() - started, 3))
             return result
         except TimeoutError as exc:
-            publish({**facts, 'phase': 'timeout', 'elapsedSeconds': round(time.monotonic() - started, 3),
-                     'errorType': 'TimeoutError'})
+            diagnostic('timeout', elapsedSeconds=round(time.monotonic() - started, 3),
+                       errorType='TimeoutError')
             raise TimeoutError(
                 f"App bridge response timed out after {timeout:g} seconds "
                 "(transport timeout, not normal coordination.wait expiry)."
             ) from exc
         except asyncio.CancelledError:
-            publish({**facts, 'phase': 'cancelled', 'elapsedSeconds': round(time.monotonic() - started, 3)})
+            diagnostic('cancelled', elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         except Exception as exc:
-            publish({**facts, 'phase': 'failed', 'errorType': type(exc).__name__,
-                     'elapsedSeconds': round(time.monotonic() - started, 3)})
+            diagnostic('failed', errorType=type(exc).__name__,
+                       elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         finally:
             self.bridges.pop(identity, None)
+            if not future.done():
+                future.cancel()
 
-    def app_access_bridge(self, coordinator):
+    def app_access_bridge(self, coordinator, *, assignment=None):
+        lookup = getattr(coordinator, 'get_capability', None)
+        existing = lookup('web.app_access.bridge') if callable(lookup) else None
+        if callable(existing):
+            # Loop preparation can evaluate this before the tool installer's
+            # idempotency check. Preserve both the assigned bridge and its
+            # nested-child installer instead of capturing a later root input.
+            return existing
         # Workers inherit the originating inputs at assignment, never
         # another client's later input or another coordinator's receipts.
-        assigned = None if coordinator is self.session.coordinator else list(self.context_inputs)
-        assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in assigned]
+        assigned = None if coordinator is self.session.coordinator else list(
+            assignment[0] if assignment is not None else self.context_inputs)
+        assigned_context = None if assigned is None else copy.deepcopy(
+            assignment[1] if assignment is not None else {i: self.context_bindings[i] for i in assigned if i in self.context_bindings})
+        assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': assigned_context.get(i, {}).get('clientId')} for i in assigned]
         assigned_clients = None if assigned_bindings is None else [b['clientId'] for b in assigned_bindings]
         watched = set()
         async def bridge(operation, args):
@@ -150,7 +170,8 @@ class Worker:
             args = {**args, '_runtimeSessionId': coordinator.session_id, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
                                              if assigned_clients is None else assigned_clients)}
             if operation.startswith('context.'):
-                bindings = [self.context_bindings[i] for i in ids if i in self.context_bindings]
+                context = self.context_bindings if assigned_context is None else assigned_context
+                bindings = [context[i] for i in ids if i in context]
                 if assigned is not None:
                     if operation == 'context.read':
                         watched.add(args.get('surfaceId'))
@@ -161,6 +182,13 @@ class Worker:
                         '_contextBindings': bindings}
             return await self.bridge(operation, args)
         register = getattr(coordinator, "register_capability", None)
+        if callable(register):
+            register('web.app_access.bridge', bridge)
+            async def install_child_access(child_coordinator):
+                from amplifier_web.app_guidance import install_app_access
+                await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
+                    assignment=None if assigned is None else (assigned, assigned_context)))
+            register("web.app_access.install", install_child_access)
         if assigned is None and callable(register):
             async def peer_continuation_ready():
                 runtime, gate = self.runtime, self.activation_gate

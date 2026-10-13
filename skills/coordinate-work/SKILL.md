@@ -44,12 +44,22 @@ compare those exact links, not equal message text.
    same host-configured instance/source, never copied secrets or a different
    account. Missing authorized bindings stay an explicit preparation failure.
    Keep source files and unrelated settings intact.
-   The committed receipt returns before service-owned preparation. Inspect its
-   `requestId`, `sessionId` and `initialInputId` through `coordination.result`.
+   The committed receipt returns before service-owned preparation. The host
+   reserves a return notification and commits it with the initial brief before
+   the peer can run. Use `returnNotification:false` only for intentional work
+   that should not automatically return. Inspect the creation `requestId` through
+   `coordination.result`; it includes the initial request and exact result when
+   available. Do not construct subordinate IDs or add a second subscription.
    A response timeout does not cancel the task. Reusing the identical command ID
-   reads the receipt; it never creates another root or replays a brief. There is
+   reads the receipt; it never creates another root or replays a brief. On host
+   restart, known unperformed preparation can resume from the captured plan;
+   an unacknowledged root effect remains unknown. Stop and changed assignment
+   or placement suppress remaining preparation. There is
    a bound of eight outstanding tasks per source, not eight historical chats.
    First-child runtime qualification may take longer than worker startup.
+   The peer keeps the source's actual execution folder while retaining the
+   canonical workspace for history. This shares that checkout; it does not
+   allocate a second worktree or isolate ports, services, or browser state.
    Identical sibling plans can reuse that qualified profile; preparation is not
    execution or completion. Read elapsed progress and honor Stop rather than
    replaying a slow request. Failed/cancelled preparation retains diagnostics.
@@ -60,6 +70,18 @@ compare those exact links, not equal message text.
    revised or budget-exhausted tasks stay stopped. Unknown is not replayed.
    Passive cursors only acknowledge observations; they do not authorize a wake.
    Independently check the actual artifact before using a declared result.
+   Sealed failure, deferral and decline also notify once, as does a runtime
+   failure tied to a delivered request even without a model reply. These
+   outcomes do not satisfy the dependency or authorize repeating tool effects.
+   A conversation admits at most 64 queued inputs plus reserved replies.
+   Messages between a pair of conversations are limited to 32 per minute,
+   including notify. On backpressure, wait or combine updates; do not change
+   identities to evade a limit. Identical retries still return their receipts.
+   To open a reported file version, use `canvas.openFile` with the calling
+   session/workspace, the reference path and `expectedSha256`, and the original
+   `referenceRequestId`. The host checks bytes in the recorded execution folder.
+   Changed, missing and legacy unbound references remain explicit; never strip
+   the digest and present current bytes as the reported version.
 
 ## Receiver workflow
 

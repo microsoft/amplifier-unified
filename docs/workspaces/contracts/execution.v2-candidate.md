@@ -68,6 +68,37 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Coherent commissioned-task operation — 2026-10-13
+
+A new commissioned conversation has one durable creation handle. The host
+captures its configuration and execution placement, reserves the requester's
+return notification by default, and commits the initial request and that wait
+before admitting execution. An explicit `returnNotification:false` permits
+independent work without an automatic return. Inspecting the creation handle
+resolves its initial request; callers do not construct subordinate command IDs.
+
+Preparation phases distinguish a committed plan, requested root creation,
+retained root and committed input. Restart may resume a proven unperformed step
+or reconcile an existing exact receipt. An unproven root-creation effect remains
+unknown and is never blindly repeated. Stop, changed assignment, changed
+placement or revoked admission suppress remaining automatic preparation. Reads
+and duplicate requests remain passive. Private captured configuration is never
+included in public receipts or ambient coordination context.
+
+### Approved initial repair implementation — 2026-10-13
+
+The initial program separates defect repairs from larger design experiments.
+The shared-folder default and independent-chat model remain unchanged. A peer
+created from a moved task inherits its actual execution directory without
+claiming a new isolated copy. Typed failure/deferral/decline and authenticated
+runtime-failure observations may wake a saved waiter; waking is distinct from
+successful dependency acceptance. Inbox capacity may reject new input with
+explicit backpressure before any message is added, while reserved result slots
+preserve accepted waits. Result navigation must verify the exact referenced
+bytes and retain the producer's execution binding; absence or mismatch is an
+explicit limitation. These additions are tracked in the implementation evidence,
+not a claim that every v2 proposal or original v1 isolation promise is delivered.
+
 No current universal checkout fence is known in this source baseline; this is not proof that all integrations are independent of the earlier promise. Existing explicit worktree handoffs, permission checks and preservation checks stay in place. Consumers must distinguish cooperative from genuinely protected bindings and report unsupported enforcement. The first collaboration increment should retain existing folder behavior, add honest context/coordination, and not claim newly enforced write isolation.
 
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.

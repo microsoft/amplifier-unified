@@ -1,6 +1,6 @@
 import {visibleWorkers} from './activity.js';
 export function executionData(session){
- if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns,segments:session.execution.segments||[],detailsDeferred:session.execution.detailsDeferred,sessionId:session.id}}
+ if(session?.workerSummary?.bounded||session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns,segments:session.execution.segments||[],detailsDeferred:session.execution.detailsDeferred,sessionId:session.id}}
  const workers=visibleWorkers(session?.workers||[]),events=session?.runtimeEvents||[];
  if(!workers.length&&!events.some(e=>e.type==='runtime.tool'||String(e.type).startsWith('tool.')))return {nodes:[],turns:[]};
  const turnId='observed-activity',nodes=[],tools=new Map();
