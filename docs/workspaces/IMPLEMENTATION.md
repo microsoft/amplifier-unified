@@ -34,11 +34,13 @@ claim, and then acquired, marked uncertain and released the resource after
 the owner explicitly relinquished it. Agent replies carry compact domain
 receipts instead of repeating unrelated application state.
 
-An earlier live attempt delivered its second prompt while the first turn was
-finishing and encountered a runtime error. Its failed evidence remains retained;
-the successful lifecycle check waits for the observed idle boundary. Turn-end
-steering remains a separate unresolved runtime qualification, not a pass inferred
-from the successful idle-to-idle check.
+An earlier live attempt failed at its second prompt. A repeat with captured
+runtime errors identified the actual cause: full app-state replies made required
+context exceed the local input budget. The pre-fix package reproduces that error;
+the compact-reply package passes the same immediate-follow-up journey as well as
+the idle-to-idle journey. Both failed runs are retained as regression evidence.
+These are bounded protocol checks, not qualification of every steering race or
+general multi-agent efficacy.
 
 This completes cooperative reservation admission, not managed provisioning or
 an OS resource lock. Different aliases and separate app installations remain
