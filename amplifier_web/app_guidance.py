@@ -114,6 +114,8 @@ async def install_app_access(coordinator, bridge):
     delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge), bridge), bridge), bridge)
     coordinator.register_capability('web.surface_delivery', delivery)
     from .surface_delivery import SurfaceProvider
+    from .request_recovery import RecoveringProvider, install as install_recovery
+    install_recovery(coordinator)
     transformed = []
     def transform(provider):
         if isinstance(provider, SurfaceProvider) and provider.delivery is delivery:
@@ -122,7 +124,7 @@ async def install_app_access(coordinator, bridge):
         if callable(observe):provider = observe(provider)
         for original, wrapped in transformed:
             if original is provider:return wrapped
-        wrapped = SurfaceProvider(provider, delivery)
+        wrapped = SurfaceProvider(RecoveringProvider(provider, coordinator), delivery)
         transformed.append((provider, wrapped))
         del transformed[:-16]
         return wrapped
