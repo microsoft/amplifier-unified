@@ -196,7 +196,7 @@ def test_workflow_requires_parallel_lanes_before_write_permission():
     for lane in qualification.LANES:
         assert jobs[lane]['needs'] == 'prepare'
         assert 'permissions' not in jobs[lane]
-    assert set(jobs['release']['needs']) == {'prepare', *qualification.LANES, 'public-readiness'}
+    assert set(jobs['release']['needs']) == {'prepare', *qualification.LANES}
     assert jobs['release']['permissions'] == {'contents': 'write'}
     steps = jobs['release']['steps']
     verify = next(i for i, step in enumerate(steps) if 'verify-receipts' in step.get('run', ''))
@@ -204,10 +204,10 @@ def test_workflow_requires_parallel_lanes_before_write_permission():
     assert verify < publish
 
 
-def test_critical_browser_checks_gate_prs_and_exact_release_source():
+def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     workflows = ROOT / '.github/workflows'
     manual = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
-    assert set(manual['on']) == {'workflow_dispatch'}
+    assert set(manual['on']) == {'workflow_dispatch', 'workflow_call'}
     assert manual['permissions'] == {'contents': 'read'}
     commands = '\n'.join(step.get('run', '') for step in manual['jobs']['browser']['steps'])
     assert 'playwright install' in commands
@@ -215,7 +215,7 @@ def test_critical_browser_checks_gate_prs_and_exact_release_source():
     assert '--context-limit --active-worker' in commands
     assert 'test:connectors-browser' in commands
     critical = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
-    assert {'pull_request', 'push', 'workflow_call'} <= set(critical['on'])
+    assert set(critical['on']) == {'workflow_dispatch', 'workflow_call'}
     assert critical['permissions'] == {'contents': 'read'}
     steps = critical['jobs']['critical']['steps']
     assert steps[0]['with']['ref'] == '${{ inputs.revision || github.sha }}'
@@ -224,18 +224,32 @@ def test_critical_browser_checks_gate_prs_and_exact_release_source():
                   'npm test', 'recovery-group-browser.mjs', 'chat-menu-browser.mjs', 'public-first-chat-browser.mjs'):
         assert check in commands
     release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)
-    assert release['jobs']['public-readiness']['needs'] == 'prepare'
-    assert release['jobs']['public-readiness']['with']['revision'] == '${{ needs.prepare.outputs.revision }}'
+    assert 'public-readiness' not in release['jobs']
+    post = yaml.load((workflows / 'post-release.yml').read_text(), Loader=yaml.BaseLoader)
+    assert post['on']['workflow_run'] == {'workflows': ['Publish application release'], 'types': ['completed']}
+    assert post['permissions'] == {'contents': 'read'}
+    for lane in ('readiness', 'python', 'browser'):
+        assert post['jobs'][lane]['needs'] == 'resolve'
+        assert post['jobs'][lane]['with']['revision'] == '${{ needs.resolve.outputs.revision }}'
+        assert 'secrets' not in post['jobs'][lane]
+    resolve = post['jobs']['resolve']
+    assert "conclusion == 'success'" in resolve['if']
+    assert 'head_repository.full_name == github.repository' in resolve['if']
+    assert 'head_branch' in resolve['if']
+    assert 'host-source-resolution' in resolve['steps'][-1]['run']
+    assert post['jobs']['report']['permissions'] == {'contents': 'read', 'issues': 'write'}
+    assert 'always()' in post['jobs']['report']['if']
+    assert set(post['jobs']['report']['needs']) == {'resolve', 'installed-package', 'readiness', 'python', 'browser'}
     frontend = '\n'.join(step.get('run', '') for step in release['jobs']['frontend']['steps'])
     assert 'npm test --prefix frontend' in frontend
     assert 'npm run build --prefix frontend' in frontend
     assert 'git diff --exit-code -- amplifier_web/static' in frontend
 
 
-def test_full_python_suite_is_manual_but_package_and_runtime_proofs_remain():
+def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
     workflows = ROOT / '.github/workflows'
     manual = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
-    assert set(manual['on']) == {'workflow_dispatch'}
+    assert set(manual['on']) == {'workflow_dispatch', 'workflow_call'}
     assert manual['permissions'] == {'contents': 'read'}
     assert any('pytest -q --tb=short' in step.get('run', '')
                for step in manual['jobs']['python']['steps'])
@@ -274,7 +288,7 @@ def test_native_core_qualification_is_manual_and_cannot_publish():
     workflows = ROOT / '.github/workflows'
     entry = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     native = yaml.load((workflows / 'core-wheels.yml').read_text(), Loader=yaml.BaseLoader)
-    assert set(entry['on']) == {'workflow_dispatch'}
+    assert set(entry['on']) == {'workflow_dispatch', 'workflow_call'}
     assert entry['on']['workflow_dispatch']['inputs']['core_wheels']['default'] == 'false'
     assert entry['jobs']['core-wheels']['uses'] == './.github/workflows/core-wheels.yml'
     assert set(native['on']) == {'workflow_call'}
