@@ -136,6 +136,7 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
     old_size = (home / 'app.sqlite3').stat().st_size
     restored = AppService(home, workspace=tmp_path)
     try:
+        await restored._storage_maintenance_task
         assert (home / 'backups/shared-storage-v1/app.sqlite3').is_file()
         assert restored.db.execute('SELECT count(*) FROM smart_tool_operations').fetchone()[0] == 20
         assert restored.db.execute("SELECT count(*) FROM smart_tool_operations WHERE json_extract(value,'$.resultExpired')=1").fetchone()[0] == 18
