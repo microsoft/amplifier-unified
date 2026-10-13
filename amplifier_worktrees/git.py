@@ -221,7 +221,8 @@ class GitWorktrees:
         with self.lock(repository):
             if self.record_path(identity).exists():
                 record = self.get(identity)
-                if record['path'] != str(target) or record['sessionId'] != session_id: raise ValueError('The command ID already names another checkout')
+                if record['path'] != str(target) or record['sessionId'] != session_id or record['source'] != str(Path(source).resolve()):
+                    raise ValueError('The command ID already names another checkout or source')
                 return record
             checked = snapshot(target)[0]
             if str(target) not in [row.get('worktree') for row in checked['worktrees']]: raise ValueError('Git does not register that worktree')

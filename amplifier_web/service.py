@@ -367,6 +367,7 @@ for _access, _actions in {
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
+        "worktree.create", "worktree.attach", "worktree.remove", "worktree.handoff", "worktree.reconcile",
     },
     "presentation": {
         "session.select", "session.pin", "session.markUnread", "session.archive", "session.restore", "session.rename",
@@ -379,6 +380,7 @@ for _access, _actions in {
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
         "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
+        "worktree.inspect", "worktree.list", "worktree.status",
     },
     "domain_authoritative": {
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
