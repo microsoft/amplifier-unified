@@ -6,6 +6,7 @@
       "title": "Faster chat controls and clearer navigation",
       "changes": [
         "Provider choices load when needed and reuse account-specific cached results. Reading existing chats avoids unnecessary provider discovery, while worker detail remains available on demand.",
+        "Long chats spend less time recalculating historical model usage during live updates. Other causes of intermittent server delays remain under investigation.",
         "Transient model timeouts and connection failures can retry the same unfinished request while its worker remains active, without repeating completed tools. Stop, changed turns and partial responses prevent automatic retries.",
         "Diagnostic publication failures no longer hide bridge request outcomes or leave disconnected requests pending.",
         "Workspace and chat pins share one saved order with keyboard, touch and drag controls; an empty Pinned section stays hidden. Unread dots remain visible in workspace chat lists, search and details.",
