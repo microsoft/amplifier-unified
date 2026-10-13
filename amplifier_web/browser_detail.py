@@ -19,7 +19,7 @@ def compact(row, session_id, part, limit):
         from .peer_attribution import neutral
         row = neutral(row)
     fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo','delegate'}
-    fields.update({'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture', 'requestRecording', 'responseRecording', 'exchange'})
+    fields.update({'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture', 'requestRecording', 'responseRecording', 'exchange', 'parentWorkerId', 'ancestors'})
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
     if 'routing' in result:
         from .host.model_selection import public_routing
@@ -60,6 +60,7 @@ def owned_nodes(session):
     from .delegate_exchange import descriptor, tool_name, delivered_nodes
     original = session.get('execution', {}).get('nodes', [])
     nodes = [*original, *delivered_nodes(session, original)]
+    delivered_owners = {row.get('parentId') for row in nodes if row.get('kind') == 'exchange'}
     by_id = {row['id']: row for row in nodes}
     workers_by_id = {row['id']: row for row in nodes if row.get('kind') == 'worker'}
     sessions = {}
@@ -69,32 +70,49 @@ def owned_nodes(session):
     workers = {sid: rows[0] for sid, rows in sessions.items() if sid and len(rows) == 1}
     fields = ('id', 'sessionId', 'label', 'provider', 'model', 'phase', 'status',
               'routing', 'parentProvider', 'runId', 'workerId', 'parentId', 'toolCallId')
+    descriptors = {}
+    def exchange_for(tool):
+        if not tool:
+            return None
+        if tool['id'] not in descriptors:
+            descriptors[tool['id']] = descriptor(tool, session['id'])
+        return descriptors[tool['id']]
+    headers = {}
+    def header(worker, seen=()):
+        if worker['id'] in headers:
+            return headers[worker['id']]
+        owner = {key: worker[key] for key in fields if key in worker}
+        parent = by_id.get(worker.get('parentId'))
+        exchange = exchange_for(parent) if parent and tool_name(parent) == 'delegate' else None
+        if exchange and worker['id'] in delivered_owners:
+            exchange = {key: value for key, value in exchange.items() if key not in {'delegateResponse', 'delegateResponseDetail'}}
+            exchange['delivery'] = 'separate'
+        if exchange:
+            owner['exchange'] = exchange
+        ancestor = (workers_by_id.get(parent.get('parentId')) or workers.get(parent.get('sessionId'))) if parent else None
+        if ancestor and ancestor['id'] not in (*seen, worker['id']) and len(seen) < 20:
+            prior = header(ancestor, (*seen, worker['id']))
+            owner['parentWorkerId'] = ancestor['id']
+            owner['ancestors'] = [*prior.get('ancestors', []), {k: v for k, v in prior.items() if k != 'ancestors'}]
+        headers[worker['id']] = owner
+        return owner
     result = []
     for row in nodes:
         worker = workers_by_id.get(row.get('exchangeOwnerId') or row.get('parentId')) or workers.get(row.get('sessionId'))
-        own_worker = row if row.get('kind') == 'worker' else worker
-        parent = by_id.get(own_worker.get('parentId')) if own_worker else None
-        exchange = descriptor(parent, session['id']) if parent and tool_name(parent) == 'delegate' else None
-        if exchange and any(item.get('parentId') == own_worker['id'] for item in nodes if item.get('kind') == 'exchange'):
-            exchange = {key: value for key, value in exchange.items() if key not in {'delegateResponse', 'delegateResponseDetail'}}
-            exchange['delivery'] = 'separate'
         if worker and row.get('kind') != 'worker':
-            owner = {key: worker[key] for key in fields if key in worker}
-            if exchange:
-                owner['exchange'] = exchange
-            result.append({**row, 'delegate': owner,
-                           **({'exchange': descriptor(row, session['id'])} if row.get('exchangeOwnerId') else {})})
-        elif exchange:
-            result.append({**row, 'exchange': exchange})
+            result.append({**row, 'delegate': header(worker),
+                           **({'exchange': exchange_for(row)} if row.get('exchangeOwnerId') else {})})
+        elif row.get('kind') == 'worker':
+            result.append({**row, **header(row)})
         elif row.get('kind') == 'tool' and tool_name(row) == 'delegate':
             # Requests that fail before spawning a worker still have an exchange.
-            result.append({**row, 'exchange': descriptor(row, session['id'])})
+            result.append({**row, 'exchange': exchange_for(row)})
         else:
             result.append(row)
     return result
 
 
-def work_segments(session):
+def work_segments(session, nodes=None):
     """Summaries cover the whole source view, even when action rows are paged."""
     messages=session.get('messages',[])
     timed=sorted((row['createdAt'],index) for index,row in enumerate(messages)
@@ -104,7 +122,7 @@ def work_segments(session):
         position=max(position,index);latest.append(position)
     turns={row['id']:row for row in generation_turns(session)}
     groups={};anchors={};last_groups={}
-    for node in owned_nodes(session):
+    for node in owned_nodes(session) if nodes is None else nodes:
         if node.get('lifecycle')=='background' and node.get('label')=='Session naming':continue
         turn=turns.get(node.get('turnId'),{})
         anchor=turn.get('anchorMessageId')
@@ -171,10 +189,12 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
                          'total': len(segments), 'before': items[0]['id'] if start and items else None})
     if part not in {'messages','nodes'}:raise ValueError('Choose messages, nodes or groups.')
     rows=session.get('messages',[]) if part=='messages' else owned_nodes(session)
+    source_nodes = rows if part == 'nodes' else None
+    segments_view = work_segments(session, source_nodes) if part == 'nodes' else None
     group_revision = None
     if group is not None:
         if part != 'nodes':raise ValueError('Work details require nodes.')
-        anchors, segments = work_segments(session)
+        anchors, segments = segments_view
         segment = next((row for row in segments if row['id'] == group), None)
         if segment is None:raise ValueError('This work is no longer available. Refresh this conversation.')
         group_revision = segment['detailRevision']
@@ -220,7 +240,7 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         result['userOffset']=session.get('sharedHistoryUserTurnOffset',0)+sum(row.get('role')=='user' for row in rows[:start])
         result['sourceOffset']=(session.get('sharedHistoryOffset',0) if session.get('nativeProject') and session.get('historyManaged') else 0)+start
     else:
-        anchors,segments=work_segments(session)
+        anchors,segments=segments_view
         for item in items:item['anchorMessageId']=anchors.get(item['id'])
         turn_ids={row.get('turnId') for row in items}
         group_ids={str(row.get('turnId'))+'@'+(row.get('anchorMessageId') or 'start') for row in items}
@@ -244,10 +264,11 @@ def sync_work(session, group, known):
     """Refresh an open window with changed rows only; retain no client cache."""
     if not isinstance(known, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in known.items()):
         raise ValueError('Work versions must map step IDs to version strings.')
-    anchors, segments = work_segments(session)
+    source_nodes = owned_nodes(session)
+    anchors, segments = work_segments(session, source_nodes)
     segment = next((row for row in segments if row['id'] == group), None)
     if segment is None:raise ValueError('This work is no longer available. Refresh this conversation.')
-    rows = [row for row in owned_nodes(session)
+    rows = [row for row in source_nodes
             if row['id'] in anchors and str(row.get('turnId'))+'@'+(anchors[row['id']] or 'start') == group]
     # Keep earlier pages the user opened, including long-running delegations.
     # If an archive was replaced, start with a fresh bounded page.

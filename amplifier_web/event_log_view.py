@@ -154,6 +154,7 @@ class EventIndex:
         self.nodes = OrderedDict()
         self.children = {}
         self.worker_runs = {}
+        self.tool_owners = {}
         self.pending = {}
         self.last = None
         self.revision = None
@@ -243,6 +244,13 @@ class EventIndex:
         # Older app-only diagnostic receipts have no tool body. They must not
         # restart a completed native tool or replace its precise timestamps.
         if data.get('kind') == 'tool' and isinstance(data.get('id'), str):
+            # App receipts contribute exact ownership only. Never use their
+            # content or lifecycle in place of the native tool event.
+            call = data.get('toolCallId')
+            owner_sid = data.get('sessionId') or sid
+            if isinstance(call, str) and isinstance(data.get('parentId'), str):
+                self.tool_owners[f'tool:{owner_sid}:{call}'] = {
+                    key: data[key] for key in ('parentId', 'turnId') if data.get(key)}
             return
         if name == 'prompt:submit' or name.startswith(('tool:', 'llm:', 'provider:')):
             from amplifier_foundation.session.history import event_association_record
@@ -412,6 +420,9 @@ class EventIndex:
     def rows(self, model_binding=None, *, coalesce=True):
         pending = [items[0] for items in self.pending.values() if len(items) == 1 and items[0]['id'] not in self.nodes]
         rows = copy.deepcopy([*self.nodes.values(), *pending])
+        for row in rows:
+            if row.get('kind') == 'tool':
+                row.update(self.tool_owners.get(row['id'], {}))
         app = [row for row in rows if row.get('_appModel')]
         if model_binding:
             for row in app:

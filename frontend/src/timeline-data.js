@@ -80,15 +80,27 @@ export function usageLabel(usage){
 export function treeForTurn(data,turnId){
  const nodes=data.nodes.filter(node=>node.turnId===turnId).map(node=>({...node}));
  const workerRows=data.nodes.filter(node=>node.kind==='worker'&&node.sessionId),workersById=new Map(workerRows.map(node=>[node.id,node]));
- const workers=new Map(workerRows.filter(node=>workerRows.filter(other=>other.sessionId===node.sessionId).length===1).map(node=>[node.sessionId,node]));
+ const counts=new Map();for(const worker of workerRows)counts.set(worker.sessionId,(counts.get(worker.sessionId)||0)+1);
+ const workers=new Map(workerRows.filter(node=>counts.get(node.sessionId)===1).map(node=>[node.sessionId,node]));
+ for(const node of nodes)if(node.delegate){for(const ancestor of node.delegate.ancestors||[])workersById.set(ancestor.id,{...workersById.get(ancestor.id),...ancestor});workersById.set(node.delegate.id,{...workersById.get(node.delegate.id),...node.delegate})}
+ const sourceById=new Map(data.nodes.map(node=>[node.id,node]));
  const groups=new Map();
+ const ensureGroup=(owner,seen=new Set())=>{
+  const id=`delegate:${turnId}:${owner.id}`;
+  if(groups.has(id)||seen.has(owner.id))return id;
+  seen.add(owner.id);
+  const sourceTool=sourceById.get(owner.parentId),parentOwner=workersById.get(owner.parentWorkerId)||workersById.get(sourceTool?.parentId)||workersById.get(sourceTool?.delegate?.id);
+  const parentId=parentOwner&&!seen.has(parentOwner.id)?ensureGroup(parentOwner,seen):null;
+  groups.set(id,{...owner,id,ownerId:owner.id,workerPhase:owner.status||owner.phase,kind:'worker',label:`Delegate · ${owner.label||'Worker'}`,turnId,parentId,members:[]});
+  return id;
+ };
  for(const node of nodes){
   if(node.kind==='worker')continue;
   const owner=node.delegate?{...workersById.get(node.delegate.id),...node.delegate}:workersById.get(node.parentId)||workers.get(node.sessionId);if(!owner)continue;
-  const id=`delegate:${turnId}:${owner.id}`;
-  if(!groups.has(id))groups.set(id,{...owner,id,ownerId:owner.id,workerPhase:owner.status||owner.phase,kind:'worker',label:`Delegate · ${owner.label||'Worker'}`,turnId,parentId:null,members:[]});
+  const id=ensureGroup(owner);
   groups.get(id).members.push(node);node.parentId=id;
  }
+ for(const node of nodes)if(node.kind==='worker'&&node.exchange)ensureGroup(node);
  // Delegate headers repeat in each message gap; their usage and timing cover
  // only calls displayed here, never the delegate's entire historical total.
  for(const group of groups.values()){
@@ -103,7 +115,6 @@ export function treeForTurn(data,turnId){
  const groupedOwners=new Set([...groups.values()].map(group=>group.ownerId));
  const exchanges=new Set([...groups.values(),...nodes.filter(node=>node.kind==='worker')].map(node=>node.exchange?.id).filter(Boolean));
  const visible=nodes.filter(node=>(node.kind!=='worker'||!groupedOwners.has(node.id))&&!(node.kind==='tool'&&exchanges.has(node.id)));
- for(const node of visible)if(node.kind==='worker'&&node.exchange)node.parentId=null;
  visible.push(...groups.values());
  const byId=new Map(visible.map(node=>[node.id,node]));
  const children=new Map();for(const node of visible){const parent=node.parentId&&node.parentId!==node.id&&byId.has(node.parentId)?node.parentId:null;if(!children.has(parent))children.set(parent,[]);children.get(parent).push(node)}

@@ -121,3 +121,52 @@ def test_multiple_persistent_reports_survive_with_partial_flags_and_no_false_pai
     reports = delivered_nodes(session, [tool, worker])
     assert [row['exchange']['delegateResponse'] for row in reports] == ['First', 'Second']
     assert reports[0]['exchange']['partial'] and not reports[1]['exchange']['partial']
+
+
+def test_resumed_tool_ownership_rebuilds_from_exact_metadata_not_timestamps(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    session = {'id': 'root', 'workspace': str(tmp_path / 'project'), 'messages': [], 'workers': []}
+    root, child = event_path(session, 'root'), event_path(session, 'child')
+    for call, at in [('first', 10), ('second', 30)]:
+        append(root, 'tool:pre', {'session_id': 'root', 'tool_call_id': call, 'tool_name': 'delegate',
+                                'tool_input': {'instruction': call}}, at)
+        append(root, 'delegate:agent_spawned' if call == 'first' else 'delegate:agent_resumed',
+               {'session_id': 'root' if call == 'first' else 'child', 'parent_session_id': 'root',
+                'sub_session_id': 'child', 'tool_call_id': call}, at + 1)
+        append(child, 'tool:post', {'session_id': 'child', 'tool_call_id': call + '-read',
+                                  'tool_name': 'read_file', 'result': call}, at + 2)
+        append(child, 'execution:node', {'session_id': 'child', 'sessionId': 'child',
+            'id': f'tool:child:{call}-read', 'kind': 'tool', 'toolCallId': call + '-read',
+            'parentId': f'worker:child:{call}', 'phase': 'running', 'input': 'must not replace native result'}, at + 3)
+    # Rebuild without any live tool metadata, as after process restart.
+    for _ in range(2):
+        session['execution'] = EventLogView(None).read(session)
+        rows = {row['id']: row for row in owned_nodes(session)}
+        for call in ('first', 'second'):
+            row = rows[f'tool:child:{call}-read']
+            assert row['output'] == call
+            assert row['delegate']['exchange']['delegateRequest'] == call
+        session.pop('execution')
+
+
+def test_paged_nested_delegate_retains_ancestor_and_reuses_bounded_descriptor(monkeypatch):
+    import amplifier_web.delegate_exchange as exchange
+    first = {'id': 'd1', 'kind': 'tool', 'label': 'delegate', 'sessionId': 'root', 'input': '{"instruction":"Outer"}'}
+    outer = {'id': 'w1', 'kind': 'worker', 'sessionId': 'one', 'parentId': 'd1'}
+    second = {'id': 'd2', 'kind': 'tool', 'label': 'delegate', 'sessionId': 'one', 'parentId': 'w1', 'input': '{"instruction":"Inner"}'}
+    inner = {'id': 'w2', 'kind': 'worker', 'sessionId': 'two', 'parentId': 'd2'}
+    session = {'id': 'root', 'messages': [], 'execution': {'turns': [], 'nodes': [first, outer, second, inner,
+        *[{'id': f'call-{i}', 'kind': 'llm', 'sessionId': 'two', 'parentId': 'w2'} for i in range(120)]]}}
+    for node in session['execution']['nodes']:
+        node['turnId'] = 'turn'
+    count = []
+    original = exchange.descriptor
+    def measured(node, sid):
+        count.append(node['id'])
+        return original(node, sid)
+    monkeypatch.setattr(exchange, 'descriptor', measured)
+    items = page(session, 'nodes')['items']
+    assert set(count) == {'d1', 'd2'} and len(count) == 2
+    owner = items[-1]['delegate']
+    assert owner['parentWorkerId'] == 'w1'
+    assert owner['ancestors'][0]['exchange']['delegateRequest'] == 'Outer'

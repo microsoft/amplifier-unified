@@ -34,6 +34,16 @@ function RawExchange({node}){
  return <>{[['Input',input],['Result',output],['Error',error]].map(([label,field])=><React.Fragment key={label}><ExecutionBlock label={label} text={field.value} loading={field.incomplete}/><FieldStatus label={label} field={field}/></React.Fragment>)}</>;
 }
 
+function Followup({entry,expanded,toggle}){
+ const detailsId=`exchange:${entry.id}:details`,details=expanded.has(detailsId);
+ const failed=['error','failed','cancelled','interrupted'].includes(entry.phase);
+ return <><DelegateMessage node={entry} field="delegateRequest" label="Follow-up to delegate" direction="Parent → Delegate" expanded={expanded} toggle={toggle}/>
+  <p className="a-caption">{failed?`Follow-up ${entry.phase}; delivery was not confirmed.`:['completed','complete','success'].includes(entry.phase)?'Request processed; application is not confirmed by this receipt.':'Follow-up attempted; awaiting receipt.'}</p>
+  <button type="button" className="a-link" aria-expanded={details} onClick={()=>toggle(detailsId)}>Follow-up receipt</button>
+  {details&&<RawExchange node={entry}/>}
+ </>;
+}
+
 export function DelegateExchange({node,expanded,toggle,activity,activityOpen,toggleActivity,childrenCount=0,entries=[]}){
  const exchange=node.exchange||{id:node.id},detailsId=`exchange:${exchange.id}:details`,details=expanded.has(detailsId);
  const response=exchange.delegateResponse!=null||!!exchange.delegateResponseDetail;
@@ -44,11 +54,11 @@ export function DelegateExchange({node,expanded,toggle,activity,activityOpen,tog
   {requestPresent?<DelegateMessage node={exchange} field="delegateRequest" label="Request to delegate" direction="Parent → Delegate" expanded={expanded} toggle={toggle}/>:<p className="a-caption">Request not recorded.</p>}
   {childrenCount>0&&<><button type="button" className="a-link a-delegate-activity-toggle" aria-expanded={activityOpen} onClick={toggleActivity}><ChevronRight className={activityOpen?'open':''}/>Worker activity · {childrenCount} {childrenCount===1?'step':'steps'}{isRunning(node)?' · running':''}</button>{activityOpen&&activity}</>}
   {entries.map(entry=><React.Fragment key={entry.id}>
-   <DelegateMessage node={entry} field="delegateRequest" label="Follow-up to delegate" direction="Parent → Delegate" expanded={expanded} toggle={toggle}/>
-   {entry.delegateRequest!=null&&<p className="a-caption">Submitted; application is not confirmed by this receipt.</p>}
+   {(entry.delegateRequest!=null||entry.delegateRequestDetail)&&<Followup entry={entry} expanded={expanded} toggle={toggle}/>}
    <DelegateMessage node={entry} field="delegateResponse" label={entry.report?'Update from delegate':'Response to parent'} direction="Delegate → Parent" expanded={expanded} toggle={toggle} partial={entry.partial}/>
   </React.Fragment>)}
   {response?<><DelegateMessage node={exchange} field="delegateResponse" label="Response to parent" direction="Delegate → Parent" expanded={expanded} toggle={toggle}/><p className="a-caption">Recorded delegate return. Parent consumption is not confirmed by this tool record.</p></>:exchange.delivery!=='separate'&&<p className="a-caption" role="status">{failure?`Worker ${phase}; no returned response recorded.`:isRunning({phase})?'Waiting for response…':'Response not recorded.'}</p>}
+  {!response&&exchange.delivery!=='separate'&&node.summary&&<><DelegateMessage node={node} field="summary" label="Recorded worker summary" direction="Delegate report" expanded={expanded} toggle={toggle} partial/><p className="a-caption">Legacy summary; not evidence of the exact response returned to the parent.</p></>}
   {exchange.delivery==='separate'&&!entries.some(entry=>entry.delegateResponse!=null||entry.delegateResponseDetail)&&<p className="a-caption">Returned messages appear in the continuation of this delegate below.</p>}
   <button type="button" className="a-link a-delegate-details-toggle" aria-expanded={details} onClick={()=>toggle(detailsId)}><ChevronRight className={details?'open':''}/>Delegation details</button>
   {details&&<div className="a-delegate-details"><p className="a-caption">{delegationRoutingLabel(node.routing)}</p><p className="a-caption">{exchange.toolCallId&&`Call: ${exchange.toolCallId}`}{node.runId&&` · Run: ${node.runId}`}</p><RawExchange node={exchange}/></div>}

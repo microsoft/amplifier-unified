@@ -62,9 +62,15 @@ try{
  await expect(delegate.getByRole('region',{name:'Response to parent',exact:true})).toHaveCount(0);
  await delegate.locator(':scope > button').click();
  await expect(delegate.getByRole('button',{name:/Worker activity/})).toHaveAttribute('aria-expanded','false');
+ // Capture a realistic short exchange, not the middle of a deliberately
+ // expanded stress payload underneath the fixed composer.
+ await control({op:'patch',sessions:{[alpha]:{messages,execution:{turns:[{id:'turn-one',phase:'completed',startedAt:start,endedAt:start+50}],nodes:[{...delegation,phase:'completed',endedAt:start+50,input:JSON.stringify({agent:'review',instruction:'Review the source and identify any missing test coverage.'}),output:JSON.stringify({success:true,output:{response:'## Review complete\n\nThe request and returned answer are visible inside this delegate.\n\n- Existing model and tool calls remain under **Worker activity**.\n- Add coverage for resumed workers and paged history.',session_id:'review'}})},{...worker,phase:'completed',endedAt:start+50},child]}}}});
+ await expect(delegate).toContainText('Add coverage for resumed workers');
+ await delegate.evaluate(el=>el.scrollIntoView({block:'start'}));
  mkdirSync(root+'test-results',{recursive:true});
  await page.screenshot({path:root+'test-results/delegate-exchange-desktop.png'});
  await page.setViewportSize({width:390,height:844});
+ await delegate.evaluate(el=>el.scrollIntoView({block:'start'}));
  await expect(delegate.getByRole('region',{name:'Response to parent',exact:true})).toBeVisible();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'No horizontal page overflow');
  await page.screenshot({path:root+'test-results/delegate-exchange-mobile.png'});

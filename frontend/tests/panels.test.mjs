@@ -26,6 +26,18 @@ test('expanded execution renders nested public summaries and genuine partial usa
  const state={view:{executionExpanded:['turn:t','tool','child']}};
  const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'t',state,act}));
  assert.match(html,/Research/);assert.match(html,/<strong>Result:<\/strong>/);assert.doesNotMatch(html,/cost unavailable|usage pending/);assert.doesNotMatch(html,/\$0\.00/);
+ assert.match(html,/Recorded worker summary/);assert.match(html,/not evidence of the exact response/);
+});
+
+test('rejected follow-up is not labeled submitted and running worker is not completed',()=>{
+ const worker={id:'w',kind:'worker',turnId:'t',sessionId:'child',label:'Review',phase:'running',exchange:{id:'d',phase:'running',delegateRequest:'Review'}};
+ const data={turns:[{id:'t',phase:'running'}],nodes:[worker,
+  {id:'read',kind:'tool',turnId:'t',sessionId:'child',parentId:'w',phase:'completed'},
+  {id:'followup',kind:'tool',turnId:'t',sessionId:'root',delegate:worker,phase:'error',exchange:{id:'followup',delegateRequest:'Continue',phase:'error'}}]};
+ const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'t',state:{view:{executionExpanded:['turn:t','delegate:t:w']}},act}));
+ assert.match(html,/Follow-up error; delivery was not confirmed/);
+ assert.doesNotMatch(html,/Submitted|aria-label="Completed"/);
+ assert.match(html,/aria-label="running"/);
 });
 
 test('advanced registries expose scoped source controls through the shared registry',()=>{

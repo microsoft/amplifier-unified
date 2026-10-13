@@ -161,3 +161,13 @@ test('resumed sessions retain exact run owners instead of latest-session ownersh
  assert.equal(tree.roots.find(n=>n.ownerId===second.id).exchange.delegateRequest,'Second');
  assert.ok(tree.roots.some(n=>n.id==='ambiguous'));
 });
+
+test('nested delegate stays under its parent when ancestor and spawning tools are paged out',()=>{
+ const outer={id:'w1',sessionId:'one',label:'Outer',phase:'running',exchange:{id:'d1',delegateRequest:'Outer request'}};
+ const inner={id:'w2',sessionId:'two',label:'Inner',parentWorkerId:'w1',ancestors:[outer],phase:'running',exchange:{id:'d2',delegateRequest:'Inner request'}};
+ const tree=treeForTurn({nodes:[{id:'call',kind:'llm',turnId:'t',sessionId:'two',delegate:inner,phase:'completed'}]},'t');
+ assert.equal(tree.roots.length,1);assert.equal(tree.roots[0].ownerId,'w1');
+ const nested=tree.children.get(tree.roots[0].id)[0];
+ assert.equal(nested.ownerId,'w2');assert.equal(nested.workerPhase,'running');
+ assert.deepEqual(tree.children.get(nested.id).map(n=>n.id),['call']);
+});
