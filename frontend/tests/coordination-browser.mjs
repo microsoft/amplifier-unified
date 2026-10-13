@@ -1,7 +1,7 @@
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdir,mkdtemp} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -290,6 +290,8 @@ try{
    const opened=uiActions.filter(call=>call.action==='canvas.openFile').at(-1);
    assert.equal(opened.args.sessionId,current.selected);assert.equal(opened.args.workspace,peerState.workspace);
    assert.equal(opened.args.path,candidate.path);
+   assert.equal(opened.args.expectedSha256,candidate.sha256);
+   assert.equal(opened.args.referenceRequestId,requestId);
    await preserve();
    await page.getByRole('button',{name:'Close panel',exact:true}).click();
    await expect(page.locator('[data-part="canvas"] .a-canvas-plain')).toContainText(candidate.text);
@@ -362,6 +364,16 @@ try{
   await preserve();
  }
  peerState=await inspect();
+ await expect(related).toContainText('Other conversation');
+ const changed=rounds[0];
+ const previousCanvas=await page.evaluate(()=>window.amplifier.getState().canvas?.content);
+ await writeFile(changed.candidate.path,'Changed after the result was reported');
+ try{
+  await related.locator('[data-request-id="'+changed.requestId+'"]').getByRole('button',{name:'Open referenced artifact',exact:true}).click();
+  await expect(related.getByRole('alert')).toContainText('not the reported artifact version');
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas?.content),previousCanvas);
+  await preserve();
+ }finally{await writeFile(changed.candidate.path,changed.candidate.text)}
  for(const {requestId} of rounds)assert.equal(peerState.sent.filter(row=>row.inputId===requestId).length,1);
  for(const continuation of continuations)assert.equal(peerState.sent.filter(row=>row.inputId===continuation).length,1);
  assert.equal(continuations.size,4);assert.equal(peerState.tasks.length,2);

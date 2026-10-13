@@ -29,6 +29,12 @@ on:
       - 'tests/test_runtime_source_declarations.py'
       - 'tests/test_state_write_scopes.py'
       - 'tests/test_host_storage.py'
+      - 'tests/test_child_app_authority.py'
+      - 'tests/test_child_file_policy.py'
+      - 'tests/test_file_access_policy.py'
+      - 'tests/test_workspace_repair_outcomes.py'
+      - 'amplifier_web/canvas_files.py'
+      - 'amplifier_web/worktrees.py'
       - 'skills/coordinate-work/**'
       - 'tests/fixtures/coordination_ui_server.py'
       - 'frontend/tests/coordination-browser.mjs'
@@ -58,7 +64,16 @@ jobs:
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py
           tests/test_state_write_scopes.py tests/test_host_storage.py
+          tests/test_workspace_repair_outcomes.py tests/test_worktrees.py
+          tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
+      - name: Verify mounted child identity and file boundaries
+        run: >-
+          uv run --locked
+          --with 'amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@08de4d442fde0210c4c89f7628c17846c5dfd67b'
+          --with 'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@db641363013ff906b656f49498a87ab01f5c506f'
+          pytest -q tests/test_child_app_authority.py tests/test_child_file_policy.py
+          tests/test_child_image_policy.py tests/test_runtime_worker.py
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
       - run: npx --prefix frontend playwright install --with-deps chromium

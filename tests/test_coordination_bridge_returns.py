@@ -347,9 +347,10 @@ async def test_terminal_failure_information_and_no_automatic_success_survive(
     else:
         assert response["status"] == "sealed" and response["outcome"] == "failed"
         assert response["nativeTerminal"]["generationId"] == response["generationId"]
-    assert not app.db.execute(
-        "SELECT 1 FROM commands WHERE id=?", (wait["result"]["continuationId"],),
-    ).fetchone()
+    continuation_id = wait["result"]["continuationId"]
+    continuation = app.collaboration.receipt(continuation_id)
+    assert continuation["dependencySatisfied"] is False
+    assert continuation["continuationReason"] == "failed"
     assert len(app.runtime.inputs) == 1
 
 

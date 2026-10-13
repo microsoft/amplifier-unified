@@ -1,6 +1,7 @@
 """Private JSON-lines worker. Runs only inside the configured runtime environment."""
 from __future__ import annotations
 import asyncio
+import copy
 import json
 import os
 import re
@@ -131,11 +132,14 @@ class Worker:
         finally:
             self.bridges.pop(identity, None)
 
-    def app_access_bridge(self, coordinator):
+    def app_access_bridge(self, coordinator, *, assignment=None):
         # Workers inherit the originating inputs at assignment, never
         # another client's later input or another coordinator's receipts.
-        assigned = None if coordinator is self.session.coordinator else list(self.context_inputs)
-        assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in assigned]
+        assigned = None if coordinator is self.session.coordinator else list(
+            assignment[0] if assignment is not None else self.context_inputs)
+        assigned_context = None if assigned is None else copy.deepcopy(
+            assignment[1] if assignment is not None else {i: self.context_bindings[i] for i in assigned if i in self.context_bindings})
+        assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': assigned_context.get(i, {}).get('clientId')} for i in assigned]
         assigned_clients = None if assigned_bindings is None else [b['clientId'] for b in assigned_bindings]
         watched = set()
         async def bridge(operation, args):
@@ -150,7 +154,8 @@ class Worker:
             args = {**args, '_runtimeSessionId': coordinator.session_id, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
                                              if assigned_clients is None else assigned_clients)}
             if operation.startswith('context.'):
-                bindings = [self.context_bindings[i] for i in ids if i in self.context_bindings]
+                context = self.context_bindings if assigned_context is None else assigned_context
+                bindings = [context[i] for i in ids if i in context]
                 if assigned is not None:
                     if operation == 'context.read':
                         watched.add(args.get('surfaceId'))
@@ -161,6 +166,12 @@ class Worker:
                         '_contextBindings': bindings}
             return await self.bridge(operation, args)
         register = getattr(coordinator, "register_capability", None)
+        if callable(register):
+            async def install_child_access(child_coordinator):
+                from amplifier_web.app_guidance import install_app_access
+                await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
+                    assignment=None if assigned is None else (assigned, assigned_context)))
+            register("web.app_access.install", install_child_access)
         if assigned is None and callable(register):
             async def peer_continuation_ready():
                 runtime, gate = self.runtime, self.activation_gate
