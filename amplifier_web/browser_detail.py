@@ -19,7 +19,7 @@ def compact(row, session_id, part, limit):
         from .peer_attribution import neutral
         row = neutral(row)
     fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo','delegate'}
-    fields.update({'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture', 'requestRecording', 'responseRecording'})
+    fields.update({'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture', 'requestRecording', 'responseRecording', 'exchange'})
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
     if 'routing' in result:
         from .host.model_selection import public_routing
@@ -57,17 +57,38 @@ def owned_nodes(session):
     Workers can start before the current message or detail page. Their child
     calls must still identify their owner, independently of pagination.
     """
-    nodes = session.get('execution', {}).get('nodes', [])
-    workers = {row.get('sessionId'): row for row in nodes
-               if row.get('kind') == 'worker' and row.get('sessionId')}
+    from .delegate_exchange import descriptor, tool_name, delivered_nodes
+    original = session.get('execution', {}).get('nodes', [])
+    nodes = [*original, *delivered_nodes(session, original)]
+    by_id = {row['id']: row for row in nodes}
+    workers_by_id = {row['id']: row for row in nodes if row.get('kind') == 'worker'}
+    sessions = {}
+    for worker in workers_by_id.values():
+        sessions.setdefault(worker.get('sessionId'), []).append(worker)
+    # Ambiguous legacy ownership must not assign an old call to the latest run.
+    workers = {sid: rows[0] for sid, rows in sessions.items() if sid and len(rows) == 1}
     fields = ('id', 'sessionId', 'label', 'provider', 'model', 'phase', 'status',
-              'routing', 'parentProvider', 'runId', 'workerId')
+              'routing', 'parentProvider', 'runId', 'workerId', 'parentId', 'toolCallId')
     result = []
     for row in nodes:
-        worker = workers.get(row.get('sessionId'))
+        worker = workers_by_id.get(row.get('exchangeOwnerId') or row.get('parentId')) or workers.get(row.get('sessionId'))
+        own_worker = row if row.get('kind') == 'worker' else worker
+        parent = by_id.get(own_worker.get('parentId')) if own_worker else None
+        exchange = descriptor(parent, session['id']) if parent and tool_name(parent) == 'delegate' else None
+        if exchange and any(item.get('parentId') == own_worker['id'] for item in nodes if item.get('kind') == 'exchange'):
+            exchange = {key: value for key, value in exchange.items() if key not in {'delegateResponse', 'delegateResponseDetail'}}
+            exchange['delivery'] = 'separate'
         if worker and row.get('kind') != 'worker':
             owner = {key: worker[key] for key in fields if key in worker}
-            result.append({**row, 'delegate': owner})
+            if exchange:
+                owner['exchange'] = exchange
+            result.append({**row, 'delegate': owner,
+                           **({'exchange': descriptor(row, session['id'])} if row.get('exchangeOwnerId') else {})})
+        elif exchange:
+            result.append({**row, 'exchange': exchange})
+        elif row.get('kind') == 'tool' and tool_name(row) == 'delegate':
+            # Requests that fail before spawning a worker still have an exchange.
+            result.append({**row, 'exchange': descriptor(row, session['id'])})
         else:
             result.append(row)
     return result
@@ -269,7 +290,7 @@ def project(session, *, resolver=None):
 
 def read_text(session, args):
     part=args.get('part');field=args.get('field')
-    if part not in {'messages','nodes','workers'} or field not in {'text','summary','detail','report','result','input','output','error','request','response'}:
+    if part not in {'messages','nodes','workers'} or field not in {'text','summary','detail','report','result','input','output','error','request','response','delegateRequest','delegateResponse'}:
         raise ValueError('Choose a valid detail field.')
     rows=session.get('execution',{}).get('nodes',[]) if part=='nodes' else session.get(part,[])
     row=next((row for row in rows if row.get('id')==args.get('id')),None)
@@ -285,6 +306,9 @@ def read_text(session, args):
         text = read_field(reference)
     else:
         text=row.get(field) if row else None
+        if row and field in {'delegateRequest', 'delegateResponse'}:
+            from .delegate_exchange import field_value, observation_response
+            text = observation_response(row) if part == 'messages' and field == 'delegateResponse' else field_value(row, field)
     if not isinstance(text,str):raise ValueError('This detail is no longer available.')
     if digest(text)!=args.get('digest'):raise ValueError('This detail changed. Refresh this conversation to load the current version.')
     offset=int(args.get('offset',0))

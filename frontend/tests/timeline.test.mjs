@@ -139,3 +139,25 @@ test('delegate grouping keeps an available report and its detail reference',()=>
  const group=treeForTurn({nodes:[worker,call]},'turn').roots[0];
  assert.equal(group.summary,'Review result');assert.deepEqual(group.summaryDetail,worker.summaryDetail);
 });
+
+test('delegate exchange suppresses its duplicate source tool without changing accounting',()=>{
+ const exchange={id:'tool:root:d',delegateRequest:'Exact request',delegateResponse:'Exact response'};
+ const worker={id:'worker:child:d',sessionId:'child',kind:'worker',turnId:'t',parentId:exchange.id,phase:'idle',exchange};
+ const tool={id:exchange.id,sessionId:'root',kind:'tool',turnId:'t',exchange};
+ const call={id:'call',sessionId:'child',kind:'llm',turnId:'t',parentId:worker.id,phase:'completed',usage:{totalTokens:7}};
+ const tree=treeForTurn({nodes:[tool,worker,call]},'t');
+ assert.equal(tree.roots.length,1);assert.equal(tree.roots[0].exchange,exchange);
+ assert.equal(tree.roots[0].aggregateUsage.totalTokens,7);
+ assert.equal(tree.roots[0].workerPhase,'idle');
+ assert.deepEqual(tree.children.get(tree.roots[0].id).map(n=>n.id),['call']);
+});
+
+test('resumed sessions retain exact run owners instead of latest-session ownership',()=>{
+ const first={id:'worker:c:first',sessionId:'c',kind:'worker',turnId:'t',exchange:{id:'d1',delegateRequest:'First'}};
+ const second={...first,id:'worker:c:second',exchange:{id:'d2',delegateRequest:'Second'}};
+ const call=(id,parent)=>({id,sessionId:'c',kind:'llm',turnId:'t',parentId:parent});
+ const tree=treeForTurn({nodes:[first,second,call('a',first.id),call('b',second.id),call('ambiguous',null)]},'t');
+ assert.equal(tree.roots.find(n=>n.ownerId===first.id).exchange.delegateRequest,'First');
+ assert.equal(tree.roots.find(n=>n.ownerId===second.id).exchange.delegateRequest,'Second');
+ assert.ok(tree.roots.some(n=>n.id==='ambiguous'));
+});

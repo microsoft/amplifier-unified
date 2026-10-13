@@ -58,20 +58,21 @@ async def test_child_actual_provider_usage_and_original_parent_survive_later_lif
     events.lifecycle(event)
     child=events.instrument_provider('child',Provider('anthropic'))
     await child.complete(SimpleNamespace(model='child-override'))
-    node=events.nodes['worker:child']
+    worker_id='worker:child:delegate-call'
+    node=events.nodes[worker_id]
     assert (node['provider'],node['model'],node['parentProvider'])==('anthropic','child-override','subscription')
     assert node['parentId']=='tool:root:delegate-call'
     assert node['turnId']=='first-turn'
     await events.instrument_provider('root',Provider('later-parent')).complete(SimpleNamespace(model='later-model'))
     await child.complete(SimpleNamespace(model='child-override'))
-    assert events.nodes['worker:child']['parentProvider']=='subscription'
+    assert events.nodes[worker_id]['parentProvider']=='subscription'
     events.lifecycle({'type':'input.delivered','input_id':'later-turn'})
     events.lifecycle({**event,'status':'completed'})
-    assert events.nodes['worker:child']['model']=='child-override'
-    assert events.nodes['worker:child']['turnId']=='first-turn'
+    assert events.nodes[worker_id]['model']=='child-override'
+    assert events.nodes[worker_id]['turnId']=='first-turn'
     session={}
     for row in events.nodes.values():ingest(session,row)
-    public=next(n for n in session['execution']['nodes'] if n['id']=='worker:child')
+    public=next(n for n in session['execution']['nodes'] if n['id']==worker_id)
     assert public['routing']==routing
     assert public['aggregateUsage']['tokenUnknownCalls']==2
     assert public['aggregateUsage']['costType']=='unavailable'
@@ -79,12 +80,16 @@ async def test_child_actual_provider_usage_and_original_parent_survive_later_lif
     token=CALL_PURPOSE.set({'label':'Naming','lifecycle':'background'})
     try:await events.instrument_provider('child',Provider('naming-provider')).complete(SimpleNamespace(model=None))
     finally:CALL_PURPOSE.reset(token)
-    assert events.nodes['worker:child']['provider']=='anthropic'
+    assert events.nodes[worker_id]['provider']=='anthropic'
     # A resumed run must not claim its previous model before observing a call.
-    events.lifecycle({**event,'runId':'run-two','status':'starting'})
-    assert 'provider' not in events.nodes['worker:child']
-    ingest(session,events.nodes['worker:child'])
-    public=next(n for n in session['execution']['nodes'] if n['id']=='worker:child')
+    events.hook('root','tool:pre',{'tool_call_id':'resume-call','tool_name':'delegate'})
+    events.lifecycle({**event,'callId':'resume-call','runId':'run-two','status':'starting'})
+    resumed_id='worker:child:resume-call'
+    assert 'provider' not in events.nodes[resumed_id]
+    assert events.nodes[worker_id]['provider']=='anthropic'
+    assert events.nodes[resumed_id]['turnId']=='later-turn'
+    ingest(session,events.nodes[resumed_id])
+    public=next(n for n in session['execution']['nodes'] if n['id']==resumed_id)
     assert 'provider' not in public
     assert 'model' not in public
 

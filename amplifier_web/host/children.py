@@ -336,7 +336,12 @@ class Children:
             components.apply(effective)
         child_prepared = replace(prepared, mount_plan=plan, bundle=effective)
         persistent = _PERSISTENT.get()
-        call_id = (session_metadata or {}).get("tool_call_id") or JOB_CALL.get()
+        # Resume metadata belongs to the previous invocation. Use this task's
+        # dispatch identity, as the delegate tool itself does for its events.
+        dispatch = (getattr(parent.coordinator, "_tool_dispatch_contexts", {}).get(asyncio.current_task())
+                    or getattr(parent.coordinator, "_tool_dispatch_context", {}) or {})
+        call_id = JOB_CALL.get() or dispatch.get("tool_call_id") or (
+            (session_metadata or {}).get("tool_call_id") if not resumed else None)
         row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": str(uuid.uuid4()),
                "agent": agent, "status": "starting", "persistent": persistent, "report": "", "reports": 0,
                "routing": child_routing(parent, overlay, preferences, selection),
@@ -347,6 +352,7 @@ class Children:
         ledger = None
         unregister = None
         metadata = {**(session_metadata or {}), "parent_id": parent.session_id, "agent_name": agent,
+                    "tool_call_id": call_id,
                     "agent_overlay": copy.deepcopy(overlay), "workspace": str(cwd), "persistent": persistent,
                     "provider_preferences": [p.to_dict() for p in preferences], "mount_plan": plan}
         if selection:

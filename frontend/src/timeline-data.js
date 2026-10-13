@@ -79,13 +79,14 @@ export function usageLabel(usage){
 }
 export function treeForTurn(data,turnId){
  const nodes=data.nodes.filter(node=>node.turnId===turnId).map(node=>({...node}));
- const workers=new Map(data.nodes.filter(node=>node.kind==='worker'&&node.sessionId).map(node=>[node.sessionId,node]));
+ const workerRows=data.nodes.filter(node=>node.kind==='worker'&&node.sessionId),workersById=new Map(workerRows.map(node=>[node.id,node]));
+ const workers=new Map(workerRows.filter(node=>workerRows.filter(other=>other.sessionId===node.sessionId).length===1).map(node=>[node.sessionId,node]));
  const groups=new Map();
  for(const node of nodes){
   if(node.kind==='worker')continue;
-  const owner=node.delegate?{...workers.get(node.sessionId),...node.delegate}:workers.get(node.sessionId);if(!owner)continue;
+  const owner=node.delegate?{...workersById.get(node.delegate.id),...node.delegate}:workersById.get(node.parentId)||workers.get(node.sessionId);if(!owner)continue;
   const id=`delegate:${turnId}:${owner.id}`;
-  if(!groups.has(id))groups.set(id,{...owner,id,kind:'worker',label:`Delegate · ${owner.label||'Worker'}`,turnId,parentId:null,members:[]});
+  if(!groups.has(id))groups.set(id,{...owner,id,ownerId:owner.id,workerPhase:owner.status||owner.phase,kind:'worker',label:`Delegate · ${owner.label||'Worker'}`,turnId,parentId:null,members:[]});
   groups.get(id).members.push(node);node.parentId=id;
  }
  // Delegate headers repeat in each message gap; their usage and timing cover
@@ -99,8 +100,10 @@ export function treeForTurn(data,turnId){
   group.endedAt=running?undefined:ends.length?Math.max(...ends):undefined;
   group.status=undefined;group.phase=running?'running':'completed';group.aggregateUsage=segmentUsage(members);
  }
- const groupedOwners=new Set([...groups.values()].map(group=>group.sessionId));
- const visible=nodes.filter(node=>node.kind!=='worker'||!groupedOwners.has(node.sessionId));
+ const groupedOwners=new Set([...groups.values()].map(group=>group.ownerId));
+ const exchanges=new Set([...groups.values(),...nodes.filter(node=>node.kind==='worker')].map(node=>node.exchange?.id).filter(Boolean));
+ const visible=nodes.filter(node=>(node.kind!=='worker'||!groupedOwners.has(node.id))&&!(node.kind==='tool'&&exchanges.has(node.id)));
+ for(const node of visible)if(node.kind==='worker'&&node.exchange)node.parentId=null;
  visible.push(...groups.values());
  const byId=new Map(visible.map(node=>[node.id,node]));
  const children=new Map();for(const node of visible){const parent=node.parentId&&node.parentId!==node.id&&byId.has(node.parentId)?node.parentId:null;if(!children.has(parent))children.set(parent,[]);children.get(parent).push(node)}
