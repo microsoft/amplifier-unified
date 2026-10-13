@@ -22,7 +22,7 @@ export function CanvasAppViewer({canvas,dispatch}){
  shown.current=mounted;
  const app=canvas.app;
  const checkpoints=useRef(new Map());
- const mount=value=>{editVersion.current=0;channel.current=crypto.randomUUID();seen.current.clear();setReview(null);setError('');setRenderError('');sent.current=null;reported.current=null;setMounted(value)};
+ const mount=value=>{editVersion.current=0;channel.current=crypto.randomUUID();seen.current.clear();setReview(null);setError('');setRenderError('');sent.current=null;reported.current=null;setMounted({...value})};
  const send=(force=false)=>{
   const current=latest.current;
   if(!sameDefinition(current,shown.current))return;
@@ -56,6 +56,16 @@ export function CanvasAppViewer({canvas,dispatch}){
    send();
   }
  },[canvas]);
+ useEffect(()=>{
+  const epoch=channel.current;
+  const timer=setTimeout(()=>{
+   if(epoch!==channel.current||reported.current)return;
+   const message='The saved surface did not initialize. Retry its saved source; no surface action was repeated.';
+   setRenderError(message);
+   dispatch('canvas.views.status',{...targetOf(mounted),status:'error',message}).catch(()=>{});
+  },15000);
+  return()=>clearTimeout(timer);
+ },[mounted,dispatch]);
  useEffect(()=>{
   const unregister=registerSurfaceCheckpoint(canvas.sessionId,identity=>new Promise(resolve=>{
    const requestId=identity||crypto.randomUUID(),timer=setTimeout(()=>{checkpoints.current.delete(requestId);resolve()},900);
@@ -128,11 +138,11 @@ export function CanvasAppViewer({canvas,dispatch}){
     <pre aria-label="Shared surface state">{JSON.stringify(app.state,null,2)}</pre>
    </details>
   </div></CanvasControl>
-  {(error||renderError)&&<div className="a-canvas-app-errors" role="alert">{renderError&&<p>{renderError}</p>}{error&&error!==renderError&&<p>{error}</p>}</div>}
+  {(error||renderError)&&<div className="a-canvas-app-errors" role="alert">{renderError&&<p>{renderError}</p>}{error&&error!==renderError&&<p>{error}</p>}{renderError&&<button type="button" disabled={dirty||!!busy.current} onClick={()=>{if(dirtyRef.current||busy.current||inlineOwnership.blocksTarget(targetOf(latest.current))){setError('Finish or cancel unfinished input before retrying the saved surface.');return}mount(latest.current)}}>Retry saved surface</button>}</div>}
   {!sameDefinition(mounted,canvas)&&<p role="status">A new design is ready. Your unfinished input is still here. <button type="button" onClick={async()=>{try{const tickets=inlineOwnership.intent(targetOf(latest.current),false);const receipt=await dispatch('canvas.views.dirty',{...targetOf(latest.current),dirty:false},{inlineDirtyTickets:tickets});if(receipt?.accepted!==true)throw Error(receipt?.error||'Discard was not confirmed.');inlineOwnership.settle(tickets,receipt);dirtyRef.current=false;setDirty(false);mount(latest.current)}catch(e){setError(e.message)}}}>Discard unfinished input and load revision {app.revision}</button></p>}
   {!canvas.readOnlyVersion&&app.requests.filter(r=>r.status==='pending').map(r=><div className="a-canvas-app-request" key={r.id}><span>{r.action==='theme.preview'?'Preview on this device':r.action==='theme.apply'?'Apply to the shared shell':'Revert this device’s last theme change'}: {r.summary}</span><button type="button" onClick={()=>preview(r).catch(e=>setError(e.message))}>Review theme change</button><button type="button" onClick={()=>run('canvas.apps.resolve',{requestId:r.id,approve:false})}>Decline</button></div>)}
   {review&&app.requests.some(r=>r.id===review.request.id&&r.status==='pending')&&<section className="a-canvas-app-review" aria-label="Review requested theme change"><strong>{review.request.summary}</strong><p>{review.request.action==='theme.apply'?'Applying changes the shell for all connected clients.':'This action uses this device’s theme controls.'}</p><pre>{review.input.css||'End the preview, or undo the last applied theme if it is still current.'}</pre><button type="button" onClick={async()=>{if(await run('canvas.apps.resolve',{requestId:review.request.id,approve:true}))setReview(null)}}>Approve theme change</button><button type="button" onClick={()=>setReview(null)}>Back</button></section>}
   {canvas.readOnlyVersion&&<p role="status">Saved design, read only.{canvas.historicalStateUnavailable?' Inputs were not recorded for this older design.':' Inputs show the state saved when this version was created.'}</p>}
-  <iframe key={mounted.app.revision} title={canvas.title} ref={frame} src={url} sandbox="allow-scripts allow-same-origin" onLoad={()=>send(true)}/>
+  <iframe key={channel.current} title={canvas.title} ref={frame} src={url} sandbox="allow-scripts allow-same-origin" onLoad={()=>send(true)}/>
  </section>;
 }

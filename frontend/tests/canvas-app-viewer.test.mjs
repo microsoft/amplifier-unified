@@ -101,6 +101,27 @@ test('duplicate snapshots and render statuses are not republished',async()=>{
  }finally{await f.close()}
 });
 
+test('missing native source initialization becomes a targeted error with explicit clean Retry, never blank readiness or repeated app work',async()=>{
+ const original=globalThis.setTimeout,originalClear=globalThis.clearTimeout;
+ let failInitialization;
+ globalThis.setTimeout=(fn,delay)=>delay===15000?(failInitialization=fn,{fixtureTimer:true}):original(fn,delay);
+ globalThis.clearTimeout=id=>id?.fixtureTimer?undefined:originalClear(id);
+ let f;
+ try{
+  f=await fixture(undefined,{viewId:'inline-source'});
+  const firstChannel=f.out.at(-1).channel;
+  await act(async()=>failInitialization());
+  assert.ok(JSON.stringify(f.component.toJSON()).includes('saved surface did not initialize'));
+  const report=f.calls.find(row=>row.name==='canvas.views.status');
+  assert.equal(report.args.viewId,'inline-source');assert.equal(report.args.status,'error');
+  assert.equal(f.calls.some(row=>row.name.startsWith('canvas.apps.')),false);
+  await act(async()=>f.component.root.findAllByType('button').find(node=>node.props.children==='Retry saved surface').props.onClick());
+  await act(async()=>f.component.root.findByType('iframe').props.onLoad());
+  assert.notEqual(f.out.at(-1).channel,firstChannel,'Explicit Retry mounts a fresh iframe channel');
+  assert.equal(f.calls.some(row=>row.name.startsWith('canvas.apps.')),false,'Retry only reloads saved source');
+ }finally{await f?.close();globalThis.setTimeout=original;globalThis.clearTimeout=originalClear}
+});
+
 test('CanvasApp editing intent protects ownership before its serialized host declaration settles',async()=>{
  let resolveDirty;
  const view={viewId:'primary',resourceId:'fixture',resourceRevision:'r1',generation:0};
