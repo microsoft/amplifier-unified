@@ -30,7 +30,9 @@ async def test_generated_image_uses_one_body_and_exact_origin_and_forks(tmp_path
         assert result['id'] == repeated['id']
         canvas = next(row for row in app.state['canvasArtifacts'] if row['id'] == result['canvasId'])
         assert canvas['body'] == result['body'] == canvas['contentResource']
-        assert canvas['publications'] == [{'messageId': 'origin', 'version': 1}]
+        assert canvas['publications'] == [{'messageId': 'origin', 'version': 1, 'chat': 'inline',
+            'outputId': result['id'], 'imageGeneration': {'verified': True, 'requestId': 'generated',
+                'operation': 'generate', 'parentId': None}}]
         assert canvas['versions'][0]['messageId'] == 'origin'
         assert canvas['imageRequestId'] == 'generated'
         from amplifier_web.state_records import load

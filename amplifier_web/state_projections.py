@@ -142,11 +142,18 @@ class StateProjections:
             from .browser_state import project
             projected = project(row, resolver=self.resolver)
             body = deepcopy({key: projected[key] for key in fields if key in projected})
+            # The projector already materialized its detached snapshot. Reuse
+            # its scalar facts rather than loading a second detached wrapper.
+            result = {key: value for key, value in projected.items()
+                      if key not in fields and key != 'messageQuotes'}
+        else:
+            # ColdRecord.items() loads every virtual body before yielding.
+            # Select names first so a warm bounded hit never reads those bodies.
+            result = {key: row[key] for key in row.keys()
+                      if key not in fields and key != 'messageQuotes'}
         self.detail_bodies[row['id']] = body
         while len(self.detail_bodies) > 32:
             self.detail_bodies.popitem(last=False)
-        result = {key: value for key, value in row.items()
-                  if key not in fields and key != 'messageQuotes'}
         result.update(body)
         from .peer_attribution import display_annotations
         result['messageAnnotations'] = display_annotations(row)

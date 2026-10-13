@@ -560,3 +560,214 @@ def test_media_origin_map_does_not_promote_new_equal_text_native_index_to_alias_
     assert store.load('unbound-media-target')[0] == rows
     assert item == original
     assert (store.directory(item['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('bundle', [None, 'synthetic-artifact-bundle'])
+def test_artifact_origin_map_rebases_exact_user_and_assistant_anchors(tmp_path, bundle):
+    from amplifier_web.automatic_history import display_message
+    rows = [
+        {'role': 'system', 'content': 'Synthetic system context'},
+        {'role': 'developer', 'content': 'Synthetic developer context'},
+        {'role': 'user', 'content': 'Repeated artifact request'},
+        {'role': 'user', 'content': 'Internal reference removed at the cut',
+         'metadata': {'amplifier_visible_reference': True}},
+        {'role': 'assistant', 'content': 'Repeated artifact answer',
+         'tool_calls': [{'id': 'artifact-pending', 'name': 'synthetic-tool'}]},
+        {'role': 'user', 'content': 'Repeated artifact request'},
+        {'role': 'assistant', 'content': 'Repeated artifact answer'},
+        {'role': 'user', 'content': 'Future artifact request'},
+        {'role': 'assistant', 'content': 'Future artifact answer'},
+    ]
+    item, store = _media_origin_fork_source(
+        tmp_path, rows, (5, 6, 7, 8), sharedHistoryOffset=2,
+        sharedHistoryUserTurnOffset=1)
+    old_ids = {index: display_message(rows[index], index, item)['id']
+               for index in (2, 4, 5, 6, 7, 8)}
+    for position, alias in ((0, 'exact-user-artifact-alias'),
+                            (1, 'exact-assistant-artifact-alias')):
+        item['messages'][position].update(
+            id=alias, source='amplifier', nativeMessageId=old_ids[position + 5])
+        item['messages'][position].pop('nativeIndex')
+    original = copy.deepcopy(item)
+    raw = (store.directory(item['id']) / 'transcript.jsonl').read_bytes()
+    artifacts, media = {}, {}
+    result = fork_session(tmp_path, item, 'exact-artifact-target', turn=2,
+                          bundle=bundle, artifact_origins=artifacts, media_origins=media)
+    saved, metadata = store.load('exact-artifact-target')
+    indexes = {2: 2, 4: 3, 5: 5, 6: 6}
+    if bundle:
+        indexes = {old: new - 2 for old, new in indexes.items()}
+    receipt_index = 2 if bundle else 4
+    assert saved[receipt_index]['role'] == 'tool'
+    assert saved[receipt_index]['tool_call_id'] == 'artifact-pending'
+    assert json.loads(saved[receipt_index]['content'])['status'] == 'interrupted'
+    assert metadata['fork']['through_user_turn'] == 2
+    assert 'Internal reference removed at the cut' not in json.dumps(saved)
+    assert 'Future artifact' not in json.dumps(saved)
+    expected = {}
+    for old, new in indexes.items():
+        canonical = display_message(saved[new], new, {'id': 'exact-artifact-target'})['id']
+        kept = next(row for row in result['messages'] if row.get('nativeIndex') == new)
+        assert kept['role'] == rows[old]['role'] and kept['text'] == rows[old]['content']
+        identity = {5: 'exact-user-artifact-alias',
+                    6: 'exact-assistant-artifact-alias'}.get(old, canonical)
+        assert kept['id'] == identity
+        if old in (5, 6):
+            assert kept['nativeMessageId'] == canonical
+            expected[identity] = identity
+        expected[old_ids[old]] = identity
+    assert artifacts == expected
+    assert media == {key: value for key, value in expected.items()
+                     if key in (old_ids[4], old_ids[6], 'exact-assistant-artifact-alias')}
+    assert old_ids[7] not in artifacts and old_ids[8] not in artifacts
+    assert not any('origins' in key.lower() for key in result)
+    assert not any(value == artifacts for value in result.values())
+    assert item == original
+    assert (store.directory(item['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+def test_artifact_origin_map_excludes_observations_and_nonconversation_roles(tmp_path):
+    from amplifier_web.automatic_history import display_identity, display_message
+    rows = [
+        {'role': 'system', 'content': 'Synthetic instructions'},
+        {'role': 'user', 'content': 'Original artifact input'},
+        {'role': 'assistant', 'content': 'Original artifact answer'},
+        {'role': 'user', 'content': 'Synthetic service observation',
+         'metadata': {'amplifier_input': {'version': 1, 'kind': 'service',
+                                        'id': 'artifact-observation', 'source': 'synthetic'}}},
+        {'role': 'assistant', 'content': 'Internal artifact reference',
+         'metadata': {'amplifier_recovery_reference': True}},
+        {'role': 'assistant', 'content': 'Ephemeral artifact observation',
+         'metadata': {'ephemeral': True}},
+        {'role': 'developer', 'content': 'Synthetic developer instruction'},
+    ]
+    item, store = _media_origin_fork_source(tmp_path, rows, (1, 2, 3))
+    original = copy.deepcopy(item)
+    artifacts, media = {}, {}
+    result = fork_session(tmp_path, item, 'role-filtered-artifact-target',
+                          artifact_origins=artifacts, media_origins=media)
+    assert artifacts == {row['id']: row['id'] for row in item['messages'][:2]}
+    assert media == {item['messages'][1]['id']: item['messages'][1]['id']}
+    for index in (0, 3, 4, 5, 6):
+        excluded = display_identity(item, index, rows[index]['role'], rows[index]['content'])
+        assert excluded not in artifacts and excluded not in media
+    assert display_message(rows[3], 3, item)['observation']['id'] == 'artifact-observation'
+    assert not any('origins' in key.lower() for key in result)
+    assert store.load('role-filtered-artifact-target')[0] == rows
+    assert item == original
+
+
+@pytest.mark.parametrize('role', ['user', 'assistant'])
+@pytest.mark.parametrize('conflict', ['role', 'text', 'observation', 'observation_id', 'duplicate'])
+def test_artifact_origin_map_refuses_surviving_conflicting_claims(tmp_path, role, conflict):
+    rows = [{'role': 'user', 'content': 'Exact artifact request'},
+            {'role': 'assistant', 'content': 'Exact artifact answer'}]
+    item, store = _media_origin_fork_source(tmp_path, rows, (0, 1))
+    index = 0 if role == 'user' else 1
+    canonical = item['messages'][index]['id']
+    item['messages'][index].update(id='exact-artifact-alias', source='amplifier',
+                                   nativeMessageId=canonical)
+    claimant = {**item['messages'][index], 'id': 'conflicting-artifact-alias'}
+    if conflict == 'role':
+        claimant['role'] = 'assistant' if role == 'user' else 'user'
+    elif conflict == 'text':
+        claimant['text'] = 'Changed claimed artifact text'
+    elif conflict == 'observation':
+        claimant['observation'] = {'source': 'synthetic'}
+    elif conflict == 'observation_id':
+        claimant['observation_id'] = 'synthetic-observation'
+    else:
+        claimant['id'] = 'exact-artifact-alias'
+    item['messages'].append(claimant)
+    original = copy.deepcopy(item)
+    raw = (store.directory(item['id']) / 'transcript.jsonl').read_bytes()
+    artifacts = {}
+    fork_session(tmp_path, item, 'conflicted-artifact-target', artifact_origins=artifacts)
+    assert canonical not in artifacts
+    assert 'exact-artifact-alias' not in artifacts
+    assert 'conflicting-artifact-alias' not in artifacts
+    other = item['messages'][1 - index]['id']
+    assert artifacts == {other: other}
+    assert item == original
+    assert (store.directory(item['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+def test_artifact_origin_map_refuses_alias_collisions_across_roles(tmp_path):
+    rows = [{'role': 'user', 'content': 'Synthetic same-ID input'},
+            {'role': 'assistant', 'content': 'Synthetic same-ID answer'}]
+    item, store = _media_origin_fork_source(tmp_path, rows, (0, 1))
+    canonical = [row['id'] for row in item['messages']]
+    for row, identity in zip(item['messages'], canonical):
+        row.update(id='colliding-artifact-alias', source='amplifier', nativeMessageId=identity)
+    original = copy.deepcopy(item)
+    artifacts = {}
+    fork_session(tmp_path, item, 'colliding-artifact-target', artifact_origins=artifacts)
+    assert artifacts == {}
+    assert item == original
+    assert store.load('colliding-artifact-target')[0] == rows
+
+
+def test_artifact_origin_map_does_not_promote_equal_text_to_exact_binding(tmp_path):
+    from amplifier_web.automatic_history import display_message
+    rows = [{'role': role, 'content': 'Repeated unbound artifact text'}
+            for role in ('user', 'assistant', 'user', 'assistant')]
+    item, store = _media_origin_fork_source(tmp_path, rows, ())
+    item['messages'] = [{'id': f'unbound-artifact-{index}', 'role': row['role'],
+                         'text': row['content']} for index, row in enumerate(rows)]
+    original = copy.deepcopy(item)
+    artifacts, media = {}, {}
+    result = fork_session(tmp_path, item, 'unbound-artifact-target',
+                          artifact_origins=artifacts, media_origins=media)
+    expected = {display_message(row, index, item)['id']:
+                display_message(row, index, {'id': 'unbound-artifact-target'})['id']
+                for index, row in enumerate(rows)}
+    assert artifacts == expected
+    assert media == {display_message(rows[index], index, item)['id']:
+                     expected[display_message(rows[index], index, item)['id']]
+                     for index in (1, 3)}
+    assert len(set(artifacts.values())) == 4
+    for index, row in enumerate(result['messages']):
+        assert row['id'] == f'unbound-artifact-{index}' and row['nativeIndex'] == index
+        assert row['id'] not in artifacts and row['id'] not in artifacts.values()
+    assert store.load('unbound-artifact-target')[0] == rows
+    assert item == original
+
+
+def test_default_media_origin_map_remains_assistant_only(tmp_path):
+    rows = [{'role': 'user', 'content': 'Original user artifact anchor'},
+            {'role': 'assistant', 'content': 'Original assistant media anchor'}]
+    item, _ = _media_origin_fork_source(tmp_path, rows, (0, 1))
+    canonical_user, canonical_assistant = [row['id'] for row in item['messages']]
+    item['messages'][0].update(id='exact-user-only-alias', source='amplifier',
+                               nativeMessageId=canonical_user)
+    item['messages'][1].update(id='exact-assistant-only-alias', source='amplifier',
+                               nativeMessageId=canonical_assistant)
+    original = copy.deepcopy(item)
+    media = {}
+    result = fork_session(tmp_path, item, 'default-assistant-media-target', media_origins=media)
+    assert media == {canonical_assistant: 'exact-assistant-only-alias',
+                     'exact-assistant-only-alias': 'exact-assistant-only-alias'}
+    assert canonical_user not in media and 'exact-user-only-alias' not in media
+    _assert_media_origin_map_not_returned(result, media)
+    assert item == original
+
+
+def test_artifact_origin_capture_never_installs_indexes_or_changes_legacy_cutoff(tmp_path):
+    from amplifier_web.session_store import _media_fork_bindings
+    rows = [{'role': role, 'content': 'Repeated legacy ' + role}
+            for role in ('user', 'assistant', 'user', 'assistant')]
+    item, store = _media_origin_fork_source(tmp_path, rows, (2, 3))
+    item['messages'][0].pop('nativeIndex')
+    original = copy.deepcopy(item)
+    visible = copy.deepcopy(item['messages'])
+    canonical, bindings = _media_fork_bindings(
+        rows, visible, item, roles=('user', 'assistant'), install_indexes=False)
+    assert visible == original['messages'] and 2 in canonical and 2 in bindings
+    boundary = item['messages'][0]['id']
+    baseline = fork_session(tmp_path, item, 'baseline-legacy-cut', before_message_id=boundary,
+                            prepare_only=True)
+    with_artifacts = fork_session(tmp_path, item, 'artifact-legacy-cut', before_message_id=boundary,
+                                  prepare_only=True, artifact_origins={})
+    assert with_artifacts == baseline
+    assert baseline['context'] == []  # Collection did not promote a new explicit cutoff anchor.
+    assert item == original and store.load(item['id'])[0] == rows

@@ -13,14 +13,35 @@ import uuid
 from .shell_modules import IDENTITY, encoded, fail
 
 PROFILE = 'trusted-native-renderer-v1'
-KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'pdf', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']
+KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'gif', 'mp4', 'pdf', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
-          'image': 'Image', 'gif': 'Retained GIF', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
+          'image': 'Image', 'gif': 'Retained GIF', 'mp4': 'Retained video', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
           'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface', 'settings': 'Settings'}
 BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': label,
     'version': '1.0.0', 'apiVersion': '1.0', 'profile': PROFILE, 'stateSchema': 'canvas-view-v1',
     'capabilities': CAPABILITIES, 'resourceKinds': [kind]} for kind, label in LABELS.items()}
+
+
+def capabilities(kind):
+    """Use the same native admission for projection and mount enforcement."""
+    canvas = kind in LABELS
+    inline = kind in KINDS and kind not in {'a2ui', 'browser'}
+    result = {'compact': True, 'inline': inline, 'canvas': canvas}
+    if not inline:
+        result['reason'] = ('Inline mounting is not qualified for this renderer.'
+                            if canvas else 'No native renderer; download or hand off the saved output.')
+    return result
+
+
+def project_artifacts(state):
+    """Metadata only; exact-version consumers also see per-definition support."""
+    state['canvasArtifacts'] = [
+        {**row, 'presentationCapabilities': capabilities(row.get('kind')),
+         'versions': [{**entry, 'presentationCapabilities': capabilities(entry.get('kind', row.get('kind')))}
+                      for entry in row.get('versions', [])]}
+        for row in state.get('canvasArtifacts', [])]
+    return state
 
 
 def definitions(schema, string):
@@ -37,6 +58,11 @@ def definitions(schema, string):
         'canvas.views.command': ('Invoke an explicitly targeted renderer control without retargeting the selected conversation.', schema({**target, 'action': string(100), 'args': {'type': 'object'}}, [*target, 'action', 'args'])),
         'canvas.views.dirty': ('Declare unsaved renderer-local edits before a replacement or close.', schema({**target, 'dirty': {'type': 'boolean'}, 'editVersion': {'type': 'integer', 'minimum': 0}}, [*target, 'dirty'])),
         'canvas.views.status': ('Record browser mount evidence for this renderer; not a package validation receipt.', schema({**target, 'status': {'enum': ['loading', 'ready', 'error']}, 'message': string(2000)})),
+        'canvas.views.mediaReport': ('Record untrusted playback evidence for this exact Canvas or inline media view, never a global latest observation.', schema({**target,
+            'sequence': {'type': 'integer', 'minimum': 1}, 'renderState': {'enum': ['loading', 'ready', 'error']},
+            'playback': {'enum': ['paused', 'playing', 'ended']}, 'presentedFrames': {'type': 'integer', 'minimum': 0},
+            'mediaTime': {'type': 'number', 'minimum': 0}, 'detail': string(500)},
+            [*target, 'sequence', 'renderState', 'playback', 'presentedFrames', 'mediaTime'])),
         'canvas.views.observe': ('Report bounded, untrusted drawing and visible-control evidence for this exact view. Does not start an agent turn.', schema({**target,
             'revision': string(80), 'editVersion': {'type': 'integer', 'minimum': 0}, 'pending': {'type': 'boolean'},
             'status': {'enum': ['ready', 'pending', 'unavailable']}, 'image': string(470000), 'text': string(1800),
@@ -154,6 +180,7 @@ class CanvasViews:
             record[view_id + 'Binding'] = binding
             preference['generation'] += 1
             preference.pop('activation', None)
+            preference.pop('mediaObservation', None)
         return row, preference
 
     def target(self, args):
@@ -217,7 +244,7 @@ class CanvasViews:
                 **({'app': copy.deepcopy(row['app'])} if row.get('app') else {}),
                 'view': copy.deepcopy(self.service.state['canvas'].get('view', {})) if view_id == 'primary' else copy.deepcopy(preference['view']),
                 'renderReports': copy.deepcopy(self.service.state['canvas'].get('renderReports', {})) if view_id == 'primary' else copy.deepcopy(preference['renderReports']),
-                **{key: copy.deepcopy(preference[key]) for key in ('document', 'interaction', 'events') if key in preference}}
+                **{key: copy.deepcopy(preference[key]) for key in ('document', 'interaction', 'events', 'mediaObservation') if key in preference}}
 
     def project(self):
         from .service import AppError
@@ -240,10 +267,11 @@ class CanvasViews:
                 or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
             fail('Open the conversation that contains this artifact first.', 409)
         publications = row.get('publications') or [{'messageId': row.get('messageId'), 'version': latest(row)}]
-        if {'messageId': args['messageId'], 'version': args['version']} not in publications:
+        if not any(link.get('messageId') == args['messageId'] and link.get('version') == args['version']
+                   for link in publications):
             fail('This version was not published in that message.', 409)
         saved = definition(row, args['version'], self.service.db)
-        if saved['kind'] not in set(KINDS) - {'a2ui', 'browser'}:
+        if not capabilities(saved['kind'])['inline']:
             fail('This artifact opens in Canvas.', 409)
         record = self.record()
         inline = record.setdefault('inline', {})
@@ -277,6 +305,11 @@ class CanvasViews:
         row, preference = self.resolve(view_id)
         indirect = row.get('contentResource') and row['kind'] in {'html', 'babylon', 'canvas-app', 'pdf'}
         body = {} if indirect else resource(self.service.db, row['body']['$resource'])
+        if indirect and row.get('outputBinding'):
+            body = resource(self.service.db, row['body']['$resource'])
+            indirect = False
+        from .artifact_presentation import resolve_body
+        body = resolve_body(self.service.db, body, row['kind'], row['sessionId'])
         canvas = {**copy.deepcopy(row), **body, 'open': True, 'viewId': view_id,
                   'resourceRevision': self.revision(row), 'generation': preference['generation']}
         canvas.pop('body', None)
@@ -300,6 +333,24 @@ class CanvasViews:
         if action == 'canvas.views.inspect':
             return self.project(), []
         row, preference = self.target(args)
+        if action == 'canvas.views.mediaReport':
+            if origin != 'ui':
+                fail('Media observations must come from the authenticated viewing client.', 403)
+            if row['kind'] not in {'gif', 'mp4'}:
+                fail('Choose an exact retained media view.', 409)
+            from .output_media import validate_media_reference
+            canvas = self.canvas(args['viewId'])
+            reference = canvas.get('mediaReference', {})
+            output = self.service.outputs.record(row['sessionId'], reference.get('item', {}).get('id'))
+            validate_media_reference(reference, output, row['sessionId'], kind=row['kind'])
+            previous = preference.get('mediaObservation', {})
+            if (previous.get('generation') == args['generation']
+                    and args['sequence'] <= previous.get('sequence', 0)):
+                return {'status': 'unchanged'}, []
+            preference['mediaObservation'] = {key: copy.deepcopy(args[key]) for key in
+                ('viewId', 'resourceId', 'resourceRevision', 'generation', 'sequence',
+                 'renderState', 'playback', 'presentedFrames', 'mediaTime', 'detail') if key in args}
+            return {'status': 'observed', 'evidence': 'untrusted-client-playback'}, []
         if action == 'canvas.views.imageDraft':
             from .attachments import save, MAX_FILES
             from .canvas_downloads import filename
@@ -389,8 +440,9 @@ class CanvasViews:
             from .canvas_paths import copy_path
             return copy_path({**self.service.state, 'canvas': canvas}, args)
         if action in {'canvas.copy', 'canvas.download'}:
-            if canvas['kind'] == 'gif':
-                fail('Use Download original on the retained GIF.', 409)
+            if canvas['kind'] in {'gif', 'mp4'}:
+                fail('Use Download original on the retained GIF.' if canvas['kind'] == 'gif'
+                     else 'Use Download original on the retained video.', 409)
             from .canvas_downloads import filename
             if action == 'canvas.copy' and canvas['kind'] == 'pdf':
                 fail('Select text in the PDF to copy it, or download the original file.')

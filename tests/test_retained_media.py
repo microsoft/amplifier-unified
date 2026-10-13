@@ -704,3 +704,211 @@ async def test_real_attached_gif_snapshot_fork_skips_invalid_adapters_before_dep
             assert clone['canvasId'] in {row['id'] for row in canvases}
         assert next(row for row in app.state['canvasArtifacts'] if row['id'] == wrapper['id']) == before_source
     assert (store.directory(source['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('defect', [
+    'versions-none', 'version-entry-none', 'version-number-missing',
+    'publications-none', 'publication-entry-none', 'publication-version-missing',
+    'publication-version-unavailable',
+])
+async def test_session_fork_malformed_gif_is_skipped_at_first_copy_boundary(
+        media_app, monkeypatch, defect):
+    from amplifier_web import canvas_versions
+    from amplifier_web.automatic_history import display_message
+    from test_output_media import _exact_media_fork_corpus
+    app = media_app
+    source, corpus, store = _exact_media_fork_corpus(app, partial=True)
+    raw = (store.directory(source['id']) / 'transcript.jsonl').read_bytes()
+    app.clients.attach('malformed-fork-reader')
+    with app.clients.bind('malformed-fork-reader'):
+        mid = display_message(corpus[6], 6, source)['id']
+        anchor_message = display_message(corpus[2], 2, source)
+        anchor = anchor_message['id']
+        args = {**media_args_without_hydration(source), 'messageId': mid}
+        saved = (await app.dispatch('outputs.attachMedia', args))['result']
+        media_before = app.outputs.record(source['id'], saved['id'])
+        opened = (await app.dispatch('canvas.openGif', gif_open_args(args, saved),
+                                     include_state=False))['result']
+        wrapper = next(row for row in app.state['canvasArtifacts'] if row['id'] == opened['id'])
+        # Synthetic historical compatibility record: its kept user anchor would
+        # reach fork_definition if first-copy validation were moved too late.
+        wrapper['messageId'] = anchor
+        wrapper['versions'][0]['messageId'] = anchor
+        wrapper['publications'] = [{'messageId': anchor, 'version': 1}]
+        source['messages'].append(anchor_message)
+        unrelated = (await app.dispatch('canvas.show', {
+            'sessionId': source['id'], 'kind': 'markdown',
+            'title': 'Unrelated retained document', 'content': 'Synthetic document survives'},
+            include_state=False))['result']
+        document = next(row for row in app.state['canvasArtifacts'] if row['id'] == unrelated['id'])
+        document_before = copy.deepcopy(document)
+        assert document['messageId'] == anchor
+        # The active Canvas is now the unrelated document, so passive remember
+        # cannot repair or overwrite the malformed GIF before the copy boundary.
+        if defect == 'versions-none':
+            wrapper['versions'] = None
+        elif defect == 'version-entry-none':
+            wrapper['versions'] = [None]
+        elif defect == 'version-number-missing':
+            wrapper['versions'][0].pop('version')
+        elif defect == 'publications-none':
+            wrapper['publications'] = None
+        elif defect == 'publication-entry-none':
+            wrapper['publications'] = [None]
+        elif defect == 'publication-version-missing':
+            wrapper['publications'][0].pop('version')
+        else:
+            wrapper['publications'][0]['version'] = 2
+        before_source = copy.deepcopy(wrapper)
+        original_ids = {row['id'] for row in app.state['sessions']}
+        copied = []
+        real_fork_definition = canvas_versions.fork_definition
+
+        def tracked_definition(row, *args, **kwargs):
+            copied.append(row['id'])
+            return real_fork_definition(row, *args, **kwargs)
+
+        monkeypatch.setattr(canvas_versions, 'fork_definition', tracked_definition)
+        forked = await app.dispatch('session.fork', {'id': source['id'], 'turn': 2},
+                                    include_state=False)
+        assert forked['accepted'] is True
+        target = app._session()
+        assert target['id'] not in original_ids and target['status'] == 'idle'
+        assert {row['id'] for row in app.state['sessions']} == original_ids | {target['id']}
+        assert app.state['selectedSessionId'] == target['id']
+        assert store.directory(target['id']).joinpath('transcript.jsonl').is_file()
+        assert wrapper['id'] not in copied
+        assert document['id'] in copied
+        skips = forked['result']['retainedAdapterSkips']
+        adapter_skips = [item for item in skips if item.get('canvasId') == wrapper['id']]
+        assert len(adapter_skips) == 1
+        assert isinstance(adapter_skips[0]['reason'], str) and adapter_skips[0]['reason']
+        assert not any(item.get('canvasId') == document['id'] for item in skips)
+        canvases = [row for row in app.state['canvasArtifacts'] if row.get('sessionId') == target['id']]
+        assert len(canvases) == 1 and canvases[0]['kind'] == 'markdown'
+        assert canvases[0]['body'] == document_before['body']
+        assert canvases[0]['versions'][0]['body'] == document_before['versions'][0]['body']
+        assert canvases[0]['messageId'] in {row['id'] for row in target['messages'] if row['role'] == 'user'}
+        media = [row for row in app.outputs.store.list(target['id'])['items'] if row['kind'] == 'media']
+        assert len(media) == 1 and media[0]['forkSource']['outputId'] == saved['id']
+        assert media[0]['body'] == media_before['body']
+        assert next(row for row in app.state['canvasArtifacts'] if row['id'] == wrapper['id']) == before_source
+        assert next(row for row in app.state['canvasArtifacts'] if row['id'] == document['id']) == document_before
+        assert app.outputs.record(source['id'], saved['id']) == media_before
+    assert (store.directory(source['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('scenario', [
+    'kept', 'future-media-origin', 'future-snapshot-anchor',
+    'invalid-canvas-adapter', 'invalid-canvas-reference-none', 'invalid-snapshot-adapter',
+])
+async def test_library_only_open_gif_snapshot_fork_remaps_without_inventing_canvas_anchor(
+        media_app, scenario):
+    import hashlib
+    from amplifier_web import resource_files
+    from amplifier_web.automatic_history import display_message
+    from test_output_media import _exact_media_fork_corpus
+    app = media_app
+    source, corpus, store = _exact_media_fork_corpus(app, partial=True)
+    raw = (store.directory(source['id']) / 'transcript.jsonl').read_bytes()
+    origin_index = 10 if scenario == 'future-media-origin' else 6
+    anchor_index = 9 if scenario == 'future-snapshot-anchor' else 2
+    app.clients.attach('library-snapshot-reader')
+    with app.clients.bind('library-snapshot-reader'):
+        mid = display_message(corpus[origin_index], origin_index, source)['id']
+        anchor_message = display_message(corpus[anchor_index], anchor_index, source)
+        anchor = anchor_message['id']
+        args = {**media_args_without_hydration(source), 'messageId': mid}
+        saved = (await app.dispatch('outputs.attachMedia', args))['result']
+        media_before = app.outputs.record(source['id'], saved['id'])
+        opened = (await app.dispatch('canvas.openGif', gif_open_args(args, saved),
+                                     include_state=False))['result']
+        wrapper = next(row for row in app.state['canvasArtifacts'] if row['id'] == opened['id'])
+        assert wrapper['messageId'] is None and wrapper['publications'] == []
+        assert all(entry['messageId'] is None for entry in wrapper['versions'])
+        if not any(row['id'] == anchor for row in source['messages']):
+            source['messages'].insert(0, anchor_message)
+        snapshot = (await app.dispatch('outputs.attach', {
+            'sessionId': source['id'], 'kind': 'canvas', 'canvasId': wrapper['id'],
+            'title': 'Explicitly anchored library GIF snapshot', 'messageId': anchor},
+            include_state=False))['result']
+        snapshot_before = app.outputs.record(source['id'], snapshot['id'])
+        assert snapshot_before['canvasSource'] == wrapper['body']
+        assert snapshot_before['origin']['messageId'] == anchor
+        assert wrapper['messageId'] is None and wrapper['publications'] == []
+        assert all(entry['messageId'] is None for entry in wrapper['versions'])
+        # Closing an admitted view is a real UI operation, not hand-anchoring or
+        # a replacement producer. It also prevents passive remember masking a
+        # deliberately malformed stored adapter in the negative cases.
+        await app.dispatch('canvas.tabClose', {'id': wrapper['id']}, include_state=False)
+        assert app.state['canvas'].get('id') != wrapper['id']
+        if scenario.startswith('invalid-'):
+            other = (await app.dispatch('outputs.write', {
+                'sessionId': source['id'], 'title': 'Unrelated nonmedia output',
+                'content': 'Synthetic text is not GIF authority', 'variant': 'document',
+                'messageId': anchor}, include_state=False))['result']
+            malformed = copy.deepcopy(app.state_resource(wrapper['body']['$resource']))
+            if scenario == 'invalid-canvas-reference-none':
+                malformed['mediaReference'] = None
+            else:
+                malformed['mediaReference']['item']['id'] = other['id']
+            body = resource_files.put(app.db, malformed)
+            if scenario in {'invalid-canvas-adapter', 'invalid-canvas-reference-none'}:
+                wrapper['body'] = body
+                wrapper['versions'][0]['body'] = body
+            else:
+                broken = copy.deepcopy(snapshot_before)
+                broken['canvasSource'] = body
+                app.db.execute('UPDATE output_records SET value=? WHERE id=?',
+                               (json.dumps(broken), snapshot['id']))
+                snapshot_before = broken
+            app.db.commit()
+        before_source = copy.deepcopy(wrapper)
+        forked = await app.dispatch('session.fork', {'id': source['id'], 'turn': 2},
+                                    include_state=False)
+        assert forked['accepted'] is True
+        target = app._session()
+        records = app.outputs.store.list(target['id'])['items']
+        canvases = [row for row in app.state['canvasArtifacts'] if row.get('sessionId') == target['id']]
+        assert not any(row['kind'] == 'gif' for row in canvases), 'Library-only wrappers must not gain a fabricated publication'
+        media = [row for row in records if row['kind'] == 'media']
+        assert len(media) == (0 if scenario == 'future-media-origin' else 1)
+        if media:
+            assert media[0]['forkSource']['outputId'] == saved['id']
+            assert media[0]['body'] == media_before['body']
+        clones = [row for row in records if row.get('forkSource', {}).get('outputId') == snapshot['id']]
+        skips = forked.get('result', {}).get('retainedAdapterSkips', [])
+        if scenario == 'kept':
+            assert len(clones) == 1
+            clone = clones[0]
+            assert clone['kind'] == 'canvas' and clone['canvasKind'] == 'gif'
+            assert 'canvasId' not in clone, 'No source-owned or nonexistent Canvas ID may escape'
+            assert clone['origin']['messageId'] in {row['id'] for row in target['messages'] if row['role'] == 'user'}
+            body = json.loads(app.outputs.content(clone))
+            assert body == app.state_resource(clone['canvasSource']['$resource'])
+            reference = body['mediaReference']
+            assert reference['item']['id'] == media[0]['id']
+            assert reference['item']['sessionId'] == target['id']
+            assert reference['item']['version'] == media[0]['version']
+            assert reference['messageId'] == media[0]['origin']['messageId']
+            assert reference['item']['sha256'] == hashlib.sha256(gif()).hexdigest()
+            assert media[0]['origin']['messageId'] in {
+                row['id'] for row in target['messages']
+                if row['role'] == 'assistant' and not row.get('observation')}
+            encoded = app.outputs.content(clone)
+            assert clone['sha256'] == hashlib.sha256(encoded).hexdigest()
+            assert clone['bytes'] == len(encoded)
+            assert not any(item.get('canvasId') == wrapper['id'] or item.get('outputId') == snapshot['id'] for item in skips)
+        else:
+            assert not clones
+            if scenario != 'future-snapshot-anchor':
+                assert any(item.get('outputId') == snapshot['id'] and item.get('reason') for item in skips)
+            if scenario in {'invalid-canvas-adapter', 'invalid-canvas-reference-none'}:
+                assert any(item.get('canvasId') == wrapper['id'] and item.get('reason') for item in skips)
+        for record in records:
+            if 'canvasId' in record:
+                assert record['canvasId'] in {row['id'] for row in canvases}
+        assert next(row for row in app.state['canvasArtifacts'] if row['id'] == wrapper['id']) == before_source
+        assert app.outputs.record(source['id'], saved['id']) == media_before
+        assert app.outputs.record(source['id'], snapshot['id']) == snapshot_before
+    assert (store.directory(source['id']) / 'transcript.jsonl').read_bytes() == raw

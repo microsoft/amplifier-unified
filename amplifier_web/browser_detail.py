@@ -301,6 +301,9 @@ def sync_work(session, group, known, *, window_message_id=None):
 def project(session, *, resolver=None):
     from .cold_display import detached
     session = detached(session)
+    # Resolve virtual fields once into this detached snapshot. Subsequent page
+    # and recovery projections share those values, never the canonical row.
+    session = {key: session[key] for key in session.keys()}
     result=dict(session)
     from .peer_attribution import display_annotations
     result['messageAnnotations'] = display_annotations(session)

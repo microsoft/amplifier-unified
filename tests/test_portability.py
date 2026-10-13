@@ -124,6 +124,479 @@ async def test_ui_agent_transfer_preserves_canonical_history_lineage_and_dirty_w
         host_env(monkeypatch, destination); await target.close()
 
 
+async def _portable_artifact(app, sid, root, output, kind, monkeypatch):
+    """Use existing producers; the adapter may add a reference, never body bytes."""
+    from amplifier_web import resource_files
+    mid = 'typed'
+    if kind == 'writing':
+        saved = output
+    elif kind in {'dataset', 'image'}:
+        from test_output_images import png
+        name = 'synthetic-data.json' if kind == 'dataset' else 'synthetic-image.png'
+        (root / name).write_bytes(b'{"synthetic": true}' if kind == 'dataset' else png())
+        saved = (await app.dispatch('outputs.attach', {
+            'sessionId': sid, 'kind': 'dataset' if kind == 'dataset' else 'file',
+            'path': name, 'title': 'Synthetic portable artifact', 'messageId': mid}))['result']
+        (root / name).unlink()
+    elif kind == 'canvas':
+        await app.dispatch('canvas.show', {'kind': 'markdown', 'content': 'Synthetic Canvas source',
+                                          'title': 'Synthetic source definition'})
+        saved = (await app.dispatch('outputs.attach', {
+            'sessionId': sid, 'kind': 'canvas', 'canvasId': app.state['canvas']['id'],
+            'title': 'Synthetic Canvas snapshot', 'messageId': mid}))['result']
+    elif kind == 'media':
+        from test_portability_outputs import attach_saved_media
+        saved, mid, _ = await attach_saved_media(app, sid, root)
+    else:
+        from test_generated_images import receipt
+        receipt(root, 'synthetic-portable-generation')
+        saved = (await app.dispatch('outputs.attachImage', {
+            'sessionId': sid, 'title': 'Synthetic generated image', 'messageId': mid,
+            'receiptPath': 'synthetic-portable-generation.json'}))['result']
+        (root / 'synthetic-portable-generation.json').unlink()
+        (root / 'synthetic-portable-generation.png').unlink()
+    original = app.outputs.record(sid, saved['id'])
+    body = copy.deepcopy(original['body'])
+    content = app.outputs.content(original)
+    owned_resource = copy.deepcopy(app.state_resource(body['$resource']))
+    puts = []
+    real_put = resource_files.put
+
+    def put(db, value):
+        puts.append(copy.deepcopy(value))
+        return real_put(db, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(resource_files, 'put', put)
+        presented = (await app.dispatch('canvas.present', {
+            'sessionId': sid, 'outputId': original['id'], 'version': original['version'],
+            'messageId': mid, 'presentation': {'chat': 'compact', 'canvas': 'unchanged'}},
+            command_id='synthetic-portable-present'))['result']
+    record = app.outputs.record(sid, original['id'])
+    row = next(row for row in app.state['canvasArtifacts'] if row['id'] == presented['id'])
+    entry = next(entry for entry in row['versions'] if entry['version'] == presented['version'])
+    assert record['body'] == body and app.outputs.content(record) == content
+    assert owned_resource not in puts
+    assert entry['outputBinding'] == {
+        'outputId': record['id'], 'outputVersion': record['version'],
+        'sessionId': sid, 'sha256': record['sha256']}
+    if kind == 'canvas':
+        assert entry['body'] == record['canvasSource']
+    elif kind == 'generated':
+        assert row['id'] == record['canvasId'] and entry['body'] == body
+    elif kind == 'media':
+        assert set(app.state_resource(entry['body']['$resource'])) == {'mediaReference'}
+    else:
+        assert app.state_resource(entry['body']['$resource']) == {
+            'outputReference': entry['outputBinding']}
+    assert next(link for link in row['publications']
+                if link['version'] == presented['version'] and link['messageId'] == mid)['outputId'] == record['id']
+    return record, row, presented, mid
+
+
+async def _ordinary_portable_revision(app, sid, row):
+    """Synthetic later definition through the existing version/body owners."""
+    from amplifier_web.canvas_versions import save
+    from amplifier_web.resource_files import put
+    from test_output_images import png
+    content = ('data:image/png;base64,' + base64.b64encode(png(4, 2)).decode()
+               if row['kind'] == 'image' else 'Ordinary later content without output binding')
+    previous = copy.deepcopy(row)
+    current = copy.deepcopy(row)
+    current.update(body=put(app.db, {'content': content}), title='Ordinary later definition')
+    current.pop('outputBinding', None)
+    if 'contentResource' in current:
+        current['contentResource'] = copy.deepcopy(current['body'])
+    # Keep the canonical generator identity on the row for the old definition,
+    # but do not attach its binding/marker to ordinary later content.
+    save(current, previous, app.state, force=True, message='typed')
+    row.clear()
+    row.update(current)
+    app._save_changes(globals={'canvasArtifacts'})
+    assert row['sessionId'] == sid and row['revision'] == 2
+    assert 'outputBinding' not in row['versions'][1]
+    assert all('imageGeneration' not in link and 'outputId' not in link
+               for link in row['publications'] if link['version'] == 2)
+
+
+def _transfer_resource(payload, value):
+    from amplifier_web.resource_files import prepare
+    prepared = prepare(value)
+    payload['resources'][prepared.identity] = copy.deepcopy(value)
+    return {'$resource': prepared.identity, 'bytes': prepared.size}
+
+
+async def _reject_signed_artifact(app, target, body, tmp_path, destination, destrepo, monkeypatch):
+    """A verified source signature must not bypass binding or admit dependents."""
+    from amplifier_portability.capsule import write_capsule
+    from amplifier_web import portability as transfer, portability_data
+    signed = app.portability.node.sign(body)
+    verified = target.portability.node.verify(
+        signed, kind='capsule', signer=app.portability.node.identity['id'])
+    with pytest.raises(ValueError):
+        portability_data.validate(verified['payload'])
+    package = tmp_path / 'synthetic-invalid-artifact.json'
+    write_capsule(package, signed)
+    host_env(monkeypatch, destination)
+    tables = ('output_records', 'output_comments', 'output_receipts', 'state_resources', 'questions')
+    before = {table: target.db.execute('SELECT * FROM ' + table + ' ORDER BY rowid').fetchall()
+              for table in tables}
+    native = {str(path.relative_to(destination)): path.read_bytes()
+              for path in (destination / 'native').rglob('*') if path.is_file()}
+    sessions = copy.deepcopy(target.state['sessions'])
+    canvases = copy.deepcopy(target.state['canvasArtifacts'])
+    records = target.portability.node.records()
+
+    def dependent_admission(*args, **kwargs):
+        pytest.fail('Invalid artifact binding reached dependent destination admission')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(target.portability.node, 'receive', dependent_admission)
+        patch.setattr(target.portability, 'destination_policy', dependent_admission)
+        patch.setattr(target.portability, 'destination_checks', dependent_admission)
+        patch.setattr(transfer, 'restore_workspace', dependent_admission)
+        patch.setattr(transfer, 'native_store', dependent_admission)
+        patch.setattr(portability_data, 'preflight_install', dependent_admission)
+        patch.setattr(portability_data, 'install_outputs', dependent_admission)
+        patch.setattr(portability_data, 'install_receipts', dependent_admission)
+        with pytest.raises(AppError):
+            await target.dispatch('portability.stage', {'path': str(package), 'repository': str(destrepo)})
+    assert {table: target.db.execute('SELECT * FROM ' + table + ' ORDER BY rowid').fetchall()
+            for table in tables} == before
+    assert {str(path.relative_to(destination)): path.read_bytes()
+            for path in (destination / 'native').rglob('*') if path.is_file()} == native
+    assert target.state['sessions'] == sessions and target.state['canvasArtifacts'] == canvases
+    assert target.portability.node.records() == records == []
+    assert not target.runtime.workers and not app.runtime.workers
+
+
+@pytest.mark.parametrize('kind', ['writing', 'dataset', 'image', 'canvas', 'media', 'generated'])
+async def test_exact_artifact_transfer_roundtrip_preserves_existing_refs_without_body_copy(
+        tmp_path, monkeypatch, kind):
+    from amplifier_web import portability_data, resource_files
+    from test_portability_outputs import release_to, activate
+    app, target, source, destination, root, destrepo, sid, _, output = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        record, row, presented, mid = await _portable_artifact(app, sid, root, output, kind, monkeypatch)
+        if kind in {'writing', 'generated'}:
+            await _ordinary_portable_revision(app, sid, row)
+        if kind == 'writing':
+            assert record['version'] == 2 and presented['version'] == 1
+            assert record['presentationArtifact'] == {
+                'id': row['id'], 'version': 1, 'outputVersion': 2}
+        # Retained transfer admission must not re-prove a live history origin.
+        app._session(sid)['messages'] = [message for message in app._session(sid)['messages']
+                                        if message['id'] != mid]
+        store = SessionStore.for_app(app.data_dir, root)
+        store.save(sid, [{'role': 'user', 'content': 'Revised synthetic history; artifact origin removed'}],
+                   {}, preserve_system=True)
+        raw = (store.directory(sid) / 'transcript.jsonl').read_bytes()
+        app._save()
+        captured = portability_data.capture(app, app._session(sid))
+        original_record = next(item for item in captured['outputs'] if item['id'] == record['id'])
+        original_canvas = next(item for item in captured['canvas'] if item['id'] == row['id'])
+        original_resources = copy.deepcopy(captured['resources'])
+        expected_content = app.outputs.content(record)
+        # Both directions use the existing signed export/stage/release/apply path.
+        for left, right, left_home, right_home, repository in (
+                (app, target, source, destination, destrepo),
+                (target, app, destination, source, root)):
+            staged, released = await release_to(left, right, sid, left_home, right_home,
+                                                repository, monkeypatch)
+            host_env(monkeypatch, right_home)
+            assert (await activate(right, sid, staged, released))['phase'] == 'active'
+            imported = right.outputs.record(sid, record['id'])
+            saved = next(item for item in right.state['canvasArtifacts'] if item['id'] == row['id'])
+            assert imported == original_record
+            assert saved['versions'] == original_canvas['versions']
+            assert saved['publications'] == original_canvas['publications']
+            assert right.outputs.content(imported) == expected_content
+            native = SessionStore.for_app(right.data_dir, right._session(sid)['workspace'])
+            assert (native.directory(sid) / 'transcript.jsonl').read_bytes() == raw
+            puts = []
+            real_put = resource_files.put
+
+            def put(db, value):
+                puts.append(copy.deepcopy(value))
+                return real_put(db, value)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(resource_files, 'put', put)
+                retained = (await right.dispatch('canvas.present', {
+                    'sessionId': sid, 'outputId': imported['id'], 'version': imported['version'],
+                    'presentation': {'chat': 'compact', 'canvas': 'unchanged'}},
+                    command_id='synthetic-retained-represent'))['result']
+            assert retained['id'] == presented['id'] and retained['version'] == presented['version']
+            assert retained['reference'] == presented['reference']
+            assert retained['publication']['status'] == 'unchanged'
+            assert puts == []
+            assert portability_data.capture(right, right._session(sid))['resources'] == original_resources
+            if kind == 'generated':
+                link = next(link for link in saved['publications'] if link.get('outputId') == imported['id'])
+                assert link['imageGeneration'] == {
+                    'verified': True, 'requestId': 'synthetic-portable-generation',
+                    'operation': 'generate', 'parentId': None}
+                assert all('imageGeneration' not in link for link in saved['publications']
+                           if link['version'] == 2)
+        assert not app.runtime.workers and not target.runtime.workers
+    finally:
+        host_env(monkeypatch, source); await app.close()
+        host_env(monkeypatch, destination); await target.close()
+
+
+@pytest.mark.parametrize('location', ['current', 'historical'])
+@pytest.mark.parametrize('defect', [
+    'binding-owner', 'binding-output', 'binding-version', 'binding-bool', 'binding-string',
+    'typed-owner', 'typed-output', 'typed-version', 'typed-bool', 'typed-content', 'definition-kind',
+])
+async def test_signed_artifact_transfer_rejects_typed_binding_corruption_in_every_saved_version(
+        tmp_path, monkeypatch, location, defect):
+    from amplifier_portability.capsule import read_capsule
+    from amplifier_web import portability_data
+    app, target, source, destination, root, destrepo, sid, output, other = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        record, row, _, _ = await _portable_artifact(app, sid, root, output, 'writing', monkeypatch)
+        if defect in {'binding-output', 'typed-output'}:
+            other = (await app.dispatch('outputs.write', {
+                'sessionId': sid, 'title': 'Equal bytes, distinct synthetic output',
+                'variant': 'document', 'content': app.outputs.content(record).decode()}))['result']
+            assert other['id'] != record['id']
+            assert other['version'] == record['version'] and other['sha256'] == record['sha256']
+            assert other['body'] == record['body']
+        if location == 'historical':
+            await _ordinary_portable_revision(app, sid, row)
+        receipt, _ = await export(app, target, sid, root)
+        body = read_capsule(Path(receipt['package']))['body']
+        portability_data.validate(body['payload'])
+        changed = copy.deepcopy(body)
+        payload = changed['payload']
+        canvas = next(item for item in payload['canvas'] if item['id'] == row['id'])
+        selected = canvas['versions'][0]
+        latest = copy.deepcopy(canvas['versions'][-1])
+        entries = [selected, canvas] if location == 'current' else [selected]
+        wrapper = copy.deepcopy(payload['resources'][selected['body']['$resource']])
+        if defect.startswith('binding-'):
+            field, replacement = {
+                'binding-owner': ('sessionId', 'synthetic-other-task'),
+                'binding-output': ('outputId', other['id']),
+                'binding-version': ('outputVersion', record['version'] + 1),
+                'binding-bool': ('outputVersion', True),
+                'binding-string': ('outputVersion', str(record['version'])),
+            }[defect]
+            for entry in entries:
+                entry['outputBinding'][field] = replacement
+        elif defect == 'definition-kind':
+            for entry in entries:
+                entry['kind'] = 'html'  # A saved inert reference never grants execution.
+        else:
+            if defect == 'typed-content':
+                wrapper['content'] = 'Competing inline content is not the owning body'
+            else:
+                field, replacement = {
+                    'typed-owner': ('sessionId', 'synthetic-other-task'),
+                    'typed-output': ('outputId', other['id']),
+                    'typed-version': ('outputVersion', record['version'] + 1),
+                    'typed-bool': ('outputVersion', True),
+                }[defect]
+                wrapper['outputReference'][field] = replacement
+            reference = _transfer_resource(payload, wrapper)
+            for entry in entries:
+                entry['body'] = copy.deepcopy(reference)
+        if location == 'historical':
+            assert canvas['versions'][-1] == latest and canvas['revision'] == 2
+            assert canvas['body'] == latest['body']  # Latest is valid; old saved entry alone is bad.
+        await _reject_signed_artifact(app, target, changed, tmp_path, destination, destrepo, monkeypatch)
+    finally:
+        host_env(monkeypatch, source); await app.close()
+        host_env(monkeypatch, destination); await target.close()
+
+
+@pytest.mark.parametrize('defect', [
+    'mapping-output-version', 'mapping-output-bool', 'mapping-output-string',
+    'mapping-canvas-version', 'mapping-canvas-bool', 'mapping-canvas-string', 'mapping-canvas-id',
+    'publication-output', 'publication-missing-output', 'publication-version',
+    'publication-bool', 'publication-string', 'saved-version-bool', 'saved-version-string',
+    'duplicate-saved-version',
+])
+async def test_signed_artifact_transfer_rejects_mapping_and_publication_namespace_corruption(
+        tmp_path, monkeypatch, defect):
+    from amplifier_portability.capsule import read_capsule
+    from amplifier_web import portability_data
+    app, target, source, destination, root, destrepo, sid, output, other = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        record, row, _, _ = await _portable_artifact(app, sid, root, output, 'writing', monkeypatch)
+        receipt, _ = await export(app, target, sid, root)
+        body = read_capsule(Path(receipt['package']))['body']
+        portability_data.validate(body['payload'])
+        changed = copy.deepcopy(body)
+        payload = changed['payload']
+        canvas = next(item for item in payload['canvas'] if item['id'] == row['id'])
+        saved = next(item for item in payload['outputs'] if item['id'] == record['id'])
+        if defect.startswith('mapping-'):
+            field, replacement = {
+                'mapping-output-version': ('outputVersion', 99),
+                'mapping-output-bool': ('outputVersion', True),
+                'mapping-output-string': ('outputVersion', '1'),
+                'mapping-canvas-version': ('version', 99),
+                'mapping-canvas-bool': ('version', True),
+                'mapping-canvas-string': ('version', '1'),
+                'mapping-canvas-id': ('id', 'synthetic-missing-canvas'),
+            }[defect]
+            saved['presentationArtifact'][field] = replacement
+        elif defect == 'publication-missing-output':
+            canvas['publications'][0].pop('outputId')
+        elif defect.startswith('publication-'):
+            field, replacement = {
+                'publication-output': ('outputId', other['id']),
+                'publication-version': ('version', 99),
+                'publication-bool': ('version', True),
+                'publication-string': ('version', '1'),
+            }[defect]
+            canvas['publications'][0][field] = replacement
+        elif defect == 'duplicate-saved-version':
+            canvas['versions'].append(copy.deepcopy(canvas['versions'][0]))
+        else:
+            canvas['versions'][0]['version'] = True if defect == 'saved-version-bool' else '1'
+        await _reject_signed_artifact(app, target, changed, tmp_path, destination, destrepo, monkeypatch)
+    finally:
+        host_env(monkeypatch, source); await app.close()
+        host_env(monkeypatch, destination); await target.close()
+
+
+@pytest.mark.parametrize('defect', [
+    'request', 'operation', 'parent', 'verified-bool', 'verified-integer', 'origin',
+    'canvas-request', 'output-canvas', 'old-body', 'ordinary-version', 'ordinary-output',
+    'missing-output', 'legacy-missing-output', 'null-marker', 'old-content-resource',
+    'current-content-resource', 'legacy-content-resource', 'legacy-current-content-resource',
+])
+async def test_signed_artifact_transfer_rejects_corrupt_or_inherited_generation_markers(
+        tmp_path, monkeypatch, defect):
+    from amplifier_portability.capsule import read_capsule
+    from amplifier_web import portability_data
+    from test_output_images import png
+    app, target, source, destination, root, destrepo, sid, output, _ = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        record, row, _, _ = await _portable_artifact(app, sid, root, output, 'generated', monkeypatch)
+        if defect not in {'current-content-resource', 'legacy-current-content-resource'}:
+            await _ordinary_portable_revision(app, sid, row)
+        receipt, _ = await export(app, target, sid, root)
+        body = read_capsule(Path(receipt['package']))['body']
+        portability_data.validate(body['payload'])
+        changed = copy.deepcopy(body)
+        payload = changed['payload']
+        canvas = next(item for item in payload['canvas'] if item['id'] == row['id'])
+        saved = next(item for item in payload['outputs'] if item['id'] == record['id'])
+        link = next(item for item in canvas['publications'] if item.get('outputId') == record['id'])
+        marker = copy.deepcopy(link['imageGeneration'])
+        if defect.startswith('legacy-'):
+            for entry in [canvas, *canvas['versions']]:
+                entry.pop('outputBinding', None)
+        if defect in {'missing-output', 'legacy-missing-output'}:
+            link.pop('outputId')
+        elif defect == 'null-marker':
+            link['imageGeneration'] = None
+        elif defect in {'old-content-resource', 'legacy-content-resource',
+                        'current-content-resource', 'legacy-current-content-resource'}:
+            other_image = _transfer_resource(payload, {'content': 'data:image/png;base64,' +
+                base64.b64encode(png(7, 2)).decode()})
+            entry = canvas if 'current' in defect else canvas['versions'][0]
+            entry['contentResource'] = other_image
+        elif defect in {'request', 'operation', 'parent', 'verified-bool', 'verified-integer'}:
+            field, replacement = {
+                'request': ('requestId', 'synthetic-different-request'),
+                'operation': ('operation', 'edit'),
+                'parent': ('parentId', output['id']),
+                'verified-bool': ('verified', False),
+                'verified-integer': ('verified', 1),
+            }[defect]
+            link['imageGeneration'][field] = replacement
+        elif defect == 'origin':
+            link['messageId'] = 'spoken'
+        elif defect == 'canvas-request':
+            canvas['imageRequestId'] = 'synthetic-different-request'
+        elif defect == 'output-canvas':
+            saved['canvasId'] = 'synthetic-different-canvas'
+        elif defect == 'old-body':
+            canvas['versions'][0]['body'] = copy.deepcopy(canvas['versions'][1]['body'])
+        elif defect == 'ordinary-version':
+            ordinary = next(item for item in canvas['publications'] if item['version'] == 2)
+            ordinary.update(outputId=record['id'], imageGeneration=marker)
+        else:
+            ordinary_record = next(item for item in payload['outputs'] if item['id'] == output['id'])
+            binding = {'outputId': output['id'], 'outputVersion': output['version'],
+                       'sessionId': sid, 'sha256': output['sha256']}
+            ordinary_record['presentationArtifact'] = {'id': canvas['id'], 'version': 2,
+                                                       'outputVersion': output['version']}
+            reference = _transfer_resource(payload, {'outputReference': binding})
+            canvas.update(kind='markdown', body=reference, outputBinding=binding)
+            canvas.pop('contentResource', None)
+            canvas['versions'][1].update(kind='markdown', body=copy.deepcopy(reference), outputBinding=binding)
+            canvas['versions'][1].pop('contentResource', None)
+            ordinary = next(item for item in canvas['publications'] if item['version'] == 2)
+            ordinary.update(outputId=output['id'], imageGeneration=marker)
+        await _reject_signed_artifact(app, target, changed, tmp_path, destination, destrepo, monkeypatch)
+    finally:
+        host_env(monkeypatch, source); await app.close()
+        host_env(monkeypatch, destination); await target.close()
+
+
+@pytest.mark.parametrize('kind', ['canvas-app', 'mcp-app', 'settings'])
+async def test_signed_transfer_refuses_output_snapshot_without_interactive_owner_binding(tmp_path, monkeypatch, kind):
+    from amplifier_portability.capsule import read_capsule
+    app, target, source, destination, root, destrepo, sid, output, _ = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        record, row, _, _ = await _portable_artifact(app, sid, root, output, 'canvas', monkeypatch)
+        receipt, _ = await export(app, target, sid, root)
+        changed = copy.deepcopy(read_capsule(Path(receipt['package']))['body'])
+        saved = next(item for item in changed['payload']['outputs'] if item['id'] == record['id'])
+        canvas = next(item for item in changed['payload']['canvas'] if item['id'] == row['id'])
+        saved['canvasKind'] = kind
+        canvas['kind'] = kind
+        for entry in canvas['versions']:
+            entry['kind'] = kind
+        await _reject_signed_artifact(app, target, changed, tmp_path, destination, destrepo, monkeypatch)
+    finally:
+        host_env(monkeypatch, source); await app.close()
+        host_env(monkeypatch, destination); await target.close()
+
+
+async def test_legacy_generated_image_signed_transfer_preserves_unmodified_definitions(tmp_path, monkeypatch):
+    from test_portability_outputs import release_to, activate
+    app, target, source, destination, root, destrepo, sid, output, _ = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        record, row, _, mid = await _portable_artifact(app, sid, root, output, 'generated', monkeypatch)
+        for entry in [row, *row['versions']]:
+            entry.pop('outputBinding')
+        row['publications'] = [{'messageId': mid, 'version': 1}]
+        versions = copy.deepcopy(row['versions'])
+        original = copy.deepcopy(app.outputs.record(sid, record['id']))
+        content = app.outputs.content(original)
+        app._session(sid)['messages'] = []
+        app._save()
+        staged, released = await release_to(app, target, sid, source, destination, destrepo, monkeypatch)
+        host_env(monkeypatch, destination)
+        assert (await activate(target, sid, staged, released))['phase'] == 'active'
+        imported = next(item for item in target.state['canvasArtifacts'] if item['id'] == row['id'])
+        presented = (await target.dispatch('canvas.present', {'sessionId': sid, 'outputId': record['id'],
+            'version': record['version'], 'presentation': {'chat': 'inline', 'canvas': 'unchanged'}}))['result']
+        assert presented['id'] == row['id'] and presented['version'] == 1
+        assert presented['publication']['imageGeneration']['requestId'] == 'synthetic-portable-generation'
+        assert imported['versions'] == versions and imported['body'] == original['body']
+        assert imported['contentResource'] == original['body']
+        assert target.outputs.record(sid, record['id']) == original
+        assert target.outputs.content(original) == content
+        assert not target.runtime.workers
+    finally:
+        host_env(monkeypatch, source); await app.close()
+        host_env(monkeypatch, destination); await target.close()
+
+
 async def test_rejected_account_stage_remains_fenced_and_never_replayed(tmp_path, monkeypatch):
     app, target, source, destination, root, destrepo, sid, *_ = await setup_hosts(tmp_path, monkeypatch)
     try:

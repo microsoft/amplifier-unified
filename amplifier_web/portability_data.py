@@ -192,13 +192,27 @@ def _validate_media_bindings(value):
     closure, signatures, receipts and lineage remain with their existing owners.
     """
     from .output_media import retained_facts, validate_retained_body, validate_media_reference
+    from .artifact_presentation import check_output, generation_binding, validate_definition
     sid = value['session']['id']
     outputs = {row['id']: row for row in value['outputs']}
     resources = value['resources']
+    generated = {}
+    for record in outputs.values():
+        if record.get('bodyFormat') == 'canvas-image-v1':
+            generated.setdefault(record.get('canvasId'), []).append(record)
 
     def check_reference(body, kind):
+        if isinstance(body, dict) and 'outputReference' in body:
+            if set(body) != {'outputReference'}:
+                raise ValueError('Ambiguous transferred output reference.')
+            binding = body['outputReference']
+            record = outputs.get(binding.get('outputId')) if isinstance(binding, dict) else None
+            if record is None:
+                raise ValueError('Output adapter has no transferred owning output.')
+            check_output(binding, record, sid)
+            return
         if not isinstance(body, dict) or 'mediaReference' not in body:
-            if kind == 'gif':
+            if kind in {'gif', 'mp4'}:
                 raise ValueError('Retained GIF adapter has no media reference.')
             return
         if set(body) != {'mediaReference'}:
@@ -244,12 +258,38 @@ def _validate_media_bindings(value):
         if refs and any(ref != refs[0] for ref in refs):
             raise ValueError('Output media adapter differs from its saved source.')
     for row in value['canvas']:
+        if (not isinstance(row.get('versions', []), list)
+                or not isinstance(row.get('publications', []), list)
+                or any(not isinstance(v, dict) for v in row.get('versions', []))):
+            raise ValueError('Retained Canvas definitions must be saved version objects.')
         versions = [*row.get('versions', []), *row.get('app', {}).get('versions', [])]
         retained = False
         current_ref = None
         latest_ref = None
+        current_saved = next((v for v in versions if v.get('version') == row.get('revision')), {})
         for entry in [row, *versions]:
             kind = entry.get('kind', row.get('kind'))
+            binding = entry.get('outputBinding')
+            if 'outputBinding' not in entry:
+                for record in generated.get(row['id'], []):
+                    if (kind == 'image' and (
+                            any(entry.get(key) == record.get('body') for key in ('body', 'contentResource'))
+                            or entry is row and current_saved.get('body') == record.get('body'))):
+                        validate_definition(entry, row, record, resources[entry['body']['$resource']])
+            if binding is not None:
+                version = entry.get('revision') if entry is row else entry.get('version')
+                if type(version) is not int or version < 1:
+                    raise ValueError('Invalid exact output adapter Canvas version.')
+                record = outputs.get(binding.get('outputId')) if isinstance(binding, dict) else None
+                if record is None:
+                    raise ValueError('Canvas binding has no transferred owning output.')
+                check_output(binding, record, sid)
+                body = resources[entry['body']['$resource']]
+                source = resources[record['canvasSource']['$resource']] if record.get('canvasSource') else None
+                validate_definition(entry, row, record, body, source)
+                if entry.get('contentResource') and resources[entry['contentResource']['$resource']] != body:
+                    raise ValueError('Output adapter has competing saved body references.')
+                retained = True
             refs = []
             if 'mediaReference' in entry:
                 refs.append(check_reference({'mediaReference': entry['mediaReference']}, kind))
@@ -269,12 +309,59 @@ def _validate_media_bindings(value):
                     current_ref = refs[0]
                 elif version == row.get('revision'):
                     latest_ref = refs[0]
-            if kind == 'gif' and not bodies and 'mediaReference' not in entry:
+            if kind in {'gif', 'mp4'} and not bodies and 'mediaReference' not in entry:
                 raise ValueError('Retained GIF adapter has no saved body.')
         if retained and len({entry['version'] for entry in versions}) != len(versions):
             raise ValueError('Duplicate retained Canvas version identities.')
         if current_ref is not None and latest_ref is not None and current_ref != latest_ref:
             raise ValueError('Latest retained media adapter differs from its saved version.')
+        by_version = {entry.get('version'): entry for entry in versions}
+        for link in row.get('publications', []):
+            if not isinstance(link, dict):
+                raise ValueError('Invalid retained publication.')
+            if not link.get('outputId'):
+                selected = by_version.get(link.get('version'))
+                if isinstance(selected, dict) and selected.get('outputBinding'):
+                    raise ValueError('Exact output publication is missing its owning output identity.')
+                if 'imageGeneration' in link:
+                    raise ValueError('Generation publication is missing its owning output identity.')
+                continue
+            if type(link.get('version')) is not int or link['version'] not in by_version:
+                raise ValueError('Publication has no exact saved Canvas version.')
+            record = outputs.get(link['outputId'])
+            if record is None:
+                raise ValueError('Publication has no transferred owning output.')
+            binding = by_version[link['version']].get('outputBinding')
+            if binding is None and 'outputBinding' not in by_version[link['version']]:
+                # Older canonical generated-image versions did not carry the
+                # adapter field. Qualify their existing exact receipt/body join,
+                # never rewrite immutable definitions during import.
+                if generation_binding(record, row, link['version']) is None:
+                    raise ValueError('Publication has no exact owning output binding.')
+            else:
+                check_output(binding, record, sid)
+            if 'imageGeneration' in link:
+                marker = link['imageGeneration']
+                if (not isinstance(marker, dict) or marker.get('verified') is not True
+                        or link.get('messageId') != record.get('origin', {}).get('messageId')
+                        or link['imageGeneration'] != generation_binding(record, row, link['version'])):
+                    raise ValueError('Invalid durable generation publication binding.')
+    canvases = {row['id']: row for row in value['canvas']}
+    for record in outputs.values():
+        mapped = record.get('presentationArtifact')
+        if mapped is None:
+            continue
+        if (not isinstance(mapped, dict) or set(mapped) != {'id', 'version', 'outputVersion'}
+                or type(mapped.get('version')) is not int or mapped['version'] < 1
+                or type(mapped.get('outputVersion')) is not int
+                or mapped['outputVersion'] != record.get('version')):
+            raise ValueError('Invalid exact output-to-Canvas mapping.')
+        canvas = canvases.get(mapped['id'])
+        selected = next((entry for entry in canvas.get('versions', [])
+                         if entry.get('version') == mapped['version']), None) if canvas else None
+        if selected is None:
+            raise ValueError('Output mapping has no transferred exact Canvas version.')
+        check_output(selected.get('outputBinding'), record, sid)
 
 
 def _validate(value):
@@ -330,7 +417,13 @@ def _validate(value):
             raise ValueError('Output lineage must remain in the transferred task')
         if row.get('body'):
             resource = value['resources'][row['body']['$resource']]
-            content = base64.b64decode(resource['data'], validate=True) if resource['encoding'] == 'base64' else resource['data'].encode()
+            if row.get('bodyFormat') == 'canvas-image-v1':
+                encoded = resource.get('content', '')
+                if not isinstance(encoded, str) or not encoded.startswith('data:image/png;base64,'):
+                    raise ValueError('Invalid transferred image body.')
+                content = base64.b64decode(encoded.split(',', 1)[1], validate=True)
+            else:
+                content = base64.b64decode(resource['data'], validate=True) if resource['encoding'] == 'base64' else resource['data'].encode()
             if digest(content) != row.get('sha256'):
                 raise ValueError('Output content differs from its saved evidence hash')
     if any(row['outputId'] not in output_ids for row in value['comments']):

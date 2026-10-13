@@ -438,3 +438,145 @@ def test_body_free_media_binding_hint_retires_with_its_message_reference(app, op
         del row['messages']
     assert 'messages' not in dict.get(row, '_coldFields')
     assert '_coldMessageCount' not in dict.keys(row) and '_coldNotifications' not in dict.keys(row)
+
+
+def cold_detail_record(app):
+    """Actual virtual bodies, with enough history to exercise bounded recovery."""
+    from amplifier_web.cold_display import ColdRecord
+    from amplifier_web.resource_files import put
+    messages = [
+        {'id': f'detail-message-{n}', 'role': 'user' if n % 2 == 0 else 'assistant',
+         'text': f'Synthetic detail {n} ' + 'x' * 5000, 'createdAt': n}
+        for n in range(80)
+    ]
+    messages[-1]['observation'] = {
+        'source': 'local-job-recovery', 'recovery': {'call_id': 'detail-recovery-call'}}
+    nodes = [
+        {'id': f'detail-tool-{n}', 'kind': 'tool', 'turnId': 'detail-turn',
+         'phase': 'completed', 'startedAt': n / 2, 'endedAt': n / 2 + 0.1,
+         'output': f'Synthetic tool result {n}'}
+        for n in range(110)
+    ]
+    nodes.append({
+        'id': 'detail-recovered-tool', 'kind': 'tool', 'turnId': 'detail-turn',
+        'toolCallId': 'detail-recovery-call', 'label': 'Recovered synthetic tool',
+        'anchorMessageId': messages[-2]['id'], 'phase': 'completed',
+        'startedAt': 78.1, 'endedAt': 78.2, 'output': 'Exact recovery output ' + 'r' * 12000})
+    execution = {'nodes': nodes, 'turns': [{
+        'id': 'detail-turn', 'anchorMessageId': messages[0]['id'],
+        'phase': 'completed', 'startedAt': 0, 'endedAt': 79}]}
+    row = ColdRecord({
+        'id': 'synthetic-cold-detail', 'status': 'idle', 'title': 'Synthetic detail',
+        'workers': [{'id': 'detail-worker', 'sessionId': 'synthetic-worker',
+                     'callId': 'detail-recovery-call', 'name': 'Recovered worker',
+                     'status': 'completed'}],
+        '_coldMessageCount': len(messages), '_coldNotifications': [],
+        '_coldFields': {'messages': put(app.db, messages),
+                        'execution': put(app.db, execution)},
+    }, app.db)
+    app.db.commit()
+    return row, messages, execution
+
+
+def count_cold_detail_loads(monkeypatch, row):
+    from amplifier_web import cold_display
+    references = {value['$resource']: key
+                  for key, value in dict.get(row, '_coldFields').items()}
+    counts = {'messages': 0, 'execution': 0}
+    real_load = cold_display.load
+
+    def counted(db, reference):
+        counts[references[reference['$resource']]] += 1
+        return real_load(db, reference)
+
+    monkeypatch.setattr(cold_display, 'load', counted)
+    return counts
+
+
+def test_cold_detail_miss_loads_each_body_once_and_warm_hit_loads_none(app, monkeypatch):
+    from amplifier_web import browser_detail, cold_display
+    from amplifier_web.state_projections import StateProjections
+    row, messages, execution = cold_detail_record(app)
+    before = copy.deepcopy(cold_display.raw(row))
+    expected = browser_detail.project(row)
+    assert cold_display.raw(row) == before
+    cache = StateProjections()
+    counts = count_cold_detail_loads(monkeypatch, row)
+
+    observed = cache.detail(row)
+    assert counts == {'messages': 1, 'execution': 1}
+    assert observed == expected
+    assert len(observed['messages']) == browser_detail.MESSAGE_LIMIT
+    assert observed['messageWindow']['total'] == len(messages)
+    assert observed['messageWindow']['offset'] == len(messages) - browser_detail.MESSAGE_LIMIT
+    assert observed['execution']['nodes'] == [] and observed['execution']['detailsDeferred']
+    assert sum(group['nodeCounts']['tools'] for group in observed['execution']['segments']) == len(execution['nodes'])
+    recovery = observed['messages'][-1]
+    assert recovery['id'] == messages[-1]['id']
+    assert recovery['text'] == messages[-1]['text'][:browser_detail.TEXT_LIMIT]
+    assert recovery['textDetail']['digest'] == browser_detail.digest(messages[-1]['text'])
+    assert recovery['recoveryWorker']['id'] == 'detail-worker'
+    assert recovery['recoveryResult']['outputDetail'] == {
+        'sessionId': row['id'], 'part': 'nodes', 'id': 'detail-recovered-tool',
+        'field': 'output', 'digest': browser_detail.digest(execution['nodes'][-1]['output']),
+        'length': len(execution['nodes'][-1]['output'])}
+    assert cold_display.raw(row) == before
+    assert not dict.__contains__(row, 'messages') and not dict.__contains__(row, 'execution')
+
+    counts.update(messages=0, execution=0)
+    row['status'], row['title'] = 'error', 'Current scalar facts'
+    expected.update(status='error', title='Current scalar facts')
+    warmed = cache.detail(row)
+    assert counts == {'messages': 0, 'execution': 0}
+    assert warmed == expected
+    assert cold_display.raw(row) == {**before, 'status': 'error', 'title': 'Current scalar facts'}
+    assert cold_display.is_cold(row)
+
+
+@pytest.mark.parametrize('invalidation', ['scoped', 'detail-only', 'all'])
+def test_cold_detail_invalidation_reloads_current_messages_and_recovery_once(
+        app, monkeypatch, invalidation):
+    from amplifier_web import browser_detail, cold_display
+    from amplifier_web.resource_files import put
+    from amplifier_web.state_projections import StateProjections
+    row, messages, execution = cold_detail_record(app)
+    cache = StateProjections()
+    previous = cache.detail(row)
+    previous_recovery = copy.deepcopy(previous['messages'][-1]['recoveryResult'])
+    messages[-1]['text'] = 'Revised recovery message ' + 'n' * 6000
+    messages.append({
+        'id': 'detail-current-message', 'role': 'assistant', 'createdAt': 80,
+        'text': 'New current recovery message',
+        'observation': {'source': 'local-job-recovery',
+                        'recovery': {'call_id': 'detail-recovery-call'}}})
+    execution['nodes'][-1]['output'] = 'Revised exact recovery output ' + 'z' * 13000
+    row['_coldFields'] = {'messages': put(app.db, messages),
+                          'execution': put(app.db, execution)}
+    row['_coldMessageCount'] = len(messages)
+    app.db.commit()
+    state = {'sessions': [row]}
+    if invalidation == 'all':
+        cache.invalidate(state=state)
+    else:
+        cache.invalidate(state=state, session_ids={row['id']},
+                         detail_only=invalidation == 'detail-only')
+    assert row['id'] not in cache.detail_bodies
+    before = copy.deepcopy(cold_display.raw(row))
+    expected = browser_detail.project(row)
+    counts = count_cold_detail_loads(monkeypatch, row)
+
+    current = cache.detail(row)
+    assert counts == {'messages': 1, 'execution': 1}
+    assert current == expected
+    assert current['messageWindow']['total'] == 81
+    assert current['messages'][-1]['id'] == 'detail-current-message'
+    assert current['messages'][-2]['text'] == messages[-2]['text'][:browser_detail.TEXT_LIMIT]
+    assert current['messages'][-1]['recoveryResult']['outputDetail']['digest'] == browser_detail.digest(execution['nodes'][-1]['output'])
+    assert current['messages'][-1]['recoveryResult'] != previous_recovery
+    assert previous['messages'][-1]['recoveryResult'] == previous_recovery
+    assert cold_display.raw(row) == before
+    counts.update(messages=0, execution=0)
+    assert cache.detail(row) == expected
+    assert counts == {'messages': 0, 'execution': 0}
+    assert not dict.__contains__(row, 'messages') and not dict.__contains__(row, 'execution')
+    assert cold_display.raw(row) == before

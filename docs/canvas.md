@@ -73,6 +73,37 @@ full-frame mode while retaining preferred split widths.
 
 ## Agent awareness and access
 
+### Exact saved artifact placement
+
+`canvas.present` is the shared UI/agent host operation for an exact saved
+version. Supply `sessionId`, exactly one of `id` (Canvas) or `outputId`
+(OutputRegistry), a positive integer `version`, and
+`presentation: {chat: "none" | "compact" | "inline", canvas: "unchanged" | "open"}`.
+Output and Canvas versions are separate namespaces; the receipt names both.
+New compact/inline publication requires an explicit original `messageId`.
+Opening an already admitted unchanged publication does not requalify history.
+
+`canvas.show` accepts optional `presentation`, `messageId`, and `clientId` and
+uses the same operation after one body save. Explicit general publication
+defaults to compact; calls without these fields retain legacy behavior.
+`none` can retain a library-only artifact. `unchanged` never closes Canvas.
+
+Save/publication is independent of the one-time client opening. The receipt's
+`publication.status` is `published` or `unchanged`; `canvas.status` is `opened`,
+`dirty-blocked`, `no-client`, `unavailable`, or `not-requested`. `opened` means
+selection was accepted, not that pixels rendered. Opening targets one capable
+connected client already displaying the conversation and uses normal split view.
+An agent's trusted originating client is preferred; peers are not retargeted.
+Use a stable command ID for uncertain retries: identical retries return the
+original receipt without reopening; changed payloads with that ID are refused.
+
+Each definition projects native `presentationCapabilities`. GIF and MP4 use the
+existing retained-media viewer. Unqualified inline browser/A2UI/CanvasApp/MCP
+mounts remain explicit gaps, not successful empty views. Secondary media views
+report with `canvas.views.mediaReport` and their exact
+`viewId/resourceId/resourceRevision/generation`; legacy inline media reports
+remain compatible.
+
 The host mounts `app_control` and injects canvas guidance as ephemeral system
 context on every provider request, including resumed conversations. Delegated
 sessions inherit this access through the loop-live execution host. The voice

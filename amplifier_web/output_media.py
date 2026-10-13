@@ -319,7 +319,8 @@ def validate_media_reference(reference, record, sid, *, kind):
     if (not isinstance(item, dict) or set(item) != set(fields)
             or any(item[key] != record[key] or type(item[key]) is not type(record[key]) for key in fields)
             or reference['messageId'] != record['origin']['messageId']
-            or kind != 'gif' or record['media']['mimeType'] != 'image/gif'):
+            or kind not in {'gif', 'mp4'}
+            or record['media']['mimeType'] != {'gif': 'image/gif', 'mp4': 'video/mp4'}.get(kind)):
         raise ValueError('Media reference must match its exact owning output, kind, version and hash.')
 
 
