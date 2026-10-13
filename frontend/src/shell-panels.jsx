@@ -50,7 +50,9 @@ export function SessionHistoryControls({session,act,onLoadEarlier,hideEarlier=fa
  const notices=session.historyActivity?.diagnostics||[],partial=notices.some(item=>['activity_scan_limit','scan_limit','invalid_event','incomplete_event','unreadable_file'].includes(item.code)),recovered=notices.some(item=>item.code==='recovered_backup');
  const retry=()=>act('session.select',{id:session.id});
  const loadEarlier=()=>{onLoadEarlier?.();return act('session.history',{id:session.id,before:session.sharedHistoryOffset,limit:100})};
- if(!pending&&!session.historyError&&!earlier&&!unavailable&&!readOnly&&!partial&&!recovered)return null;
+ // A refresh with retained messages has no loading notice. Even an empty flex
+ // child adds a gap and can disturb the independent reading-position owner.
+ if(!(pending&&!session.messages?.length)&&!session.historyError&&!earlier&&!unavailable&&!readOnly&&!partial&&!recovered)return null;
  return <div className="a-session-history" data-part="session-history">
   {(unavailable||readOnly)&&<p role="status"><FolderOpen/>{readOnly||'This workspace folder is unavailable. You can read its saved chats here.'}</p>}
   {recovered&&<p role="status"><AlertCircle/>Showing a recovered history backup. Original files are unchanged.</p>}
