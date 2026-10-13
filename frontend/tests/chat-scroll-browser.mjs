@@ -141,9 +141,14 @@ try{
  await page.waitForFunction(()=>document.querySelector('.a-user:last-of-type')?.textContent.includes('New multiline message')||[...document.querySelectorAll('.a-user')].at(-1)?.textContent.includes('New multiline message'));
  await expect.poll(()=>readComposerDraft(input)).toBe('');
  await atBottom();
- const message=await page.locator('.a-user').last().boundingBox(),composer=await page.locator('.a-composer').boundingBox();
- assert.ok(message.y+message.height<=composer.y,`submitted message ends at ${message.y+message.height}, composer starts at ${composer.y}`);
- assert.ok(message.y>=(await pane.boundingBox()).y,'submitted message is visible without scrolling');
+ // The receipt replaces the optimistic row. Read all geometry in one frame
+ // and wait for the submitted row to remain visible through that replacement.
+ await expect.poll(()=>page.evaluate(()=>{
+  const row=[...document.querySelectorAll('.a-user')].at(-1);
+  if(!row?.textContent.includes('New multiline message'))return false;
+  const message=row.getBoundingClientRect(),composer=document.querySelector('.a-composer').getBoundingClientRect(),pane=document.querySelector('.a-messages').getBoundingClientRect();
+  return message.bottom<=composer.top&&message.top>=pane.top;
+ })).toBe(true);
 
  // The response may grow, but the start stays visible once there is enough
  // content to position the submitted message near the top of the viewport.
