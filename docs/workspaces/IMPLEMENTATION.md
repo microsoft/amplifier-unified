@@ -27,6 +27,19 @@ Seven unrelated workspace-starter tests fail identically on the pre-change
 macOS baseline because of its existing directory-descriptor Git handling;
 they are excluded from the focused pass count.
 
+All 16 reservation checks also pass against an installed wheel outside the
+source checkout. A two-round real-provider run using fresh worker processes
+confirmed a conflict against an independent owner's claim, preserved that
+claim, and then acquired, marked uncertain and released the resource after
+the owner explicitly relinquished it. Agent replies carry compact domain
+receipts instead of repeating unrelated application state.
+
+An earlier live attempt delivered its second prompt while the first turn was
+finishing and encountered a runtime error. Its failed evidence remains retained;
+the successful lifecycle check waits for the observed idle boundary. Turn-end
+steering remains a separate unresolved runtime qualification, not a pass inferred
+from the successful idle-to-idle check.
+
 This completes cooperative reservation admission, not managed provisioning or
 an OS resource lock. Different aliases and separate app installations remain
 outside its domain. Per-repository bindings, actual command/import/preview
