@@ -176,7 +176,7 @@ def open_gif(service, args, proof):
         row = {'id': uuid.uuid4().hex, 'kind': 'gif', 'title': record['title'],
                'sessionId': args['sessionId'], 'workspaceId': state.get('selectedWorkspaceId'),
                # Do not infer a user publication or duplicate the inline GIF.
-               'messageId': None, 'createdAt': time.time(), 'body': body, 'tabOpen': False}
+               'messageId': None, 'createdAt': time.time(), 'body': body, 'tabOpen': False, 'view': {}}
         save(row, None, state, message=None)
         state.setdefault('canvasArtifacts', []).append(row)
     load(state, service.db, row['id'])

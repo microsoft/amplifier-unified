@@ -211,3 +211,23 @@ test('late completion of a disposed generation cannot flush into a new owner',as
  current.report(snapshot(2,'paused'));assert.deepEqual([posts.at(-1).generation,posts.at(-1).sequence],[11,2]);
  current.dispose();
 });
+
+test('Canvas local report cadence is independent of the inline media generation',async()=>{
+ const clock=reportClock(),inlinePosts=[],canvasReports=[];
+ const inline=new MediaReporter({...clock,generation:20,send:value=>inlinePosts.push(value)});
+ const canvas=new MediaReporter({...clock,generation:21,send:value=>canvasReports.push(value)});
+ inline.report(snapshot(1,'paused'));await settle();
+ canvas.report(snapshot(0,'paused','loading'));await settle();
+ canvas.report(snapshot(1,'paused'));await settle();
+ assert.equal(canvasReports.at(-1).renderState,'ready','Ready follows the first decoded frame, not the mount');
+ for(let frame=2;frame<200;frame++){
+  clock.advance(frame*10);canvas.report(snapshot(frame));await settle();
+ }
+ assert.ok(canvasReports.filter(row=>row.playback==='playing').length<=3);
+ assert.deepEqual(inlinePosts.map(row=>[row.generation,row.sequence,row.presentedFrames]),[[20,1,1]]);
+ inline.report(snapshot(2));await settle();
+ assert.deepEqual([inlinePosts.at(-1).generation,inlinePosts.at(-1).sequence],[20,2]);
+ canvas.dispose();clock.advance(5000);await settle();
+ assert.equal(inlinePosts.length,2);
+ inline.dispose();
+});

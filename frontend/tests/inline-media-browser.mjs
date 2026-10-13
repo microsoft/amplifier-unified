@@ -29,7 +29,7 @@ const physicalNames=['mp4-native-controls','visibility','keyboard-200-percent'];
 const scenarioPhases=['gif-live-attach','metadata-malformed-retry','gif-resume','gif-report-cadence','report-readback-negative-control',
  'mp4-native','mp4-native-controls','mp4-decode-error','mp4-explicit-cleanup','partial-disposal','large-native',
  'reduced-motion','visibility','offscreen','decoder-error','unsupported-decoder','decoder-late-cleanup',
- 'preservation','worker-history-descriptor','endpoints','layout','keyboard-200-percent'];
+ 'preservation','worker-history-descriptor','gif-canvas','gif-canvas-errors','endpoints','layout','keyboard-200-percent'];
 let browser,fixture,boot,sharedStorage,sharedContext,exit,forcedKill=false;
 await mkdir(resolve(evidenceDir),{recursive:true});
 const privateHeaders={'X-Inline-Media-Fixture':'synthetic-control'};
@@ -146,12 +146,13 @@ function installProbe({unsupported=false,corrupt=false,hold=false}={}){
     return result;
    }finally{probe.active--}
   }
-  close(){if(!this.probeClosed){this.probeClosed=true;probe.decoders--;probe.closed++}return super.close()}
+  close(){if(!this.probeClosed){this.probeClosed=true;probe.decoders--;probe.closed++;probe.perDecoder[this.probeId].closed=true}return super.close()}
  };
  const draw=CanvasRenderingContext2D.prototype.drawImage;
  CanvasRenderingContext2D.prototype.drawImage=function(frame,...args){
   const result=draw.call(this,frame,...args),info=frames.get(frame);
   if(info)probe.draws.push({...info,id:this.canvas.closest('[data-media-id]')?.dataset.mediaId,
+   viewId:this.canvas.closest('[data-canvas-view]')?.dataset.canvasView||'inline',
    at:performance.now(),timestamp:frame.timestamp,duration:frame.duration});
   return result;
  };
@@ -189,6 +190,7 @@ async function newClient(options={}){
  const page=await context.newPage();pages.add(page);
  page.on('pageerror',error=>pageErrors.push(String(error.stack||error.message)));
  await page.addInitScript(installProbe,options);
+ if(options.resumeClientId)await page.addInitScript(id=>sessionStorage.setItem('amplifier.clientId',id),options.resumeClientId);
  if(options.suppressReports){
   // Negative control: real pixels still advance, but the host must not acquire
   // an observation. Never create a synthetic report to make readback green.
@@ -938,6 +940,231 @@ try{
    await phase('worker-history-descriptor',async()=>{
     throw new CantCheck('Preservation did not reach the native-discovered worker rendering check');
    });
+  await phase('gif-canvas',async()=>{
+   let client=await newClient(),peer=await newClient();
+   let page=client.page;
+   const canvasRoot=p=>p.locator('[data-canvas-view="primary"]');
+   const canvasFigure=(p,id)=>canvasRoot(p).locator(`[data-media-id="${id}"]`);
+   const inlineFigure=(p,id)=>p.locator(`[data-message-id="${boot.messageId}"] [data-media-id="${id}"]`);
+   const canvasDraws=(p,id)=>p.evaluate(id=>window.__mediaProbe.draws.filter(row=>row.id===id&&row.viewId==='primary'),id);
+   const state=p=>p.evaluate(()=>window.amplifier.getState());
+   const originalPeer=await state(peer.page);
+   let releaseOpen,openCalls=0,clickEnvelope;
+   const openGate=new Promise(done=>{releaseOpen=done});
+   const holdOpen=async route=>{
+    const body=route.request().postDataJSON();
+    if(body?.action!=='canvas.openGif')return route.continue();
+    openCalls++;clickEnvelope=body;await openGate;await route.continue();
+   };
+   let large,identity,reference,peerBefore;
+   try{
+    large=await attach(page,'large');
+    assert.equal(large.bytes,boot.samples.large.bytes);
+    assert.ok(large.bytes>5*1024*1024&&large.bytes>=19_000_000&&large.bytes<=20_100_000);
+    assert.equal(large.sha256,boot.samples.large.sha256);
+    await action(peer.page,'canvas.show',{kind:'text',title:'Peer selected artifact',content:'Keep this peer Canvas'});
+    await peer.page.getByRole('textbox',{name:'Message Amplifier'}).fill('GIF peer unsent draft');
+    await expect(peer.page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('GIF peer unsent draft');
+    peerBefore=await state(peer.page);
+    await page.getByRole('textbox',{name:'Message Amplifier'}).fill('GIF clicker unsent draft');
+    await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('GIF clicker unsent draft');
+    const inline=inlineFigure(page,large.id);
+    await inline.scrollIntoViewIfNeeded();
+    await expect(inline).toHaveAttribute('data-media-state','ready');
+    await expect(inline.getByRole('button',{name:'Open in Canvas',exact:true})).toHaveCount(1);
+    assert.equal((await state(page)).canvas.open,false,'Retained media alone never opens Canvas');
+    const inlineBefore=await readOutput(page,large);
+    assert.equal(inlineBefore.result.browserObservation.status,'observed');
+    const inlineGeneration=inlineBefore.result.browserObservation.generation;
+    // Actual visible USER click: never assign Canvas in the fixture.
+    const receipt=page.waitForResponse(response=>response.request().method()==='POST'&&
+     new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='canvas.openGif');
+    await page.route('**/api/actions',holdOpen);
+    await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
+    await expect.poll(()=>openCalls).toBe(1);
+    await expect(inline.getByRole('button',{name:'Opening in Canvas…',exact:true})).toBeDisabled();
+    assert.equal(typeof clickEnvelope.id,'string');assert.ok(clickEnvelope.id.length>0);
+    assert.equal(clickEnvelope.args.messageId,boot.messageId);
+    assert.equal((await state(page)).canvas.open,false,'Pending does not spontaneously select an artifact');
+    releaseOpen();
+    const opened=await receipt;
+    await page.unroute('**/api/actions',holdOpen);
+    assert.equal(opened.status(),200);
+    const result=await opened.json();assert.equal(result.accepted,true);assert.equal(result.result.status,'opened');
+    identity=result.result.id;
+    await expect.poll(async()=>(await state(page)).canvas.id).toBe(identity);
+    const current=await state(page);
+    assert.equal(current.canvas.kind,'gif');reference=current.canvas.mediaReference;
+    assert.deepEqual(Object.fromEntries(['id','sessionId','version','sha256'].map(key=>[key,reference.item[key]])),
+     Object.fromEntries(['id','sessionId','version','sha256'].map(key=>[key,large[key]])));
+    assert.equal(reference.messageId,boot.messageId);
+    const rows=current.canvasArtifacts.filter(row=>row.kind==='gif');
+    assert.equal(rows.length,1);assert.equal(rows[0].messageId,null);
+    assert.deepEqual(rows[0].publications,[]);assert.equal(rows[0].revision,1);assert.equal(rows[0].versions.length,1);
+    assert.ok(rows[0].body.bytes<8000);
+    const figure=canvasFigure(page,large.id);
+    await expect(figure).toBeVisible();await expect(figure).toHaveAttribute('data-media-state','ready');
+    await expect(figure).toHaveAttribute('data-playback','paused');
+    await expect(canvasRoot(page).getByRole('button',{name:'Open in Canvas',exact:true})).toHaveCount(0);
+    await expect(canvasRoot(page).getByRole('button',{name:/Copy canvas source|Download canvas source|Restore as new version/})).toHaveCount(0);
+    const initial=await canvasPixels(figure),defaultDraws=(await canvasDraws(page,large.id)).length;
+    assert.deepEqual([initial.width,initial.height],[1280,720]);
+    assert.ok(initial.pixels.some(pixel=>pixel[3]===255),'Actual decoded first-frame pixels');
+    await clockWait(page,350);assert.equal((await canvasDraws(page,large.id)).length,defaultDraws);
+    await figure.getByRole('button',{name:'Play GIF',exact:true}).click();
+    await expect.poll(()=>canvasPixels(figure)).not.toEqual(initial);
+    await expect.poll(async()=>(await canvasDraws(page,large.id)).length).toBeGreaterThan(defaultDraws+1);
+    await figure.getByRole('button',{name:'Pause GIF',exact:true}).click();
+    const paused=await canvasPixels(figure),pauseDraws=(await canvasDraws(page,large.id)).length;
+    await clockWait(page,450);assert.deepEqual(await canvasPixels(figure),paused);
+    assert.equal((await canvasDraws(page,large.id)).length,pauseDraws);
+    await figure.locator('canvas').screenshot({path:join(evidenceDir,'gif-canvas-large-pixels.png')});
+    const canvasDecoder=(await canvasDraws(page,large.id))[0].decoderId;
+    assert.ok((await probeState(page)).perDecoder[canvasDecoder].peak<=2);
+    const reportsDuringCanvas=await dispatchedReports(page,large.id);
+    assert.ok(reportsDuringCanvas.every(row=>row.generation===inlineGeneration),
+     'Canvas local reports must not replace the inline output generation');
+    // Inline controls and fresh readback still work after the newer Canvas
+    // instance reports real playback. A synthetic Canvas mediaReport breaks it.
+    await inline.scrollIntoViewIfNeeded();
+    await inline.getByRole('button',{name:'Play GIF',exact:true}).click();
+    await expect(inline).toHaveAttribute('data-playback','playing');
+    await inline.getByRole('button',{name:'Pause GIF',exact:true}).click();
+    await expect.poll(async()=>{
+     const observed=(await readOutput(page,large)).result.browserObservation;
+     return observed.generation===inlineGeneration&&observed.sequence>inlineBefore.result.browserObservation.sequence
+      &&observed.playback==='paused';
+    }).toBe(true);
+    const inlineAfter=await readOutput(page,large);
+    assert.equal(inlineAfter.result.browserObservation.generation,inlineGeneration);
+    assert.equal(inlineAfter.result.browserObservation.playback,'paused');
+    const link=await figure.getByRole('link',{name:'Download original'}).getAttribute('href');
+    const original=await page.request.get(link);assert.equal(original.status(),200);
+    assert.equal(createHash('sha256').update(await original.body()).digest('hex'),large.sha256);
+    // Close must dispose the actual Canvas decoder; inline players remain.
+    await action(page,'canvas.close',{id:identity});
+    await expect(canvasFigure(page,large.id)).toHaveCount(0);
+    await expect.poll(async()=>page.evaluate(id=>window.__mediaProbe.perDecoder[id].live,canvasDecoder)).toBe(0);
+    await expect.poll(async()=>page.evaluate(id=>window.__mediaProbe.perDecoder[id].closed,canvasDecoder)).toBe(true);
+    const closed=(await probeState(page)).closed;
+    await action(page,'canvas.reopen');
+    await expect(canvasFigure(page,large.id)).toHaveAttribute('data-media-state','ready');
+    assert.ok((await probeState(page)).closed>=closed);
+    assert.equal((await state(page)).canvas.id,identity);
+    const duplicate=page.waitForResponse(response=>response.request().method()==='POST'&&
+     new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='canvas.openGif');
+    await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
+    assert.equal((await (await duplicate).json()).result.id,identity);
+    assert.equal((await state(page)).canvasArtifacts.filter(row=>row.kind==='gif').length,1);
+    await control(page,'mutate',{name:'large',operation:'remove-source'});
+    await page.reload();await page.waitForSelector('#amp-one');
+    await expect(canvasFigure(page,large.id)).toHaveAttribute('data-media-state','ready');
+    assert.deepEqual((await state(page)).canvas.mediaReference,reference);
+    // Close the ordinary app tab and reopen with its saved client presentation.
+    // This does not unmount by selecting a fixture-assigned artifact.
+    const resumeClientId=(await state(page)).client.id;
+    await page.close();pages.delete(page);
+    client=await newClient({resumeClientId});page=client.page;
+    await expect(canvasFigure(page,large.id)).toHaveAttribute('data-media-state','ready');
+    assert.equal((await state(page)).canvas.id,identity);
+    assert.deepEqual((await state(page)).canvas.mediaReference,reference);
+    await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('GIF clicker unsent draft');
+    await page.emulateMedia({reducedMotion:'reduce'});
+    const restored=canvasFigure(page,large.id);
+    await expect(restored).toHaveAttribute('data-playback','paused');
+    const restoredPixels=await canvasPixels(restored);
+    await clockWait(page,350);assert.deepEqual(await canvasPixels(restored),restoredPixels);
+    await restored.getByRole('button',{name:'Play GIF',exact:true}).click();
+    await expect.poll(()=>canvasPixels(restored)).not.toEqual(restoredPixels);
+    await restored.getByRole('button',{name:'Pause GIF',exact:true}).click();
+    await page.emulateMedia({reducedMotion:'no-preference'});
+    const after=await state(page),other=await state(peer.page);
+    assert.deepEqual(other.canvas,peerBefore.canvas,'Other client Canvas stays exactly unchanged');
+    await expect(peer.page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('GIF peer unsent draft');
+    assert.equal(after.canvasArtifacts.filter(row=>row.kind==='gif').length,1);
+    assert.equal(after.canvasArtifacts.find(row=>row.id===identity).versions.length,1);
+    const evidence=await (await page.request.get(boot.url+'/api/fixture/evidence',{headers:privateHeaders})).json();
+    assert.deepEqual(evidence.errors,[]);
+    assert.ok(!Object.keys(evidence.counters).some(key=>key.startsWith('unexpected:')));
+    return {artifactId:identity,tuple:reference,bytes:large.bytes,originalSha256:large.sha256,
+     userClick:true,physicalPixels:true,pausedFreeze:true,defaultPaused:true,reducedMotion:true,
+     inlineGeneration,inlineReadback: inlineAfter.result.browserObservation,sourceRemoved:true,
+     reload:true,appCloseReopen:true,peerPreserved:true,versions:1,automaticRuntimeCalls:0};
+   }finally{
+    releaseOpen();
+    if(!page.isClosed())await page.unroute('**/api/actions',holdOpen);
+    if(!page.isClosed())await unmountAndClose(client);
+    if(!peer.page.isClosed()){
+     // Restore the peer through the normal action before disposing the test client.
+     if(originalPeer.canvas?.kind)await action(peer.page,'canvas.select',{id:originalPeer.canvas.id});
+     await unmountAndClose(peer);
+    }
+   }
+  });
+  await phase('gif-canvas-errors',async()=>{
+   if(!saved)throw new CantCheck('GIF setup unavailable for Canvas failure checks');
+   const client=await newClient(),{page}=client;
+   const inline=page.locator(`[data-message-id="${boot.messageId}"] [data-media-id="${saved.id}"]`);
+   const canvasRoot=page.locator('[data-canvas-view="primary"]');
+   try{
+    await inline.scrollIntoViewIfNeeded();
+    await expect(inline).toHaveAttribute('data-media-state','ready');
+    for(const figure of await page.locator('[data-message-id] [data-media-id]').all()){
+     if(await figure.locator('canvas').count())await expect(figure).toHaveAttribute('data-media-state','ready');
+    }
+    await action(page,'canvas.show',{kind:'text',title:'Dirty primary',content:'Keep the mounted dirty view'});
+    const current=await page.evaluate(()=>window.amplifier.getState());
+    const view=current.canvasWorkspace.views.find(view=>view.viewId==='primary');
+    const target=Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
+    await action(page,'canvas.views.dirty',{...target,dirty:true});
+    const before=await page.evaluate(()=>window.amplifier.getState());
+    await inline.scrollIntoViewIfNeeded();
+    await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
+    await expect(inline.getByRole('alert')).toContainText('Finish or cancel');
+    const after=await page.evaluate(()=>window.amplifier.getState());
+    assert.equal(after.canvas.id,before.canvas.id);assert.deepEqual(after.canvasArtifacts,before.canvasArtifacts);
+    assert.equal(after.canvasWorkspace.views.find(view=>view.viewId==='primary').dirty,true);
+    await action(page,'canvas.views.dirty',{...target,dirty:false});
+    // Hold the REAL native first decode. Mounted is not ready; closing owns
+    // pending-frame cleanup and may not leak a late frame into a replacement.
+    await page.evaluate(()=>{window.__mediaProbe.hold=true});
+    await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
+    const figure=canvasRoot.locator(`[data-media-id="${saved.id}"]`);
+    await expect(figure).toHaveAttribute('data-media-state','loading');
+    await expect.poll(async()=>(await probeState(page)).heldCount).toBeGreaterThan(0);
+    const pending=await page.evaluate(()=>window.amplifier.getState());
+    assert.equal(pending.canvas.kind,'gif');
+    assert.notEqual(pending.canvasWorkspace.views.find(view=>view.viewId==='primary').activation?.status,'ready');
+    const heldDecoder=(await probeState(page)).created;
+    await action(page,'canvas.show',{kind:'text',title:'Replacement',content:'No late GIF draw here'});
+    await page.evaluate(()=>{window.__mediaProbe.hold=false;window.__mediaProbe.held.splice(0).forEach(done=>done())});
+    await expect(figure).toHaveCount(0);
+    await expect.poll(async()=>page.evaluate(id=>window.__mediaProbe.perDecoder[id].live,heldDecoder)).toBe(0);
+    await expect.poll(async()=>page.evaluate(id=>window.__mediaProbe.perDecoder[id].closed,heldDecoder)).toBe(true);
+    assert.equal(await page.evaluate(id=>window.__mediaProbe.draws.filter(row=>row.decoderId===id).length,heldDecoder),0);
+    // Decoder failure in the same shared player must become Canvas error,
+    // never a generic mounted-ready report or an outputs.mediaReport.
+    await page.route('**/api/outputs/*/media?*',async route=>{
+     const url=new URL(route.request().url());
+     if(url.pathname!==`/api/outputs/${saved.id}/media`||url.searchParams.has('download'))return route.continue();
+     const response=await route.fetch();assert.equal(response.status(),200);
+     await route.fulfill({response,body:Buffer.from('synthetic undecodable GIF')});
+    });
+    await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
+    await expect(figure).toHaveAttribute('data-media-state','error');
+    await expect.poll(async()=>page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views
+     .find(view=>view.viewId==='primary').activation?.status)).toBe('error');
+    await expect(figure.getByRole('link',{name:'Download original'})).toHaveCount(1);
+    await page.unroute('**/api/outputs/*/media?*');
+    return {dirtyRejectedBeforeMutation:true,visibleError:true,actualDecodeReadiness:true,
+     replacementCleanup:true,lateFramesOwned:true,decoderError:'error',mountedReady:false};
+   }finally{
+    if(!page.isClosed()){
+     await page.evaluate(()=>{window.__mediaProbe.hold=false;window.__mediaProbe.held.splice(0).forEach(done=>done())});
+     await unmountAndClose(client);
+    }
+   }
+  });
   await phase('endpoints',async()=>{
    if(!primary||!saved)throw new CantCheck('GIF setup unavailable');
    const {page}=primary,figure=await readyFigure(page,saved.id);

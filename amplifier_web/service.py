@@ -1432,7 +1432,8 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         if action == 'canvas.openGif' and (origin != 'ui' or client_id is None
-                or args.get('clientId', client_id) != client_id):
+                or args.get('clientId', client_id) != client_id
+                or self.clients.record().get('kind') != 'web'):
             raise AppError('Open in Canvas requires an explicit click in the originating browser client.', 403)
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
