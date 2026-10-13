@@ -62,7 +62,8 @@ async def main(home):
                               'turns': [{'id': 'turn', 'phase': 'completed'}]},
                    workers=[{'id': f'old-{j}', 'sessionId': f'child-{j}', 'callId': 'old-call' if j == 0 else f'call-{j}',
                              'kind': 'session', 'name': f'Historical worker {j}', 'status': 'completed', 'report': 'Saved report. '*1000} for j in range(1000)],
-                   runtimeReport={'provider_choices': [{'id': 'one', 'sharedCatalogKey': 'current-one', 'display_name': 'Fixture provider', 'model': 'first', 'effort': 'high'}],
+                   runtimeReport={'provider_choices': [{'id':p['id'], 'sharedCatalogKey':'current-'+p['id'],
+                       'display_name':'Fixture provider', 'model':p['config']['model'], 'effort':'high'} for p in providers],
                                   'effective_selection': {'instance': 'one', 'model': 'first', 'effort': 'high'}})
         row.pop('nativeProject', None)
         row.pop('nativeIdentity', None)
@@ -121,7 +122,7 @@ async def main(home):
             if data.get('reverse'):rows.reverse()
             row['workers'].extend(rows+[{'id':'control-active','kind':'session','callId':'unrelated','status':'working','name':'Active worker'}])
         service._publish_changes(sessions={ids[1]})
-        return web.json_response({'ok':True})
+        return web.json_response({'ok':True,'revision':service.state['revision']})
     app.router.add_get('/fixture/demand',metrics)
     app.router.add_post('/fixture/reset',reset)
     app.router.add_post('/fixture/invalidate',invalidate)

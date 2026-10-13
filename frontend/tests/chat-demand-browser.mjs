@@ -56,8 +56,11 @@ try{
  if(!measureOnly)assert.equal(focused.messages.find(m=>m.id==='1-m-0').recoveryWorker.id,'old-0');
  // Terminal jobs win over stale session progress in either observation order.
  for(const terminal of ['completed','error','cancelled'])for(const reverse of [false,true]){
-  await api('/fixture/activity',{terminal,reverse});
+  const changed=await api('/fixture/activity',{terminal,reverse});
+  await page.waitForFunction(revision=>window.amplifier.getState().revision>=revision,changed.revision);
   await expect(page.getByText('1 worker lane is active',{exact:true})).toBeVisible();
+  const received=await page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id===id).workers,meta.ids[1]);
+  assert.equal(received.find(w=>w.id==='control-job').status,terminal);
   const current=(await snapshot()).sessions.find(s=>s.id===meta.ids[1]);
   assert.ok(current.workers.some(w=>w.id==='control-child'&&w.sessionId==='controlled-child'));
   assert.ok(current.workers.some(w=>w.id==='control-job'&&w.status===terminal));
@@ -87,6 +90,8 @@ try{
  await page.evaluate(()=>{const stream=demandStreams.at(-1);stream.close();stream.dispatchEvent(new Event('error'))});
  await expect.poll(()=>page.evaluate(()=>demandStreams.length),{timeout:10000}).toBeGreaterThan(streams);
  await page.waitForFunction(()=>demandStreams.at(-1).readyState===EventSource.OPEN);
+ await expect.poll(()=>page.evaluate(()=>demandFrames.filter(f=>f.name==='state').length)).toBeGreaterThan(0);
+ evidence.reconnectFrameBytes=await page.evaluate(()=>demandFrames.filter(f=>f.name==='state').at(-1).bytes);
  await expect(composer).toHaveDraft('Target private draft');
  await action('session.select',{id:meta.ids[0]});await expect(composer).toHaveDraft('Source private draft');
  await action('session.select',{id:meta.ids[1]});await expect(composer).toHaveDraft('Target private draft');
@@ -98,6 +103,7 @@ try{
  await expect(page.locator('#chat-model option[value="second"]')).toBeAttached();
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Chat options'})).toHaveCount(0);
+ if(!measureOnly){await expect.poll(async()=>(await snapshot()).view.composerModel?.open).toBe(false)}
  await settle();const final=await api('/fixture/demand');assert.deepEqual(final.runtimeCalls,[]);assert.equal(final.workersUnchanged,true);assert.deepEqual(errors,[]);
  evidence.controls={olderRecovery:true,focusedRecovery:true,terminalPrecedenceBothOrders:true,desktopPicker:true,accountIsolation:true,privateDrafts:true,reconnect:true,mobilePicker:true,workerEvidenceUnchanged:true};evidence.pageErrors=errors;
  console.log(JSON.stringify(evidence,null,2));
