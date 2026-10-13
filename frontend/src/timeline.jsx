@@ -16,7 +16,8 @@ import {DelegateExchange} from './delegate-exchange.jsx';
 function Usage({value,pending=false}){const label=usageLabel(value,{pending}),breakdown=compactBreakdown(value);return label?<span className="a-execution-usage" title={label.title}>{label.text}{breakdown&&<small className="a-usage-breakdown">{breakdown}</small>}</span>:null}
 function Status({status}){return ['error','failed','cancelled','interrupted'].includes(status)?<AlertCircle className="a-execution-warning" aria-label={status}/>:['complete','completed','success','done'].includes(status)?<Check className="a-execution-complete" aria-label="Completed"/>:isRunning({phase:status})?<span className="a-execution-dot" aria-label={status}/>:<Circle aria-label={status||'Recorded'}/>}
 const stamp=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString():null;
-function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle,detail='standard'}){
+function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle,detail:level}){
+ const shell=useShellContext(),detail=level||shell?.composition?.presentation?.interfaceDetail||shell?.composition?.presentation?.executionDetail||'standard';
  const tool=node.kind==='tool',worker=node.kind==='worker',delegate=worker||!!node.exchange,children=tree.children.get(node.id)||[],summary=cleanSummary(node.summary||node.detail);
  const collapsible=tool||node.kind==='llm'||node.kind==='worker'||!!summary||children.length>15,open=!collapsible||expanded.has(node.id);
  const Header=collapsible?'button':'div';
