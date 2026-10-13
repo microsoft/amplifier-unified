@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,publicationOutputIds,inlineViewAccess} from '../src/artifact-presentation.js';
+import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,publicationOutputIds,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest} from '../src/artifact-presentation.js';
 import {imageGalleryEntries,imageGallerySelection} from '../src/image-generation.js';
 import {createArtifactOverrides,createInlineOwnership,inlineEditNotice} from '../src/conversation-navigation.js';
 
@@ -38,10 +38,12 @@ test('explicit publication identity and host capabilities do not infer renderer 
  assert.equal(presentationCapabilities(item('gif')).inline,false,'Legacy host cannot mount retained GIF inline');
  for(const kind of ['canvas-app','mcp-app','browser','a2ui']){
   const value=item(kind);
+  assert.equal(presentationCapabilities(value).inline,false,'A native kind alone cannot establish lifecycle admission');
   value.row.presentationCapabilities={compact:true,inline:true,canvas:true};
   value.row.capabilities=['arbitrary.active.grant'];
-  assert.equal(presentationCapabilities(value).inline,false,'An advanced native lifecycle is still pending');
-  assert.match(presentationCapabilities(value).reason,/qualification is pending/);
+  assert.equal(presentationCapabilities(value).inline,true,'Only the server-projected native lifecycle enables inline');
+  value.row.presentationCapabilities.inline=false;
+  assert.equal(presentationCapabilities(value).inline,false);
  }
  const unavailable=item();
  unavailable.row.presentationCapabilities={compact:true,inline:false,canvas:false,reason:'Renderer unavailable'};
@@ -110,8 +112,8 @@ function component({dispatch,request=async()=>({id:'saved-artifact',kind:'image'
   }
  };
  const render=runInNewContext(`${source.slice(start,end).replace('export ','')}
- return {mode,loaded,revoked,refusal,notice,override,busy,root,owned,opening,changeMode,open};}\nGeneralArtifact`,{
-  ...hooks,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,overrides,inlineOwnership:createInlineOwnership(),inlineEditNotice,
+ return {mode,loaded,view,revoked,refusal,notice,override,busy,root,owned,opening,changeMode,open,follow,bodyError,setBodyAttempt};}\nGeneralArtifact`,{
+  ...hooks,useLayoutEffect:hooks.useEffect,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,overrides,inlineOwnership:createInlineOwnership(),inlineEditNotice,
   targetOf:view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]])),
   request,AbortController,URLSearchParams,crypto:{randomUUID:()=>`preview-command-${++serial}`},
   window:{amplifier:{getActions:()=>actions}},
@@ -195,11 +197,114 @@ test('actual clean unmount releases once and late body delivery never mounts or 
  const harness=component({dispatch:async(action,args)=>{calls.push({action,args});return {accepted:true,result:inlineView}},
   request:()=>new Promise(done=>{finish=done})});
  harness.render();harness.render();await settle();
+ harness.render();await settle();
  harness.dispose();await settle();const writes=harness.writes.length;
  finish({id:'saved-artifact',kind:'image'});await settle();
  assert.equal(harness.writes.length,writes);
  assert.equal(calls.filter(row=>row.action==='canvas.views.inline').length,1);
  assert.equal(calls.filter(row=>row.action==='canvas.views.release').length,1);
+});
+
+test('admitted exact view snapshot uses its own app state and explicit read-only numbered selection',()=>{
+ const body={id:'app',kind:'canvas-app',app:{state:{value:'saved'}},content:'saved definition'};
+ const view={...inlineView,resourceId:'app',publishedVersion:2,selectedVersion:2,latestVersion:2,app:{revision:2,stateRevision:0,state:{value:'numbered'}}};
+ let result=artifactViewCanvas(body,view);
+ assert.equal(result.app,view.app);assert.equal(result.readOnlyVersion,true,'Number equal to Latest is still read-only');
+ const live={...view,selectedVersion:null,followLatest:true,app:{revision:2,stateRevision:3,state:{value:'current'}}};
+ result=artifactViewCanvas(body,live);
+ assert.equal(result.app.state.value,'current');assert.equal(result.readOnlyVersion,false);
+ assert.equal(body.app.state.value,'saved','Original saved body is never mutated');
+ for(const kind of ['browser','a2ui','image','markdown'])assert.equal(followsLatest(kind),false);
+ for(const invalid of [null,{}, {id:'app',kind:'canvas-app'}, {id:'mcp',kind:'mcp-app'}, {id:'doc',kind:'markdown'}, {id:'ui',kind:'a2ui',surface:{root:'missing',components:[]}}]){
+  assert.throws(()=>requireArtifactBody(invalid),/source is unavailable/);
+ }
+});
+
+test('actual explicit Latest follows the same publication view, blocks dirty changes and returns to its exact published number',async()=>{
+ const saved=item('canvas-app','inline'),calls=[];
+ saved.row.presentationCapabilities={compact:true,inline:true,canvas:true};
+ let view={...inlineView,renderer:'builtin.canvas.canvas-app',publishedVersion:2,selectedVersion:2,latestVersion:3,followLatest:false,dirty:false};
+ const harness=component({saved,request:async()=>({id:'saved-artifact',kind:'canvas-app',app:{revision:2,stateRevision:0,state:{},versions:[],requests:[]}}),
+  dispatch:async(action,args,meta)=>{
+   calls.push({action,args,meta});
+   if(action==='canvas.views.inline')return {accepted:true,result:view};
+   if(action==='canvas.views.follow'){
+    const before=view;view={...view,followLatest:args.followLatest,selectedVersion:args.followLatest?null:2,generation:view.generation+1};
+    assert.equal(args.viewId,before.viewId);assert.equal(args.generation,before.generation);
+    return {accepted:true,result:view};
+   }
+   return {accepted:true};
+  }});
+ const render=patch=>harness.render({state:{...state,canvasWorkspace:{views:[view]}},...patch});
+ render();render();await settle();render();await settle();
+ await render().follow(true);await settle();render();await settle();
+ assert.equal(render().view.followLatest,true);
+ assert.equal(render().view.publishedVersion,2);
+ view={...view,dirty:true};
+ await render().follow(false);
+ assert.match(render().notice,/Finish or cancel/);
+ assert.equal(calls.filter(row=>row.action==='canvas.views.follow').length,1);
+ view={...view,dirty:false};
+ await render().follow(false);render();await settle();render();await settle();
+ assert.equal(render().view.selectedVersion,2);
+ assert.equal(calls.filter(row=>row.action==='canvas.views.inline').length,1,'No replacement admission sidesteps dirty protection');
+ assert.ok(calls.every(row=>!['canvas.present','canvas.select','smartTools.call','view.update'].includes(row.action)));
+ harness.dispose();await settle();
+ assert.equal(calls.filter(row=>row.action==='canvas.views.release').length,1);
+ assert.equal(calls.at(-1).args.generation,3,'Cleanup addresses only the last accepted generation');
+});
+
+test('actual live app consumes canonical view updates while primary and another client cannot retarget it',async()=>{
+ const saved=item('canvas-app','inline');saved.row.presentationCapabilities={inline:true,canvas:true,compact:true};
+ let view={...inlineView,resourceId:saved.row.id,followLatest:true,publishedVersion:2,selectedVersion:null,app:{revision:2,stateRevision:0,state:{value:'first'}}};
+ const harness=component({saved,dispatch:async()=>({accepted:true,result:view}),request:async()=>({id:saved.row.id,kind:'canvas-app',app:view.app})});
+ const render=()=>harness.render({state:{...state,canvas:{app:{state:{value:'WRONG PRIMARY'}}},canvasWorkspace:{views:[view]}}});
+ render();render();await settle();render();await settle();render();
+ view={...view,app:{...view.app,stateRevision:1,state:{value:'current'}}};
+ assert.equal(render().view.app.state.value,'current');
+ view={...view,generation:2,resourceRevision:'new-definition',app:{...view.app,revision:3}};
+ assert.equal(render().revoked,false,'Live same-publication canonical design update retains the component owner');
+ const foreign=harness.render({state:{...state,client:{hostInstanceId:'foreign'},canvasWorkspace:{views:[view]}}});
+ assert.equal(foreign.revoked,true);harness.dispose();
+});
+
+test('actual missing source stays an explicit failure; Retry re-reads the same admitted view',async()=>{
+ let reads=0;const calls=[];
+ const harness=component({dispatch:async(action,args)=>{calls.push({action,args});return {accepted:true,result:inlineView}},
+  request:async()=>++reads===1?{id:'saved-artifact',kind:'image'}:{id:'saved-artifact',kind:'image',content:'pixels'}});
+ harness.render();harness.render();await settle();harness.render();await settle();
+ let result=harness.render();assert.match(result.bodyError,/source is unavailable/);assert.equal(result.loaded.canvas,null);
+ result.setBodyAttempt(value=>value+1);harness.render();await settle();result=harness.render();
+ assert.equal(result.bodyError,'');assert.equal(result.loaded.canvas.content,'pixels');
+ assert.equal(calls.filter(row=>row.action==='canvas.views.inline').length,1);harness.dispose();
+});
+
+test('actual follow receipt can lag its new host generation; unknown delivery retries one unchanged envelope',async()=>{
+ const saved=item('canvas-app','inline');saved.row.presentationCapabilities={inline:true,canvas:true,compact:true};
+ const initial={...inlineView,followLatest:false,publishedVersion:2,selectedVersion:2};
+ const next={...initial,followLatest:true,selectedVersion:null,generation:2};
+ let view=initial,resolveFollow,unknown=true;const calls=[];
+ const harness=component({saved,request:async()=>({id:saved.row.id,kind:'canvas-app',app:{revision:2,stateRevision:0,state:{},versions:[],requests:[]}}),
+  dispatch:async(action,args,meta)=>{
+   calls.push({action,args,meta});
+   if(action==='canvas.views.inline')return {accepted:true,result:initial};
+   if(action==='canvas.views.follow'){
+    if(unknown){unknown=false;throw Object.assign(Error('Version change delivery unconfirmed'),{unconfirmed:true})}
+    return new Promise(resolve=>{resolveFollow=resolve});
+   }
+   return {accepted:true};
+  }});
+ const render=()=>harness.render({state:{...state,canvasWorkspace:{views:[view]}}});
+ render();render();await settle();render();await settle();
+ await render().follow(true);assert.match(render().notice,/unconfirmed/);
+ view=next;
+ assert.equal(render().revoked,false,'Unconfirmed version change is not access revocation');
+ const retry=render().follow(true);await settle();
+ assert.deepEqual(calls.filter(row=>row.action==='canvas.views.follow')[0],calls.filter(row=>row.action==='canvas.views.follow')[1]);
+ assert.equal(render().revoked,false,'State may precede its own accepted receipt');
+ resolveFollow({accepted:true,result:next});await retry;render();await settle();
+ const result=render();assert.equal(result.revoked,false);assert.equal(result.view.generation,2);assert.equal(result.view.followLatest,true);
+ harness.dispose();
 });
 
 test('actual owned preview does not retarget a revoked generation or reused target from another client',async()=>{

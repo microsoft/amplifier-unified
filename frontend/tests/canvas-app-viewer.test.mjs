@@ -15,10 +15,10 @@ const server=await createServer({server:{middlewareMode:true,hmr:false},appType:
 const {CanvasAppViewer}=await server.ssrLoadModule('/src/canvas-app-viewer.jsx');
 const {inlineOwnership}=await server.ssrLoadModule('/src/conversation-navigation.js');
 test.after(()=>server.close());
-async function fixture(dispatcher){
+async function fixture(dispatcher,initial={}){
  const callbacks=new Map(),out=[],calls=[],contentWindow={postMessage:data=>out.push(data)};
  globalThis.window={addEventListener:(name,fn)=>callbacks.set(name,fn),removeEventListener:name=>callbacks.delete(name)};
- let canvas={id:'fixture',sessionId:'session',title:'Test',viewId:'primary',resourceId:'fixture',resourceRevision:'r1',generation:0,app:{revision:1,stateRevision:0,state:{tab:'draw'},manifest:{},versions:[],requests:[]}},component;
+ let canvas={id:'fixture',sessionId:'session',title:'Test',viewId:'primary',resourceId:'fixture',resourceRevision:'r1',generation:0,app:{revision:1,stateRevision:0,state:{tab:'draw'},manifest:{},versions:[],requests:[]},...initial},component;
  const dispatch=async(name,args)=>{calls.push({name,args});const receipt=dispatcher&&await dispatcher(name,args);return receipt??{accepted:true,result:{app:{...canvas.app,stateRevision:canvas.app.stateRevision+1}}}};
  await act(async()=>{component=create(React.createElement(CanvasAppViewer,{canvas,dispatch}),{createNodeMock:node=>node.type==='iframe'?{contentWindow}:null})});
  const channel=out.at(-1).channel;
@@ -35,6 +35,54 @@ test('unrelated events never clear custom edits; only the acknowledged edit is c
   await f.send({op:'state',requestId:'old',args:{patch:{strokes:[]}},commit:1});assert.ok(f.dirty());
   await f.send({op:'state',requestId:'save',editVersion:2,args:{patch:{strokes:[]}},commit:2});assert.equal(f.dirty(),false);
  }finally{await f.close()}
+});
+
+test('native inline state, event and request carry the actual target and stable request identity',async()=>{
+ const target={viewId:'inline-app',resourceId:'fixture',resourceRevision:'saved-r1',generation:4};
+ const f=await fixture(undefined,target);
+ try{
+  for(const op of ['state','event','request']){
+   const requestId='exact-'+op,args=op==='state'?{patch:{tab:'clock'}}:op==='event'?{name:'choose',payload:{value:'clock'}}:{name:'preview',input:{}};
+   await f.send({op,requestId,args});
+   const call=f.calls.find(row=>row.name==='canvas.apps.'+op);
+   assert.deepEqual(Object.fromEntries(Object.keys(target).map(field=>[field,call.args[field]])),target);
+   assert.equal(call.args.id,'fixture');assert.equal(call.args.sessionId,'session');
+   assert.equal(call.args.expectedRevision,1);assert.equal(call.args.expectedStateRevision,0);
+   await f.send({op,requestId,args});
+   assert.equal(f.calls.filter(row=>row.name==='canvas.apps.'+op).length,1,'Duplicate iframe request never reruns host work');
+  }
+ }finally{await f.close()}
+});
+
+test('numbered native app remains read-only even at the latest revision; another live view can still edit',async()=>{
+ const historical=await fixture(undefined,{viewId:'inline-history',selectedVersion:1,readOnlyVersion:true});
+ try{
+  for(const op of ['state','event','request','dirty'])await historical.send({op,requestId:'blocked-'+op,args:{patch:{tab:'wrong'}}});
+  await historical.send({op:'editing'});
+  assert.equal(historical.calls.length,0);assert.equal(historical.dirty(),false);
+  assert.match(historical.out.at(-1).error,/read-only/);
+ }finally{await historical.close()}
+ const live=await fixture(undefined,{viewId:'inline-live',selectedVersion:null,readOnlyVersion:false});
+ try{await live.send({op:'state',requestId:'allowed',args:{patch:{tab:'clock'}}});assert.equal(live.calls[0].name,'canvas.apps.state');assert.equal(live.calls[0].args.viewId,'inline-live')}
+ finally{await live.close()}
+});
+
+test('dirty native app retains its iframe/channel when a canonical design advances; refused discard retains conflict',async()=>{
+ const f=await fixture(async(name,args)=>name==='canvas.views.dirty'&&!args.dirty?{accepted:false,error:'Retain unfinished input'}:undefined,{viewId:'inline-live'});
+ const nextTarget={viewId:'inline-live',resourceId:'fixture',resourceRevision:'r2',generation:2};
+ const unregister=inlineOwnership.register({},nextTarget,{sessionId:'session',messageId:'publication',version:1});
+ try{
+  await f.send({op:'editing',editVersion:1});
+  const oldFrame=f.component.root.findByType('iframe').props.src,oldChannel=f.out.at(-1).channel;
+  await f.update({app:{revision:2,stateRevision:4,state:{tab:'new'},manifest:{},versions:[],requests:[]},resourceRevision:'r2',generation:2});
+  assert.equal(f.component.root.findByType('iframe').props.src,oldFrame);
+  assert.equal(f.out.at(-1).channel,oldChannel);assert.equal(f.dirty(),true);
+  assert.equal(inlineOwnership.blocksTarget(nextTarget),true,'The new binding retains local leave protection, without redirecting old frame operations');
+  const discard=f.component.root.findAllByType('button').find(node=>String(node.props.children).includes('Discard unfinished'));
+  await act(async()=>discard.props.onClick());
+  assert.equal(f.dirty(),true);assert.equal(f.component.root.findByType('iframe').props.src,oldFrame);
+  assert.ok(JSON.stringify(f.component.toJSON()).includes('Retain unfinished input'));
+ }finally{unregister();await f.close()}
 });
 test('failed save keeps dirty input and rendering errors survive successful unrelated operations',async()=>{
  const f=await fixture(async name=>{if(name==='canvas.apps.state')throw Error('Conflict')});try{

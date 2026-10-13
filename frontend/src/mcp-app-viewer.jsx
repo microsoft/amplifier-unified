@@ -10,23 +10,26 @@ import {createMcpReadGate} from './mcp-app-reads';
 
 // The iframe can call tools only through its saved server binding. No host
 // credentials, app_control handle, or server selector crosses postMessage.
-async function command(action,args,signal){
- const accepted=await request('/api/actions',{method:'POST',body:{id:crypto.randomUUID(),action,args},signal});
+async function command(action,args,signal,id=crypto.randomUUID()){
+ const accepted=await request('/api/actions',{method:'POST',body:{id,action,args},signal});
  if(!accepted.operationId)return accepted;
  const deadline=Date.now()+310000;
  while(Date.now()<deadline){
   if(signal?.aborted)throw new Error('This view closed. Tool work has not been cancelled.');
-  const op=await request(`/api/smart-tools/operations/${encodeURIComponent(accepted.operationId)}`,{signal});
+  let op;
+  try{op=await request(operationUrl(accepted.operationId,args),{signal})}
+  catch(error){if(error.code==='transport_unavailable')error.unconfirmed=true;throw error}
   if(op.status==='completed')return op.result;
   if(op.status==='failed'&&op.result?.isError)return op.result;
   if(['failed','interrupted'].includes(op.status))throw new Error(op.error||'Tool work was interrupted; it was not replayed.');
   await new Promise(resolve=>setTimeout(resolve,350));
  }
- throw new Error('No completion received. Inspect Smart Tools activity before retrying.');
+ throw Object.assign(new Error('No completion received. Inspect Smart Tools activity before retrying.'),{unconfirmed:true});
 }
 
 const viewTarget=canvas=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].filter(key=>canvas[key]!=null).map(key=>[key,canvas[key]]));
 const viewUrl=(canvas,path,params={})=>{const query=new URLSearchParams({...viewTarget(canvas),...params}).toString();return `/api/canvas/${encodeURIComponent(canvas.id)}/${path}${query?'?'+query:''}`};
+const operationUrl=(id,canvas)=>{const query=new URLSearchParams(viewTarget(canvas)).toString();return `/api/smart-tools/operations/${encodeURIComponent(id)}${query?'?'+query:''}`};
 
 async function callTool(canvas,params,signal){
  const id=crypto.randomUUID(),deadline=Date.now()+310000;
@@ -36,7 +39,7 @@ async function callTool(canvas,params,signal){
  while(['pending','running','queued'].includes(op.status)){
   if(signal?.aborted||Date.now()>=deadline)throw new Error('No completion received. Inspect Smart Tools activity before retrying; input was not replayed.');
   await new Promise(resolve=>setTimeout(resolve,350));
-  op=await request(`/api/smart-tools/operations/${encodeURIComponent(id)}`,{signal});
+  op=await request(operationUrl(id,canvas),{signal});
  }
  if(op.status==='completed'||op.result?.isError)return op.result;
  throw new Error(op.error||'Tool work was interrupted; it was not replayed.');
@@ -56,14 +59,14 @@ function useHostTheme(scheme){
 }
 
 export function McpAppViewer({canvas,act,connectionKey}){
- const frame=useRef(null),current=useRef(canvas),bridgeRef=useRef(null),hostContext=useRef(null),themeRef=useRef(),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
+ const frame=useRef(null),bridgeRef=useRef(null),hostContext=useRef(null),themeRef=useRef(),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
  const connection=useRef(null),booted=useRef(false),[recovery,setRecovery]=useState(null),[recovering,setRecovering]=useState(false);
  const renderReport=useRef(null),resetCatalog=useRef(null),refreshConnection=useRef(null),lastConnection=useRef(null);
+ const lifetime=useRef(null),reconnectCommand=useRef(null);
  const rememberConnection=value=>{connection.current=value;setRecovery(value)};
  const theme=useHostTheme(useMcpAppTheme());
  const visible=useMcpAppVisibility(canvas.open!==false&&!canvas.visibilityPending),visibleRef=useRef(visible);
  visibleRef.current=visible;
- current.current=canvas;
  themeRef.current=theme;
  useEffect(()=>{
   const bridge=bridgeRef.current,previous=hostContext.current;
@@ -74,10 +77,12 @@ export function McpAppViewer({canvas,act,connectionKey}){
  },[theme,visible]);
  useEffect(()=>{
   const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='',availabilityRevision=0,latestAvailability;
+  const lease={controller};lifetime.current=lease;
+  const assertLive=()=>{if(!live||controller.signal.aborted)throw Error('This saved view generation closed. Inspect the current view before interacting.');};
   const reads=createMcpReadGate({isVisible:()=>visibleRef.current});
   let catalog;
   const clearCatalog=()=>{catalog=undefined};resetCatalog.current=clearCatalog;
-  const listTools=()=>canvas.readOnlyVersion?Promise.resolve({tools:[]}):catalog||(catalog=request(viewUrl(canvas,'tools'),{signal:controller.signal}).catch(error=>{catalog=null;throw error}));
+  const listTools=()=>{assertLive();return canvas.readOnlyVersion?Promise.resolve({tools:[]}):catalog||(catalog=request(viewUrl(canvas,'tools'),{signal:controller.signal}).catch(error=>{catalog=null;throw error}))};
   const report=(phase,text)=>{if(!live||lastReport===phase+text)return;lastReport=phase+text;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
   renderReport.current=report;
   const inspectConnection=()=>{
@@ -109,12 +114,13 @@ export function McpAppViewer({canvas,act,connectionKey}){
    bridge.oncalltool=async params=>{
     const callAvailabilityRevision=availabilityRevision;
     try{
-     if(current.current.readOnlyVersion)throw Error('This saved version is read-only. Select Latest for live features.');
+     assertLive();
+     if(canvas.readOnlyVersion)throw Error('This saved version is read-only. Select Latest for live features.');
      // Metadata is an optimization hint, not a new admission dependency. The
      // server still checks grants and schemas when an unknown call is sent.
      const tools=await listTools().catch(error=>{if(controller.signal.aborted)throw error;return {tools:[]}});
      const definition=tools.tools?.find(tool=>tool.name===params.name);
-     const run=()=>callTool(canvas,params,controller.signal);
+     const run=()=>{assertLive();return callTool(canvas,params,controller.signal)};
      const readOnly=definition?.annotations?.readOnlyHint===true&&definition?.annotations?.destructiveHint!==true;
      const result=await (readOnly?reads.run(params,run):run());
      // The tool owns its progress UI. Routine calls (including typing) must
@@ -125,20 +131,23 @@ export function McpAppViewer({canvas,act,connectionKey}){
     }catch(error){if(!error.backgroundReadPaused)report('error',error.message);throw error}
    };
    bridge.onlisttools=listTools;
-   const resource=(kind,params={})=>request(viewUrl(canvas,'resources',{kind,...params}),{signal:controller.signal});
+   const resource=(kind,params={})=>{assertLive();return request(viewUrl(canvas,'resources',{kind,...params}),{signal:controller.signal})};
    bridge.onreadresource=params=>resource('read',{uri:params.uri});
    bridge.onlistresources=params=>resource('list',params?.cursor?{cursor:params.cursor}:{});
    bridge.onlistresourcetemplates=params=>resource('templates',params?.cursor?{cursor:params.cursor}:{});
    bridge.onupdatemodelcontext=async context=>{
+    assertLive();
     if(canvas.readOnlyVersion)return {};
-    await command('smartTools.context',{canvasId:canvas.id,expectedRevision:canvas.revision||1,context},controller.signal);return {};
+    await command('smartTools.context',{...viewTarget(canvas),canvasId:canvas.id,expectedRevision:canvas.revision||1,context},controller.signal);return {};
    };
    bridge.oninitialized=async()=>{
+    if(!live)return;
     initialized=true;booted.current=true;
     try{
-     await bridge.sendToolInput({arguments:current.current.mcp?.toolArguments||{}});
-     const operationId=current.current.mcp?.operationId;
-     const result=current.current.mcp?.savedResult?(await request(viewUrl(canvas,'result'),{signal:controller.signal})).result:operationId?(await request(`/api/smart-tools/operations/${encodeURIComponent(operationId)}`,{signal:controller.signal})).result:current.current.mcp?.result;
+     await bridge.sendToolInput({arguments:canvas.mcp?.toolArguments||{}});
+     const operationId=canvas.mcp?.operationId;
+     const result=canvas.mcp?.savedResult?(await request(viewUrl(canvas,'result'),{signal:controller.signal})).result:operationId?(await request(operationUrl(operationId,canvas),{signal:controller.signal})).result:canvas.mcp?.result;
+     assertLive();
      if(result)await bridge.sendToolResult(result);
      const availability=connection.current;
      report(['ready','saved_version'].includes(availability?.status)?'ready':'error',availability?.message||'Tool view connected');
@@ -146,6 +155,7 @@ export function McpAppViewer({canvas,act,connectionKey}){
    };
    bridge.onerror=error=>report('error',error.message);
    await bridge.connect(new PostMessageTransport(frame.current.contentWindow,frame.current.contentWindow));
+   if(!live){await bridge.close();return}
    // Connect before navigation so even a fast inline App.initialize is heard.
    if(live){
     bridgeRef.current=bridge;
@@ -158,35 +168,45 @@ export function McpAppViewer({canvas,act,connectionKey}){
   booted.current=false;rememberConnection(null);
   report('loading','Checking saved tool view…');start().catch(error=>report('error',error.message));
   const timeout=setTimeout(()=>{if(live&&!initialized)report('error',connection.current?.source==='available'?'The saved tool document did not initialize. Reload it to retry. Its scripts must work within the self-contained MCP App sandbox.':connection.current?.message||'The saved tool document could not be checked. Retry when the host is available.')},15000);
-  return()=>{live=false;clearTimeout(timeout);reads.close();controller.abort();if(renderReport.current===report)renderReport.current=null;if(refreshConnection.current===inspectConnection)refreshConnection.current=null;if(resetCatalog.current===clearCatalog)resetCatalog.current=null;if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
- },[canvas.id,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
+  return()=>{live=false;clearTimeout(timeout);reads.close();controller.abort();if(lifetime.current===lease)lifetime.current=null;reconnectCommand.current=null;if(renderReport.current===report)renderReport.current=null;if(refreshConnection.current===inspectConnection)refreshConnection.current=null;if(resetCatalog.current===clearCatalog)resetCatalog.current=null;if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
+ },[canvas.id,canvas.viewId,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
  // A second client or a backgrounded phone can keep its iframe mounted while
  // the shared connection changes. Refresh status only; never reconnect/replay.
  useEffect(()=>{
-  const identity=JSON.stringify([canvas.id,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
+  const identity=JSON.stringify([canvas.id,canvas.viewId,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
   const previous=lastConnection.current;
   lastConnection.current={identity,connectionKey,visible};
   if(visible&&previous?.identity===identity&&(previous.connectionKey!==connectionKey||!previous.visible))refreshConnection.current?.().catch(()=>{});
- },[connectionKey,visible,canvas.id,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
+ },[connectionKey,visible,canvas.id,canvas.viewId,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
  const reconnect=async reviewedContract=>{
+  const lease=lifetime.current;
+  if(!lease||canvas.readOnlyVersion)return;
+  const stillLive=()=>lifetime.current===lease&&!lease.controller.signal.aborted;
   setRecovering(true);
   try{
-   const available=await request(viewUrl(canvas,'status'));rememberConnection(available);
+   const available=await request(viewUrl(canvas,'status'),{signal:lease.controller.signal});
+   if(!stillLive())return;rememberConnection(available);
    if(!available.canReconnect)throw new Error(available.message);
-   const result=await command('smartTools.reconnectView',{canvasId:canvas.id,expectedBindingRevision:available.bindingRevision,...(reviewedContract?{reviewedContract}:{})});
+   if(!reconnectCommand.current)reconnectCommand.current={id:crypto.randomUUID(),args:{...viewTarget(canvas),canvasId:canvas.id,expectedBindingRevision:available.bindingRevision,...(reviewedContract?{reviewedContract}:{})}};
+   const envelope=reconnectCommand.current;
+   const result=await command('smartTools.reconnectView',envelope.args,lease.controller.signal,envelope.id);
+   if(!stillLive())return;reconnectCommand.current=null;
    rememberConnection(result);
    if(result.status==='ready')resetCatalog.current?.();
    renderReport.current?.(result.status==='ready'&&booted.current?'ready':'error',result.status==='ready'&&!booted.current?'Tool reconnected. Reload the saved view to retry initialization.':result.message);
   }catch(error){
-   try{rememberConnection(await request(viewUrl(canvas,'status')))}catch{}
+   if(!stillLive())return;
+   if(!error.unconfirmed)reconnectCommand.current=null;
+   try{const value=await request(viewUrl(canvas,'status'),{signal:lease.controller.signal});if(stillLive())rememberConnection(value)}catch{}
+   if(!stillLive())return;
    renderReport.current?.('error',error.message);
   }
-  finally{setRecovering(false)}
+  finally{if(stillLive())setRecovering(false)}
  };
  return <div className="a-mcp-app-viewer" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
   <CanvasControl inline={status.phase==='error'}><div data-phase={status.phase} className={`a-mcp-status a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">
    {status.phase==='error'?<AlertCircle/>:status.phase==='ready'?<Check/>:<Loader className="a-progress-spinner"/>}<span>{status.text}</span>
-   <button type="button" className="a-icon" aria-label="Reconnect tool view" data-action="smartTools.reconnectView" disabled={recovering||recovery?.canReconnect===false} onClick={()=>reconnect()}><RefreshCw/></button>
+   <button type="button" className="a-icon" aria-label="Reconnect tool view" data-action="smartTools.reconnectView" disabled={canvas.readOnlyVersion||recovering||recovery?.canReconnect===false} onClick={()=>reconnect()}><RefreshCw/></button>
    {status.phase==='error'&&recovery?.source==='available'&&<button type="button" className="a-link" style={{whiteSpace:'nowrap'}} title="Reloading resets unfinished inputs in this tool view" data-action="canvas.view" onClick={()=>act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}>Reload saved view</button>}
   </div></CanvasControl>
   {recovery?.review&&<div className="a-canvas-result" role="region" aria-label="Review saved tool connection"><p>This older view did not save its action schemas. Reconnecting keeps its saved document and existing action names. Review the current definitions before enabling them; no previous calls will run.</p><details><summary>Existing tool actions ({recovery.review.tools.length})</summary><pre>{JSON.stringify(recovery.review.tools,null,2)}</pre></details><button type="button" disabled={recovering} data-action="smartTools.reconnectView" onClick={()=>reconnect(recovery.review.fingerprint)}>Use reviewed actions in this tab</button></div>}

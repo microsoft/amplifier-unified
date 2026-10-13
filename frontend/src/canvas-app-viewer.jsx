@@ -6,6 +6,7 @@ import {CanvasControl} from './canvas-controls';
 import {inlineOwnership} from './conversation-navigation';
 
 const targetOf=canvas=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,canvas[key]]));
+const sameDefinition=(a,b)=>a.app.revision===b.app.revision&&['viewId','resourceId','resourceRevision','generation'].every(field=>a[field]===b[field]);
 const tokens=['bg','surface','soft','ink','muted','line','accent','tint','green','danger'];
 function hostTheme(){
  const root=document.getElementById('amp-one'),style=getComputedStyle(root||document.documentElement);
@@ -24,7 +25,7 @@ export function CanvasAppViewer({canvas,dispatch}){
  const mount=value=>{editVersion.current=0;channel.current=crypto.randomUUID();seen.current.clear();setReview(null);setError('');setRenderError('');sent.current=null;reported.current=null;setMounted(value)};
  const send=(force=false)=>{
   const current=latest.current;
-  if(current.app.revision!==shown.current.app.revision)return;
+  if(!sameDefinition(current,shown.current))return;
   const snapshot={id:current.id,app:current.app,visible:!!current.open,theme:hostTheme()};
   const key=JSON.stringify([channel.current,current.app.revision,current.app.stateRevision,snapshot.visible,snapshot.theme]);
   if(!force&&key===sent.current)return;
@@ -46,8 +47,14 @@ export function CanvasAppViewer({canvas,dispatch}){
   }).catch(e=>{if(epoch===channel.current){dirtyRef.current=true;setDirty(true);setError(e.message)}throw e});
  };
  useEffect(()=>{
-  if(canvas.app.revision!==mounted.app.revision&&!dirtyRef.current&&!busy.current){mount(canvas)}
-  else send();
+  if(!sameDefinition(canvas,mounted)&&!dirtyRef.current&&!busy.current){mount(canvas)}
+  else{
+   // A remote definition can race an unacknowledged local declaration. Retain
+   // both the iframe conflict and the new target's local leave protection;
+   // this is not permission to redirect old-generation mutations.
+   if(!sameDefinition(canvas,mounted)&&dirtyRef.current)inlineOwnership.intent(targetOf(canvas),true);
+   send();
+  }
  },[canvas]);
  useEffect(()=>{
   const unregister=registerSurfaceCheckpoint(canvas.sessionId,identity=>new Promise(resolve=>{
@@ -87,8 +94,10 @@ export function CanvasAppViewer({canvas,dispatch}){
     if(data.op==='dirty'){await declare(!!data.args?.dirty,editing);result={app:latest.current.app}}
     else{
      const allowed=data.op==='state'?{patch:data.args?.patch}:data.op==='event'?{name:data.args?.name,payload:data.args?.payload}:{name:data.args?.name,input:data.args?.input};
-     result=(await dispatch('canvas.apps.'+data.op,{...allowed,id:shown.current.id,sessionId:shown.current.sessionId,
-      expectedRevision:shown.current.app.revision,expectedStateRevision:data.stateRevision}, {id:channel.current+':'+data.requestId})).result;
+     const receipt=await dispatch('canvas.apps.'+data.op,{...allowed,...targetOf(shown.current),id:shown.current.id,sessionId:shown.current.sessionId,
+      expectedRevision:shown.current.app.revision,expectedStateRevision:data.stateRevision}, {id:channel.current+':'+data.requestId});
+     if(receipt?.accepted===false)throw Error(receipt.error||'The surface change was not accepted.');
+     result=receipt.result;
      if(result.app.revision===latest.current.app.revision&&result.app.stateRevision>=latest.current.app.stateRevision)
       latest.current={...latest.current,app:result.app};
      if((data.op==='state'||data.op==='event')&&Number.isSafeInteger(data.commit)&&data.commit===editing&&editing===editVersion.current)await declare(false,editing);
@@ -96,7 +105,7 @@ export function CanvasAppViewer({canvas,dispatch}){
     if(epoch!==channel.current)return;
     const response={snapshot:{id:latest.current.id,app:result.app,theme:hostTheme()}};seen.current.set(data.requestId,response);reply(response);setError('');
    }catch(e){if(epoch!==channel.current)return;const response={error:e.message};seen.current.set(data.requestId,response);reply(response);setError(e.message)}
-   finally{busy.current--;if(epoch===channel.current&&!busy.current&&!dirtyRef.current&&latest.current.app.revision!==shown.current.app.revision)mount(latest.current)}
+   finally{busy.current--;if(epoch===channel.current&&!busy.current&&!dirtyRef.current&&!sameDefinition(latest.current,shown.current))mount(latest.current)}
   };
   window.addEventListener('message',receive);
   let scheduled;
@@ -120,8 +129,8 @@ export function CanvasAppViewer({canvas,dispatch}){
    </details>
   </div></CanvasControl>
   {(error||renderError)&&<div className="a-canvas-app-errors" role="alert">{renderError&&<p>{renderError}</p>}{error&&error!==renderError&&<p>{error}</p>}</div>}
-  {mounted.app.revision!==app.revision&&<p role="status">A new design is ready. Your unfinished input is still here. <button type="button" onClick={async()=>{try{await dispatch('canvas.views.dirty',{...targetOf(latest.current),dirty:false});dirtyRef.current=false;setDirty(false);mount(latest.current)}catch(e){setError(e.message)}}}>Discard unfinished input and load revision {app.revision}</button></p>}
-  {app.requests.filter(r=>r.status==='pending').map(r=><div className="a-canvas-app-request" key={r.id}><span>{r.action==='theme.preview'?'Preview on this device':r.action==='theme.apply'?'Apply to the shared shell':'Revert this device’s last theme change'}: {r.summary}</span><button type="button" onClick={()=>preview(r).catch(e=>setError(e.message))}>Review theme change</button><button type="button" onClick={()=>run('canvas.apps.resolve',{requestId:r.id,approve:false})}>Decline</button></div>)}
+  {!sameDefinition(mounted,canvas)&&<p role="status">A new design is ready. Your unfinished input is still here. <button type="button" onClick={async()=>{try{const tickets=inlineOwnership.intent(targetOf(latest.current),false);const receipt=await dispatch('canvas.views.dirty',{...targetOf(latest.current),dirty:false},{inlineDirtyTickets:tickets});if(receipt?.accepted!==true)throw Error(receipt?.error||'Discard was not confirmed.');inlineOwnership.settle(tickets,receipt);dirtyRef.current=false;setDirty(false);mount(latest.current)}catch(e){setError(e.message)}}}>Discard unfinished input and load revision {app.revision}</button></p>}
+  {!canvas.readOnlyVersion&&app.requests.filter(r=>r.status==='pending').map(r=><div className="a-canvas-app-request" key={r.id}><span>{r.action==='theme.preview'?'Preview on this device':r.action==='theme.apply'?'Apply to the shared shell':'Revert this device’s last theme change'}: {r.summary}</span><button type="button" onClick={()=>preview(r).catch(e=>setError(e.message))}>Review theme change</button><button type="button" onClick={()=>run('canvas.apps.resolve',{requestId:r.id,approve:false})}>Decline</button></div>)}
   {review&&app.requests.some(r=>r.id===review.request.id&&r.status==='pending')&&<section className="a-canvas-app-review" aria-label="Review requested theme change"><strong>{review.request.summary}</strong><p>{review.request.action==='theme.apply'?'Applying changes the shell for all connected clients.':'This action uses this device’s theme controls.'}</p><pre>{review.input.css||'End the preview, or undo the last applied theme if it is still current.'}</pre><button type="button" onClick={async()=>{if(await run('canvas.apps.resolve',{requestId:review.request.id,approve:true}))setReview(null)}}>Approve theme change</button><button type="button" onClick={()=>setReview(null)}>Back</button></section>}
   {canvas.readOnlyVersion&&<p role="status">Saved design, read only.{canvas.historicalStateUnavailable?' Inputs were not recorded for this older design.':' Inputs show the state saved when this version was created.'}</p>}
   <iframe key={mounted.app.revision} title={canvas.title} ref={frame} src={url} sandbox="allow-scripts allow-same-origin" onLoad={()=>send(true)}/>

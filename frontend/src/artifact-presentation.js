@@ -2,6 +2,8 @@
 const inlineKinds=new Set(['image','html','babylon','mermaid','dot']);
 const nativeKinds=new Set(['markdown','text','code','json','jsonl','image','html','babylon','mermaid','dot','pdf']);
 const mediaKinds=new Set(['gif','mp4']);
+const interactiveKinds=new Set(['canvas-app','mcp-app','browser','a2ui']);
+export const followsLatest=kind=>kind==='canvas-app'||kind==='mcp-app';
 const modes=new Set(['none','compact','inline']);
 
 export function publicationMode(item){
@@ -33,12 +35,32 @@ export function artifactPublications(rows,messageId){
 export function presentationCapabilities(item){
  const kind=item.row.kind,caps=item.row.presentationCapabilities;
  const legacy=nativeKinds.has(kind);
- // Advanced views need their qualified native lifecycle, not just a renderer
- // package or an active capability grant. That consumer is a separate unit.
- const mountable=legacy||mediaKinds.has(kind);
+ // Interactive mounts require the host's qualified native lifecycle. A kind,
+ // renderer package, or grant alone is never admission for a live app.
+ const mountable=legacy||mediaKinds.has(kind)||interactiveKinds.has(kind);
  const inline=mountable&&(caps?caps.inline===true:legacy);
  return {compact:caps?caps.compact===true:true,inline,canvas:caps?caps.canvas===true:true,
   reason:inline?'':caps?.reason||(mountable?'Inline preview is unavailable on this host.':'Inline lifecycle qualification is pending for this artifact. Open it in Canvas.')};
+}
+
+// This consumes only the admitted view, never the primary Canvas app/binding.
+// An explicit numbered selection is read-only even when it equals Latest.
+export function artifactViewCanvas(body,view){
+ return {...body,...(view.app?{app:view.app}:{}),
+  ...Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(field=>[field,view[field]])),
+  ...(followsLatest(body.kind)?{selectedVersion:view.selectedVersion,readOnlyVersion:view.selectedVersion!=null}:{}),
+  view:view.view,renderReports:view.renderReports,document:view.document,interaction:view.interaction,events:view.events};
+}
+
+export function requireArtifactBody(body){
+ if(!body||typeof body.kind!=='string'||!body.id||
+  (body.kind==='canvas-app'?!body.app:
+   body.kind==='mcp-app'?!body.mcp:
+   body.kind==='browser'?!body.url:
+   body.kind==='a2ui'?!body.surface?.components?.some(row=>row.id===body.surface.root):typeof body.content!=='string')){
+  throw Error('Saved artifact source is unavailable. Retry the preview or open it in Canvas.');
+ }
+ return body;
 }
 
 export function artifactOverrideKey(state,item,messageId){

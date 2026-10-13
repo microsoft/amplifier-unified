@@ -6,7 +6,8 @@ import {Renderer} from './canvas-workspace';
 import {ImageActions} from './image-actions';
 import {CanvasControlsHost} from './canvas-controls';
 import {imageGalleryEntries,imageGallerySelection,imageJobLabel} from './image-generation';
-import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess} from './artifact-presentation';
+import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest} from './artifact-presentation';
+import {mcpConnectionKey} from './mcp-app-lifecycle';
 import {createArtifactOverrides,inlineOwnership,inlineEditNotice} from './conversation-navigation';
 import './inline-artifacts.css';
 
@@ -160,28 +161,56 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  const desired=override??publicationMode(item);
  const [mode,setMode]=useState(desired),[near,setNear]=useState(false),[loaded,setLoaded]=useState(null);
  const [notice,setNotice]=useState(''),[refusal,setRefusal]=useState(''),[busy,setBusy]=useState(false),[attempt,setAttempt]=useState(0);
+ const [bodyError,setBodyError]=useState(''),[bodyAttempt,setBodyAttempt]=useState(0);
+ const followCommand=useRef(null),latest=useRef(state);latest.current=state;
  const root=useRef(null),owned=useRef(null),run=useRef(dispatch),changing=useRef(false),opening=useRef(null),mounted=useRef(false);
  run.current=dispatch;
- const authorized=loaded&&loaded.hostInstanceId===state.client?.hostInstanceId&&loaded.clientId===(state.client?.id??state.client?.clientId)&&
-  (state.canvasWorkspace?.views||[]).find(value=>value.viewId===loaded.view.viewId&&value.resourceId===loaded.view.resourceId&&value.resourceRevision===loaded.view.resourceRevision&&value.generation===loaded.view.generation);
- const view=authorized||loaded?.view;
- const revoked=!!loaded&&!authorized;
- if(owned.current&&view)owned.current.view=view;
+ const access=inlineViewAccess(loaded,state);
+ const sameClient=loaded&&loaded.hostInstanceId===state.client?.hostInstanceId&&loaded.clientId===(state.client?.id??state.client?.clientId);
+ // A live canonical design can advance within the SAME admitted publication.
+ // Static numbered views never adopt a different generation or primary body.
+ const advancing=loaded&&!loaded.revoked&&loaded.seen&&loaded.view.followLatest===true&&followsLatest(row.kind)&&
+  sameClient&&
+  (state.canvasWorkspace?.views||[]).find(value=>value.viewId===loaded.view.viewId&&value.resourceId===row.id&&value.followLatest===true&&value.publishedVersion===version);
+ const authorized=access.status==='live'?access.view:advancing;
+ const view=authorized||loaded?.view,revoked=!!loaded&&!authorized&&(!loaded.pendingFollow||!sameClient)&&access.status==='revoked';
+ if(loaded&&authorized){loaded.seen=true;loaded.view=view;loaded.lifecycle.view=view;if(owned.current===loaded)owned.current.view=view}
+ if(revoked)loaded.revoked=true;
  const release=async record=>{
-  if(!record||record.released)return;
-  if(inlineOwnership.blocksTarget(record.view))throw Error(inlineEditNotice);
-  if(!record.pending)record.pending=run.current('canvas.views.release',targetOf(record.view)).then(receipt=>{
+  const lifecycle=record?.lifecycle;
+  if(!lifecycle||lifecycle.released)return;
+  if(record.hostInstanceId!==latest.current.client?.hostInstanceId||record.clientId!==(latest.current.client?.id??latest.current.client?.clientId)){lifecycle.unregister?.();return}
+  if(inlineOwnership.blocksTarget(lifecycle.view))throw Error(inlineEditNotice);
+  if(!lifecycle.pending)lifecycle.pending=run.current('canvas.views.release',targetOf(lifecycle.view)).then(receipt=>{
    if(receipt?.accepted===false)throw Error(receipt.error||'The preview could not be closed.');
-   record.released=true;
-   record.unregister?.();
-  }).finally(()=>{record.pending=null});
-  await record.pending;
+   lifecycle.released=true;
+   lifecycle.unregister?.();
+  }).finally(()=>{lifecycle.pending=null});
+  await lifecycle.pending;
  };
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  useEffect(()=>{
   if(!revoked)return;
-  owned.current?.unregister?.();setNotice('The host removed access to this preview. Private input could not be retained.');
+  owned.current?.lifecycle.unregister?.();setNotice('The host removed access to this preview. Private input could not be retained.');
  },[revoked]);
+ const binding=view&&JSON.stringify(targetOf(view));
+ useLayoutEffect(()=>{
+  if(!loaded||!authorized||revoked)return;
+  loaded.lifecycle.unregister?.();
+  const unregister=inlineOwnership.register(state,view,{sessionId:row.sessionId,messageId,version});
+  loaded.lifecycle.unregister=unregister;
+  return unregister;
+ },[binding,!!authorized,revoked]);
+ useEffect(()=>{
+  if(!loaded||!authorized||revoked)return;
+  let active=true;const controller=new AbortController(),target=targetOf(view);
+  setBodyError('');
+  request(`/api/canvas/views/${view.viewId}/resource?`+new URLSearchParams(target),{signal:controller.signal}).then(requireArtifactBody).then(canvas=>{
+   if(active)setLoaded(old=>old===loaded?{...old,canvas,bodyBinding:binding}:old);
+  }).catch(error=>{if(active&&error.name!=='AbortError')setBodyError(error.message)});
+  return()=>{active=false;controller.abort()};
+ // Body refresh never replaces the admitted view or runs app/tool work.
+ },[binding,!!authorized,revoked,bodyAttempt]);
  useEffect(()=>{
   if(mode==='none'||!root.current)return;
   if(!globalThis.IntersectionObserver){setNear(true);return}
@@ -192,16 +221,15 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  },[mode==='none']);
  useEffect(()=>{
   if(!near||mode!=='inline'||!caps.inline||refusal)return;
-  let active=true,record;const controller=new AbortController();
+  let active=true,record;
   run.current('canvas.views.inline',{resourceId:row.id,version,messageId,previewId:crypto.randomUUID()}).then(async receipt=>{
    if(receipt?.accepted===false)throw Error(receipt.error||'Inline preview was not accepted.');
-   record={view:receipt.result,released:false};owned.current=record;
+   record={view:receipt.result,lifecycle:{view:receipt.result,released:false},canvas:null,seen:false,revoked:false,
+    hostInstanceId:receipt.hostInstanceId??receipt.state?.client?.hostInstanceId??state.client?.hostInstanceId,
+    clientId:receipt.state?.client?.id??receipt.state?.client?.clientId??state.client?.id??state.client?.clientId,
+    stateRevision:receipt.stateRevision??receipt.state?.revision};owned.current=record;
    if(!active){await release(record);return}
-   const canvas=await request(`/api/canvas/views/${record.view.viewId}/resource?`+new URLSearchParams(targetOf(record.view)),{signal:controller.signal});
-   if(active){
-    record.unregister=inlineOwnership.register(state,record.view,{sessionId:row.sessionId,messageId,version});
-    setLoaded({view:record.view,canvas,hostInstanceId:state.client?.hostInstanceId,clientId:state.client?.id??state.client?.clientId});
-   }
+   setLoaded(record);
   }).catch(error=>{
    if(active&&error.name!=='AbortError'){
     // Capacity/resource refusal leaves a useful compact handoff, not an empty
@@ -209,10 +237,32 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
     setRefusal(error.message);setNotice(error.message);
    }
   });
-  return()=>{active=false;controller.abort();record?.unregister?.();void release(record).catch(()=>{})};
+  return()=>{active=false;record?.lifecycle.unregister?.();void release(record).catch(()=>{})};
  // Capability refreshes do not tear down a live editor. A newly available
  // capability can be tried explicitly; publication/mode changes use release.
  },[near,mode,refusal,attempt,row.id,version,messageId]);
+ // Keep cleanup/release ownership attached to the newest body record.
+ if(loaded&&owned.current?.view.viewId===loaded.view.viewId)owned.current=loaded;
+ async function follow(followLatest){
+  if(changing.current||!loaded||!sameClient||(!authorized&&!followCommand.current)||revoked)return;
+  changing.current=true;setBusy(true);setNotice('');
+  try{
+   if(inlineOwnership.blocksTarget(view)||view.dirty)throw Error(inlineEditNotice);
+   if(!followCommand.current)followCommand.current={action:'canvas.views.follow',args:{...targetOf(view),followLatest},id:crypto.randomUUID()};
+   loaded.pendingFollow=true;
+   const command=followCommand.current,receipt=await run.current(command.action,command.args,{id:command.id});
+   if(receipt?.accepted!==true)throw Error(receipt?.error||'The preview version change was not confirmed.');
+   const next=receipt.result;
+   if(next?.viewId!==view.viewId||next.resourceId!==row.id||next.publishedVersion!==version||next.followLatest!==command.args.followLatest||
+    (next.followLatest?next.selectedVersion!==null:next.selectedVersion!==version))throw Error('The host did not return the exact publication view binding.');
+   followCommand.current=null;
+   loaded.lifecycle.unregister?.();loaded.lifecycle.view=next;
+   const record={...loaded,view:next,canvas:null,bodyBinding:null,seen:false,revoked:false,pendingFollow:false,stateRevision:receipt.stateRevision??receipt.state?.revision};
+   owned.current=record;
+   if(mounted.current){setLoaded(record);setBodyError('');setBodyAttempt(value=>value+1)}
+  }catch(error){if(!error.unconfirmed){followCommand.current=null;loaded.pendingFollow=false}if(mounted.current)setNotice(error.message)}
+  finally{changing.current=false;if(mounted.current)setBusy(false)}
+ }
  const changeMode=async(next,privateChoice=false)=>{
   if(changing.current)return;
   changing.current=true;setBusy(true);
@@ -258,16 +308,20 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  if(mode==='none')return null;
  const inline=mode==='inline'&&(caps.inline||!!loaded)&&!refusal;
  const Icon=row.kind==='image'?ImageIcon:['gif','mp4'].includes(row.kind)?Film:row.kind==='browser'?Globe:['code','html','json','jsonl'].includes(row.kind)?Code:FileText;
- const canvas=loaded&&!revoked&&{...loaded.canvas,...targetOf(view),view:view.view,renderReports:view.renderReports,document:view.document,interaction:view.interaction,events:view.events};
+ const canvas=loaded?.canvas&&authorized&&!revoked&&
+  (loaded.bodyBinding===binding||row.kind==='canvas-app'&&view.app)&&artifactViewCanvas(loaded.canvas,view);
  return <section ref={root} className="a-general-artifact a-inline-artifact" data-artifact-id={row.id} data-artifact-version={version} data-chat-mode={inline?'inline':'compact'} aria-label={titleOf(item)}>
   <div className="a-general-artifact-heading">
    <Icon aria-hidden="true"/><span className="a-general-artifact-title"><strong>{titleOf(item)}</strong><small>{row.kind} · Version {version}</small></span>
    <button type="button" className="a-soft" aria-label={`Open ${titleOf(item)} in Canvas`} data-action={canvasOpenCommand(item,messageId,globalThis.window?.amplifier?.getActions?.()||[]).action} disabled={busy||!caps.canvas} aria-busy={busy||undefined} onClick={open}><Maximize2 aria-hidden="true"/><span>Open in Canvas</span></button>
    {inline?<button type="button" className="a-soft" aria-label={`Collapse ${titleOf(item)}`} disabled={busy} aria-expanded={true} onClick={()=>changeMode('compact',true)}><ChevronUp aria-hidden="true"/>Collapse</button>:caps.inline&&<button type="button" className="a-soft" aria-label={`Expand ${titleOf(item)} in chat`} disabled={busy} aria-expanded={false} onClick={()=>changeMode('inline',true)}><ChevronDown aria-hidden="true"/>{refusal?'Retry preview':'Expand'}</button>}
+   {inline&&(authorized||followCommand.current)&&followsLatest(row.kind)&&<button type="button" className="a-soft" disabled={busy} onClick={()=>follow(!view.followLatest)}>{followCommand.current?'Retry version change':view.followLatest?'Return to published version':'Go to Latest'}</button>}
   </div>
   {(notice||!caps.inline&&caps.reason||!caps.canvas)&&<p className="a-inline-artifact-notice" role="status">{notice||(!caps.canvas?'Canvas is unavailable for this artifact.':caps.reason)}</p>}
   {inline&&<div className="a-general-artifact-body" data-kind={row.kind}>
-   {revoked?<p role="status">Preview access was removed by the host.</p>:canvas?<CanvasControlsHost.Provider value={undefined}><Renderer key={view.viewId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch}/></CanvasControlsHost.Provider>:<div className="a-inline-artifact-placeholder" role="status">{near?'Loading preview…':'Saved artifact'}</div>}
+   {authorized&&followsLatest(row.kind)&&<p role="status">{view.followLatest?`Latest · Version ${view.latestVersion}`:`Published version ${version} · Read only`}</p>}
+   {revoked?<p role="status">Preview access was removed by the host.</p>:bodyError?<div role="alert" className="a-inline-artifact-notice"><p>{bodyError}</p><button type="button" onClick={()=>setBodyAttempt(value=>value+1)}>Retry source</button></div>:null}
+   {!revoked&&canvas?<CanvasControlsHost.Provider value={undefined}><Renderer key={row.kind==='canvas-app'?view.viewId+':'+(view.selectedVersion??'latest'):view.viewId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} connectionKey={mcpConnectionKey(canvas,state.smartTools)}/></CanvasControlsHost.Provider>:!revoked&&!bodyError&&<div className="a-inline-artifact-placeholder" role="status">{near?'Loading preview…':'Saved artifact'}</div>}
   </div>}
  </section>;
 }
