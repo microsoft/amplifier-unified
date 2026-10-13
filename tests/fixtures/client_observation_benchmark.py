@@ -12,7 +12,8 @@ from amplifier_web.state_projections import StateProjections
 rows = [{'id': str(i), 'title': 'Synthetic chat', 'status': 'idle',
          'completion': {'id': str(i), 'at': i}, 'approvals': [{'id': str(i)}]} for i in range(10000)]
 service = SimpleNamespace(_state={'sessions': rows, 'pinnedSessionIds': [r['id'] for r in rows]},
-                          instance_id='synthetic-benchmark', projections=StateProjections())
+                          instance_id='synthetic-benchmark', projections=StateProjections(),
+                          clients=SimpleNamespace(current=SimpleNamespace(get=lambda: None)))
 observations = Observations(service)
 tracemalloc.start()
 started = time.perf_counter()

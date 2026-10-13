@@ -444,10 +444,13 @@ try{
     corrupted++;
     return route.fulfill({response,json:{ok:true}});
    };
+   // Drain the previous document before arming a response waiter. Otherwise
+   // an in-flight old-document response can match and lose its body on reload.
+   await page.goto('about:blank');
    await page.route(pattern,handler);
    try{
     const malformed=page.waitForResponse(response=>exact(response.request()));
-    await page.reload();await page.waitForSelector('#amp-one');
+    await page.goto(boot.url);await page.waitForSelector('#amp-one');
     const failed=await malformed;
     assert.equal(failed.status(),200);assert.equal(await failed.finished(),null);
     assert.deepEqual(await failed.json(),{ok:true});assert.equal(corrupted,1);
@@ -512,10 +515,11 @@ try{
         await route.fulfill({response,json:{...value,items:value.items.map(item=>
          item.id===saved.id?{...item,title}:item)}});
        };
+       await titlePage.goto('about:blank');
        await titlePage.route(pattern,titleHandler);
        try{
         const pending=titlePage.waitForResponse(response=>exact(response.request()));
-        await titlePage.reload();await titlePage.waitForSelector('#amp-one');
+        await titlePage.goto(boot.url);await titlePage.waitForSelector('#amp-one');
         const response=await pending;
         assert.equal(response.status(),200);assert.equal(await response.finished(),null);
         assert.equal((await response.json()).items.find(item=>item.id===saved.id).title,title);

@@ -7,7 +7,29 @@ continuation even while the live catalog changes. Browser links were refreshed
 against main and production assets rebuilt from the merged frontend source.
 See [the public contract](../clients/observations.md).
 
-## Owned environment and checks
+## Third review: completed traversal lifecycle
+
+The review of `285258f15` reproduced 503 after eight fully completed changing
+catalog traversals. Per-traversal leases now finish on the terminal response;
+obsolete snapshots with no unfinished readers are reclaimed. Concurrent readers
+retain independent leases, and per-collection quotas prevent a busy catalog from
+starving counts or notices. Terminal retries retain only one bounded response for
+30 seconds (up to 64 per collection), never a whole catalog.
+
+Regressions cover 40 completed HTTP catalog traversals, 24 changing-generation
+10,000-session count scans, concurrently unfinished readers across 25 completed
+generations, terminal retries/expiry/eviction, first-page retry reuse and separate
+collection capacity. Existing draft/transcript, sustained-change and fingerprint
+coverage remains in place. The source is refreshed onto main `297bd0c82`; #583
+has merged and this PR now targets main directly.
+
+The hosted `metadata-malformed-retry` failure was a response-lifecycle race:
+a waiter could catch an old document's request just before reloading away from
+its body. The test now navigates to a blank document before installing the
+interceptor/waiter and navigating back to the real application. Authentication,
+malformed-response/retry assertions and the full media gate remain unchanged.
+
+## Earlier owned environment and checks
 
 Validation on main `af1d453c8` (Unified 0.20.123), restacked on browser-link
 commit `188035616`: 308 host tests passed in the focused combined suite; the final
@@ -54,8 +76,8 @@ Ownership, revisions, evidence and exact cleanup are in the workspace manifest.
   than the prior live-state scanner (~22.8 MB versus ~0.81 MB in these runs).
   Cold construction and broad reconciliation remain O(catalog + notice slots),
   outside the bounded page/count loops. Warm continuation avoids reconstruction;
-  transcript-only saves do not scan the catalog. Eight fixed ten-minute snapshot
-  leases bound retained generations and protect progress under genuine changes.
+  transcript-only saves do not scan the catalog. Per-collection limits bound unfinished traversal leases and snapshot generations;
+  completed traversals now release their leases immediately.
 
 ## Reproduce inside an owned DTU
 

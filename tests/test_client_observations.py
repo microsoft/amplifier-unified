@@ -1,7 +1,7 @@
 from copy import deepcopy
 import pytest
 from amplifier_web.server import create_app
-from amplifier_web.client_observations import Observations, SCAN_BUDGET
+from amplifier_web.client_observations import Observations, SCAN_BUDGET, MAX_TRAVERSALS
 from amplifier_web.service import AppService, AppError
 from test_service import Runtime
 
@@ -194,11 +194,16 @@ async def test_pages_have_bounded_construction_and_no_query_cache_growth(tmp_pat
         monkeypatch.setattr(module, 'session_item_at', observed)
         observations.refresh()  # One cold public-facts index, shared across queries.
         calls = 0
-        for limit in range(1, 201):
+        for limit in range(1, MAX_TRAVERSALS + 1):
             page = observations.page('attention', {'limit': str(limit)})
             assert len(page['items']) == limit
         assert calls == 0
         assert len(observations.snapshots) == 1
+        assert len(observations.leases) == MAX_TRAVERSALS
+        with pytest.raises(AppError):
+            observations.page('attention', {'limit': str(MAX_TRAVERSALS + 1)})
+        # These intentionally abandoned queries expire before the next scenario.
+        observations.leases.clear()
         assert observations.counts_cache is None
         calls = 0
         # Resuming a dense single-session collection must seek, not rebuild its prefix.
@@ -457,3 +462,127 @@ async def test_large_count_finishes_original_totals_during_sustained_changes(obs
     while current['nextCursor']:
         current = observations.activity(cursor=current['nextCursor'])
     assert current['revision'] != original_revision and current['executionCount'] > 0
+
+
+async def test_completed_http_traversals_and_large_counts_do_not_exhaust_slots(observation_host):
+    import amplifier_web.client_observations as module
+    app, client = observation_host
+    service, observations = app['service'], app['observations']
+    catalog(service, 230)
+    for generation in range(40):
+        service._state['sessions'][0]['status'] = 'working' if generation % 2 else 'idle'
+        service.projections.invalidate(state=service._state, session_ids={'s0'})
+        rows = await traverse(client, '/api/sessions', {'view': 'observation', 'limit': '200'})
+        assert len(rows) == 230
+        assert not observations.leases
+        assert len(observations.snapshots) <= 1
+    catalog(service, 10000)
+    for generation in range(24):
+        service._state['sessions'][0]['status'] = 'working' if generation % 2 else 'idle'
+        service.projections.invalidate(state=service._state, session_ids={'s0'})
+        params = {}
+        for _ in range(20):
+            response = await client.get('/api/activity', params=params)
+            assert response.status in (200, 202), await response.text()
+            value = await response.json()
+            if value['nextCursor'] is None:
+                break
+            params = {'cursor': value['nextCursor']}
+        else:
+            pytest.fail('Large count did not finish')
+        assert value['executionCount'] == generation % 2
+        assert value['attentionCount'] == 20000
+        assert params.get('cursor')
+        retry = await client.get('/api/activity', params=params)
+        assert retry.status == 200 and await retry.json() == value
+        assert not observations.leases
+        assert len(observations.snapshots) <= 2
+        assert len(observations.completed) <= 2 * module.MAX_COMPLETED
+
+
+async def test_concurrent_readers_survive_completion_and_terminal_retry_reclaims_catalog(observation_host, monkeypatch):
+    import amplifier_web.client_observations as module
+    app, client = observation_host
+    service, observations = app['service'], app['observations']
+    catalog(service, 230)
+    now = 1000
+    monkeypatch.setattr(module.time, 'monotonic', lambda: now)
+    params = {'limit': '200'}
+    for identity in ('reader-a', 'reader-b'):
+        response = await client.post('/api/clients/attach', json={
+            'clientId': identity, 'kind': 'api', 'protocolVersion': 1, 'includeState': False})
+        assert response.status == 200
+    with service.clients.bind('reader-a'):
+        first_a = observations.page('sessions', params)
+        assert observations.page('sessions', params) == first_a  # First-page retry/ETag is stable.
+    with service.clients.bind('reader-b'):
+        first_b = observations.page('sessions', params)
+    assert first_a['nextCursor'] != first_b['nextCursor']
+    terminal_a = observations.page('sessions', {**params, 'cursor': first_a['nextCursor']})
+    assert not terminal_a['nextCursor'] and len(observations.leases) == 1
+    assert observations.page('sessions', {**params, 'cursor': first_a['nextCursor']}) == terminal_a
+    original_revision = first_a['revision']
+    # Keep B unfinished through substantially more generations than snapshot slots.
+    for generation in range(25):
+        service._state['sessions'][0]['title'] = f'Generation {generation}'
+        service.projections.invalidate(state=service._state, session_ids={'s0'})
+        first = observations.page('sessions', params)
+        observations.page('sessions', {**params, 'cursor': first['nextCursor']})
+        assert len(observations.leases) == 1 and len(observations.snapshots) <= 2
+    terminal_b = observations.page('sessions', {**params, 'cursor': first_b['nextCursor']})
+    assert terminal_b['revision'] == original_revision
+    assert [row['id'] for row in terminal_b['items']] == [f's{i}' for i in range(200, 230)]
+    assert original_revision not in observations.snapshots  # No reader pins the old catalog now.
+    assert observations.page('sessions', {**params, 'cursor': first_a['nextCursor']}) == terminal_a
+    now += module.RETRY_SECONDS
+    with pytest.raises(AppError) as error:
+        observations.page('sessions', {**params, 'cursor': first_a['nextCursor']})
+    assert error.value.code == 'snapshot_changed'
+    assert not observations.completed
+
+
+async def test_collection_capacity_isolated_and_only_terminal_cursor_can_retry(observation_host, monkeypatch):
+    import amplifier_web.client_observations as module
+    app, client = observation_host
+    service, observations = app['service'], app['observations']
+    catalog(service, 230)
+    params = {'limit': '100'}
+    first = observations.page('sessions', params)
+    second = observations.page('sessions', {**params, 'cursor': first['nextCursor']})
+    last = observations.page('sessions', {**params, 'cursor': second['nextCursor']})
+    assert observations.page('sessions', {**params, 'cursor': second['nextCursor']}) == last
+    with pytest.raises(AppError) as error:
+        observations.page('sessions', {**params, 'cursor': first['nextCursor']})
+    assert error.value.code == 'snapshot_changed'
+    for generation in range(module.MAX_SNAPSHOTS):
+        service._state['sessions'][0]['title'] = str(generation)
+        service.projections.invalidate()
+        observations.page('sessions', {'limit': '1'})
+    service._state['sessions'][0]['title'] = 'Capacity'
+    service.projections.invalidate()
+    with pytest.raises(AppError):
+        observations.page('sessions', {'limit': '1'})
+    # Exhausting sessions cannot deny either other collection its first read.
+    assert observations.page('attention', {'limit': '200'})['items']
+    assert observations.activity()['attentionCount'] == 460
+    assert len(observations.snapshots) <= 3 * module.MAX_SNAPSHOTS
+
+
+async def test_terminal_retry_cache_is_bounded_without_retaining_old_snapshots(observation_host):
+    import amplifier_web.client_observations as module
+    app, _ = observation_host
+    service, observations = app['service'], app['observations']
+    catalog(service, 3)
+    oldest = None
+    for generation in range(module.MAX_COMPLETED + 5):
+        service._state['sessions'][0]['title'] = str(generation)
+        service.projections.invalidate(state=service._state, session_ids={'s0'})
+        first = observations.page('sessions', {'limit': '2'})
+        oldest = oldest or first['nextCursor']
+        terminal = observations.page('sessions', {'limit': '2', 'cursor': first['nextCursor']})
+        assert terminal['nextCursor'] is None
+        assert not observations.leases and len(observations.snapshots) == 1
+        assert len(observations.completed) <= module.MAX_COMPLETED
+    with pytest.raises(AppError) as error:
+        observations.page('sessions', {'limit': '2', 'cursor': oldest})
+    assert error.value.code == 'snapshot_changed'

@@ -24,7 +24,10 @@ SCAN_BUDGET = 1024
 MAX_PAGE = 200
 COUNT_BUDGET = 4096
 SNAPSHOT_SECONDS = 600
-MAX_SNAPSHOTS = 8
+MAX_SNAPSHOTS = 8  # Per collection: one busy resource cannot starve another.
+MAX_TRAVERSALS = 64  # Per collection, shared snapshots within a generation.
+RETRY_SECONDS = 30
+MAX_COMPLETED = 64  # Terminal-response retries, not retained catalogs.
 CAPABILITIES = {
     'observations': {'version': 1, 'sessions': '/api/sessions?view=observation',
                      'attention': '/api/attention', 'activity': '/api/activity',
@@ -71,6 +74,8 @@ class Observations:
         self.pending = True
         self.generations = dict(sessions=0, attention=0, activity=0)
         self.snapshots = OrderedDict()
+        self.leases = {}
+        self.completed = OrderedDict()
         # No catalog work on hosts that never read an observation resource.
         service.projections.observation_listener = self.invalidate
 
@@ -177,20 +182,48 @@ class Observations:
         self.refresh()
         return self.saved_pins
 
-    def cursor(self, query, position, revision):
-        self.snapshots[revision]['leased'] = True
-        raw = json.dumps([revision, query, position], separators=(',', ':'), sort_keys=True).encode()
+    def reclaim(self):
+        now = time.monotonic()
+        self.leases = {key: value for key, value in self.leases.items() if now < value['expires']}
+        for key, value in list(self.completed.items()):
+            if now >= value['expires']:
+                del self.completed[key]
+        live = {lease['revision'] for lease in self.leases.values()}
+        for key, value in list(self.snapshots.items()):
+            if key not in live and key != self.revision_for(value['collection']):
+                del self.snapshots[key]
+
+    def cursor(self, query, position, revision, lease_id):
+        if lease_id is None:
+            collection = query['collection']
+            if sum(value['collection'] == collection for value in self.leases.values()) >= MAX_TRAVERSALS:
+                raise AppError('Too many unfinished observation traversals.', 503, code='observation_busy')
+            lease_id = secrets.token_urlsafe(16)
+            self.leases[lease_id] = {'revision': revision, 'query': query, 'collection': collection,
+                'owner': self.service.clients.current.get(), 'expires': time.monotonic() + SNAPSHOT_SECONDS}
+        raw = json.dumps([revision, query, position, lease_id], separators=(',', ':'), sort_keys=True).encode()
         signature = hmac.digest(self.secret, raw, 'sha256')
         return base64.urlsafe_b64encode(signature + raw).decode().rstrip('=')
 
+    def finish(self, query, token, lease_id, value):
+        if lease_id is not None:
+            self.leases.pop(lease_id, None)
+            if token:
+                # Only a terminal page/count result survives completion. Its
+                # small retry grace must never reserve an entire catalog slot.
+                self.completed[token] = {'query': query, 'value': value,
+                    'expires': time.monotonic() + RETRY_SECONDS, 'collection': query['collection']}
+                keys = [key for key, row in self.completed.items() if row['collection'] == query['collection']]
+                for key in keys[:-MAX_COMPLETED]:
+                    del self.completed[key]
+            self.reclaim()
+        return value
+
     def snapshot(self, token, query):
         self.refresh()
-        now = time.monotonic()
-        for key, value in list(self.snapshots.items()):
-            if now >= value['expires']:
-                del self.snapshots[key]
+        self.reclaim()
         revision = self.revision_for(query['collection'])
-        position = [0, 0]
+        position, lease_id = [0, 0], None
         if token:
             try:
                 if len(token) > 4096:
@@ -199,27 +232,33 @@ class Observations:
                 signature, raw = decoded[:32], decoded[32:]
                 if not hmac.compare_digest(signature, hmac.digest(self.secret, raw, 'sha256')):
                     raise ValueError()
-                revision, saved_query, position = json.loads(raw)
-                if (query != saved_query or not isinstance(revision, str) or len(position) != 2
-                        or any(type(i) is not int or i < 0 for i in position)):
+                revision, saved_query, position, lease_id = json.loads(raw)
+                if (query != saved_query or not isinstance(revision, str) or not isinstance(lease_id, str)
+                        or len(position) != 2 or any(type(i) is not int or i < 0 for i in position)):
                     raise ValueError()
             except (ValueError, TypeError, KeyError):
                 raise AppError('Invalid cursor or cursor query mismatch.', code='invalid_cursor') from None
-            if revision not in self.snapshots:
-                raise AppError('The observation snapshot expired; restart from the first page.',
+            completed = self.completed.get(token)
+            if completed is not None:
+                return None, position, lease_id, completed['value']
+            if lease_id not in self.leases or revision not in self.snapshots:
+                raise AppError('The traversal finished or expired; restart from the first page.',
                                409, code='snapshot_changed')
+        else:
+            # Revalidation/retry of the first page must not manufacture abandoned
+            # readers or change its ETag. Distinct clients and queries have their
+            # own leases even when sharing the same immutable snapshot.
+            owner = self.service.clients.current.get()
+            lease_id = next((key for key, value in self.leases.items()
+                if value['owner'] == owner and value['revision'] == revision and value['query'] == query), None)
         if revision not in self.snapshots:
-            # Completed, cursor-free responses need no historical lease.
-            for key, value in list(self.snapshots.items()):
-                if not value['leased'] and key != self.revision_for(key.split(':')[-2]):
-                    del self.snapshots[key]
-            if len(self.snapshots) >= MAX_SNAPSHOTS:
-                # Never evict an in-flight reader to admit a new revision.
-                raise AppError('Observation snapshots are busy; retry after a lease expires.',
+            collection = query['collection']
+            if sum(row['collection'] == collection for row in self.snapshots.values()) >= MAX_SNAPSHOTS:
+                raise AppError('Observation snapshots are busy; finish a traversal or retry after expiry.',
                                503, code='observation_busy')
-            self.snapshots[revision] = {'revision': revision, 'expires': now + SNAPSHOT_SECONDS,
-                                       'rows': tuple(self.facts[sid] for sid in self.order), 'counts': None, 'leased': False}
-        return self.snapshots[revision], position
+            self.snapshots[revision] = {'revision': revision, 'collection': collection,
+                                       'rows': tuple(self.facts[sid] for sid in self.order), 'counts': None}
+        return self.snapshots[revision], position, lease_id, None
 
     def query(self, params, collection):
         allowed = {'cursor', 'limit', 'scope', 'clientId'}
@@ -253,7 +292,10 @@ class Observations:
 
     def page(self, collection, params):
         query = self.query(params, collection)
-        snapshot, (position, slot) = self.snapshot(params.get('cursor'), query)
+        token = params.get('cursor')
+        snapshot, (position, slot), lease_id, replay = self.snapshot(token, query)
+        if replay is not None:
+            return replay
         rows = snapshot['rows']
         items, inspected = [], 0
         while position < len(rows) and inspected < SCAN_BUDGET and len(items) < query['limit']:
@@ -282,8 +324,9 @@ class Observations:
                 slot += 1
                 if slot >= len(notices):
                     position, slot = position + 1, 0
-        return {'revision': snapshot['revision'], 'items': items,
-                'nextCursor': self.cursor(query, [position, slot], snapshot['revision']) if position < len(rows) else None}
+        value = {'revision': snapshot['revision'], 'items': items,
+                 'nextCursor': self.cursor(query, [position, slot], snapshot['revision'], lease_id) if position < len(rows) else None}
+        return value if value['nextCursor'] else self.finish(query, token, lease_id, value)
 
     @staticmethod
     def in_scope(session, scope):
@@ -294,7 +337,9 @@ class Observations:
         if scope not in {'roots', 'delegates', 'all'}:
             raise AppError('Unsupported activity scope.')
         query = {'collection': 'activity', 'scope': scope}
-        snapshot, _ = self.snapshot(cursor, query)
+        snapshot, _, lease_id, replay = self.snapshot(cursor, query)
+        if replay is not None:
+            return replay
         if snapshot['counts'] is None:
             snapshot['counts'] = {'position': 0, 'slot': -1,
                 'counts': {role: dict(executionCount=0, preparingCount=0, loadingCount=0,
@@ -326,10 +371,11 @@ class Observations:
                 cache['slot'] = -1
         if cache['position'] < len(rows):
             return {'revision': snapshot['revision'], 'status': 'collecting',
-                    'nextCursor': self.cursor(query, [cache['position'], cache['slot'] + 1], snapshot['revision'])}
+                    'nextCursor': self.cursor(query, [cache['position'], cache['slot'] + 1], snapshot['revision'], lease_id)}
         counts = cache['counts']
         value = counts[scope] if scope != 'all' else {k: counts['roots'][k] + counts['delegates'][k] for k in counts['roots']}
-        return {'revision': snapshot['revision'], 'status': 'ready', 'nextCursor': None, **value}
+        return self.finish(query, cursor, lease_id,
+                           {'revision': snapshot['revision'], 'status': 'ready', 'nextCursor': None, **value})
 
     def response(self, request, value, status=200):
         etag = '"' + hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest() + '"'

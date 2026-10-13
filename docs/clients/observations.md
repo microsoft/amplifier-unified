@@ -49,13 +49,27 @@ activity. A new first-page request sees current facts.
 
 A continuation reads its original snapshot even during sustained real changes.
 Its revision describes that snapshot, not a guarantee that the host is unchanged.
-Snapshots that issue cursors have a fixed ten-minute lease from construction;
-reads do not extend it. Expired continuation returns `409 snapshot_changed`:
-discard accumulated pages and restart. At most eight snapshots are retained
-across collections, shared by all clients/queries. Completed cursor-free snapshots
-can be replaced; leased snapshots are never evicted to admit a newer revision.
-When every slot is occupied, a new snapshot returns `503 observation_busy`;
-existing readers can still finish. Back off and retry only the observation.
+Each unfinished traversal has a fixed ten-minute lease; reads do not extend it.
+Leases are distinct per client, normalized query and generation. Retrying the
+first page of that same unfinished traversal reuses its cursor and ETag. A new
+first page after completion begins a new traversal; separate clients/queries
+can finish independently while sharing the same immutable snapshot.
+
+A terminal response (`nextCursor:null`) releases that traversal immediately.
+An obsolete snapshot is evicted once it has no unfinished readers. Retrying the
+exact cursor that produced a terminal response replays that response for up to
+30 seconds, subject to a 64-response cache per collection; only the terminal
+page/count result is retained, not its catalog. Earlier cursors of a completed
+traversal, evicted terminal retries, and expired continuations return `409
+snapshot_changed`: discard accumulated pages and restart. Retry caches and
+leases are reclaimed on the next observation request.
+
+Each collection has its own limits of eight snapshot generations and 64 unfinished
+traversals. Admission returns `503 observation_busy` only when those live-reader
+limits are reached; existing readers can still finish. A busy session catalog
+cannot exhaust attention or activity admission. Completed generations do not
+occupy history slots for the remaining ten-minute period. Back off and retry only
+the observation on 503; finish existing continuations instead of abandoning them.
 Malformed, tampered, cross-query, or old-instance cursors return `400
 invalid_cursor`; restart discovery and the collection. Unsupported/repeated
 parameters and invalid limits are rejected, not silently ignored.
@@ -125,7 +139,9 @@ transcript-only publication path does no reconciliation. Unchanged row facts are
 reused by identity. Pin/read-receipt changes currently require broad reconciliation.
 The current pin lookup/read receipts are shared, not copied per query. A snapshot
 retains one tuple of row references; revisions share unchanged row bodies. At
-most eight such snapshots plus the current index are retained, never whole
+most eight snapshots per collection (24 total), 64 active leases per collection,
+and 64 terminal response retries per collection are retained, plus the current
+index; never whole
 transcripts or private prompt/tool/error bodies. Expired leases are reclaimed on
 the next observation request, without a background timer. See the acceptance
 report for cold/reconciliation costs measured separately from warm continuation.
