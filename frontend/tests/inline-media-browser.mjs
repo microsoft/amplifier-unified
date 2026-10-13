@@ -1022,6 +1022,8 @@ try{
     await clockWait(page,450);assert.deepEqual(await canvasPixels(figure),paused);
     assert.equal((await canvasDraws(page,large.id)).length,pauseDraws);
     await figure.locator('canvas').screenshot({path:join(evidenceDir,'gif-canvas-large-pixels.png')});
+    await figure.locator('.media-controls').scrollIntoViewIfNeeded();
+    await page.screenshot({path:join(evidenceDir,'gif-canvas-controls-viewport.png')});
     const canvasDecoder=(await canvasDraws(page,large.id))[0].decoderId;
     assert.ok((await probeState(page)).perDecoder[canvasDecoder].peak<=2);
     const reportsDuringCanvas=await dispatchedReports(page,large.id);
