@@ -8,7 +8,9 @@ stores a small media reference, not an inline base64 image snapshot.
 
 GIF admission permits 64 MiB encoded, 4096 pixels per side, 4 million pixels per
 frame, 500 frames, and a 512 MiB total composited-pixel estimate. MP4 keeps its
-32 MiB limit. Ordinary image snapshots still have their 5 MB limit; their GIF
+32 MiB limit. Conversation transfer retains its independent 32 MiB total limit;
+oversized exports fail explicitly, without omitting media or changing the source.
+Download the original GIF directly when that transfer budget is exceeded. Ordinary image snapshots still have their 5 MB limit; their GIF
 error now directs agents to the retained path. A source path or receipt alone
 is not evidence that playback succeeded.
 
