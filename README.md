@@ -11,6 +11,16 @@ or **Ctrl+Enter** to continue writing. In a list, these continue the list;
 Undo and redo work as usual. Pasted images remain attachments, and pasted text
 longer than 10,000 characters becomes a **Pasted text** attachment.
 
+### Collapse interim replies (experimental)
+
+In **Settings → Appearance**, enable **Collapse interim replies** to move earlier
+assistant updates into the existing work details after a confirmed final response.
+It is off by default and applies to this browser. Expand the disclosure to read,
+copy, or reply to those messages; exports retain the complete conversation.
+The explicit option also collapses these groups at the Everything detail level,
+but preserves details you opened manually. Active, interrupted, or unqualified
+older turns remain visible. Turning the option off restores normal placement.
+
 ## Set up Unified on your computer
 
 For macOS and Linux (including WSL with systemd), paste this into your terminal:

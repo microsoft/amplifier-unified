@@ -3596,6 +3596,8 @@ class AppService:
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
+                from .response_completion import apply as apply_response_completion
+                apply_response_completion(session, payload)
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
                 if root_generation and payload.get('event') == 'generation.started':
@@ -3635,6 +3637,13 @@ class AppService:
                 if not repeated or session.get("streaming") == payload.get("text"):
                     session.pop("streaming", None)
                     session.pop("streamingId", None)
+                # Transport may deliver completion before its saved message.
+                terminal = next((event for event in reversed(session.get("generations", []))
+                                 if event.get("generation_id") == generation_id
+                                 and event.get("event") in {"generation.finished", "generation.failed", "generation.detached"}), None)
+                if terminal:
+                    from .response_completion import apply as apply_response_completion
+                    apply_response_completion(session, terminal)
             elif kind == "assistant.delta":
                 session.setdefault("streamingId", str(uuid.uuid4()))
                 session["streaming"] = session.get("streaming", "") + payload.get("text", payload.get("delta", ""))

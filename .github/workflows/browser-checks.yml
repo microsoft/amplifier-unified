@@ -98,6 +98,7 @@ jobs:
         run: |
           npm run test:execution-browser
           npm run test:execution-actions-browser
+          npm run test:interim-replies-browser
           npm run test:tool-outcomes-browser
       - name: Verify stable navigation and workspace drill-in
         if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}

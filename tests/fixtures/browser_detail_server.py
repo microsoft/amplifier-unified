@@ -108,6 +108,37 @@ async def main():
                 service.state['updates'].update(args.get('updates', {}))
                 service.state['view'].update(args.get('view',{}))
                 for sid,patch in args.get('sessions',{}).items(): service._session(sid).update(patch)
+            elif op=='interim-start':
+                row=service._session(aid);now=time.time()
+                row.update(status='working',messages=[],execution={'nodes':[],'turns':[]},generations=[],workers=[])
+                service._message(row,'user','Investigate the synthetic issue.','chat',inputId='interim-input')
+                from amplifier_web.execution import ensure_turn
+                ensure_turn(row,'interim-input')
+                await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
+                    'event':'generation.started','generation_id':'interim-generation'})
+                for index,text in enumerate(['Checking the first detail.','Checking the second detail.'],1):
+                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':'interim-input',
+                        'generationId':'interim-generation','text':text,'runtimeMessage':{'sequence':index},
+                        'createdAt':now+index*2,'timestampKnown':True})
+                    await service.on_runtime_event('execution.event',{'sessionId':aid,'rootSessionId':aid,
+                        'id':f'interim-call-{index}','turnId':'interim-input','kind':'tool','label':'read_file','phase':'completed',
+                        'startedAt':now+index*2+.1,'endedAt':now+index*2+1,'input':{'file_path':'sample.txt'},'output':'Checked.'})
+                if args.get('long'):
+                    row['messages'][1]['text'] += '\n\n' + ('A retained progress paragraph.\n\n'*100)
+            elif op=='interim-finish':
+                row=service._session(aid)
+                for index,text in enumerate(['The final conclusion.','The final next step.'],10):
+                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':'interim-input',
+                        'generationId':'interim-generation','text':text,'runtimeMessage':{'sequence':index}})
+                await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
+                    'event':'generation.finished','generation_id':'interim-generation','input_ids':['interim-input'],
+                    'text':'The final conclusion.The final next step.','active_job_ids':[],
+                    'finalMessageRefs':{'version':1,'generationId':'interim-generation','sequences':[10,11]}})
+                await service.on_runtime_event('runtime.status',{'sessionId':aid,'status':'idle'})
+            elif op=='interim-error':
+                await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
+                    'event':'generation.failed','generation_id':'interim-generation','input_ids':['interim-input']})
+                await service.on_runtime_event('runtime.error',{'sessionId':aid,'error':'Synthetic interruption.'})
             elif op=='heavy':
                 for sid,count in [(aid,args.get('messages',520)),(bid,args.get('otherMessages',549))]:
                     row=service._session(sid)

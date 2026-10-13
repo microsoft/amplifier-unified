@@ -507,6 +507,9 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
                     raise
         messages = messages[:boundary]
         visible = visible[:cut]
+        from .response_completion import invalidate_removed
+        invalidate_removed({"messages": visible},
+                           {row["id"] for row in source.get("messages", [])[cut:]})
     # A full copy retains historical references even when their UI copies are
     # hidden. Partial edits rebuild references only from their retained prefix,
     # because an old wrapper may also describe messages after the edit boundary.

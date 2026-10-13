@@ -64,6 +64,9 @@ class Worker:
         self.context_bindings = {}
         self.context_inputs = []
         self.root_generation_outcome = None
+        from amplifier_web.response_completion import ResponseBlocks
+        self.response_blocks = ResponseBlocks()
+        self.terminal_response_refs = None
         self.terminal_checkpointed = False
         if __package__:
             from .ownership import WorkerOwnership
@@ -193,6 +196,10 @@ class Worker:
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
         if root_generation and event.get('type') == 'generation.started':
             self.root_generation_outcome = None
+            self.response_blocks.reset()
+            self.terminal_response_refs = None
+        if root_generation and event.get('type') == 'assistant.message':
+            self.response_blocks.message(event)
         elif root_generation and event.get('type') in {'generation.finished', 'generation.failed', 'generation.detached'}:
             self.root_generation_outcome = {
                 'generation.finished': 'completed',
@@ -224,6 +231,9 @@ class Worker:
             if (anchor.get("generationId") == event.get("generation_id")
                     and anchor.get("textDigest") == fingerprint(event.get("text", ""))):
                 event["nativeTerminal"] = anchor
+                refs = self.terminal_response_refs
+                if refs and refs.get("generationId") == event.get("generation_id"):
+                    event["finalMessageRefs"] = refs
         publish(event)
         if event.get("type") == "generation.finished" and loop:
             count = sum(not job["task"].done() for job in loop.jobs.values())
@@ -242,6 +252,7 @@ class Worker:
             return
         async def observed_checkpoint(*args, **kwargs):
             self.collaboration_terminal = None
+            self.terminal_response_refs = None
             result = await checkpoint(*args, **kwargs)
             # The persistence owner applies preserve_system before returning
             # these rows; context indexes are not necessarily native indexes.
@@ -259,6 +270,7 @@ class Worker:
                     self.collaboration_terminal = {"messageId": native["id"], "nativeIndex": native["nativeIndex"],
                         "rootSessionId": coordinator.session_id, "generationId": generation["id"],
                         "nativeText": native["text"], "textDigest": fingerprint(terminal_text)}
+                    self.terminal_response_refs = self.response_blocks.terminal(rows[-1], generation["id"])
             return result
         coordinator.register_capability("live.checkpoint", observed_checkpoint)
         coordinator.register_capability("web.collaboration.checkpoint", True)
@@ -274,6 +286,25 @@ class Worker:
                     providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
             return
         coordinator.register_capability("web.activity", True)
+        if coordinator is self.session.coordinator:
+            async def response_block(event, data):
+                from amplifier_web.execution_events import CALL_PURPOSE
+                if not CALL_PURPOSE.get() and data.get("session_id", coordinator.session_id) == coordinator.session_id:
+                    generation = self.runtime.generation or {}
+                    self.response_blocks.block(event, data, generation.get("id"))
+                return HookResult()
+            # Run before loop-live's content-block observer (default priority).
+            for event in ("content_block:start", "content_block:end"):
+                coordinator.hooks.register(event, response_block, priority=-100,
+                    name="amplifier-web-response-" + event)
+            async def response_boundary(event, data):
+                from amplifier_web.execution_events import CALL_PURPOSE
+                if not CALL_PURPOSE.get() and data.get("session_id", coordinator.session_id) == coordinator.session_id:
+                    self.response_blocks.reset()
+                return HookResult()
+            for event in ("provider:request", "llm:request", "tool:pre"):
+                coordinator.hooks.register(event, response_boundary, priority=-100,
+                    name="amplifier-web-response-boundary-" + event)
         # A resumed child reuses its session ID but owns a new coordinator.
         # Bind hooks to their originating run, never the mutable registry row.
         activity_run_id = coordinator.get_capability("web.worker_run")
