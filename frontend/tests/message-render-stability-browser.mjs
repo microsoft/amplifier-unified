@@ -51,8 +51,12 @@ try{
  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const stableText=await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).messages.find(row=>row.id==='message-79').text);
  const counts=()=>page.evaluate(text=>({apps:renderProbe.apps,stableParses:renderProbe.parses.filter(value=>value===text).length}),stableText);
- // Acknowledged view change lets initial observation traffic settle; no timer sleeps.
+ // Action acknowledgement precedes React's commit and outstanding startup
+ // reads. Measure the local clock only after those independent updates settle.
  await action('view.update',{patch:{draft:'Ready'}});
+ await expect(composer).toHaveDraft('Ready');
+ await page.waitForLoadState('networkidle');
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  let before=await counts(),elapsed=await page.getByRole('timer').innerText();
  for(let i=0;i<3;i++){
   await page.evaluate(()=>window.tickActivity());
