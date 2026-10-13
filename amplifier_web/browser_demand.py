@@ -52,7 +52,7 @@ def project(result):
                                          for row in smart.get('servers', [])]}
     # Composer connections and their cached model capabilities are always ready.
     # Setup operation receipts, matrices and diagnostic metadata are page resources.
-    if page not in {'ai-connections', 'overview', 'providers', 'routing', 'voice', 'defaults', 'desktop'}:
+    if page not in {'ai-connections', 'overview', 'image-generation', 'providers', 'routing', 'voice', 'defaults', 'desktop'}:
         result['setup'] = pick(result.get('setup', {}), ('providers', 'providerCatalogs', 'metadata',
             'providersWorkspace', 'providersRequestedWorkspace', 'providersLocation', 'providersLoadedAt'))
     if not runtime:

@@ -9,7 +9,7 @@ const newDestination=()=>({id:crypto.randomUUID(),name:'Personal server',url:'',
 export function DiagnosticsSettings({state,act}){
  const busy=action=>['queued','working','pending'].includes(state.actionStatus?.[action]?.phase);
  const info=state.diagnostics||{},draft=state.view?.diagnosticsDraft||{},cfg=draft.config||info.config,streams=info.streams||[];
- const [saving,setSaving]=useState(''),[saveError,setSaveError]=useState(''),sending=useRef(false),alive=useRef(true),latestDraft=useRef(draft);
+ const [capturePending,setCapturePending]=useState({}),[saving,setSaving]=useState(''),[retryPatch,setRetryPatch]=useState(null),[saveError,setSaveError]=useState(''),saveQueue=useRef(Promise.resolve()),sending=useRef(false),alive=useRef(true),latestDraft=useRef(draft);
  latestDraft.current=draft;
  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
  if(!cfg)return null;
@@ -17,25 +17,34 @@ export function DiagnosticsSettings({state,act}){
  const change=patch=>act('view.update',{patch:{diagnosticsDraft:{...draft,...patch}}});
  const config=patch=>change({config:{...cfg,...patch}}),selected=cfg.destinations.find(d=>d.id===draft.destinationId);
  const update=patch=>config({destinations:cfg.destinations.map(d=>d.id===selected.id?{...d,...patch}:d)});
- const save=async(value=cfg,removeId=null,recordingOnly=false)=>{
+ const persist=async(value={...info.config,destinations:cfg.destinations},removeId=null,patch=null)=>{
   if(sending.current)return;
-  sending.current=true;setSaving(removeId?'remove':'save');setSaveError('');
+  sending.current=true;setSaving(removeId?'remove':patch?'auto':'save');if(!patch||retryPatch&&Object.keys(retryPatch).every(key=>Object.hasOwn(patch,key))){setSaveError('');setRetryPatch(null)}
   const submitted=JSON.stringify(draft.config);
   try{
-   const receipt=await act('diagnostics.configure',{config:value});
+   const receipt=await act('diagnostics.configure',patch?{patch}:{config:value});
    if(receipt?.accepted!==true)throw Error('Save was not confirmed');
    // A later draft or a reopened panel must not be cleared by this receipt.
    const current=latestDraft.current;
    if(alive.current&&JSON.stringify(current.config)===submitted){
-    await act('view.update',{patch:{diagnosticsDraft:{...current,config:recordingOnly&&current.config?{...current.config,providerRequests:value.providerRequests}:null,...(removeId&&current.destinationId===removeId?{destinationId:null}:{})}}});
+    await act('view.update',{patch:{diagnosticsDraft:{...current,config:patch&&current.config?{...current.config,...patch}:null,...(removeId&&current.destinationId===removeId?{destinationId:null}:{})}}});
    }
   }catch{
-   if(alive.current)setSaveError('Could not save diagnostics settings. Your entries are kept. Try again.');
+   if(alive.current){setRetryPatch(patch);setSaveError('Could not save diagnostics settings. Your entries are kept. Try again.');}
   }finally{sending.current=false;if(alive.current)setSaving('');}
+ };
+ const save=(...args)=>{
+  const work=saveQueue.current.catch(()=>{}).then(()=>persist(...args));
+  saveQueue.current=work;return work;
+ };
+ const capture={...info.config,...capturePending};
+ const apply=patch=>{
+  setCapturePending(current=>({...current,...patch}));
+  return save(null,null,patch).finally(()=>setCapturePending(current=>Object.fromEntries(Object.entries(current).filter(([key,value])=>!Object.hasOwn(patch,key)||value!==patch[key]))));
  };
  const result=info.lastResult,delivery=selected&&info.destinations?.find(d=>d.id===selected.id),test=selected&&info.results?.[selected.id];
  const toggle=(current,id,on)=>on?[...current,id]:current.filter(x=>x!==id);
- const pickStreams=(values,onChange,local=false)=><div className="a-diagnostic-streams">{streams.map(s=><label className="a-inline-checkbox" key={s.id}><input type="checkbox" data-action="view.update" checked={values.includes(s.id)} disabled={!local&&!cfg.streams.includes(s.id)} onChange={e=>onChange(toggle(values,s.id,e.target.checked))}/><span>{s.label}</span></label>)}</div>;
+ const pickStreams=(values,onChange,local=false)=><div className="a-diagnostic-streams">{streams.map(s=><label className="a-inline-checkbox" key={s.id}><input type="checkbox" data-action={local?"diagnostics.configure":"view.update"} checked={values.includes(s.id)} disabled={!local&&!cfg.streams.includes(s.id)} onChange={e=>onChange(toggle(values,s.id,e.target.checked))}/><span>{s.label}</span></label>)}</div>;
  return <SettingsGroup id="diagnostics" title="Diagnostics & Context Intelligence" summary="Local capture, selected streams and your servers" state={state} act={act}>
  <p>Keep diagnostic records on this computer, or send selected streams to your own Context Intelligence servers. Each server has its own choices. App forwarding starts only after you save an enabled destination. Bundle exporters have their own settings.</p>
  {selected?<ActivityRegion name={'diagnostic-destination-'+selected.id} busy={test?.phase==='working'}><button className="a-link a-diagnostics-back" data-action="view.update" onClick={()=>change({destinationId:null})}><ArrowLeft/>All destinations</button>
@@ -52,21 +61,20 @@ export function DiagnosticsSettings({state,act}){
  <p className="a-caption">Save before testing. A test sends one synthetic event to verify authentication and write access.</p>{!draft.config&&<ResultNotice {...test}/>}
  <p className="a-caption">{delivery?.counts?.accepted||0} accepted · {delivery?.counts?.duplicate||0} recognized retries · {delivery?.counts?.pending||0} queued · {delivery?.counts?.failed||0} failed · {delivery?.counts?.cancelled||0} cancelled</p>
  {delivery?.error&&<ResultNotice phase="error" message={`Delivery needs attention: ${delivery.error.type}${delivery.error.statusCode?' (HTTP '+delivery.error.statusCode+')':''}`}/>}
- <button className="a-soft a-danger" data-action="diagnostics.configure" disabled={saveBusy} aria-busy={saving==='remove'||undefined} onClick={()=>save({...cfg,destinations:cfg.destinations.filter(d=>d.id!==selected.id)},selected.id)}><Trash2/><WorkingLabel active={saving==='remove'} working="Removing…">Remove destination</WorkingLabel></button>
- </ActivityRegion>:<><fieldset className="a-diagnostics-fields" disabled={saveBusy}><label className="a-inline-checkbox"><input type="checkbox" data-action="view.update" checked={cfg.enabled} onChange={e=>config({enabled:e.target.checked})}/>Collect app diagnostics and enable selected forwarding</label>
+ <button className="a-soft a-danger" data-action="diagnostics.configure" disabled={saveBusy} aria-busy={saving==='remove'||undefined} onClick={()=>save({...info.config,destinations:cfg.destinations.filter(d=>d.id!==selected.id)},selected.id)}><Trash2/><WorkingLabel active={saving==='remove'} working="Removing…">Remove destination</WorkingLabel></button>
+ </ActivityRegion>:<><fieldset className="a-diagnostics-fields" disabled={saveBusy&&saving!=='auto'}><label className="a-inline-checkbox"><input type="checkbox" data-action="diagnostics.configure" checked={capture.enabled} onChange={e=>apply({enabled:e.target.checked})}/>Collect app diagnostics and enable selected forwarding</label>
  <p className="a-caption">Sessions use the community Context Intelligence hook and shared files. The choices below control this app’s metadata index and forwarding; they do not disable the hook.</p>
  <h4>Model request & response details</h4>
- <p role="status"><strong>Saved recording setting: {info.config?.providerRequests?'On':'Off'}</strong>{(cfg.providerRequests===true)!==(info.config?.providerRequests===true)&&' · Unsaved change'}</p>
- <label className="a-inline-checkbox"><input type="checkbox" data-action="view.update" checked={cfg.providerRequests===true} onChange={e=>config({providerRequests:e.target.checked})}/>Record provider requests and responses for troubleshooting</label>
- {(cfg.providerRequests===true)!==(info.config?.providerRequests===true)&&<button type="button" className="a-primary" data-action="diagnostics.configure" disabled={saveBusy} onClick={()=>save({...info.config,providerRequests:cfg.providerRequests},null,true)}><WorkingLabel active={saving==='save'} working="Saving…">Save recording setting</WorkingLabel></button>}
- <p className="a-caption">Save this choice to apply it. Recording starts when a supported conversation runtime next prepares; it does not change an already-running runtime. Start a new chat to check recording without interrupting current work. Explicit provider opt-outs are kept. Earlier calls cannot be recovered.</p>
+ <p role="status"><strong>Saved recording setting: {info.config?.providerRequests?'On':'Off'}</strong></p>
+ <label className="a-inline-checkbox"><input type="checkbox" data-action="diagnostics.configure" checked={capture.providerRequests===true} onChange={e=>apply({providerRequests:e.target.checked})}/>Record provider requests and responses for troubleshooting</label>
+ <p className="a-caption">This choice is saved automatically. Recording starts when a supported conversation runtime next prepares; it does not change an already-running runtime. Start a new chat to check recording without interrupting current work. Explicit provider opt-outs are kept. Earlier calls cannot be recovered.</p>
  <p className="a-caption">Saved records can contain private messages, instructions, tool inputs, and attachments. Recognizable credentials are redacted. Large records have a bounded log preview and a separate downloadable copy, limited to 16 million characters and 64 MiB. Partial captures are labeled. Request and response availability depends on the provider; some adapters expose only a summary. Downloads are stored beside the session log on this host; bundle exporters may include only the preview.</p>
- <h4>Streams to index and make available for forwarding</h4>{pickStreams(cfg.streams,values=>config({streams:values,destinations:cfg.destinations.map(d=>({...d,streams:d.streams.filter(s=>values.includes(s))}))}),true)}
- <div className="a-form-grid"><label>Index days<input type="number" min="1" max="365" value={cfg.retentionDays} data-action="view.update" onChange={e=>config({retentionDays:Number(e.target.value)})}/></label><label>Maximum indexed records<input type="number" min="100" max="100000" value={cfg.maxRecords} data-action="view.update" onChange={e=>config({maxRecords:Number(e.target.value)})}/></label></div>
+ <h4>Streams to index and make available for forwarding</h4>{pickStreams(capture.streams,values=>apply({streams:values}),true)}
+ <div className="a-form-grid"><label>Index days<input type="number" min="1" max="365" value={cfg.retentionDays} data-action="view.update" onChange={e=>config({retentionDays:e.target.value})} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur()}} onBlur={e=>{if(e.target.checkValidity()&&e.target.value!==''&&Number(e.target.value)!==info.config.retentionDays)apply({retentionDays:Number(e.target.value)})}}/></label><label>Maximum indexed records<input type="number" min="100" max="100000" value={cfg.maxRecords} data-action="view.update" onChange={e=>config({maxRecords:e.target.value})} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur()}} onBlur={e=>{if(e.target.checkValidity()&&e.target.value!==''&&Number(e.target.value)!==info.config.maxRecords)apply({maxRecords:Number(e.target.value)})}}/></label></div>
  <p className="a-caption">These limits apply to the local index and queued deliveries. Shared Context Intelligence events.jsonl files are preserved. Indexed: {info.local?.storageError&&info.local?.records==null?'unavailable':(info.local?.records??0)+' records'}.{info.local?.dropped||info.local?.outboxDropped||info.local?.expiredPending?` Dropped: ${info.local.dropped||0}; outbox limit: ${info.local.outboxDropped||0}; expired before delivery: ${info.local.expiredPending||0}.`:''}</p>
  {info.local?.configurationError&&<ResultNotice phase="error" message="The saved diagnostics configuration could not be read. Capture and forwarding are disabled; save reviewed settings to restore them."/>}
  {info.local?.storageError&&<ResultNotice phase="error" message="Local diagnostic storage needs attention. Conversations can continue."/>}
- <SettingsActions><button className="a-primary" data-action="diagnostics.configure" disabled={saveBusy} aria-busy={saving==='save'||undefined} onClick={()=>save()}><WorkingLabel active={saving==='save'} working="Saving…">Save capture settings</WorkingLabel></button></SettingsActions></fieldset>
+ </fieldset>
  <h4>Destinations</h4><div className="a-diagnostic-destinations">{cfg.destinations.map(d=>{const status=info.destinations?.find(row=>row.id===d.id);return <button className="a-settings-group-title" data-action="view.update" key={d.id} onClick={()=>change({destinationId:d.id})}><span><strong>{d.name}</strong><small>{d.enabled?'Sending selected streams':'Disabled'} · {d.streams.length} streams{status?.error?' · Needs attention':''}</small></span><Activity/></button>})}</div>
  <button className="a-soft" data-action="view.update" disabled={saveBusy} onClick={()=>{const d=newDestination();change({config:{...cfg,destinations:[...cfg.destinations,d]},destinationId:d.id})}}><Plus/>Add server</button>
  <p className="a-caption">Saving a changed destination cancels its old pending deliveries. Data already accepted or in flight cannot be recalled. Selecting another stream starts with new records; history is never uploaded automatically.</p>
@@ -75,7 +83,7 @@ export function DiagnosticsSettings({state,act}){
  {result?.action==='diagnostics.records'&&<pre className="a-state-view">{JSON.stringify(result.items,null,2)}</pre>}</ActivityRegion>
  </>}
  {saving&&<ResultNotice phase="working" message={saving==='remove'?'Removing destination…':'Saving diagnostics settings…'}/>}
- {saveError&&<ResultNotice phase="error" message={saveError}/>}
+ {saveError&&<><ResultNotice phase="error" message={saveError}/>{retryPatch&&<button type="button" disabled={saveBusy} onClick={()=>apply(retryPatch)}>Retry saving preference</button>}</>}
  {!saving&&!saveError&&result?.action!=='diagnostics.records'&&result?.action!=='diagnostics.test'&&result?.action!=='diagnostics.environment'&&<ResultNotice phase={result?.phase||'ready'} message={result?.message}/>}
  </SettingsGroup>;
 }

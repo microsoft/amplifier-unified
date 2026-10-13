@@ -42,7 +42,7 @@ test('notification secrets wait for confirmed completion and preserve edits per 
  await act(async()=>{renderer=create(render())});
  const inputs=()=>renderer.root.findAllByType('input').filter(row=>row.props.type==='password');
  const fill=(index,value)=>act(()=>inputs()[index].props.onChange({target:{value}}));
- const save=()=>renderer.root.findAllByType('button').find(row=>row.children.includes('Save notifications')).props.onClick();
+ const save=()=>renderer.root.findAllByType('button').find(row=>row.children.includes('Save phone connection')).props.onClick();
  const complete=async(id,phase)=>{state={...state,actionStatus:{'notifications.save':{commandId:id,phase,error:phase==='error'?'Try again':undefined}}};await act(()=>renderer.update(render()))};
  try{
   await fill(0,'fixture-topic');await fill(1,'fixture-token');let submitted;

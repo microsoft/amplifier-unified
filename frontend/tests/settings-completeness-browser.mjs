@@ -55,23 +55,22 @@ try{
  assert.equal(await page.getByLabel(/^Topic/).inputValue(),'fixture-private-topic');
  assert.equal(await page.getByLabel(/^Access token/).inputValue(),'fixture-private-token');
  assert.ok(!JSON.stringify(await state()).includes('fixture-private-token'));
- await page.getByRole('button',{name:'Save notifications',exact:true}).click();
+ await page.getByRole('button',{name:'Save phone connection',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().notificationSettings?.tokenConfigured);
  await page.waitForFunction(()=>[...document.querySelectorAll('input[type=password]')].every(input=>input.value===''));
  assert.equal(await page.getByLabel(/^Access token/).inputValue(),'');
  await page.getByLabel('Include a response preview',{exact:true}).uncheck();
- await page.getByRole('button',{name:'Save notifications',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().notificationSettings?.preview===false);
  await page.reload();await page.getByText('Send notifications to another device',{exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().notificationSettings?.server==='https://notify.example');
  let notify=(await state()).notificationSettings;assert.ok(notify.tokenConfigured&&notify.topicConfigured&&notify.enabled&&!notify.preview);assert.equal(notify.topic,undefined);assert.equal(notify.token,undefined);
  // Server-side rejection is visible and does not replace the last good settings.
  await page.getByLabel('Notification server',{exact:true}).fill('http://invalid.example');
- await page.getByRole('button',{name:'Save notifications',exact:true}).click();
+ await page.getByRole('button',{name:'Save phone connection',exact:true}).click();
  await page.getByText('Enter an HTTPS notification server URL',{exact:true}).first().waitFor();
  assert.equal((await state()).notificationSettings.server,'https://notify.example');
  await page.getByLabel('Notification server',{exact:true}).fill('https://notify.example');
- await page.getByRole('button',{name:'Save notifications',exact:true}).click();
+ await page.getByRole('button',{name:'Save phone connection',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().management?.phase!=='working'&&!window.amplifier.getState().management?.error);
  await openSettingsPage(page,'voice');await page.getByText('Advanced voice options',{exact:true}).click();
  await page.locator('#preferred-voice').selectOption('gpt-realtime-2.1');
