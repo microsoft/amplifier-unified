@@ -12,6 +12,7 @@ import './execution-content.css';
 import {compactBreakdown} from './usage-details.js';
 import {UsageDetails} from './usage-details.jsx';
 import {DelegateExchange} from './delegate-exchange.jsx';
+import {interimOpen} from './interim-replies.js';
 
 function Usage({value,pending=false}){const label=usageLabel(value,{pending}),breakdown=compactBreakdown(value);return label?<span className="a-execution-usage" title={label.title}>{label.text}{breakdown&&<small className="a-usage-breakdown">{breakdown}</small>}</span>:null}
 function Status({status}){return ['error','failed','cancelled','interrupted'].includes(status)?<AlertCircle className="a-execution-warning" aria-label={status}/>:['complete','completed','success','done'].includes(status)?<Check className="a-execution-complete" aria-label="Completed"/>:isRunning({phase:status})?<span className="a-execution-dot" aria-label={status}/>:<Circle aria-label={status||'Recorded'}/>}
@@ -59,19 +60,28 @@ export function TurnTimeline({data,turnId,state,act,embedded=false,automatic=fal
 }
 
 
-export function WorkTimeline({items,data,state,act}){
+export function WorkTimeline({items,data,state,act,row,renderMessage}){
  const shell=useShellContext(),detail=shell?.composition?.presentation?.interfaceDetail||shell?.composition?.presentation?.executionDetail||'standard';
  const turns=items.filter(item=>item.turnId).map(item=>data.turns.find(turn=>turn.id===item.turnId)).filter(Boolean);
- const expanded=new Set(state.view?.executionExpanded||[]),summaryId=`work:${items[0].turnId}`;
- const open=detailOpen(expanded,summaryId,detail),ticking=turns.some(isRunning);
+ const expanded=new Set(state.view?.executionExpanded||[]),summaryId=row?.interim?row.id:`work:${items[0].turnId}`;
+ const open=row?.interim?interimOpen(expanded,row):detailOpen(expanded,summaryId,detail),ticking=turns.some(isRunning);
  const [now,setNow]=useState(()=>hostNow());
  useEffect(()=>{if(!ticking)return;setNow(hostNow());const timer=setInterval(()=>setNow(hostNow()),1000);return()=>clearInterval(timer)},[ticking]);
- if(items.length===1)return <TurnTimeline data={data} turnId={items[0].turnId} state={state} act={act}/>;
+ if(items.length===1&&!row?.interim)return <TurnTimeline data={data} turnId={items[0].turnId} state={state} act={act}/>;
  const summary=combinedWork(turns,now),label=summary.running?`Working${summary.elapsed?' · '+summary.elapsed:'…'}`:summary.elapsed?'Worked for '+summary.elapsed:'Work details';
- return <section className="a-execution-turn a-execution-content a-work-group" data-part="execution-group" aria-label="Work between messages">
-  <button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" aria-expanded={open} onClick={()=>act('view.update',{patch:{executionExpanded:[...toggleDetail(expanded,summaryId,detail)]}})}>
-   <ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}</span><Usage value={summary.usage} pending={summary.running}/><Status status={summary.phase}/>
+ const updates=items.filter(item=>item.message).length;
+ const toggle=()=>{
+  const next=row?.interim?new Set(expanded):toggleDetail(expanded,summaryId,detail);
+  if(row?.interim){
+   next.delete(summaryId);next.delete('closed:'+summaryId);next.add(open?'closed:'+summaryId:summaryId);
+   for(const item of items)if(item.message){const key='interim-message:'+item.message.id;open?next.delete(key):next.add(key)}
+  }
+  act('view.update',{patch:{executionExpanded:[...next]}});
+ };
+ return <section className="a-execution-turn a-execution-content a-work-group" data-part="execution-group" data-interim-group={row?.interim?row.id:undefined} aria-label="Work between messages">
+  <button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" aria-expanded={open} onClick={toggle}>
+   <ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}{updates>0&&` · ${updates} ${updates===1?'update':'updates'}`}</span><Usage value={summary.usage} pending={summary.running}/><Status status={summary.phase}/>
   </button>
-  {open&&<div className="a-work-group-items">{summary.usage.calls>0&&<UsageDetails usage={summary.usage} label="Work usage" costLabel="Work cost (USD)"/>}{items.map(item=><TurnTimeline key={item.turnId} data={data} turnId={item.turnId} state={state} act={act} embedded automatic={detail==='detailed'&&!expanded.has(summaryId)}/>)}</div>}
+  {open&&<div className="a-work-group-items">{summary.usage.calls>0&&<UsageDetails usage={summary.usage} label="Work usage" costLabel="Work cost (USD)"/>}{items.map(item=>item.message?<React.Fragment key={item.message.id}>{renderMessage?.(item.message)}</React.Fragment>:<TurnTimeline key={item.turnId} data={data} turnId={item.turnId} state={state} act={act} embedded automatic={detail==='detailed'&&!expanded.has(summaryId)}/>)}</div>}
  </section>;
 }

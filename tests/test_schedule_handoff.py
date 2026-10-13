@@ -163,7 +163,8 @@ async def test_due_recheck_distinguishes_new_human_input_from_peer_updates(tmp_p
         await app.schedules.tick()
         accepted = origin == 'peer'
         assert len(runtime.inputs) == int(accepted)
-        assert app.schedules.store.runs(target['id'])[0]['phase'] == ('accepted' if accepted else 'skipped')
+        runs = app.schedules.store.runs(target['id'])
+        assert [row['phase'] for row in runs] == (['accepted'] if accepted else [])
         if not accepted:
             assert app.schedules.store.get(target['id'], record['id'])['status'] == 'needs_review'
     finally:
