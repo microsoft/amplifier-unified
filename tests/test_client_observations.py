@@ -586,3 +586,26 @@ async def test_terminal_retry_cache_is_bounded_without_retaining_old_snapshots(o
     with pytest.raises(AppError) as error:
         observations.page('sessions', {'limit': '2', 'cursor': oldest})
     assert error.value.code == 'snapshot_changed'
+
+
+async def test_agent_creation_classification_is_shared_with_navigation(observation_host):
+    app, client = observation_host
+    service = app['service']
+    catalog(service, 3)
+    rows = service.state['sessions']
+    rows[1]['collaboration'] = {'creatorSessionId': 's0', 'requestId': 'peer-request'}
+    rows[2]['collaboration'] = {'creatorSessionId': 's0'}  # Incomplete evidence is not enough.
+    service.projections.invalidate()
+    sessions = await traverse(client, '/api/sessions', {'view': 'observation'})
+    assert {row['id']: row['agentCreated'] for row in sessions} == {'s0': False, 's1': True, 's2': False}
+    notices = await traverse(client, '/api/attention', {})
+    assert all(row['agentCreated'] == (row['target']['sessionId'] == 's1') for row in notices)
+    response = await client.get('/api/companion')
+    assert response.status == 200
+    adapter = await response.json()
+    assert next(row for row in adapter['sessions'] if row['id'] == 's1')['agentCreated']
+    assert all(row['agentCreated'] == (row['sessionId'] == 's1') for row in adapter['items'])
+    rows[1].pop('collaboration')
+    service.projections.invalidate()
+    changed = await traverse(client, '/api/sessions', {'view': 'observation'})
+    assert not any(row['agentCreated'] for row in changed)

@@ -1,5 +1,5 @@
 import {useConnectionSetup} from './setup-journey';
-import {chatDeepLink} from './chat-deep-link';
+import {createChatLinkReceiver} from './chat-deep-link';
 import {DictationButton} from './dictation-controls';
 import {ChatPlan} from './chat-plan';
 import {ChatPages,chatPageTitles} from './chat-pages';
@@ -248,15 +248,12 @@ function App(){
  const shell=useShell(serverState.current,dispatch,clientId,state,{onError:reportError,onRecovered:()=>setConnectionFailure(afterReconnect)});
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>reportError(e)),[dispatch,reportError]);
- const deepLinkOpened=useRef(false);
+ const chatLinkReceiver=useRef(null);
  useEffect(()=>{
-  if(!state||deepLinkOpened.current)return;
-  deepLinkOpened.current=true;
-  const id=chatDeepLink(location.search);
-  if(id)dispatch('session.select',{id}).then(result=>{
-   if(!result.accepted)return;
-   const url=new URL(location.href);url.searchParams.delete('chat');history.replaceState(history.state,'',url);
-  }).catch(reportError);
+  if(!chatLinkReceiver.current)chatLinkReceiver.current=createChatLinkReceiver({location,history,
+   launchQueue:window.launchQueue,reportError});
+  if(!state)return;
+  return chatLinkReceiver.current.bind(id=>dispatch('session.select',{id}));
  },[!!state,dispatch,reportError]);
  const viewReporter=useRef(null);
  if(!viewReporter.current)viewReporter.current=createViewReporter(body=>request('/api/view',{method:'POST',body}));

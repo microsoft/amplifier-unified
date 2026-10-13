@@ -38,6 +38,7 @@ try {
  page.on('request', request => {
   if (request.url().endsWith('/api/actions') && request.method() === 'POST') actions.push(request.postDataJSON());
  });
+ await page.addInitScript(()=>{Object.defineProperty(window,'launchQueue',{value:{setConsumer(fn){window.tempoLaunch=fn}},configurable:true})});
  await page.goto(ready.url + '/?chat=' + encodeURIComponent(ready.destination));
  await expect(page.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Companion destination');
  await expect(page).toHaveURL(ready.url + '/');
@@ -49,6 +50,14 @@ try {
  await ordinary.reload();
  await expect(ordinary.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Settings test');
  assert.equal(ordinaryActions.filter(row => row.action === 'conversation.send').length, 0);
+ // Warm installed-app launches preserve the document and select only this window.
+ await page.evaluate(()=>{window.tempoDocumentMarker='same-document'});
+ await page.evaluate(url=>window.tempoLaunch({targetURL:url}),ready.url+'/?chat='+ready.original);
+ await expect(page.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Settings test');
+ await page.evaluate(url=>window.tempoLaunch({targetURL:url}),ready.url+'/?chat='+ready.destination);
+ await expect(page.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Companion destination');
+ assert.equal(await page.evaluate(()=>window.tempoDocumentMarker),'same-document','Launch must preserve the mounted document');
+ await expect(ordinary.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Settings test');
  assert.deepEqual(companionRequests, [], 'Browser clients never poll Tempo summaries');
  assert.deepEqual(errors, []);
  // Unavailable links report failure without clearing the target or selecting a substitute.

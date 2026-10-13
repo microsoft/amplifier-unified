@@ -23,3 +23,16 @@ Acceptance: `frontend/tests/chat-deep-link.test.mjs` and
 reload, independent windows, missing/deleted targets, sign-in, and no submitted
 turn or ordinary-browser companion polling. Run application/browser tests only
 in the project's owned DTU.
+
+Installed browsers supporting the Launch Handler API use `focus-existing`.
+The application consumes same-origin, same-path launch URLs, queues them until
+boot/attachment, and selects targets in order in the receiving window without
+reloading its document. Cold URL/launch-queue duplicates are ignored. Warm failed
+launches report the existing navigation error; browsers without this API retain
+ordinary URL navigation. Existing installations may need their browser to refresh
+the installed manifest before the launch mode changes.
+
+Implementation reference: [Chromium Launch Handler API](https://developer.chrome.com/docs/web-platform/launch-handler).
+The DTU browser test covers two warm launches, document preservation, exact target,
+independent windows and no chat submission; pure tests cover pre-boot delivery and
+foreign/path-mismatched targets.
