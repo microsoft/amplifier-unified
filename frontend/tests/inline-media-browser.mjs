@@ -7,6 +7,7 @@ import {createHash} from 'node:crypto';
 import {hostname,homedir} from 'node:os';
 import {chromium,expect,request} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {setTimeout as delay} from 'node:timers/promises';
 import './composer-test-helpers.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
@@ -58,6 +59,7 @@ class CantCheck extends Error{}
 async function phase(name,work,{required=true}={}){
  if(selectedPhases&&!selectedPhases.has(name)&&!['shared-setup','cleanup'].includes(name))
   return record(name,'NOT_RUN',{reason:'Explicit partial verification selection'},false);
+ console.log(JSON.stringify({phase:name,status:'RUNNING',required}));
  try{return await record(name,'PASS',await work(),required)}
  catch(error){
   const snapshots=[];
@@ -168,11 +170,14 @@ const retainedVideoState=page=>page.evaluate(()=>{
  const node=window.__retainedNativeVideo,owned=window.__nativeMediaProbe.nodes.get(node);
  return {connected:node.isConnected,hasSrc:node.hasAttribute('src'),paused:node.paused,...owned,cancel:[...owned.cancel]};
 });
-const clockWait=(page,milliseconds)=>page.evaluate(ms=>new Promise(done=>{
- const deadline=performance.now()+ms;
- function tick(){if(performance.now()>=deadline)done();else requestAnimationFrame(tick)}
- requestAnimationFrame(tick);
-}),milliseconds);
+// This measures an interval during which draws must remain stopped. A paused
+// or background page may have no animation frames at all; waiting for its next
+// frame would deadlock the very pause/visibility behavior being checked.
+const clockWait=async(page,milliseconds)=>{
+ const before=await page.evaluate(()=>performance.now());
+ await delay(milliseconds);
+ assert.ok(await page.evaluate(before=>performance.now()-before,before)>=milliseconds-1);
+};
 async function control(page,path,data){
  const response=await page.request.post(boot.url+'/api/fixture/'+path,{headers:privateHeaders,data});
  assert.equal(response.status(),200,await response.text());return response.json();
@@ -185,7 +190,13 @@ async function attach(page,name,instance=0){
 async function newClient(options={}){
  // Distinct pages have distinct host client identities. One browser context
  // preserves that discriminator without unsupported single-process multi-contexts.
- if(!sharedContext)sharedContext=await browser.newContext({baseURL:boot.url,viewport:{width:1280,height:950},storageState:sharedStorage});
+ if(!sharedContext){
+  sharedContext=await browser.newContext({baseURL:boot.url,viewport:{width:1280,height:950},storageState:sharedStorage});
+  // Library-mode Playwright otherwise waits forever for actions/events. Keep
+  // failures local so phase evidence and cleanup survive a missing control.
+  sharedContext.setDefaultTimeout(30000);
+  sharedContext.setDefaultNavigationTimeout(30000);
+ }
  const context=sharedContext;
  contexts.add(context);
  const page=await context.newPage();pages.add(page);

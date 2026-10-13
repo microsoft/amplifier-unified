@@ -73,8 +73,16 @@ try{
  await page.mouse.down();await page.mouse.move(handle.x+handle.width/2+230,handle.y+handle.height/2,{steps:12});await page.mouse.up();
  await expect.poll(async()=>Math.round((await page.locator('.a-conversation').boundingBox()).width)).toBeGreaterThan(550);
  const resizedWidth=await page.evaluate(()=>window.amplifier.getState().view.canvasWidth);
+ // The UI applies navigation optimistically. Reload only after the real host
+ // acknowledges this exact destination, not merely after its heading paints.
+ const appearanceSaved=page.waitForResponse(response=>response.request().method()==='POST'&&
+  new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='view.update'&&
+  response.request().postDataJSON()?.args?.patch?.settingsExpanded?.includes('appearance'));
  await openSettingsPage(page,'appearance');
  await expect(page.locator('.a-settings-canvas [data-settings-page=appearance]')).toBeVisible();
+ const savedAppearance=await appearanceSaved;
+ assert.equal(savedAppearance.status(),200);
+ assert.equal((await savedAppearance.json()).accepted,true);
  await page.reload();await expect(page.locator('.a-settings-canvas [data-settings-page=appearance]')).toBeVisible();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.canvasWidth),resizedWidth);
  assert.ok((await page.locator('.a-conversation').boundingBox()).width>550);
