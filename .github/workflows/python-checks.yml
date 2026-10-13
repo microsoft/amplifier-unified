@@ -1,5 +1,5 @@
-name: Python checks (on demand)
-# Temporarily opt-in during rapid development; never a PR or release gate.
+name: Full Python checks
+# Local/manual qualification and post-release coverage; never a publication gate.
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +7,11 @@ on:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      revision:
+        type: string
+        required: true
 permissions:
   contents: read
 jobs:
@@ -16,6 +21,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
