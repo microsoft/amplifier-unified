@@ -222,6 +222,7 @@ jobs:
           name: public-readiness-${{ github.run_id }}
           path: |
             public-readiness-revision.txt
+            /tmp/unified-block-copy-trace.zip
             /tmp/unified-recovery-group-mobile.png
             /tmp/amplifier-updates-calm-feedback.png
             /tmp/unified-generated-images-mobile.png
