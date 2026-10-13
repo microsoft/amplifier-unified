@@ -6,7 +6,8 @@
       "title": "Responsive controls with multiple chat windows",
       "changes": [
         "Live browser updates use a dedicated socket so multiple chat windows cannot occupy every HTTP connection needed for images, settings and actions.",
-        "Each window retains its own chat, draft and Canvas selection. Reconnect restores current state without replaying messages or model work."
+        "Each window retains its own chat, draft and Canvas selection. Reconnect restores current state without replaying messages or model work.",
+        "Background history refreshes keep your reading position steady instead of briefly inserting an empty notice above the conversation."
       ],
       "notices": []
     },
