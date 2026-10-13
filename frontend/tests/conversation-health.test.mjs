@@ -99,6 +99,25 @@ test('copy refuses an explicitly stale diagnostic result instead of mislabeling 
  await renderAct(async()=>root.unmount());
 });
 
+test('failed diagnostic copy keeps its complete manual report through equivalent server refreshes',async()=>{
+ Object.defineProperty(globalThis,'navigator',{value:{userAgent:'fixture-browser',clipboard:{writeText:async()=>{throw Error('denied')}}},configurable:true});
+ const failure={category:'app_bridge_timeout',generationId:'failed-turn',recordedAt:42};
+ const session={id:'chat',status:'error',failure};
+ const act=async()=>({accepted:true,result:{sessionId:'chat',status:'error',diagnosticsSchema:2,failure}});
+ let root;
+ try{
+  await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session,act,focused:true}))});
+  await renderAct(async()=>root.root.findAllByType('button').find(button=>button.children.includes('Copy diagnostics')).props.onClick());
+  await renderAct(async()=>root.update(React.createElement(ConversationDetails,{session:{...session,failure:{...failure}},act,focused:true})));
+  assert.match(JSON.stringify(root.toJSON()),/Clipboard unavailable/);
+  const report=JSON.parse(root.root.findByProps({'aria-label':'Diagnostic report'}).props.value);
+  assert.equal(report.failure.generationId,'failed-turn');
+  assert.equal(report.client.userAgent,'fixture-browser');
+  await renderAct(async()=>root.update(React.createElement(ConversationDetails,{session:{...session,failure:{...failure,recordedAt:43}},act,focused:true})));
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Copy diagnostic text manually/);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
 test('clipboard write starts in the click gesture while its fresh diagnostic content is pending',async()=>{
  const writes=[];let release,delay=false;
  const prior=globalThis.ClipboardItem;
@@ -115,6 +134,21 @@ test('clipboard write starts in the click gesture while its fresh diagnostic con
   assert.equal(JSON.parse(writes[1]).status,'stopped');
   assert.match(JSON.stringify(root.toJSON()),/Diagnostics copied/);
  }finally{await renderAct(async()=>root?.unmount());globalThis.ClipboardItem=prior}
+});
+
+test('a late diagnostic response cannot replace the report for a newer failure',async()=>{
+ const writes=[];let release,root,operation;
+ Object.defineProperty(globalThis,'navigator',{value:{clipboard:{writeText:async value=>writes.push(value)}},configurable:true});
+ const session={id:'chat',status:'error',failure:{generationId:'old',recordedAt:42}};
+ const act=()=>new Promise(resolve=>release=resolve);
+ try{
+  await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session,act,focused:true}))});
+  await renderAct(async()=>{operation=root.root.findAllByType('button').find(button=>button.children.includes('Copy diagnostics')).props.onClick()});
+  await renderAct(async()=>root.update(React.createElement(ConversationDetails,{session:{...session,failure:{generationId:'new',recordedAt:43}},act,focused:true})));
+  await renderAct(async()=>{release({accepted:true,result:{status:'error',failure:session.failure}});await operation});
+  assert.deepEqual(writes,[]);
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Diagnostics copied|Copy diagnostic text manually/);
+ }finally{await renderAct(async()=>root?.unmount())}
 });
 
 
