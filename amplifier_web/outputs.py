@@ -164,6 +164,27 @@ class Outputs:
                 return await self.media.attach(args, origin, command_id)
             if action == 'outputs.mediaReport':
                 return await self.media.observe(args, origin)
+            if action == 'outputs.read':
+                async with self.app.lock:
+                    record = self.record(args['sessionId'], args['id'])
+                    if record.get('kind') == 'media':
+                        values = {**record, 'messageId': record.get('origin', {}).get('messageId')}
+                        before = self.media.snapshot(values)
+                    else:
+                        before = None
+                if before is not None:
+                    # Metadata-only indexed validation; never hydrate history
+                    # or decode a media body for the agent's observation read.
+                    await self.media.head(values)
+                    async with self.app.lock:
+                        if self.media.snapshot(values) != before:
+                            raise ValueError('Retained media changed during metadata read.')
+                        record = self.media.guard(values)
+                        observation = self.media.observation(record)
+                        return {'accepted':True,'result':{**self.media.descriptor(record),
+                            'saved':True,'attached':bool(record.get('linked')),
+                            'browserObservation':observation,
+                            'playback':observation.get('playback', 'unknown')}}
             async with self.app.lock:
                 session=copy.deepcopy(self.app._session(args['sessionId']))
                 if action=='outputs.list':
@@ -178,12 +199,6 @@ class Outputs:
                     return {'accepted':True,'result':result}
                 if action=='outputs.read':
                     record=self.record(session['id'],args['id'])
-                    if record.get('kind') == 'media':
-                        observation = self.media.observation(record)
-                        return {'accepted':True,'result':{**self.media.descriptor(record),
-                            'saved':True,'attached':bool(record.get('linked')),
-                            'browserObservation':observation,
-                            'playback':observation.get('playback', 'unknown')}}
                     data=self.content(record)
                     comments=self.store.comments(record['id']);start=args.get('commentOffset',0);count=args.get('commentLimit',5)
                     result={**record,'comments':comments[start:start+count],'nextCommentOffset':start+count if start+count<len(comments) else None}

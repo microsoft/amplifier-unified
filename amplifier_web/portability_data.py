@@ -177,6 +177,79 @@ def _validate_output_receipts(receipts, sid, output_ids, comment_outputs):
         raise ValueError('Output receipt must belong to the transferred task or its outputs')
 
 
+def _validate_media_bindings(value):
+    """Pure admission validation after the host verifies signed transfer binding.
+
+    No transcript qualification and no destination file/database I/O. Resource
+    closure, signatures, receipts and lineage remain with their existing owners.
+    """
+    from .output_media import retained_facts, validate_retained_body, validate_media_reference
+    sid = value['session']['id']
+    outputs = {row['id']: row for row in value['outputs']}
+    resources = value['resources']
+
+    def check_reference(body, kind):
+        if not isinstance(body, dict) or 'mediaReference' not in body:
+            if kind == 'gif':
+                raise ValueError('Retained GIF adapter has no media reference.')
+            return
+        if set(body) != {'mediaReference'}:
+            raise ValueError('Ambiguous retained media adapter body.')
+        reference = body['mediaReference']
+        if not isinstance(reference, dict) or not isinstance(reference.get('item'), dict):
+            raise ValueError('Malformed retained media adapter.')
+        record = outputs.get(reference['item'].get('id'))
+        if record is None:
+            raise ValueError('Retained media adapter has no transferred owning output.')
+        validate_media_reference(reference, record, sid, kind=kind)
+        return reference
+
+    for row in outputs.values():
+        if row.get('kind') == 'media':
+            retained_facts(row, sid)
+            resource = resources[row['body']['$resource']]
+            if not isinstance(resource, dict) or set(resource) != {'encoding', 'data'} or resource['encoding'] != 'base64':
+                raise ValueError('Invalid retained media transfer body.')
+            validate_retained_body(base64.b64decode(resource['data'], validate=True), row)
+        # Generic output snapshots of a GIF adapter also retain its binding.
+        if row.get('canvasSource'):
+            check_reference(resources[row['canvasSource']['$resource']], row.get('canvasKind'))
+        if row.get('kind') == 'canvas' and row.get('body'):
+            resource = resources[row['body']['$resource']]
+            content = (base64.b64decode(resource['data'], validate=True).decode()
+                       if resource['encoding'] == 'base64' else resource['data'])
+            # Reject duplicate keys rather than letting the JSON parser pick
+            # one of two competing mediaReference/item/tuple definitions.
+            def unique(pairs):
+                result = {}
+                for key, child in pairs:
+                    if key in result:
+                        raise ValueError('Duplicate retained adapter field.')
+                    result[key] = child
+                return result
+            check_reference(json.loads(content, object_pairs_hook=unique), row.get('canvasKind'))
+    for row in value['canvas']:
+        versions = row.get('versions', [])
+        retained = False
+        for entry in [row, *versions]:
+            kind = entry.get('kind', row.get('kind'))
+            refs = []
+            if 'mediaReference' in entry:
+                refs.append(check_reference({'mediaReference': entry['mediaReference']}, kind))
+            bodies = [entry[key] for key in ('body', 'contentResource') if entry.get(key)]
+            for body in bodies:
+                ref = check_reference(resources[body['$resource']], kind)
+                if ref is not None:
+                    refs.append(ref)
+            retained = retained or bool(refs)
+            if refs and any(ref != refs[0] for ref in refs):
+                raise ValueError('Ambiguous retained media adapter references.')
+            if kind == 'gif' and not bodies and 'mediaReference' not in entry:
+                raise ValueError('Retained GIF adapter has no saved body.')
+        if retained and len({entry['version'] for entry in versions}) != len(versions):
+            raise ValueError('Duplicate retained Canvas version identities.')
+
+
 def _validate(value):
     validate_public(value)
     if len(json.dumps(value).encode()) > MAX_BYTES:
@@ -237,6 +310,7 @@ def _validate(value):
         raise ValueError('Output comment has no transferred lineage')
     if len({row['id'] for row in value['canvas']}) != len(value['canvas']) or any(row['sessionId'] != session['id'] for row in value['canvas']):
         raise ValueError('Canvas identities must belong to the transferred task')
+    _validate_media_bindings(value)
     for request in value['observations']['operationRequests']:
         if request['record']['sessionId'] != session['id'] or request['record']['requestId'] != request['id']:
             raise ValueError('Operation receipt belongs to another task')

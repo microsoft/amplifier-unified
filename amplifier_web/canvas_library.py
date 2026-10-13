@@ -153,17 +153,19 @@ def empty(state, *, open_panel=False):
                        'sessionId':state.get('selectedSessionId'),'workspaceId':state.get('selectedWorkspaceId')}
 
 
-def open_gif(service, args, proof):
+def open_gif(service, args):
     """Under the action lock, bind one immutable reference to this client only."""
     from .service import AppError
-    # Fresh guard immediately before mutation: an earlier guarded record is
-    # not authority. Canonical proof is obtained off-lock by the dispatcher.
-    record = service.outputs.media.guard(args, proof=proof)
+    # Fresh retained-object guard immediately before mutation. Active history
+    # is not the lifetime or authority of an already admitted object.
+    record = service.outputs.media.guard(args)
     if record.get('media', {}).get('mimeType') != 'image/gif':
         raise AppError('Open in Canvas is available only for retained GIFs.', 409)
     item = {key: copy.deepcopy(record[key]) for key in
             ('id', 'sessionId', 'title', 'filename', 'version', 'sha256', 'bytes', 'media')}
     reference = {'item': item, 'messageId': args['messageId']}
+    from .output_media import validate_media_reference
+    validate_media_reference(reference, record, args['sessionId'], kind='gif')
     if len(json.dumps(reference, ensure_ascii=False).encode()) >= 8000:
         raise AppError('The retained GIF reference metadata is unavailable.', 409)
     from .resource_files import put

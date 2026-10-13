@@ -1808,16 +1808,13 @@ class AppService:
                     resolver=self.peer_attribution.resolve, message_rows=rows))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
-        gif_proof = gif_record = None
+        gif_record = None
         if action == 'canvas.openGif':
             media = self.outputs.media
             try:
-                # Canonical identity work owns its own lock and worker. Never
-                # call identity/guarded inside the action mutation lock.
-                proof = await media.identity(args['sessionId'], args['messageId'], scoped=True)
                 async with self.lock:
-                    gif_record = copy.deepcopy(media.guard(args, proof=proof))
-                    if gif_record.get('media', {}).get('mimeType') != 'image/gif':
+                    gif_record = media.snapshot(args)
+                    if gif_record[0]['media']['mimeType'] != 'image/gif':
                         raise ValueError('Open in Canvas is available only for retained GIFs.')
                     self.canvas_views.guard_transition(action, args)
                 # Validate the same existing retained body before any library
@@ -1825,16 +1822,13 @@ class AppService:
                 # bytes() uses the existing bounded workers/cache/hash guards;
                 # none of these bytes enter Canvas state or action receipts.
                 await media.bytes(args)
-                gif_proof = await media.identity(args['sessionId'], args['messageId'], scoped=True)
-                if gif_proof != proof:
-                    raise ValueError('The saved assistant identity changed while opening Canvas.')
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
         pending = []
         async with self.lock:
             if action == 'canvas.openGif':
                 try:
-                    current = self.outputs.media.guard(args, proof=gif_proof)
+                    current = self.outputs.media.snapshot(args)
                     if current != gif_record:
                         raise ValueError('The retained GIF changed while opening Canvas.')
                 except ValueError as exc:
@@ -2081,7 +2075,7 @@ class AppService:
                     diagnostic_result = open_file(self, args, origin)
                 elif action == 'canvas.openGif':
                     from .canvas_library import open_gif
-                    diagnostic_result = open_gif(self, args, gif_proof)
+                    diagnostic_result = open_gif(self, args)
                 elif action == 'canvas.openAttachment':
                     from .canvas_files import open_attachment
                     diagnostic_result = open_attachment(self, args, origin)

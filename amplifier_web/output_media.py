@@ -234,6 +234,90 @@ def validate_media(data):
     raise ValueError("Only structurally valid GIF or MP4 media is supported.")
 
 
+def retained_facts(record, sid):
+    """Pure shape validation, not admission authority or transcript evidence.
+
+    Only the owning host registry or signed/reviewed transfer route supplies
+    records. A payload flag or a content hash cannot admit a new record.
+    """
+    def text(value, maximum):
+        return isinstance(value, str) and 0 < len(value) <= maximum
+
+    def integer(value, low, high):
+        return type(value) is int and low <= value <= high
+
+    origin = record.get('origin')
+    body = record.get('body')
+    metadata = record.get('media')
+    if (record.get('kind') != 'media' or record.get('sessionId') != sid
+            or not text(record.get('id'), 100) or not text(sid, 200)
+            or not isinstance(origin, dict) or not isinstance(origin.get('source'), str)
+            or origin['source'] not in {'ui', 'agent'}
+            or not text(origin.get('messageId'), 200)
+            or not integer(record.get('version'), 1, 2**63 - 1)
+            or not isinstance(record.get('sha256'), str)
+            or not re.fullmatch(r'[a-f0-9]{64}', record['sha256'])
+            or not text(record.get('title'), 200) or not text(record.get('filename'), 4000)
+            or not isinstance(body, dict) or set(body) not in ({'$resource'}, {'$resource', 'bytes'})
+            or not isinstance(body['$resource'], str)
+            or not re.fullmatch(r'[a-f0-9]{64}', body['$resource'])
+            or ('bytes' in body and not integer(body['bytes'], 1, MAX_BYTES * 4 // 3 + 1024))
+            or not isinstance(metadata, dict)):
+        raise ValueError('Invalid retained media record or historical provenance.')
+    mime = metadata.get('mimeType')
+    if mime == 'image/gif':
+        fields = {'mimeType', 'width', 'height', 'frameCount', 'durationMs',
+                  'loopCount', 'decodedPixelBytesEstimate'}
+        if (not integer(metadata.get('frameCount'), 1, MAX_FRAMES)
+                or not integer(metadata.get('durationMs'), 0, MAX_FRAMES * 655350)
+                or (metadata.get('loopCount') is not None
+                    and not integer(metadata['loopCount'], 0, 65535))):
+            raise ValueError('Invalid retained GIF metadata.')
+    elif mime == 'video/mp4':
+        fields = {'mimeType', 'width', 'height', 'codedWidth', 'codedHeight'}
+    else:
+        raise ValueError('Invalid retained media MIME type.')
+    if set(metadata) != fields:
+        raise ValueError('Invalid retained media metadata fields.')
+    for first, second in [('width', 'height')] + (
+            [('codedWidth', 'codedHeight')] if mime == 'video/mp4' else []):
+        if not integer(metadata[first], 1, MAX_SIDE) or not integer(metadata[second], 1, MAX_SIDE):
+            raise ValueError('Invalid retained media dimensions.')
+        _dimensions(metadata[first], metadata[second])
+    if mime == 'image/gif':
+        estimate = metadata['width'] * metadata['height'] * 4 * metadata['frameCount']
+        if (not integer(metadata['decodedPixelBytesEstimate'], 1, MAX_DECODED_ESTIMATE)
+                or metadata['decodedPixelBytesEstimate'] != estimate):
+            raise ValueError('Invalid retained GIF decoded-pixel estimate.')
+    if not integer(record.get('bytes'), 1, MAX_MP4_BYTES if mime == 'video/mp4' else MAX_BYTES):
+        raise ValueError('Invalid media byte metadata.')
+    # Linking and its CAS revision are publication state, not object lifetime.
+    return {key: copy.deepcopy(record[key]) for key in (
+        'id', 'sessionId', 'kind', 'origin', 'title', 'filename',
+        'version', 'sha256', 'bytes', 'media', 'body')}
+
+
+def validate_retained_body(data, record):
+    """Worker-only structural/integrity comparison with the admitted metadata."""
+    if (len(data) != record['bytes'] or hashlib.sha256(data).hexdigest() != record['sha256']
+            or validate_media(data) != record['media']):
+        raise ValueError('Media body differs from its saved metadata or hash.')
+
+
+def validate_media_reference(reference, record, sid, *, kind):
+    """Bind an inert adapter to one exact host-admitted output, without I/O."""
+    retained_facts(record, sid)
+    if not isinstance(reference, dict) or set(reference) != {'item', 'messageId'}:
+        raise ValueError('Invalid retained media reference.')
+    item = reference['item']
+    fields = ('id', 'sessionId', 'title', 'filename', 'version', 'sha256', 'bytes', 'media')
+    if (not isinstance(item, dict) or set(item) != set(fields)
+            or any(item[key] != record[key] or type(item[key]) is not type(record[key]) for key in fields)
+            or reference['messageId'] != record['origin']['messageId']
+            or kind != 'gif' or record['media']['mimeType'] != 'image/gif'):
+        raise ValueError('Media reference must match its exact owning output, kind, version and hash.')
+
+
 def read_verified(root, value, expected_sha256):
     """Run in a bounded worker. Never resolve symlinks in the supplied path."""
     if not re.fullmatch(r"[a-f0-9]{64}", expected_sha256):
@@ -396,29 +480,17 @@ class Media:
                 # Identity, attachment, bytes and reports remain root-only.
                 return {'items': [], 'overflow': False,
                         'mediaRevision': session.get('mediaRevision', 0)}
-        from .media_message_identity import StaleMediaIdentityError
-        # Discovery is read-only. Requalify the entire proof after a revision
-        # race; byte access and mutations never reuse or relax a stale proof.
-        for attempt in range(3):
-            try:
-                proof = await self.identity(sid, message_id, scoped=True)
-                async with self.app.lock:
-                    return self.descriptors(sid, message_id, proof)
-            except StaleMediaIdentityError:
-                if attempt == 2:
-                    raise
+            return self.descriptors(sid, message_id)
 
     async def guarded(self, values):
-        proof = await self.identity(values['sessionId'], values['messageId'], scoped=True)
         async with self.app.lock:
-            return self.guard(values, proof=proof)
+            return self.guard(values)
 
     async def observe(self, values, origin):
         if origin != 'ui':
             raise ValueError('Media observations must originate in the authenticated browser UI.')
-        proof = await self.identity(values['sessionId'], values['messageId'], scoped=True)
         async with self.app.lock:
-            return self.report(values, origin, proof=proof)
+            return self.report(values, origin)
 
     def authority(self, session, origin):
         if session.get('sessionKind', 'root') != 'root':
@@ -534,31 +606,46 @@ class Media:
     def descriptors(self, sid, message_id, proof=None):
         self.client_scope(sid)
         session = self.app._session(sid, hydrate=False)
-        self.assistant(session, message_id, proof)
+        self.authority(session, 'ui')
+        if (not isinstance(message_id, str) or not 0 < len(message_id) <= 200
+                or any(ord(char) < 32 for char in message_id)):
+            raise ValueError('Choose an exact stored media message ID.')
         rows = self.app.db.execute("""SELECT value FROM output_records WHERE session_id=?
             AND json_extract(value,'$.kind')='media' AND json_extract(value,'$.linked')=1
             AND json_extract(value,'$.origin.messageId')=? ORDER BY created,id LIMIT 21""",
             (sid, message_id)).fetchall()
         import json
-        return {'items': [self.descriptor(json.loads(row[0])) for row in rows[:20]],
+        records = [json.loads(row[0]) for row in rows[:20]]
+        for record in records:
+            retained_facts(record, sid)
+        return {'items': [self.descriptor(record) for record in records],
                 'overflow': len(rows) > 20, 'mediaRevision': session.get('mediaRevision', 0)}
 
     def guard(self, values, proof=None):
         sid = values['sessionId']
         self.client_scope(sid)
         session = self.app._session(sid, hydrate=False)
-        self.assistant(session, values['messageId'], proof)
+        self.authority(session, 'ui')
         record = self.outputs.record(sid, values['id'])
-        if (record.get('kind') != 'media' or not record.get('linked')
+        retained_facts(record, sid)
+        if (record['id'] != values['id']
                 or record.get('origin', {}).get('messageId') != values['messageId']
                 or record.get('version') != int(values['version']) or record.get('sha256') != values['sha256']):
-            raise ValueError('Choose the exact linked assistant media version and hash.')
+            raise ValueError('Choose the exact retained assistant media version and hash.')
         return record
+
+    def snapshot(self, values):
+        """Under the app lock: immutable registry/index facts and caller scope."""
+        from .resource_files import detach
+        record = self.guard(values)
+        return (retained_facts(record, values['sessionId']),
+                detach(self.app.db, record['body']['$resource']),
+                self.client_scope(values['sessionId']))
 
     def report(self, values, origin, proof=None):
         if origin != 'ui':
             raise ValueError('Media observations must originate in the authenticated browser UI.')
-        self.guard(values, proof=proof)
+        record = self.guard(values)
         client = self.app.clients.current.get()
         key = (client, values['id'], values['version'], values['sha256'])
         previous = self.observations.get(key)
@@ -568,7 +655,8 @@ class Media:
         result = {key: values[key] for key in ('generation', 'sequence', 'renderState', 'playback',
                                               'presentedFrames', 'mediaTime') if key in values}
         result.update(clientId=client, serverTimestamp=time.time(), detail=values.get('detail', ''),
-                      evidence='authenticated-ui-report', modelAttestation=False)
+                      evidence='authenticated-ui-report', modelAttestation=False,
+                      linked=bool(record.get('linked')))
         self.observations[key] = result
         self.observations.move_to_end(key)
         while len(self.observations) > 200:
@@ -580,8 +668,6 @@ class Media:
         observed = self.observations.get((client, record['id'], record['version'], record['sha256']))
         # Absence of current evidence is not evidence that a browser never loaded
         # it. Do not borrow an arbitrary other client's report for an agent read.
-        if not record.get('linked'):
-            return {'status': 'unlinked'}
         if not client or self.app.clients.records.get(client, {}).get('selectedSessionId') != record['sessionId']:
             return {'status': 'unbound', 'detail': 'No matching authenticated client is bound to this read.'}
         if not observed:
@@ -592,15 +678,13 @@ class Media:
         if client not in self.app.queue_clients.values():
             return {'status': 'disconnected', 'serverTimestamp': observed['serverTimestamp'],
                     'detail': 'The reporting browser is disconnected; current playback is unknown.'}
-        return {'status': 'observed', **copy.deepcopy(observed)}
+        return {'status': 'observed', **copy.deepcopy(observed), 'linked': bool(record.get('linked'))}
 
     async def bytes(self, values):
-        from .resource_files import detach, settle_worker
-        proof = await self.identity(values['sessionId'], values['messageId'], scoped=True)
+        from .resource_files import settle_worker
         async with self.app.lock:
-            record = self.guard(values, proof=proof)
-            source = detach(self.app.db, record['body']['$resource'])
-            workspace = self.workspace(self.app._session(values['sessionId'], hydrate=False))
+            before = self.snapshot(values)
+            record, source, client = before
         # Bounded workers also serialize cache decisions: no durable byte store.
         async with self.workers:
             signature = await settle_worker(_signature, source)
@@ -615,32 +699,21 @@ class Media:
                 self.cache[key] = (data, signature, time.monotonic())
                 while len(self.cache) > 2 or sum(len(row[0]) for row in self.cache.values()) > 64 * 1024 * 1024:
                     self.cache.popitem(last=False)
-        refreshed = await self.identity(values['sessionId'], values['messageId'], scoped=True)
+            await settle_worker(validate_retained_body, data, record)
         async with self.app.lock:
-            current = self.guard(values, proof=refreshed)
-            current_source = detach(self.app.db, current['body']['$resource'])
-            if (refreshed != proof
-                    or current.get('body') != record.get('body') or current_source != source
-                    or self.workspace(self.app._session(values['sessionId'], hydrate=False)) != workspace):
+            if self.snapshot(values) != before:
                 raise ValueError('Media source authority changed during read.')
         return data
 
     async def head(self, values):
         """Indexed metadata only: HEAD never opens/decodes a saved media body."""
-        from .resource_files import detach, settle_worker
-        proof = await self.identity(values['sessionId'], values['messageId'], scoped=True)
+        from .resource_files import settle_worker
         async with self.app.lock:
-            record = self.guard(values, proof=proof)
-            source = detach(self.app.db, record['body']['$resource'])
+            before = self.snapshot(values)
+            record, source, client = before
         async with self.workers:
             await settle_worker(_signature, source)
-        refreshed = await self.identity(values['sessionId'], values['messageId'], scoped=True)
         async with self.app.lock:
-            current = self.guard(values, proof=refreshed)
-            if (refreshed != proof
-                    or current != record or detach(self.app.db, current['body']['$resource']) != source):
+            if self.snapshot(values) != before:
                 raise ValueError('Media source authority changed during HEAD.')
-        size = record['bytes']
-        if not isinstance(size, int) or not 0 < size <= MAX_BYTES:
-            raise ValueError('Invalid media byte metadata.')
-        return size
+        return record['bytes']

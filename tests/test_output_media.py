@@ -240,8 +240,8 @@ async def test_media_actual_assistant_commit_receipt_revision_and_source_removal
     await media_app.dispatch('outputs.unlink', {'sessionId': args['sessionId'], 'id': record['id'], 'expectedRevision': 1})
     assert session['mediaRevision'] == 2
     with media_app.clients.bind('media-client'):
-        with pytest.raises(ValueError, match='linked'):
-            await media_app.outputs.media.bytes(tuple_args)
+        assert (await media_app.outputs.media.describe(args['sessionId'], args['messageId']))['items'] == []
+        assert await media_app.outputs.media.bytes(tuple_args) == gif()
 
 
 async def test_media_role_unknown_foreign_hash_and_command_forgery(media_app):
@@ -329,11 +329,18 @@ async def test_warm_cache_never_bypasses_changed_index(tmp_path, in_memory):
     db = sqlite3.connect(':memory:' if in_memory else tmp_path / 'index.sqlite3')
     db.execute('CREATE TABLE state_resources(id TEXT PRIMARY KEY, value TEXT NOT NULL)')
     session = {'id': 'own', 'workspace': 'synthetic'}
-    app = SimpleNamespace(db=db, lock=asyncio.Lock(), _session=lambda sid, **kwargs: session)
+    clients = SimpleNamespace(current=SimpleNamespace(get=lambda: 'index-client'),
+                              records={'index-client': {'selectedSessionId': 'own'}})
+    app = SimpleNamespace(db=db, lock=asyncio.Lock(), clients=clients,
+                          _session=lambda sid, **kwargs: session)
     media = Media(SimpleNamespace(app=app))
     body = await put_prepared_async(db, _prepare_media(gif()))
     db.commit()
-    record = {'body': body, 'sha256': hashlib.sha256(gif()).hexdigest()}
+    record = {'id': 'index-media', 'sessionId': 'own', 'kind': 'media',
+              'origin': {'source': 'ui', 'messageId': 'saved-assistant'},
+              'title': 'Indexed GIF', 'filename': 'indexed.gif', 'version': 1,
+              'body': body, 'sha256': hashlib.sha256(gif()).hexdigest(),
+              'bytes': len(gif()), 'media': validate_media(gif())}
     media.guard = lambda values, proof=None: record
 
     async def indexed_identity(*args, **kwargs):
@@ -779,7 +786,7 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
     monkeypatch.setattr(app.cold_display, 'hydrate', no_bodies)
     app.clients.attach('index-recovery-browser')
     with app.clients.bind('index-recovery-browser'):
-        assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
+        await app.outputs.media.identity(session['id'], requested, scoped=True)
         assert len(acquired) == 2 and acquired[0] is not acquired[1]
         assert len(conflicts) == 1
         assert type(conflicts[0]) is ValueError
@@ -796,7 +803,7 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
         with monkeypatch.context() as warm:
             warm.setattr(foundation_history, '_decode', no_bodies)
             warm.setattr(media_saved_aliases.DisplayJSON, 'string', no_bodies)
-            assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
+            await app.outputs.media.identity(session['id'], requested, scoped=True)
         assert len(acquired) == 3 and acquired[2] is acquired[1] and len(conflicts) == 1
         assert proofs[1] == proof
     assert hashes and owner not in hashes
@@ -843,7 +850,9 @@ async def test_media_index_conflict_budget_and_attachment_publication_fail_close
     with app.clients.bind('index-refusal-browser'):
         with pytest.raises(ValueError) as error:
             if boundary == 'descriptor':
-                await app.outputs.media.describe(session['id'], old)
+                # This retry budget still belongs to admission identity, not
+                # retained discovery (which must never consult the index).
+                await app.outputs.media.identity(session['id'], old, scoped=True)
             else:
                 await app.outputs.media.attach(args, 'ui', 'index-refusal-attach')
     assert len(acquired) == (4 if boundary.startswith('final-') else 2)
@@ -917,7 +926,7 @@ async def test_media_index_retry_never_rescues_unsafe_second_snapshot(
     with app.clients.bind('unsafe-index-browser'):
         with pytest.raises(ValueError):
             if boundary == 'descriptor':
-                await app.outputs.media.describe(session['id'], old)
+                await app.outputs.media.identity(session['id'], old, scoped=True)
             else:
                 await app.outputs.media.attach(args, 'ui', 'unsafe-index-attach')
     assert len(acquired) == 2 and acquired[0] is not acquired[1] and len(conflicts) == 1
@@ -1109,19 +1118,24 @@ async def test_canonical_240_tail_100_old_window_empty_attach_http_and_body_boun
                 **query, 'id': record['id'], 'version': record['version'], 'sha256': record['sha256'],
                 'generation': 1, 'sequence': 1, 'renderState': 'ready', 'playback': 'paused'}})
         assert observed.status == 200 and (await observed.json())['accepted']
-        for invalid in ('missing', '\x00malformed', 'x' * 201,
-                        automatic_history.display_message(corpus[0], 0, session)['id']):
+        for invalid in ('\x00malformed', 'x' * 201):
             refused = await client.get('/api/outputs/media', params={**query, 'messageId': invalid})
             assert refused.status == 400
+        for absent in ('missing', automatic_history.display_message(corpus[0], 0, session)['id']):
+            empty = await client.get('/api/outputs/media', params={**query, 'messageId': absent})
+            assert empty.status == 200 and (await empty.json())['items'] == []
     assert reads == [60]  # Warm descriptor/bytes/report never read message bodies.
     assert threads and owner not in threads
     assert dict.get(session, 'messages') == tail
     assert (directory / 'transcript.jsonl').read_bytes() == raw
-    # Disappearance invalidates canonical authority even while the tail is
-    # untouched. No empty-success response disguises the missing origin.
+    # History revision does not revoke an already-admitted retained object,
+    # but it still refuses admission under the removed origin.
     store.save(sid, corpus[2:], {}, preserve_system=True)
-    assert (await client.get('/api/outputs/media', params=query)).status == 400
-    assert (await client.get(route, params=exact)).status == 400
+    assert (await client.get('/api/outputs/media', params=query)).status == 200
+    response = await client.get(route, params=exact)
+    assert response.status == 200 and await response.read() == gif()
+    with pytest.raises(ValueError):
+        await service.outputs.media.attach(args, 'ui', 'removed-origin-admission')
 
 
 def media_args_without_hydration(session):
@@ -1163,15 +1177,15 @@ async def test_retained_web_alias_and_native_forgery_ambiguity(media_app):
         assert (await app.outputs.media.describe(session['id'], alias['id']))['items'] == []
         session['messages'].append({**alias, 'id': 'competing-web-assistant'})
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], alias['id'])
+            await app.outputs.media.identity(session['id'], alias['id'])
         session['messages'].pop()
         session['messages'].insert(0, copy.deepcopy(alias))
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], alias['id'])
+            await app.outputs.media.identity(session['id'], alias['id'])
         session['messages'].pop(0)
         session.update(historyManaged=True, messages=[{**canonical, 'id': 'forged-native-id'}])
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], 'forged-native-id')
+            await app.outputs.media.identity(session['id'], 'forged-native-id')
 
 
 async def test_hidden_canonical_assistant_id_does_not_grant_media_authority(media_app):
@@ -1183,8 +1197,9 @@ async def test_hidden_canonical_assistant_id_does_not_grant_media_authority(medi
     store.save(session['id'], corpus, {}, preserve_system=True)
     app.clients.attach('hidden-canonical-browser')
     with app.clients.bind('hidden-canonical-browser'):
+        assert (await app.outputs.media.describe(session['id'], internal))['items'] == []
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], internal)
+            await app.outputs.media.identity(session['id'], internal)
 
 
 async def test_old_canonical_media_restart_reopen_preserves_origin_without_display_hydration(media_app):
@@ -1284,8 +1299,7 @@ async def test_canonical_bytes_revalidate_entire_operation_scope(media_app, monk
                 else:
                     session['nativeIdentity'] = 'different-canonical-session'
             release.set()
-            with pytest.raises(ValueError):
-                await pending
+            assert await pending == gif()
         finally:
             release.set()
             await asyncio.gather(pending, return_exceptions=True)
@@ -1707,9 +1721,9 @@ async def test_cold_saved_alias_conflicts_fail_closed(media_app, defect):
     app.clients.attach('invalid-alias-browser')
     with app.clients.bind('invalid-alias-browser'):
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], rows[0]['id'])
+            await app.outputs.media.identity(session['id'], rows[0]['id'])
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], canonical)
+            await app.outputs.media.identity(session['id'], canonical)
     assert not dict.__contains__(chilled, 'messages')
 
 
@@ -1724,7 +1738,7 @@ async def test_untrusted_compact_alias_hint_cannot_replace_saved_body(media_app)
     with app.clients.bind('hint-browser'):
         assert (await app.outputs.media.describe(session['id'], canonical))['items'] == []
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], 'hint-only-alias')
+            await app.outputs.media.identity(session['id'], 'hint-only-alias')
     assert not dict.__contains__(chilled, 'messages')
 
 
@@ -1790,13 +1804,16 @@ async def test_cold_alias_later_boundaries_recheck_detached_index(media_app, bou
             app.db.execute('UPDATE state_resources SET value=? WHERE id=?',
                            ('{"$blob":"' + 'f' * 64 + '"}', reference['$resource']))
             app.db.commit()
+            # Corrupt history still revokes a write proof, never the separate
+            # already-admitted media object or its exact retained tuple.
             with pytest.raises(ValueError, match='resource index changed'):
-                if boundary == 'descriptor':
-                    app.outputs.media.descriptors(session['id'], 'saved-web-assistant', proof)
-                elif boundary == 'guard':
-                    app.outputs.media.guard(values, proof=proof)
-                else:
-                    app.outputs.media.report(values, 'ui', proof=proof)
+                app.outputs.media.assistant(chilled, 'saved-web-assistant', proof)
+            if boundary == 'descriptor':
+                assert app.outputs.media.descriptors(session['id'], 'saved-web-assistant')['items'][0]['id'] == record['id']
+            elif boundary == 'guard':
+                assert app.outputs.media.guard(values)['id'] == record['id']
+            else:
+                assert app.outputs.media.report(values, 'ui')['accepted']
     assert not dict.__contains__(chilled, 'messages')
 
 
@@ -2700,7 +2717,7 @@ async def test_legacy_inline_alias_fresh_hashing_runs_off_owner_thread_on_warm_m
     with app.clients.bind('inline-worker-browser'):
         for requested in (canonical, 'saved-web-assistant'):
             assert (await app.outputs.media.describe(sid, requested))['items'] == []
-    assert len(threads) == 4 and owner not in threads
+    assert len(threads) == 2 and owner not in threads
     assert dict.get(chilled, '_coldFields') == markers and not dict.__contains__(chilled, 'messages')
 
 
@@ -2796,7 +2813,7 @@ async def test_cold_saved_alias_attach_reaches_all_fences_without_display_hydrat
 
 
 async def assert_resident_media_refused(app, session, directory, identities, monkeypatch):
-    """Actual attachment and descriptor boundaries, not an identity-only probe."""
+    """Actual attachment refusal; discovery does not infer trust from history."""
     from amplifier_web.service import AppError
     task = getattr(app, '_storage_maintenance_task', None)
     if task:
@@ -2818,8 +2835,7 @@ async def assert_resident_media_refused(app, session, directory, identities, mon
         patch.setattr(app, '_publish_changes', publish)
         with app.clients.bind('resident-refusal-browser'):
             for index, identity in enumerate(identities):
-                with pytest.raises(ValueError, match='assistant'):
-                    await app.outputs.media.describe(session['id'], identity)
+                assert (await app.outputs.media.describe(session['id'], identity))['items'] == []
                 command = 'resident-refusal-' + str(index)
                 with pytest.raises(AppError):
                     await app.dispatch('outputs.attachMedia', {**args, 'messageId': identity},
@@ -3098,13 +3114,14 @@ async def test_resident_index_only_claimant_evidence_is_frozen_for_later_boundar
             # Still a valid unique alias, but not the captured authority.
             session['messages'][0]['id'] = 'different-valid-retained-alias'
             with pytest.raises(ValueError, match='identity changed'):
-                if boundary == 'descriptor':
-                    app.outputs.media.descriptors(session['id'], canonical, proof)
-                elif boundary == 'guard':
-                    app.outputs.media.guard(values, proof=proof)
-                else:
-                    app.outputs.media.report(values, 'ui', proof=proof)
-        assert app.outputs.media.observations == {}
+                app.outputs.media.assistant(session, canonical, proof)
+            if boundary == 'descriptor':
+                assert app.outputs.media.descriptors(session['id'], canonical)['items'][0]['id'] == record['id']
+            elif boundary == 'guard':
+                assert app.outputs.media.guard(values)['id'] == record['id']
+            else:
+                assert app.outputs.media.report(values, 'ui')['accepted']
+        assert bool(app.outputs.media.observations) == (boundary == 'report')
     assert (directory / 'transcript.jsonl').read_bytes() == raw
 
 
@@ -3168,11 +3185,13 @@ async def test_missing_kind_keeps_root_identity_and_descriptor_errors(media_app)
     media_app.clients.attach('missing-kind-browser')
     with media_app.clients.bind('missing-kind-browser'):
         assert (await media_app.outputs.media.describe(session['id'], session['messages'][0]['id']))['items'] == []
+        assert (await media_app.outputs.media.describe(session['id'], 'unknown'))['items'] == []
         with pytest.raises(ValueError, match='assistant'):
-            await media_app.outputs.media.describe(session['id'], 'unknown')
+            await media_app.outputs.media.identity(session['id'], 'unknown')
         session['messages'][0]['role'] = 'user'
+        assert (await media_app.outputs.media.describe(session['id'], session['messages'][0]['id']))['items'] == []
         with pytest.raises(ValueError, match='assistant'):
-            await media_app.outputs.media.describe(session['id'], session['messages'][0]['id'])
+            await media_app.outputs.media.identity(session['id'], session['messages'][0]['id'])
 
 
 async def test_discovered_worker_descriptor_http_empty_without_byte_report_or_mutation_authority(
