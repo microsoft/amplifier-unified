@@ -71,6 +71,15 @@ existing view and draft. The native child tests used real Core/Foundation with
 scripted orchestration. None of these checks claims provider efficacy, publication,
 installed-worker adoption, or live-host acceptance.
 
+A subsequent native-loop re-preparation probe reproduced reassignment of a
+nested child's context to an unrelated later root input. Keeping the
+coordinator's existing bridge and child installer fixes that path; 104 focused
+identity, worker, surface-context and file-policy checks pass. The broad browser
+gate also needed two fixture corrections: an attachment selector matched both
+Open and Remove, and a timer measurement could count a delayed host render.
+The corrected timer probe passes repeated runs and detects a deliberately
+introduced parent render on every tick. Production rendering behavior is unchanged.
+
 Follow-up scope remains explicit: multi-repository resource bindings;
 assignment budgets and scoped Stop across independent roots; full capability
 grants; expiry/fair scheduling beyond the initial inbox bounds; live-provider,
