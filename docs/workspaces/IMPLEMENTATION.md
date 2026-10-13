@@ -27,6 +27,14 @@ Seven unrelated workspace-starter tests fail identically on the pre-change
 macOS baseline because of its existing directory-descriptor Git handling;
 they are excluded from the focused pass count.
 
+The full local Python run at the initial packaged reservation revision completed
+with 6,798 passes, six passing subtests, 209 skips and 28 failures. All 28 failed
+cases reproduce on unchanged main `0dcc211` in the same environment. They include
+macOS path/case/installer behavior, an absent optional loop module, existing
+storage tests and a workflow-source policy assertion. This is not a green full
+suite; subsequent compact-receipt changes have separate focused and installed
+package checks, plus the live journeys below.
+
 All 16 reservation checks also pass against an installed wheel outside the
 source checkout. A two-round real-provider run using fresh worker processes
 confirmed a conflict against an independent owner's claim, preserved that
