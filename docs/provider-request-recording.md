@@ -7,8 +7,8 @@ model, counts, and other metadata, so the request cannot be displayed later.
 
 ## Enable recording
 
-Open **Settings → Advanced → Troubleshooting & recovery → Diagnostics**, select
-**Record provider requests for troubleshooting**, and save. This option is off
+Open **Settings → Privacy & files → App diagnostic capture**, select
+**Record provider requests and responses for troubleshooting**, and save. This option is off
 by default. The agent-side equivalent is `diagnostics.configure` with
 `config.providerRequests: true`, retaining the other desired configuration.
 
@@ -35,8 +35,37 @@ or forward the unsanitized raw field. Neither redaction nor bounding modifies
 the actual provider request. Arbitrary private text is still private text;
 credential redaction is best effort, not a guarantee that a log is public-safe.
 
+### Larger recordings and downloads
+
+The one-million-character event preview keeps activity and conversation state
+bounded. When that preview truncates an emitted request or response, the host
+also saves a separate redacted JSON copy beside that session's event log, in
+`provider-payloads/`. This copy permits up to 16 Mi characters (16,777,216),
+24 nesting levels and 64 MiB of encoded JSON. These are capture limits, not a
+promise that the provider exposes its complete wire payload.
+
+Expand a model call to download the larger recorded request or response without
+loading it into the transcript or JSON viewer. Each download identifies the
+root session, actual calling session (including delegates), call, provider,
+model, redaction and truncation. A capped recording is explicitly labelled
+**partial** and has `-partial` in its filename. The smaller viewer and its copy
+button still show the event preview. Historical truncated events cannot gain a
+larger copy retroactively.
+
+Downloads require normal host authentication and a matching canonical event
+reference. The host verifies the file's SHA-256 and length, then streams it in
+64 KiB chunks. Browser arguments cannot choose paths. Missing files produce an
+unavailable error; they are not reconstructed from chat history. Diagnostic I/O
+failure preserves the safe preview and does not stop inference.
+
+Copies are private (files mode 600, directory mode 700), owned by native session
+storage and kept until that storage is removed. Disabling capture does not
+remove earlier copies. Existing bundle exporters and session-export formats
+may contain only the event preview, not these separate files. Use the model
+call's download for a portable copy, and treat it as private conversation data.
+
 Some provider raw flags also enable response recording. The same redaction and
-size bound applies to those raw response fields. Existing session logging and
+preview/download limits apply to those raw response fields. Existing session logging and
 bundle exporters remain in control of storage and external delivery; this
 setting does not enable app forwarding or create a new destination. Shared
 event files keep their existing retention behavior and are not deleted when

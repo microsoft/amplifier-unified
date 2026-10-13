@@ -155,6 +155,51 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                                       group=request.query.get('group'), revision=request.query.get('revision'),
                                       resolver=service.peer_attribution.resolve))
 
+    async def provider_recording(request):
+        from .provider_payloads import open_record
+        field = request.query.get('field')
+        if field not in {'request', 'response'}:
+            raise ValueError('Choose a provider request or response.')
+        session = service._session(request.query.get('sessionId'))
+        node = next((row for row in session.get('execution', {}).get('nodes', [])
+                     if row.get('id') == request.query.get('id') and row.get('kind') == 'llm'), None)
+        reference = (node or {}).get('_eventFields', {}).get(field)
+        if not reference:
+            raise ValueError('This provider recording is no longer available.')
+        opening = asyncio.create_task(asyncio.to_thread(open_record, reference, request.query.get('digest')))
+        try:
+            stream, info = await asyncio.shield(opening)
+        except asyncio.CancelledError:
+            # A worker thread cannot be cancelled. Close its verified handle
+            # when it completes even if the browser disconnected meanwhile.
+            def release(task):
+                if not task.cancelled() and task.exception() is None:
+                    task.result()[0].close()
+            opening.add_done_callback(release)
+            raise
+        try:
+            header = {'schemaVersion': 1, 'kind': 'provider.' + field, 'callId': node['id'],
+                      'sessionId': node.get('sessionId'), 'rootSessionId': session['id'],
+                      'provider': node.get('provider'), 'model': node.get('model'),
+                      'capture': info}
+            prefix = (json.dumps(header)[:-1] + ', "payload":').encode()
+            suffix = '-partial' if info['truncated'] else ''
+            response = web.StreamResponse(headers={
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Disposition': f'attachment; filename="provider-{field}-{info["sha256"][:16]}{suffix}.json"',
+                'Content-Length': str(len(prefix) + info['bytes'] + 1),
+            })
+            _set_response_headers(response, request.path)
+            await response.prepare(request)
+            await response.write(prefix)
+            while chunk := await asyncio.to_thread(stream.read, 64 * 1024):
+                await response.write(chunk)
+            await response.write(b'}')
+            await response.write_eof()
+            return response
+        finally:
+            stream.close()
+
     async def conversation_navigation(request):
         from .conversation_navigation import query
         session = service._session(request.query.get('sessionId'))
@@ -556,6 +601,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
     app.router.add_get("/api/conversation/detail", conversation_detail)
+    app.router.add_get("/api/conversation/provider-recording", provider_recording)
     app.router.add_get("/api/conversation/navigation", conversation_navigation)
     app.router.add_post("/api/conversation/work-sync", conversation_work_sync)
     app.router.add_get('/api/conversation/exports/{identity}', conversation_export)
