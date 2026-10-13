@@ -2,6 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {executionData,messageTurnId,treeForTurn,usageLabel} from '../src/timeline-data.js';
 
+test('a focused empty modern window does not synthesize a partial legacy timeline',()=>{
+ const session={id:'modern',workerSummary:{bounded:true,total:900},
+  execution:{nodes:[],turns:[],detailsDeferred:true},workers:[{id:'active',status:'working'}]};
+ assert.deepEqual(executionData(session).nodes,[]);
+ assert.deepEqual(executionData(session).turns,[]);
+ delete session.workerSummary;
+ assert.equal(executionData(session).nodes.length,1,'older servers retain legacy behavior');
+});
+
 for(const [status,expected] of [['working','running'],['starting','running'],['idle','completed'],['error','error'],['failed','failed']])test(`legacy tool errors respect the host ${status} lifecycle`,()=>{
  const session={status,runtimeEvents:[{type:'runtime.tool',phase:'error',callId:'failed-fetch',tool:'web_fetch',at:100,error:'HTTP 404: Not Found'}]};
  const before=JSON.stringify(session),data=executionData(session);

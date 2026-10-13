@@ -6,6 +6,7 @@ import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {RecoveryNotice,recoveryPresentation}=await server.ssrLoadModule('/src/recovery-notice.jsx');
 const {ConversationError}=await server.ssrLoadModule('/src/conversation-controls.jsx');
+const {ChatOverview}=await server.ssrLoadModule('/src/work-overview.jsx');
 test.after(()=>server.close());
 const message={id:'notice',text:'Original recovery JSON',observation:{source:'local-job-recovery',recovery:{job_id:'job-1',call_id:'call-1',status:'returned',outcome:'tool_report_unverified'}}};
 test('recovery presents recorded status without claiming verified success',()=>{
@@ -30,4 +31,18 @@ test('failure banner identifies the recorded incident and respects acknowledgeme
  assert.doesNotMatch(html,/Conversation stopped/);
  assert.equal(renderToStaticMarkup(React.createElement(ConversationError,{...props,state:{attention:{items:[{id:'session:chat',read:true}]}}})), '');
  assert.equal(renderToStaticMarkup(React.createElement(ConversationError,{...props,session:{id:'chat',status:'idle',failure:props.session.failure}})), '');
+});
+test('paged recovery keeps its worker identity when historical rows are deferred',()=>{
+ const worker={id:'child',sessionId:'native-child',name:'Earlier worker'};
+ const saved={...message,recoveryWorker:worker},session={id:'chat',workers:[],workerSummary:{bounded:true,total:900}};
+ assert.deepEqual(recoveryPresentation(saved,session).worker,worker);
+ const html=renderToStaticMarkup(React.createElement(RecoveryNotice,{message:saved,session,state:{sessions:[{id:'child'}]},act:()=>{}}));
+ assert.match(html,/Earlier worker/);assert.match(html,/Open worker chat/);
+ assert.doesNotMatch(renderToStaticMarkup(React.createElement(RecoveryNotice,{message:saved,session,state:{sessions:[]},act:()=>{}})),/Open worker chat/);
+});
+test('finished-only worker summary remains visible without eager worker rows',()=>{
+ const session={id:'chat',workers:[],workerSummary:{bounded:true,total:1000,finished:1000,
+  recentFinished:[{id:'last',name:'Last saved worker',status:'completed'}]}};
+ const html=renderToStaticMarkup(React.createElement(ChatOverview,{state:{selectedSessionId:'chat',sessions:[session],view:{}},act:()=>{},changeDraft:()=>{}}));
+ assert.match(html,/1000.*finished observations/);assert.match(html,/Last saved worker/);
 });

@@ -4,7 +4,7 @@ import {DetailText} from './conversation-detail';
 export function recoveryPresentation(message,session){
  const facts=message.observation?.recovery||{},callId=facts.call_id||message.observation?.call_id;
  const node=message.recoveryResult||(callId?(session?.execution?.nodes||[]).find(n=>n.kind==='tool'&&n.toolCallId===callId):null);
- const worker=callId?(session?.workers||[]).find(w=>w.callId===callId||w.toolCallId===callId):null;
+ const worker=message.recoveryWorker||(callId?(session?.workers||[]).find(w=>w.callId===callId||w.toolCallId===callId):null);
  const status=({returned:'Result returned',cancelled:'Work cancelled',interrupted:'Work interrupted',failed:'Work failed',pending:'Outcome unknown'})[facts.status]||'Saved work notice';
  const uncertain=facts.outcome==='unconfirmed'||['cancelled','interrupted','pending'].includes(facts.status);
  const explanation=uncertain?'The final outcome is unconfirmed. Inspect the saved work before deciding whether to continue.':facts.reason==='restored_evidence'?'A saved call or result was restored to this chat.':facts.reason==='changed_evidence'?'A saved result replaced an earlier pending record.':'Saved work was found when this chat resumed.';

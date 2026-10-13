@@ -219,7 +219,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             # SQLite belongs to this event loop, not the transcript-read worker.
             # Bind raw text before compacting; a >4096-character prompt must not
             # lose its provenance merely because its display body is deferred.
-            from .browser_detail import compact, TEXT_LIMIT
+            from .browser_detail import compact, TEXT_LIMIT, enrich_recovery
             from .message_interactions import annotate
             from .peer_attribution import derive, display_annotations
             rows = derive(session, result['messages'], service.peer_attribution.resolve)
@@ -230,6 +230,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                 if row.get('attribution'):
                     item['attribution'] = row['attribution']
                 messages.append(item)
+            enrich_recovery(session, messages)
             result['messages'] = messages
         return web.json_response(result, headers={'Cache-Control':'no-store'})
 
