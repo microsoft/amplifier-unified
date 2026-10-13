@@ -12,7 +12,7 @@ export function interimResponse(message){
 export function foldInterimRows(rows,data,enabled,{deferred=new Set(),revealId=null}={}){
  if(enabled!==true)return rows;
  const turns=new Map(data.turns.map(turn=>[turn.id,turn])),result=[];
- let group=null,boundary=null;
+ let group=null;
  const compatible=(items,response)=>items.every(item=>{
   const turn=turns.get(item.turnId);
   return turn&&!isRunning(turn)&&!['failed','error','cancelled','interrupted'].includes(turn.phase||turn.status)&&
@@ -23,7 +23,7 @@ export function foldInterimRows(rows,data,enabled,{deferred=new Set(),revealId=n
   if(response&&!deferred.has(response.generationId)){
    if(!group||group.generationId!==response.generationId){
     const previous=result.at(-1),work=previous?.kind==='work'&&!previous.interim&&compatible(previous.items,response)?result.pop():null;
-    group={kind:'work',interim:true,id:`interim:${response.generationId}:${boundary||response.anchorMessageId||'start'}`,
+    group={kind:'work',interim:true,id:`interim:${response.generationId}:${row.id}`,
      generationId:response.generationId,response,items:[...(work?.items||[])],outputs:[],reveal:false};
     result.push(group);
    }
@@ -36,7 +36,6 @@ export function foldInterimRows(rows,data,enabled,{deferred=new Set(),revealId=n
    group.items.push(...row.items);
   }else{
    group=null;result.push(row);
-   if(row.kind==='message'||row.kind==='recovery')boundary=row.id;
   }
  }
  return result;
@@ -46,7 +45,20 @@ export function interimOpen(expanded,row){
  if(row.reveal||expanded.has(row.id))return true;
  if(expanded.has('closed:'+row.id))return false;
  // A deliberate open of an existing work section survives its regrouping.
- return row.items.some(item=>item.turnId&&(expanded.has('turn:'+item.turnId)||expanded.has('work:'+item.turnId)));
+ return row.items.some(item=>item.message?expanded.has('interim-message:'+item.message.id):
+  item.turnId&&(expanded.has('turn:'+item.turnId)||expanded.has('work:'+item.turnId)));
+}
+
+export function retainInterimIds(rows,previous=[]){
+ const used=new Set();
+ return rows.map(row=>{
+  if(!row.interim)return row;
+  const ids=new Set(row.items.flatMap(item=>item.message?[item.message.id]:[]));
+  const old=previous.find(candidate=>candidate.interim&&!used.has(candidate.id)&&
+   candidate.items.some(item=>item.message&&ids.has(item.message.id)));
+  const id=old?.id||row.id;used.add(id);
+  return id===row.id?row:{...row,id};
+ });
 }
 
 export function groupForMessage(rows,id){

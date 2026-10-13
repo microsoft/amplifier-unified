@@ -69,7 +69,10 @@ export function WorkTimeline({items,data,state,act,row,renderMessage}){
  const updates=items.filter(item=>item.message).length;
  const toggle=()=>{
   const next=row?.interim?new Set(expanded):toggleDetail(expanded,summaryId,detail);
-  if(row?.interim){next.delete(summaryId);next.delete('closed:'+summaryId);next.add(open?'closed:'+summaryId:summaryId)}
+  if(row?.interim){
+   next.delete(summaryId);next.delete('closed:'+summaryId);next.add(open?'closed:'+summaryId:summaryId);
+   for(const item of items)if(item.message){const key='interim-message:'+item.message.id;open?next.delete(key):next.add(key)}
+  }
   act('view.update',{patch:{executionExpanded:[...next]}});
  };
  return <section className="a-execution-turn a-execution-content a-work-group" data-part="execution-group" data-interim-group={row?.interim?row.id:undefined} aria-label="Work between messages">

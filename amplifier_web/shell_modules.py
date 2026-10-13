@@ -164,7 +164,10 @@ class ShellModules:
             appearance = json.loads(row[0])['composition']['presentation'] if row else {}
             if appearance:
                 self.put('preferences', 'appearance', appearance)
-        composition['presentation'] = appearance
+        # Experimental transcript folding is a view choice, never inherited by
+        # an unrelated browser from the shared look-and-feel defaults.
+        composition['presentation'] = {key: value for key, value in appearance.items()
+                                       if key != 'collapseInterimReplies'}
         saved = {'revision': 0, 'composition': composition, 'baselineView': baseline, 'views': {}, 'preview': None, 'lastGood': copy.deepcopy(composition), 'reported': None}
         self.put('client', identity, saved)
         return saved
@@ -707,7 +710,8 @@ class ShellModules:
                     # Only a committed appearance change updates new-window defaults.
                     # Recovering an older tab must not overwrite a newer preference.
                     if action != 'shell.recover' and client['composition']['presentation'] != composition['presentation']:
-                        self.put('preferences', 'appearance', composition['presentation'])
+                        self.put('preferences', 'appearance', {key: value for key, value in composition['presentation'].items()
+                                                              if key != 'collapseInterimReplies'})
                     client['composition'] = composition
                     client['preview'] = None
                     client['revision'] += 1

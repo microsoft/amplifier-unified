@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {foldInterimRows,interimResponse,interimOpen,groupForMessage} from '../src/interim-replies.js';
+import {foldInterimRows,interimResponse,interimOpen,groupForMessage,retainInterimIds} from '../src/interim-replies.js';
 import {conversationWorkRows,turnPlacements,combinedWork} from '../src/timeline-data.js';
 import {withArtifactRows} from '../src/artifact-placement.js';
 
@@ -41,6 +41,16 @@ test('human/peer boundaries split groups and unrelated/live work is not swallowe
  assert.ok(folded.some(row=>row.id==='steer'));
  const live=structuredClone(fixture());live.data.turns[1].phase='running';delete live.data.turns[1].endedAt;
  assert.ok(foldInterimRows(live.rows,live.data,true).some(row=>!row.interim&&row.items?.some(i=>i.turnId==='input@progress')));
+ const ids=foldInterimRows(live.rows,live.data,true).filter(row=>row.interim).map(row=>row.id);
+ assert.equal(new Set(ids).size,ids.length);
+});
+test('earlier pages retain the open group identity rather than remounting its messages',()=>{
+ const {rows,data}=fixture();
+ const earlier=foldInterimRows(rows.slice(4),data,true);
+ const all=retainInterimIds(foldInterimRows(rows,data,true),earlier);
+ const old=earlier.find(row=>row.interim),current=all.find(row=>row.interim);
+ assert.equal(current.id,old.id);
+ assert.equal(interimOpen(new Set([old.id]),current),true);
 });
 test('message-only turns and final off-page use host annotation, not loaded suffix',()=>{
  const rows=withArtifactRows([{kind:'message',id:'progress',message:message('progress',{response})}]);

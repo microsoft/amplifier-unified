@@ -1,5 +1,5 @@
 import React,{useCallback,useLayoutEffect,useMemo,useRef,useState} from 'react';
-import {foldInterimRows,groupForMessage,interimResponse,interimOpen} from './interim-replies.js';
+import {foldInterimRows,groupForMessage,interimResponse,interimOpen,retainInterimIds} from './interim-replies.js';
 import {WorkTimeline} from './timeline';
 import {MessageEntry} from './message-actions';
 import {InlineMedia} from './inline-media';
@@ -16,7 +16,7 @@ function reading(pane){
 // must not unfold everything. No reading state is sent to the runtime.
 export function useInterimReplies(rows,data,enabled,sessionId,pane,expanded,act){
  const saved=useRef(null),[revision,refresh]=useState(0);
- if(saved.current?.sessionId!==sessionId)saved.current={sessionId,seen:new Set(),deferred:new Set()};
+ if(!saved.current||saved.current.sessionId!==sessionId)saved.current={sessionId,seen:new Set(),deferred:new Set(),rows:[]};
  const state=saved.current;
  const candidates=useMemo(()=>new Set(rows.flatMap(row=>{
   const response=row.kind==='message'&&interimResponse(row.message);
@@ -34,16 +34,23 @@ export function useInterimReplies(rows,data,enabled,sessionId,pane,expanded,act)
   const element=pane.current;if(!element)return;
   const release=()=>{if(state.deferred.size&&!reading(element)){state.deferred.clear();refresh(value=>value+1)}};
   element.addEventListener('scroll',release);element.ownerDocument.addEventListener('selectionchange',release);
-  element.addEventListener('focusout',release);
-  return()=>{element.removeEventListener('scroll',release);element.ownerDocument.removeEventListener('selectionchange',release);element.removeEventListener('focusout',release)};
+  let frame;
+  const focusout=event=>{
+   if(element.contains(event.relatedTarget))return;
+   frame=requestAnimationFrame(release);
+  };
+  element.addEventListener('focusout',focusout);
+  return()=>{cancelAnimationFrame(frame);element.removeEventListener('scroll',release);element.ownerDocument.removeEventListener('selectionchange',release);element.removeEventListener('focusout',focusout)};
  },[state,pane,enabled]);
  // Until the first layout effect has checked reading intent, retain live rows.
  const deferred=new Set([...state.deferred,...[...candidates].filter(id=>!state.seen.has(id))]);
- const folded=useMemo(()=>foldInterimRows(rows,data,enabled,{deferred}),[rows,data,enabled,state,revision]);
+ const folded=useMemo(()=>retainInterimIds(foldInterimRows(rows,data,enabled,{deferred}),state.rows),[rows,data,enabled,state,revision]);
+ useLayoutEffect(()=>{state.rows=folded},[state,folded]);
  const ensureVisible=useCallback(async id=>{
   const row=groupForMessage(folded,id);if(!row)return false;
   const opened=new Set(expanded||[]);if(interimOpen(opened,row))return false;
   opened.delete('closed:'+row.id);opened.add(row.id);
+  for(const item of row.items)if(item.message)opened.add('interim-message:'+item.message.id);
   await act('view.update',{patch:{executionExpanded:[...opened]}});
   return true;
  },[folded,expanded,act]);
@@ -51,13 +58,15 @@ export function useInterimReplies(rows,data,enabled,sessionId,pane,expanded,act)
 }
 
 export function ConversationWork({row,data,state,act,dispatch,session,working}){
+ const open=row.interim&&interimOpen(new Set(state.view?.executionExpanded||[]),row);
+ const outputs=message=><div data-interim-output={message.id}>
+  <InlineMedia sessionId={session.id} messageId={message.id} mediaRevision={session.mediaRevision||0} dispatch={dispatch}/>
+  <ArtifactLinks state={state} message={message} act={act} dispatch={dispatch}/>
+ </div>;
  return <>
   <WorkTimeline row={row} items={row.items} data={data} state={state} act={act}
-   renderMessage={message=><MessageEntry message={message} session={session} state={state} act={act} dispatch={dispatch} working={working} omitMedia/>}/>
-  {row.interim&&row.items.filter(item=>item.message).map(({message})=>
-   <div key={message.id} data-interim-output={message.id}>
-    <InlineMedia sessionId={session.id} messageId={message.id} mediaRevision={session.mediaRevision||0} dispatch={dispatch}/>
-    <ArtifactLinks state={state} message={message} act={act} dispatch={dispatch}/>
-   </div>)}
+   renderMessage={message=><><MessageEntry message={message} session={session} state={state} act={act} dispatch={dispatch} working={working} omitMedia/>{outputs(message)}</>}/>
+  {row.interim&&!open&&row.items.filter(item=>item.message).map(({message})=>
+   <React.Fragment key={message.id}>{outputs(message)}</React.Fragment>)}
  </>;
 }

@@ -8,7 +8,7 @@ import pytest
 from amplifier_web.response_completion import ResponseBlocks, apply, invalidate_removed
 from amplifier_web.runtime import normalize_event
 from amplifier_web.runtime_worker import Worker
-from amplifier_web.service import AppService
+from amplifier_web.service import AppError, AppService
 
 
 def blocks(tracker, texts, *, generation="g", start=10):
@@ -166,3 +166,24 @@ async def test_completion_before_message_reload_and_older_than_event_caps(tmp_pa
         assert session["messages"][0]["response"]["phase"] == "interim"
     finally:
         await restored.close()
+
+
+async def test_folding_preference_is_boolean_and_not_a_new_browser_default(tmp_path):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        shell = app.shell
+        first = shell.client("first")
+        composition = deepcopy(first["composition"])
+        composition["presentation"]["collapseInterimReplies"] = True
+        receipt = await app.dispatch("shell.changes.prepare", {"clientId": "first",
+            "expectedRevision": first["revision"], "composition": composition})
+        await app.dispatch("shell.changes.apply", {"clientId": "first",
+            "expectedRevision": first["revision"], "changeId": receipt["result"]["id"]})
+        assert shell.client("first")["composition"]["presentation"]["collapseInterimReplies"] is True
+        assert "collapseInterimReplies" not in shell.client("second")["composition"]["presentation"]
+        composition["presentation"]["collapseInterimReplies"] = "true"
+        with pytest.raises(AppError, match="boolean"):
+            await app.dispatch("shell.changes.prepare", {"clientId": "first",
+                "expectedRevision": shell.client("first")["revision"], "composition": composition})
+    finally:
+        await app.close()

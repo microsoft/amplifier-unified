@@ -16,10 +16,11 @@ const started=await new Promise((resolve,reject)=>{
 const base=`http://127.0.0.1:${started.port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
 const control=async body=>{const r=await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(r.ok,true,await r.clone().text());return r.json()};
 const browser=await chromium.launch({headless:true});
+let debugPage,debugErrors=[];
 try{
  const context=await browser.newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:headers,permissions:['clipboard-read','clipboard-write']});
  await context.addCookies([{name:'amplifier_unified_session',value:started.cookie,url:base,httpOnly:true,sameSite:'Strict'}]);
- const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(15000);
+ const page=await context.newPage(),errors=[];debugPage=page;debugErrors=errors;page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(15000);
  await control({op:'interim-start'});await page.goto(base);
  await expect(page.getByText('Checking the first detail.',{exact:true})).toBeVisible();
  await control({op:'interim-finish'});
@@ -37,6 +38,7 @@ try{
  await expect(group).toHaveCount(1);await expect(header).toHaveAttribute('aria-expanded','false');
  await expect(page.getByText('Checking the first detail.',{exact:true})).toHaveCount(0);
  await expect(page.getByText('The final conclusion.',{exact:true})).toBeVisible();
+ if(process.env.EVIDENCE_DIR){await mkdir(process.env.EVIDENCE_DIR,{recursive:true});await page.locator('.a-messages').screenshot({path:process.env.EVIDENCE_DIR+'/interim-desktop-collapsed.png'});}
  assert.equal(await exportText(),originalExport,'folding never changes export');
  await header.focus();await page.keyboard.press('Enter');
  await expect(header).toHaveAttribute('aria-expanded','true');
@@ -66,10 +68,57 @@ try{
  await control({op:'interim-start'});await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight;document.activeElement?.blur()});
  await control({op:'interim-finish'});await expect(group).toHaveCount(1);
  await expect(header).toHaveAttribute('aria-expanded','false');
+ // Completion must not remove a keyboard user's focused progress controls.
+ await control({op:'interim-start'});
+ const currentProgress=page.locator('.a-assistant').filter({hasText:'Checking the first detail.'});
+ await currentProgress.getByRole('button',{name:'Copy message as Markdown'}).focus();
+ await control({op:'interim-finish'});
+ await expect(page.getByText('The final next step.',{exact:true})).toBeVisible();
+ await expect(group).toHaveCount(0);
+ await page.keyboard.press('Tab');await expect(group).toHaveCount(0);
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ await expect(group).toHaveCount(1);
+ // Actual retained media is visible once, outside collapsed prose and in order when opened.
+ await control({op:'interim-media'});
+ await expect(page.getByText('Retained interim animation',{exact:true})).toBeVisible();
+ await expect(page.locator('[data-media-id]')).toHaveCount(1);
+ await header.click();await expect(header).toHaveAttribute('aria-expanded','true');
+ await expect(page.locator('[data-media-id]')).toHaveCount(1);
+ const contentOrder=await group.locator('[data-message-id],[data-media-id]').evaluateAll(nodes=>nodes.map(node=>node.hasAttribute('data-media-id')?'media':node.querySelector('p')?.textContent));
+ assert.deepEqual(contentOrder,['Checking the first detail.','media','Checking the second detail.']);
+ await header.click();
  await page.setViewportSize({width:390,height:844});
  await expect(header).toBeVisible();await header.click();
  await expect(page.getByText('Checking the first detail.',{exact:true})).toBeVisible();
+ await expect(group.locator('[data-kind="tool"]')).toHaveCount(2);
  if(process.env.EVIDENCE_DIR){await mkdir(process.env.EVIDENCE_DIR,{recursive:true});await page.screenshot({path:process.env.EVIDENCE_DIR+'/interim-mobile-expanded.png',fullPage:true});}
+ await page.setViewportSize({width:1280,height:1000});
+ await control({op:'interim-start',long:true});
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
+ await control({op:'interim-finish'});
+ await expect(group,'scrollback defers automatic folding').toHaveCount(0);
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ await expect(group).toHaveCount(1);
+ await openSettingsPage(page,'appearance');
+ const rejectSave=async route=>{
+  if(route.request().postDataJSON()?.action==='shell.changes.prepare')
+   return route.fulfill({status:409,json:{error:'Synthetic preference save rejected.'}});
+  return route.continue();
+ };
+ await page.route('**/api/actions',rejectSave);await toggle.click();
+ await expect(page.getByText('Synthetic preference save rejected.',{exact:true})).toBeVisible();
+ await expect(toggle).toBeChecked();
+ await page.unroute('**/api/actions',rejectSave);await toggle.uncheck();
+ await expect(toggle).not.toBeChecked();
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(group).toHaveCount(0);
+ const finalState=await control({op:'patch'});
+ assert.equal(finalState.runtimeSends,0,'presentation never sends model input');
  assert.deepEqual(errors,[]);
- console.log('PASS: off/on, final-only, expand/copy/reveal, export equality, reload/Everything, two-client isolation, active/error, mobile.');
+ console.log('PASS: off/on/rejected save, final-only, expand/copy/reveal, export equality, reload/Everything, two-client isolation, active/error, focus/scroll deferral, media once/in order, mobile, zero model sends.');
+}catch(error){
+ console.error('Browser errors:',debugErrors,'Visible:',await debugPage?.locator('body').innerText());
+ console.error('Fixture:',log);throw error;
 }finally{await browser.close();fixture.kill('SIGTERM');}
