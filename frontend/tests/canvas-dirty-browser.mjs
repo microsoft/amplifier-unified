@@ -55,11 +55,20 @@ try {
  await page.unroute('**/api/actions',holdDirty);
  await expect.poll(async()=>(await view('primary')).dirty).toBe(true);
  const before=(await inspect()).map(target);
+ // Browsing retains the dirty mount; explicitly reopening the same chat must
+ // neither block nor discard its edit just because return shortcuts are gone.
+ await action('view.update',{patch:{workSurface:'workspaces'}});
+ await expect(primary).toBeHidden();
+ assert.equal((await state()).selectedSessionId,session);
+ assert.equal((await view('primary')).dirty,true);
+ await action('session.select',{id:session});
+ await expect(primary).toBeVisible();await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
+ assert.deepEqual((await inspect()).map(target),before);
  for(let cycle=0;cycle<2;cycle++){
-  await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
+  await page.getByRole('button',{name:'Chat overview',exact:true}).click();
   await expect(primary).toBeHidden();
   assert.equal(await primary.evaluate(el=>el.closest('.a-canvas-workspace').inert),true);
-  await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
+  await page.getByRole('button',{name:'Chat overview',exact:true}).click();
   await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
  }
  await page.getByRole('button',{name:'Close canvas panel'}).click();
@@ -67,7 +76,7 @@ try {
  await page.getByRole('button',{name:'Open canvas',exact:true}).click();
  await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
 
- await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
+ await page.getByRole('button',{name:'Chat overview',exact:true}).click();
  await page.getByRole('button',{name:/Other artifact.*markdown/}).click();
  await expect(primary).toBeVisible();await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
  for(const [name,args] of [

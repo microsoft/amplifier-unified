@@ -9,6 +9,23 @@ preferences survive resizing.
 Workspace browsing stays in the drawer. Tap **…** for a details sheet with the
 full title, canonical session ID, path, and actions.
 
+Workspace pages and Search chats have no remembered-chat return control or
+working-chat banner. Open a named conversation from Pinned, Recent, search or a
+workspace list, including the conversation already selected before browsing.
+Escape clears a search query; with an empty query it stays in search.
+Workspace file previews name their destination chat before opening. A guarded
+`canvas.openFile {sessionId,workspace,path,showConversation:true}` opens the file
+and shows that chat in one action, only from its workspace Files page. Failed or
+stale requests do not navigate, and delayed receipts never navigate again.
+
+Browsing still retains the selected chat's draft, attachments, reading position
+and mounted Canvas editors. It does not stop work or revoke screen-sharing
+consent. Call controls and Stop sharing remain visible; to stop non-voice work,
+open that chat and use its normal Stop control. No selection or storage migration
+is involved. The shared `view.update {workSurface:"chat"}` presentation action
+remains available to authorized callers; it shows the selected conversation,
+not a separate saved return target.
+
 **Canvas** is an icon beside More in the top toolbar. On phones, it fills the
 content area and offers **Back to chat**; the chat's scroll and draft stay intact.
 On larger screens it docks when the chat and panel have usable widths.

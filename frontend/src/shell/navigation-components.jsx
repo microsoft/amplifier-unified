@@ -340,14 +340,14 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
  </>;
 }
 export function ChatSearch({page,model,view,viewAct,now}){
- const root=useRef(null),input=useRef(null),nav=useContext(WorkNavigationContext);
+ const root=useRef(null),input=useRef(null);
  const counts=page.activityCounts||{};
  const active=(view.navArchive||'active')!=='active'||(view.navStatusFilter||'all')!=='all'||view.navLocationFilter==='managed';
  useEffect(()=>{input.current?.focus()},[]);
  const update=value=>patch(viewAct,value);
  const clear=()=>{update({navFilter:'',navArchive:'active',navStatusFilter:'all',navLocationFilter:'all'});input.current?.focus()};
  const keyboard=event=>{
-  if(event.key==='Escape'&&event.target===input.current){event.preventDefault();if(view.navFilter)update({navFilter:''});else nav?.browse('chat');return}
+  if(event.key==='Escape'&&event.target===input.current){event.preventDefault();if(view.navFilter)update({navFilter:''});return}
   if(!['ArrowDown','ArrowUp'].includes(event.key)||!(event.target===input.current||event.target.matches('.a-nav-chat-select')))return;
   const rows=[...root.current.querySelectorAll('.a-nav-chat-select')],index=rows.indexOf(event.target);
   event.preventDefault();

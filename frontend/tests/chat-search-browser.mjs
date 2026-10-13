@@ -21,6 +21,7 @@ try{
  const search=page.getByRole('searchbox',{name:'Search chats',exact:true}),area=page.getByRole('region',{name:'Chat search',exact:true});
  const results=area.locator('.a-nav-chat-select');
  await expect(search).toBeFocused();await expect(area.getByRole('status')).toHaveText('206 chats');
+ await expect(page.getByRole('button',{name:/^Back(?: to chat)?$/})).toHaveCount(0);
  assert.equal(await page.locator('.a-browser-pins').count(),0);
  assert.ok((await search.boundingBox()).y<300,'search appears above results without scrolling');
  await expect(area.locator('details')).not.toHaveAttribute('open','');
@@ -42,18 +43,22 @@ try{
  await area.locator('summary').click();await page.screenshot({path:'/tmp/unified-search-desktop.png'});
  await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:'/tmp/unified-search-dark.png'});
  await page.setViewportSize({width:390,height:844});await expect(search).toBeVisible();
+ await expect(page.getByRole('button',{name:/^Back(?: to chat)?$/})).toHaveCount(0);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  // Wait for the responsive navigation state to follow the resized viewport.
  await expect.poll(()=>area.evaluate(el=>el.scrollWidth>el.clientWidth+1)).toBe(false);
  await area.locator('summary').click();await page.screenshot({path:'/tmp/unified-search-mobile.png'});
  await page.setViewportSize({width:1280,height:900});
- await page.getByRole('button',{name:'Back to chat',exact:true}).click();await expect(draft).toHaveDraft('Keep this unfinished draft.');
- await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect(search).toBeFocused();await expect(search).toHaveValue('Beta');
- await search.press('Escape');await expect(search).toHaveValue('');await search.press('Escape');await expect(draft).toHaveDraft('Keep this unfinished draft.');
+ await search.focus();await search.press('Escape');await expect(search).toHaveValue('');
+ await search.press('Escape');await expect(search).toBeFocused();await expect(area).toBeVisible();await expect(draft).toBeHidden();
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
+ // Explicitly choose the same retained chat; selection must not be a no-op.
+ await page.locator('[data-sidebar-section=pinned] [data-session-id="'+selected+'"] .a-nav-chat-select').click();
+ await expect(draft).toHaveDraft('Keep this unfinished draft.');await expect(draft).toBeVisible();
  await page.getByRole('button',{name:'Search chats',exact:true}).click();await search.fill('Beta 002');await expect(results).toHaveCount(1);await search.press('ArrowDown');await results.first().press('Enter');await expect(area).toHaveCount(0);
  assert.notEqual(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
  const info=await (await page.request.get(`http://127.0.0.1:${port}/api/fixture/info`)).json();assert.deepEqual(info.runtimeSends,[]);
  assert.deepEqual(errors,[]);
- console.log('Search passed: focused top field, pinned matches, wildcard search, paging reset, archive and sort, keyboard selection/return, retained draft, compact light/dark and narrow layouts; no model sends.');
+ console.log('Search passed: focused top field, pinned matches, wildcard search, paging reset, archive and sort, no implicit Back/Escape return, explicit same-chat selection, retained draft, compact light/dark and narrow layouts; no model sends.');
 }catch(error){await page?.screenshot({path:'/tmp/unified-search-failure.png'}).catch(()=>{});throw error}
 finally{await browser?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}}

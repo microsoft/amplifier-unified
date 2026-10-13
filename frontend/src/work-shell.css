@@ -75,7 +75,8 @@
 #amp-one.a-approachable-shell .a-work-details{max-width:600px;font-size:14px;line-height:1.7}
 #amp-one.a-approachable-shell .a-work-file-path{display:flex;align-items:center;gap:8px;color:var(--a-muted);font-size:12px;overflow-wrap:anywhere;margin:10px 0}
 #amp-one.a-approachable-shell .a-work-file-row{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--a-line);min-height:48px}
-#amp-one.a-approachable-shell .a-work-file-row>button:not(.a-icon){flex:1;justify-content:flex-start;text-align:left;background:none;border:0;padding:12px 0;color:var(--a-ink)}
+#amp-one.a-approachable-shell .a-work-file-row>button:not(.a-icon){flex:1;min-width:0;flex-direction:column;align-items:flex-start;justify-content:flex-start;text-align:left;background:none;border:0;padding:12px 0;color:var(--a-ink);overflow-wrap:anywhere}
+#amp-one.a-approachable-shell .a-work-file-row>button>small{color:var(--a-muted);font-size:var(--a-text-xs,12px)}
 #amp-one.a-approachable-shell:not([data-work-surface=chat]) .a-conversation>*:not(.a-work-browser-host){display:none!important}
 #amp-one.a-approachable-shell .a-work-browser-host{display:flex;flex:1;min-height:0;overflow:hidden}
 #amp-one.a-approachable-shell .a-work-browser-host[hidden]{display:none}
