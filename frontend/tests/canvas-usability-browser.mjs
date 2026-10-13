@@ -41,7 +41,7 @@ try{
  await action('attachment.add',{sessionId:state.selectedSessionId,name:'Review notes.md',base64:Buffer.from('# Attached review\n\nThe original text.').toString('base64')});
  const attachment=await page.evaluate(()=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).draftAttachments[0]);
  await action('conversation.send',{sessionId:state.selectedSessionId,text:'Review my notes',attachmentIds:[attachment.id]});
- await page.getByRole('button',{name:'Review notes.md',exact:false}).click();
+ await page.locator('[data-action="canvas.openAttachment"]').filter({hasText:'Review notes.md'}).click();
  await expect(panel.getByRole('heading',{name:'Attached review'})).toBeVisible();
  await expect(page.getByRole('link',{name:'Download Review notes.md'})).toHaveAttribute('href',attachment.url);
  await page.reload();await expect(panel.getByRole('heading',{name:'Attached review'})).toBeVisible();
