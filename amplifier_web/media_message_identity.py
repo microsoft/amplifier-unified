@@ -126,8 +126,18 @@ def resolve(value, message_id, saved=None, aliases=None):
         return {'snapshot': value, 'fact': (message_id, 'assistant'), 'revision': None}
     from .automatic_history import revision, display_identity
     from .conversation_navigation import source
-    before = revision(value)
-    facts, _ = source({**value, 'historyManaged': True})
+    for attempt in range(2):
+        before = revision(value)
+        try:
+            facts, _ = source({**value, 'historyManaged': True})
+        except ValueError as exc:
+            # Only a lost indexed-read revision permits one fresh acquisition.
+            # Qualification and final comparisons below must never be retried.
+            if (attempt or type(exc) is not ValueError
+                    or exc.args != ('Session history changed during indexed read',)):
+                raise
+        else:
+            break
     if saved is not None:
         if aliases is None:
             raise ValueError(ERROR)

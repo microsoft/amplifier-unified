@@ -85,6 +85,7 @@ ACTION_DEFINITIONS = {
     "canvas.copyPath": ("Copy the selected artifact file path on the app server, absolute or relative to its original workspace; never opens a file or submits a message.", schema({"id":string(100),"format":{"enum":["absolute","relative"]}},["id","format"])),
     "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
     "canvas.openAttachment": ("Open a sent text attachment from the currently displayed conversation in Canvas; never submits or replays work.", schema({"sessionId":string(200),"id":string(32),"clientId":string(200)}, ["sessionId","id"])),
+    "canvas.openGif": ("Open an exact retained assistant GIF in the originating browser client's Canvas, only on an explicit UI click. Does not send, generate, or attach anything.", schema({"sessionId":string(200),"messageId":string(200),"id":string(100),"version":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"clientId":string(200)}, ["sessionId","messageId","id","version","sha256"])),
     "canvas.openFile": ("Open a local file in Canvas for the currently displayed chat and its unchanged workspace. Missing or out-of-workspace files return unavailable; never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200)}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
@@ -379,7 +380,7 @@ for _access, _actions in {
     },
     "domain_authoritative": {
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
-        "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.select", "canvas.reference",
+        "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.openGif", "canvas.select", "canvas.reference",
         *MESSAGE_INTERACTIONS,
         *operation_definitions(), *observation_definitions(schema, string),
         *visual_definitions(schema, string), *computer_visual_definitions(schema, string),
@@ -1430,6 +1431,10 @@ class AppService:
             raise AppError(exc.message) from exc
         except ValueError as exc:
             raise AppError(str(exc)) from None
+        if action == 'canvas.openGif' and (origin != 'ui' or client_id is None
+                or args.get('clientId', client_id) != client_id
+                or self.clients.record().get('kind') != 'web'):
+            raise AppError('Open in Canvas requires an explicit click in the originating browser client.', 403)
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
@@ -1800,8 +1805,45 @@ class AppService:
                     resolver=self.peer_attribution.resolve, message_rows=rows))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
+        gif_proof = gif_record = None
+        if action == 'canvas.openGif':
+            media = self.outputs.media
+            try:
+                # Canonical identity work owns its own lock and worker. Never
+                # call identity/guarded inside the action mutation lock.
+                proof = await media.identity(args['sessionId'], args['messageId'], scoped=True)
+                async with self.lock:
+                    gif_record = copy.deepcopy(media.guard(args, proof=proof))
+                    if gif_record.get('media', {}).get('mimeType') != 'image/gif':
+                        raise ValueError('Open in Canvas is available only for retained GIFs.')
+                    self.canvas_views.guard_transition(action, args)
+                # Validate the same existing retained body before any library
+                # mutation, including when the source file has disappeared.
+                # bytes() uses the existing bounded workers/cache/hash guards;
+                # none of these bytes enter Canvas state or action receipts.
+                await media.bytes(args)
+                gif_proof = await media.identity(args['sessionId'], args['messageId'], scoped=True)
+                if gif_proof != proof:
+                    raise ValueError('The saved assistant identity changed while opening Canvas.')
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from None
         pending = []
         async with self.lock:
+            if action == 'canvas.openGif':
+                try:
+                    current = self.outputs.media.guard(args, proof=gif_proof)
+                    if current != gif_record:
+                        raise ValueError('The retained GIF changed while opening Canvas.')
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                # Re-check dirty state after every await, even before a replay
+                # receipt. No remember/save/select has happened yet.
+                self.canvas_views.guard_transition(action, args)
+            if action in {'canvas.versions.revise', 'canvas.versions.restore'}:
+                row = next((r for r in self.state.get('canvasArtifacts', [])
+                            if r['id'] == args['id']), {})
+                if row.get('kind') == 'gif':
+                    raise AppError('Retained GIF references are immutable. Open the original GIF instead.', 409)
             if transfer_sid:
                 try:
                     current_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
@@ -1885,6 +1927,10 @@ class AppService:
                 target = self.projections.sessions(self.state).by_id.get(args['id'])
                 if target is not None and accepts(self, target):
                     return select(self, target, command_id, fingerprint, include_state=include_state)
+            if action in {'canvas.copy', 'canvas.download'}:
+                canvas = self.state['canvas']
+                if args['id'] == canvas.get('id') and canvas.get('kind') == 'gif':
+                    raise AppError('Use Download original on the retained GIF.', 409)
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
@@ -2030,6 +2076,9 @@ class AppService:
                 if action == 'canvas.openFile':
                     from .canvas_files import open_file
                     diagnostic_result = open_file(self, args, origin)
+                elif action == 'canvas.openGif':
+                    from .canvas_library import open_gif
+                    diagnostic_result = open_gif(self, args, gif_proof)
                 elif action == 'canvas.openAttachment':
                     from .canvas_files import open_attachment
                     diagnostic_result = open_attachment(self, args, origin)

@@ -8,12 +8,42 @@ import {Code,Eye,Copy,Download,ZoomIn,ZoomOut,Maximize,Check,AlertCircle} from '
 import {Markdown} from './markdown';
 import {FormattedCopy} from './formatted-copy';
 import {BlockCopy,CopyControl} from './block-copy.js';
+import {MediaFigure,validateMediaMetadata} from './inline-media';
 
 const PdfPreview=lazy(()=>import('./pdf-preview'));
 const viewAction=(canvas,act,patch)=>act('canvas.view',{id:canvas.id,patch});
 function useReport(canvas,act,part='preview'){
  const ref=useRef(act);ref.current=act;
- return useMemo(()=> (status,message='')=>{if(canvas.id)ref.current('canvas.report',{id:canvas.id,part,status,message:String(message).slice(0,2000)})},[canvas.id,part]);
+ return useMemo(()=> (status,message='')=>{if(canvas.id)return ref.current('canvas.report',{id:canvas.id,part,status,message:String(message).slice(0,2000)})},[canvas.id,part]);
+}
+
+export function GifCanvasViewer({canvas,act,reportStatus}){
+ const report=useReport(canvas,act);
+ const reference=useMemo(()=>{
+  try{
+   const value=canvas.mediaReference;
+   if(!value||typeof value.messageId!=='string'||!value.messageId||value.messageId.length>200)
+    throw Error('The retained GIF reference is unavailable.');
+   validateMediaMetadata({items:[value.item],overflow:false,mediaRevision:0},canvas.sessionId);
+   if(value.item.media.mimeType!=='image/gif')throw Error('This artifact is not a retained GIF.');
+   return value;
+  }catch(error){return {error:error.message}}
+ },[canvas.mediaReference,canvas.sessionId]);
+ const statusRef=useRef(reportStatus);statusRef.current=reportStatus;
+ const reportMedia=useMemo(()=>payload=>{
+  const status=payload.renderState==='loading'?'pending':payload.renderState;
+  const message=payload.detail||`${payload.renderState} · ${payload.playback} · ${payload.presentedFrames} frames`;
+  // Both client-local reports belong to one notification. Even a rejection
+  // must wait for the other transport before MediaReporter can flush again.
+  return Promise.allSettled([report(status,message),statusRef.current?.(status==='pending'?'loading':status,message)])
+   .then(results=>{const failed=results.find(row=>row.status==='rejected');if(failed)throw failed.reason;return results.map(row=>row.value)});
+ },[report]);
+ useEffect(()=>{
+  if(reference.error){report('error',reference.error);reportStatus?.('error',reference.error)}
+ },[reference.error,report,reportStatus]);
+ return reference.error?<p role="alert">{reference.error}</p>:<div className="a-canvas-viewer a-inline-media">
+  <MediaFigure item={reference.item} messageId={reference.messageId} reportMedia={reportMedia}/>
+ </div>;
 }
 function cleanSvg(svg){
  return DOMPurify.sanitize(svg,{USE_PROFILES:{svg:true,svgFilters:true},FORBID_TAGS:['foreignObject','script','image','a','use','animate','set'],FORBID_ATTR:['href','xlink:href']});

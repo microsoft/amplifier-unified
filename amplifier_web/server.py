@@ -565,6 +565,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/events", events)
     from .live_clients import setup_routes as setup_clients
     setup_clients(app, streams)
+    from .client_observations import setup_routes as setup_observations
+    setup_observations(app)
+    from .companion import setup_routes as setup_companion
+    setup_companion(app)
 
     async def shell_state(request):
         from .shell_modules import IDENTITY

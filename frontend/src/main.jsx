@@ -1,4 +1,5 @@
 import {useConnectionSetup} from './setup-journey';
+import {chatDeepLink} from './chat-deep-link';
 import {DictationButton} from './dictation-controls';
 import {ChatPlan} from './chat-plan';
 import {ChatPages,chatPageTitles} from './chat-pages';
@@ -172,7 +173,7 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
-  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment'].includes(action);
+  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action);
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,error:'Settings changes were kept.'});
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
   const referenceAction=action==='message.reply'||action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
@@ -247,6 +248,16 @@ function App(){
  const shell=useShell(serverState.current,dispatch,clientId,state,{onError:reportError,onRecovered:()=>setConnectionFailure(afterReconnect)});
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>reportError(e)),[dispatch,reportError]);
+ const deepLinkOpened=useRef(false);
+ useEffect(()=>{
+  if(!state||deepLinkOpened.current)return;
+  deepLinkOpened.current=true;
+  const id=chatDeepLink(location.search);
+  if(id)dispatch('session.select',{id}).then(result=>{
+   if(!result.accepted)return;
+   const url=new URL(location.href);url.searchParams.delete('chat');history.replaceState(history.state,'',url);
+  }).catch(reportError);
+ },[!!state,dispatch,reportError]);
  const viewReporter=useRef(null);
  if(!viewReporter.current)viewReporter.current=createViewReporter(body=>request('/api/view',{method:'POST',body}));
  const publishView=useCallback(()=>{if(latest.current&&!document.hidden)viewReporter.current({...visibleView(root.current,clientId,{interfaceOnly:true}),sessionId:latest.current.selectedSessionId??null,voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'});},[]);

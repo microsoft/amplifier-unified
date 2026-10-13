@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.124",
+      "title": "Chat links, GIF Canvas playback and reliable coordination waits",
+      "changes": [
+        "Browser chat links open the requested conversation in that window, including after sign-in, without changing other windows or sending a message.",
+        "Retained inline GIFs can open in Canvas with play/pause controls and original downloads. Saved media survives source-file removal, and unsaved Canvas edits are protected.",
+        "Media lookup retries once when the saved conversation index changes during a read, while retaining conversation and attachment identity checks.",
+        "Coordination waits allow time for the host response after the requested wait period. Transport failures with empty messages now provide actionable details.",
+        "Web, terminal and other authorized clients can read shared paginated conversation activity and attention through discoverable APIs, without loading conversation history. Completed reads release their snapshot capacity."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.123",
       "title": "Focused workspace storage and downloadable model recordings",
       "changes": [

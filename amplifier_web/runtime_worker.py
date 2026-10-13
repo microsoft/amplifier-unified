@@ -87,12 +87,25 @@ class Worker:
             self.approvals.pop(identity, None)
 
     async def bridge(self, operation, args):
+        timeout = 60
+        if operation == "dispatch" and args.get("action") == "coordination.wait":
+            values = args.get("args", {})
+            wait_ms = values.get("waitMs", 0) if isinstance(values, dict) else None
+            # The host starts its long-poll clock after transport/preprocessing.
+            # Only valid bounded waits earn margin; host validation still applies.
+            if type(wait_ms) is int and 0 <= wait_ms <= 60000:
+                timeout = max(timeout, wait_ms / 1000 + 5)
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         self.bridges[identity] = future
-        publish({"op": "bridge", "id": identity, "operation": operation, "args": args})
         try:
-            return await asyncio.wait_for(future, 60)
+            publish({"op": "bridge", "id": identity, "operation": operation, "args": args})
+            return await asyncio.wait_for(future, timeout)
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"App bridge response timed out after {timeout:g} seconds "
+                "(transport timeout, not normal coordination.wait expiry)."
+            ) from exc
         finally:
             self.bridges.pop(identity, None)
 

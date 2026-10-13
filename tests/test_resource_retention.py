@@ -54,6 +54,7 @@ async def test_bound_save_retains_shared_other_client_and_nested_resources_on_di
         service._last_storage_sweep = -1e30
         with service.clients.bind('browser-a'):
             service._save()
+            await service._storage_maintenance_task
         kept = (nested, body, dynamic, shared_view, other_client)
         for ref in kept:
             assert resource(service.db, ref['$resource'])

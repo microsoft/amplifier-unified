@@ -13,6 +13,7 @@ const server=await createServer({configFile:false,server:{middlewareMode:true,hm
   return code.replace(needle,'remarkPlugins:[()=>()=>{globalThis.messageParseVisits.push(original)},remarkGfm,');
  }}]});
 const {MessageEntry}=await server.ssrLoadModule('/src/message-actions.jsx');
+const {InlineMedia}=await server.ssrLoadModule('/src/inline-media.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const observer=globalThis.IntersectionObserver;
 globalThis.IntersectionObserver=class{observe(){}disconnect(){}};
@@ -35,6 +36,28 @@ test('unrelated parent updates do not reparse unchanged assistant text',async()=
   await act(async()=>root.update(render(props)));
   assert.ok(root.root.findAllByProps({role:'status'}).some(row=>row.children.includes('Copied Markdown')));
   assert.equal(globalThis.messageParseVisits.length,1,'live copy acknowledgement does not invalidate text');
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('media keeps current dispatch and revision outside the memoized text body',async()=>{
+ let root,props=initial();const calls=[];
+ const first=(...args)=>calls.push(['first',...args]),next=(...args)=>calls.push(['next',...args]);
+ props={...props,dispatch:first};globalThis.messageParseVisits=[];
+ try{
+  await act(async()=>{root=create(render(props))});
+  const media=()=>root.root.findByType(InlineMedia);
+  assert.equal(media().props.dispatch,first);
+  props={...props,dispatch:next,session:{...props.session,mediaRevision:2}};
+  await act(async()=>root.update(render(props)));
+  assert.equal(media().props.dispatch,next);
+  assert.equal(media().props.mediaRevision,2);
+  assert.equal(media().props.sessionId,'chat');assert.equal(media().props.messageId,'answer');
+  media().props.dispatch('canvas.openGif',{id:'synthetic-media'});
+  assert.deepEqual(calls,[['next','canvas.openGif',{id:'synthetic-media'}]]);
+  assert.equal(globalThis.messageParseVisits.length,1,'media updates must not reparse unchanged text');
+  props={...props,state:{view:{messageEdit:{sessionId:'chat',messageId:'answer',text:props.message.text}}}};
+  await act(async()=>root.update(render(props)));
+  assert.equal(root.root.findAllByType(InlineMedia).length,0,'editing still hides inline media');
  }finally{await act(async()=>root?.unmount())}
 });
 
