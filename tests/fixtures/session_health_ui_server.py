@@ -21,6 +21,15 @@ async def main(home):
     store=SessionStore.for_app(home,source['workspace']);store.save(source['id'],rows,{})
     folder=store.directory(source['id'])/'context-intelligence';folder.mkdir(exist_ok=True)
     (folder/'events.jsonl').write_text(json.dumps({'event':'provider:error','data':{'session_id':source['id'],'error':{'type':'InvalidRequestError','msg':'Invalid image_url: invalid base64-encoded value'}}})+'\n')
+    if os.environ.get('BRIDGE_TIMEOUT_FIXTURE'):
+        from amplifier_web.session_health import failure_details
+        source['failure'] = {**failure_details('Manager failed', 'TimeoutError'),
+                             'generationId': 'bridge-generation', 'inputIds': ['input-1'],
+                             'recordedAt': 1789926000, 'stage': 'manager_turn'}
+        source['generations'] = [{'event': 'generation.started', 'generation_id': 'bridge-generation', 'at': 1789925800}]
+        (folder/'events.jsonl').write_text(json.dumps({'event': 'provider:error', 'timestamp': 1789925990,
+            'data': {'session_id': source['id'], 'error': {'type': 'TimeoutError',
+            'msg': 'App bridge response timed out after 60 seconds (transport timeout, not normal coordination.wait expiry).'}}})+'\n')
     if os.environ.get('MODULE_FAILURE_FIXTURE'):
         from amplifier_web.module_failures import persist_failures
         failure = persist_failures(home / 'runtime-reports' / source['id'], [

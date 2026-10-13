@@ -29,8 +29,8 @@ def test_normal_chat_retains_live_facts_without_settings_history():
     assert result['attention']['sessions'] == {'chat': 1}
     assert [item['id'] for item in result['attention']['items']] == ['session:chat']
     assert result['sessions'][0]['task'] == {'status': 'blocked', 'blockedReason': 'Dependency'}
-    assert result['modelCatalogs'] == state['modelCatalogs']
-    assert result['setup']['providerCatalogs'] == state['setup']['providerCatalogs']
+    assert result['modelCatalogs'] == {}
+    assert 'providerCatalogs' not in result['setup']
     assert result['runtimeControl']['chat']['configuration.providers'] == {'provider': 'ready'}
 
 

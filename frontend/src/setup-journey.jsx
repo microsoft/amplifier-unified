@@ -10,7 +10,8 @@ export function useConnectionSetup(state,session,act){
  const setup=state?.setup||{},workspace=session?.workspace||state?.settings?.workspace;
  const loaded=setup.providersLoadedAt&&(setup.providersWorkspace===workspace||!session&&setup.providersLocation?.kind==='managed');
  const any=setup.providers?.some(row=>row.enabled!==false);
- useEffect(()=>{const revisit=()=>{prompted.current=null;act('providers.list',session?{sessionId:session.id}:{})};window.addEventListener('focus',revisit);return()=>window.removeEventListener('focus',revisit)},[session?.id]);
+ const discovering=!session||['welcome','connect'].includes(state?.view?.setupJourney);
+ useEffect(()=>{if(!discovering)return;const revisit=()=>{prompted.current=null;act('providers.list',session?{sessionId:session.id}:{})};window.addEventListener('focus',revisit);return()=>window.removeEventListener('focus',revisit)},[session?.id,discovering]);
  useEffect(()=>{
   if(!loaded)return;
   if(any&&state?.view?.setupJourney!=='welcome'){prompted.current=null;return;}

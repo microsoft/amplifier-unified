@@ -19,7 +19,7 @@ async function measure(directory){
   const samples=[];
   for(let run=0;run<3;run++){
    const page=await browser.newPage({viewport:{width:1440,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
-   let streams=0;page.on('request',request=>{if(request.url().includes('/api/events'))streams++});
+   let streams=0;page.on('websocket',socket=>{if(new URL(socket.url()).pathname==='/api/events/ws')streams++});page.on('request',request=>{if(new URL(request.url()).pathname==='/api/events')streams++});
    await page.goto(`http://127.0.0.1:${port}`);
    await page.locator('.a-nav-chat').nth(99).waitFor();
    const startupMs=await page.evaluate(()=>performance.now());

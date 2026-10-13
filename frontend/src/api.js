@@ -31,7 +31,23 @@ export function attachClient(signal){
 // Host response time anchors live elapsed displays even when a device clock differs.
 let hostClock;
 export function hostNow(){return hostClock?hostClock.seconds+(performance.now()-hostClock.received)/1000:Date.now()/1000}
+const actionTimings=[];
+export function recordActionTiming(action,queuedAt,startedAt){
+ if(!/^[a-z][a-z0-9_.]{0,79}$/.test(action))return;
+ actionTimings.push({action,at:Date.now()/1000,queueMs:Math.round(startedAt-queuedAt),runMs:Math.round(performance.now()-startedAt)});
+ if(actionTimings.length>30)actionTimings.shift();
+}
+export function recentActionTimings(){return actionTimings.map(row=>({...row}))}
+const requestTimings=[];
+export function recentRequestTimings(){return requestTimings.map(row=>({...row}))}
 export async function request(path, options = {}) {
+  const started=performance.now(),row={at:Date.now()/1000,method:options.method||'GET',route:path.split('?')[0].replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/ig,':id')};
+  const action=options.body?.action;if(typeof action==='string'&&/^[a-z][a-z0-9_.]{0,79}$/.test(action))row.action=action;
+  try{return await measuredRequest(path,options,row)}
+  catch(error){row.error=error.name;throw error}
+  finally{row.elapsedMs=Math.round(performance.now()-started);requestTimings.push(row);if(requestTimings.length>30)requestTimings.shift()}
+}
+async function measuredRequest(path, options, timing) {
   const headers = { ...(path.startsWith('/api/')?{'X-Amplifier-Client':clientId,'X-Amplifier-State-Transport':'delta-v1'}:{}), ...options.headers };
   let body = options.body;
   if (body && typeof body === 'object' && !(body instanceof FormData)) { headers['Content-Type']='application/json'; body=JSON.stringify(body); }
@@ -41,6 +57,8 @@ export async function request(path, options = {}) {
   };
   let res;
   try{res=await fetch(path,{...options,body,headers,credentials:'same-origin'})}catch(error){throw unavailable(error)}
+  timing.status=res.status;timing.requestId=res.headers?.get?.('X-Amplifier-Request-Id')||undefined;
+  const server=/app;dur=([0-9.]+)/.exec(res.headers?.get?.('Server-Timing')||'');if(server)timing.serverMs=Number(server[1]);
   const dated=Date.parse(res.headers?.get?.('date'));
   // Second-precision or delayed responses cannot wind an active timer back.
   if(Number.isFinite(dated)&&(!hostClock||dated/1000>hostNow()))hostClock={seconds:dated/1000,received:performance.now()};

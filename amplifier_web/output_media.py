@@ -396,9 +396,17 @@ class Media:
                 # Identity, attachment, bytes and reports remain root-only.
                 return {'items': [], 'overflow': False,
                         'mediaRevision': session.get('mediaRevision', 0)}
-        proof = await self.identity(sid, message_id, scoped=True)
-        async with self.app.lock:
-            return self.descriptors(sid, message_id, proof)
+        from .media_message_identity import StaleMediaIdentityError
+        # Discovery is read-only. Requalify the entire proof after a revision
+        # race; byte access and mutations never reuse or relax a stale proof.
+        for attempt in range(3):
+            try:
+                proof = await self.identity(sid, message_id, scoped=True)
+                async with self.app.lock:
+                    return self.descriptors(sid, message_id, proof)
+            except StaleMediaIdentityError:
+                if attempt == 2:
+                    raise
 
     async def guarded(self, values):
         proof = await self.identity(values['sessionId'], values['messageId'], scoped=True)

@@ -68,13 +68,13 @@ class Management:
             valid=set(catalogs)
             if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
             from .conversation_models import publish_catalogs
-            publish_catalogs(self,{entry['sharedCatalogKey']:entry for entry in catalogs.values()})
             setup['providerCatalogs']=catalogs
+            catalog_changed=publish_catalogs(self,{entry['sharedCatalogKey']:entry for entry in catalogs.values()})
             setup['modelCatalogs']={identity:entry['models'] for identity,entry in catalogs.items()}
             for row in enabled:
                 if catalogs[row['id']].get('metadata'):
                     setup.setdefault('metadata',{})[row['module']]=catalogs[row['id']]['metadata']
-            if before!={key:setup.get(key) for key in before}:
+            if catalog_changed or before!={key:setup.get(key) for key in before}:
                 self.service._publish_changes(globals={'setup','modelCatalogs'})
         if not pending:return
         # Yield after the start snapshot so ordinary requests can proceed.
@@ -105,9 +105,9 @@ class Management:
                 setup=self.service.state.setdefault('setup',{})
                 if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
                 from .conversation_models import publish_catalogs
-                publish_catalogs(self,{entry['sharedCatalogKey']:entry})
                 setup['providers']=manager.provider_rows(workspace)
                 setup.setdefault('providerCatalogs',{})[identity]=entry
+                publish_catalogs(self,{entry['sharedCatalogKey']:entry})
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
                 if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
                 self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup','modelCatalogs'})

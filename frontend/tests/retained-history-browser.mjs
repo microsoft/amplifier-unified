@@ -38,6 +38,9 @@ try{
  const reading=rows.nth(150),readingId=await reading.getAttribute('data-message-id');
  await reading.evaluate(el=>el.scrollIntoView({block:'start'}));
  await page.locator('.a-messages').evaluate(el=>{el.dispatchEvent(new WheelEvent('wheel',{deltaY:-1}));el.dispatchEvent(new Event('scroll'))});
+ // Let the scroll controller finish the pending paging/layout frame before
+ // recording the position that the independent reader must preserve.
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const offset=()=>page.locator(`[data-message-id="${readingId}"]`).evaluate(el=>el.getBoundingClientRect().top-el.closest('.a-messages').getBoundingClientRect().top);
  const before=await offset();
  // Another reader expanding the shared native window must not reset ours.

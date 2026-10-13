@@ -2,6 +2,27 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.128",
+      "title": "Responsive controls with multiple chat windows",
+      "changes": [
+        "Live browser updates use a dedicated socket so multiple chat windows cannot occupy every HTTP connection needed for images, settings and actions.",
+        "Each window retains its own chat, draft and Canvas selection. Reconnect restores current state without replaying messages or model work.",
+        "Background history refreshes keep your reading position steady instead of briefly inserting an empty notice above the conversation."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.127",
+      "title": "More useful chat diagnostics and smoother message delivery",
+      "changes": [
+        "Ordinary messages can move into the next turn when the run they targeted finishes normally during submission. Messages are no longer labeled corrections.",
+        "Copy diagnostics preserves the failed turn, includes correlated internal timeout evidence, version information and bounded request timings, and offers manual copying when the clipboard is unavailable.",
+        "Read-only media discovery retries a changing conversation snapshot without relaxing attachment identity checks.",
+        "These diagnostics help investigate intermittent stalls; this release does not claim to resolve every stall or automatically replay interrupted model requests."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.126",
       "title": "Settings that save as you change them",
       "changes": [
