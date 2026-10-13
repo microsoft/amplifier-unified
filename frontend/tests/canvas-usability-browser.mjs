@@ -41,9 +41,10 @@ try{
  await action('attachment.add',{sessionId:state.selectedSessionId,name:'Review notes.md',base64:Buffer.from('# Attached review\n\nThe original text.').toString('base64')});
  const attachment=await page.evaluate(()=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).draftAttachments[0]);
  await action('conversation.send',{sessionId:state.selectedSessionId,text:'Review my notes',attachmentIds:[attachment.id]});
- await page.getByRole('button',{name:'Review notes.md',exact:false}).click();
+ const sentNote=page.locator('[data-message-id]').filter({hasText:'Review my notes'});
+ await sentNote.getByRole('button',{name:'Review notes.md 1 KB',exact:true}).click();
  await expect(panel.getByRole('heading',{name:'Attached review'})).toBeVisible();
- await expect(page.getByRole('link',{name:'Download Review notes.md'})).toHaveAttribute('href',attachment.url);
+ await expect(sentNote.getByRole('link',{name:'Download Review notes.md',exact:true})).toHaveAttribute('href',attachment.url);
  await page.reload();await expect(panel.getByRole('heading',{name:'Attached review'})).toBeVisible();
  // Current Graphviz and tall embedded Mermaid rendering, independent of old reports.
  await action('canvas.show',{kind:'dot',title:'Graph check',content:'digraph G { root [label="Root"]; root -> worker; worker -> result; }'});
