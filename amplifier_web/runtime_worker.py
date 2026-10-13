@@ -109,28 +109,37 @@ class Worker:
         action = args.get('action')
         if isinstance(action, str) and re.fullmatch(r'[a-z][a-z0-9_.]{0,79}', action):
             facts['action'] = action
-        publish({**facts, 'phase': 'requested'})
+        def diagnostic(phase, **extra):
+            # Observability must not change a bridge result or mask its error.
+            try:
+                publish({**facts, 'phase': phase, **extra})
+            except Exception:
+                pass
+
         try:
+            diagnostic('requested')
             publish({"op": "bridge", "id": identity, "operation": operation, "args": args})
             result = await asyncio.wait_for(future, timeout)
-            publish({**facts, 'phase': 'completed', 'elapsedSeconds': round(time.monotonic() - started, 3)})
+            diagnostic('completed', elapsedSeconds=round(time.monotonic() - started, 3))
             return result
         except TimeoutError as exc:
-            publish({**facts, 'phase': 'timeout', 'elapsedSeconds': round(time.monotonic() - started, 3),
-                     'errorType': 'TimeoutError'})
+            diagnostic('timeout', elapsedSeconds=round(time.monotonic() - started, 3),
+                       errorType='TimeoutError')
             raise TimeoutError(
                 f"App bridge response timed out after {timeout:g} seconds "
                 "(transport timeout, not normal coordination.wait expiry)."
             ) from exc
         except asyncio.CancelledError:
-            publish({**facts, 'phase': 'cancelled', 'elapsedSeconds': round(time.monotonic() - started, 3)})
+            diagnostic('cancelled', elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         except Exception as exc:
-            publish({**facts, 'phase': 'failed', 'errorType': type(exc).__name__,
-                     'elapsedSeconds': round(time.monotonic() - started, 3)})
+            diagnostic('failed', errorType=type(exc).__name__,
+                       elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         finally:
             self.bridges.pop(identity, None)
+            if not future.done():
+                future.cancel()
 
     def app_access_bridge(self, coordinator, *, assignment=None):
         lookup = getattr(coordinator, 'get_capability', None)

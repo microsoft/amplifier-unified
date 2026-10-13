@@ -66,9 +66,12 @@ recorded execution folder remain inspectable as receipts but cannot silently
 open guessed source bytes. Files are not automatically archived at reply time;
 if they change before first opening, the exact-result view reports a mismatch.
 
-The separate bridge cleanup change is tracked by PR #616; this tranche does not
-duplicate that implementation. Source integration must verify its final status.
-All generated web assets must be rebuilt from the combined candidate.
+The coherent-creation candidate also integrates the existing bridge-cleanup
+commit from PR #616, preserving its original history. Diagnostics remain
+best-effort inside cleanup, pending futures are cancelled and bridge effects
+are never replayed. The combined candidate passes 66 focused transport, worker
+authority and creation checks, including the real 60-second wait. All generated
+web assets must be rebuilt when combined frontend source changes.
 
 Local candidate validation: 797 Python tests and two subtests passed across the
 affected coordination, runtime, storage, settings, worktree and Canvas families;
