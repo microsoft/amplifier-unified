@@ -16,6 +16,7 @@ import pytest
 
 pytest.importorskip("amplifier_module_loop_live.orchestrator")
 pytest.importorskip("amplifier_module_loop_streaming")
+pytest.importorskip("amplifier_module_context_simple")
 
 from fixtures.collaboration_native_probe import (
     DirectNativeHost, ScriptedProvider, message_text, peer_envelopes, tool_output,

@@ -209,11 +209,25 @@ async def test_exit_without_retirement_ack_is_reported_as_uncertain(manager):
     assert 'no-ack' not in manager._retired
 
 
-async def test_background_startup_is_bounded_and_disabled_policy_does_not_start(manager):
+async def test_background_startup_is_bounded_and_disabled_policy_does_not_start(manager, monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+    starts = []
+    original = manager.start
+    async def held_start(session, emit):
+        starts.append(session['id'])
+        if len(starts) >= 2:
+            entered.set()
+        await release.wait()
+        await original(session, emit)
+    monkeypatch.setattr(manager, 'start', held_start)
     pending = [asyncio.create_task(warm(manager, f'slow-{i}')) for i in range(4)]
-    await asyncio.sleep(.04)
-    assert len(manager.workers) == 2
-    await asyncio.gather(*pending)
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert len(starts) == 2
+    finally:
+        release.set()
+        await asyncio.gather(*pending)
+    assert len(manager.workers) == 4
     manager.retention.settings['prewarm_on_select'] = False
     await manager.prewarm({'id': 'not-started'}, manager.emit)
     assert 'not-started' not in manager.workers

@@ -35,6 +35,33 @@ def source(session):
     return [(row['id'], row.get('role'), not bool(row.get('observation')), i) for i,row in enumerate(rows)], lambda positions:[rows[i] for i in positions]
 
 
+def with_window(session, messages):
+    """A read-only overlay for work projection, never the retained chat window."""
+    rows = {row['id']: row for row in session.get('messages', [])}
+    rows.update((row['id'], row) for row in messages)
+    ordered = sorted(rows.values(), key=lambda row: (
+        row.get('nativeIndex', float('inf')), row.get('createdAt', 0)))
+    return {**session, 'messages': ordered}
+
+
+def group_source(session, window_message_id=None):
+    """Resolve an explicitly opened old work segment from a bounded native page.
+
+    Navigation and subsequent lazy detail/sync reads must see the same recorded
+    observations even when the host retains only the latest transcript window.
+    """
+    if window_message_id is None:
+        return session
+    if not isinstance(window_message_id, str) or not 0 < len(window_message_id) <= 200:
+        raise ValueError('Choose a valid history window.')
+    facts, read = source(session)
+    position = next((i for i, row in enumerate(facts) if row[0] == window_message_id), None)
+    if position is None:
+        raise ValueError('This history window is no longer available. Refresh the conversation.')
+    start = max(0, position - 5)
+    return with_window(session, read(range(start, min(len(facts), start + MESSAGE_LIMIT))))
+
+
 def query(session, *, message_id=None, window=False, _raw_window=False):
     """Pure public queries stay neutral; the host may request bounded raw rows.
 
@@ -63,8 +90,8 @@ def query(session, *, message_id=None, window=False, _raw_window=False):
     messages = selected if _raw_window else [
         compact(annotate(annotation_source,row),session['id'],'messages',TEXT_LIMIT) for row in selected]
     anchors={row['id'] for row in messages}
-    _,segments=work_segments(session)
-    segments=[row for row in segments if row.get('anchorMessageId') in anchors]
+    _,segments=work_segments(with_window(session, selected))
+    segments=[{**row, 'windowMessageId': message_id} for row in segments if row.get('anchorMessageId') in anchors]
     turn_ids={row['turnId'] for row in segments}
     return {'revision':revision,'messages':messages,'offset':start,'sourceOffset':facts[start][3],'total':len(facts),
             'before':facts[max(0,start-(MESSAGE_LIMIT-5))][0] if start else None,'after':facts[end][0] if end<len(facts) else None,

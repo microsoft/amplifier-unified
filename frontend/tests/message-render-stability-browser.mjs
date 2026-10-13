@@ -56,7 +56,10 @@ try{
  // still have a pending React commit; asynchronous observation traffic must not
  // be mistaken for a render caused by the timer. flushSync also makes a real
  // parent-render regression observable on every tick, without timing sleeps.
+ const settleRender=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  await action('view.update',{patch:{draft:'Ready'}});
+ await expect(composer).toHaveDraft('Ready');
+ await page.waitForLoadState('networkidle');
  await expect(composer).toHaveText('Ready');
  evidence.clock=await page.evaluate(async text=>{
   // The API receipt precedes React's DOM commit. Observe that commit above,
@@ -77,13 +80,16 @@ try{
  let before=await counts();
  await composer.fill('Private draft');
  await action('view.update',{patch:{draft:'Private draft'}});
- let after=await counts();evidence.draft={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses};
  await expect(composer).toHaveDraft('Private draft');
+ await expect(composer).toHaveText('Private draft');
+ await settleRender();
+ let after=await counts();evidence.draft={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses};
  before=await counts();
  for(let i=0;i<3;i++){
   await change({workers:[{id:'active-child',kind:'session',callId:'active-call',status:'working',detail:'Progress '+i}]});
   await page.waitForFunction(i=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).workers[0]?.detail==='Progress '+i,i);
  }
+ await settleRender();
  after=await counts();evidence.workerUpdates={stableParses:after.stableParses-before.stableParses,updates:3};
  await change({workers:[]});
  // Changed body and streaming remain live; these are positive controls.

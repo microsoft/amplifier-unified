@@ -1835,11 +1835,17 @@ async def test_cold_alias_warm_http_descriptor_head_range_report_read_no_display
     import threading
     from amplifier_foundation.session import history as foundation_history
     from amplifier_web import conversation_navigation, media_saved_aliases, resource_files
+    from amplifier_web import storage_migration
     from amplifier_web.server import create_app
     from test_service import Runtime
+    # This probe counts foreground media reads. Background catalog reconciliation
+    # and resource collection legitimately read bodies and have separate tests.
+    monkeypatch.setattr(storage_migration, 'maintenance', lambda service: None)
     server = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
                               voice=False, preload_providers=False, background_updates=False)
     app = server['service']
+    await app.history.close()
+    await app.event_log_view.close()
     await app.dispatch('session.create', {'title': 'Saved alias HTTP corpus'})
     session, _, _, directory, canonical = cold_alias_corpus(app, native_message_id=False)
     chilled, reference = await freeze_alias_display(app, session)

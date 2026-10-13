@@ -59,7 +59,14 @@ async def test_socket_admission_and_no_commands(authenticated_client, tmp_path):
     await socket.receive_json(timeout=3)
     before = len(app['service'].state['sessions'])
     await socket.send_json({'action':'session.create','args':{}})
-    response = await socket.receive(timeout=3)
+    # Independent state publications may already be in flight before rejection.
+    # Observe the close itself, without treating an earlier snapshot as a reply.
+    async with asyncio.timeout(3):
+        while True:
+            response = await socket.receive()
+            if response.type != WSMsgType.TEXT:
+                break
+            assert response.json()['event'] in {'state', 'state-delta', 'shell'}
     assert response.type == WSMsgType.CLOSE and response.data == 1008
     assert len(app['service'].state['sessions']) == before
 

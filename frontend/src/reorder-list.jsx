@@ -7,10 +7,11 @@ export function moveItem(ids,id,to){if(!ids.includes(id))return ids;const next=i
 
 // Both immediate actions and Settings drafts use this pointer/keyboard control.
 // Consumers own persistence; cancelled drags never call onChange.
-export function ReorderList({items,ids,onChange,busy=false,renderItem,className='',rowClassName='',floatingClassName='',action='view.update',savedHint='',onDraggingChange}){
+export function ReorderList({items,ids,onChange,busy=false,renderItem,className='',rowClassName='',floatingClassName='',action='view.update',savedHint='',onDraggingChange,orderKey=ids.join('\0')}){
  const root=useRef(null),drag=useRef(null),rects=useRef(new Map()),pending=useRef(false),alive=useRef(true);
  const [preview,setPreview]=useState(null),[floating,setFloating]=useState(null),[announcement,announce]=useState('');
- const shown=preview||ids,rows=new Map(items.map(item=>[item.id,item]));
+ const rows=new Map(items.map(item=>[item.id,item]));
+ const shown=preview&&preview.length===ids.length&&preview.every(id=>ids.includes(id))?preview:ids;
  const focus=id=>globalThis.requestAnimationFrame?.(()=>root.current?.querySelector(`[data-order-id="${CSS.escape(id)}"] .a-reorder-grip`)?.focus({preventScroll:true}));
  const capture=()=>{if(root.current)rects.current=new Map([...root.current.querySelectorAll('[data-order-id]')].map(node=>[node.dataset.orderId,node.getBoundingClientRect()]));};
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;drag.current=null}},[]);
@@ -36,14 +37,14 @@ export function ReorderList({items,ids,onChange,busy=false,renderItem,className=
  };
  useEffect(()=>{if(typeof document==='undefined')return;const key=e=>{if(e.key==='Escape'&&drag.current){e.preventDefault();e.stopPropagation();finish(true)}};document.addEventListener('keydown',key,true);return()=>document.removeEventListener('keydown',key,true)});
  // A concurrent pin/unpin or external order change invalidates a held drag.
- useEffect(()=>{if(drag.current&&drag.current.original.join('\0')!==ids.join('\0'))finish(true)},[ids.join('\0')]);
+ useEffect(()=>{if(drag.current&&(drag.current.original.join('\0')!==ids.join('\0')||drag.current.orderKey!==orderKey))finish(true)},[ids.join('\0'),orderKey]);
  const down=(event,id)=>{
   if(busy||pending.current||event.button!==0)return;event.preventDefault();
   document.dispatchEvent(new CustomEvent('amplifier-navigation-details',{detail:'reordering'}));
   const node=event.currentTarget.closest('[data-order-id]'),box=node.getBoundingClientRect(),bounds=root.current.getBoundingClientRect();
   let scroll=root.current.parentElement;while(scroll&&!(scroll.scrollHeight>scroll.clientHeight&&/(auto|scroll)/.test(getComputedStyle(scroll).overflowY)))scroll=scroll.parentElement;
   const nodes=[...root.current.querySelectorAll('[data-order-id]')];
-  drag.current={id,pointerId:event.pointerId,x:event.clientX,y:event.clientY,box,bounds,scroll,scrollTop:scroll?.scrollTop||0,centers:nodes.map(n=>{const r=n.getBoundingClientRect();return(r.top+r.bottom)/2}),original:[...ids],preview:[...ids],active:false,valid:true};
+  drag.current={id,pointerId:event.pointerId,x:event.clientX,y:event.clientY,box,bounds,scroll,scrollTop:scroll?.scrollTop||0,centers:nodes.map(n=>{const r=n.getBoundingClientRect();return(r.top+r.bottom)/2}),original:[...ids],orderKey,preview:[...ids],active:false,valid:true};
   root.current.setPointerCapture(event.pointerId);
  };
  const moving=event=>{

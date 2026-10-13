@@ -9,6 +9,23 @@ preferences survive resizing.
 Workspace browsing stays in the drawer. Tap **…** for a details sheet with the
 full title, canonical session ID, path, and actions.
 
+Workspace pages and Search chats have no remembered-chat return control or
+working-chat banner. Open a named conversation from Pinned, Recent, search or a
+workspace list, including the conversation already selected before browsing.
+Escape clears a search query; with an empty query it stays in search.
+Workspace file previews name their destination chat before opening. A guarded
+`canvas.openFile {sessionId,workspace,path,showConversation:true}` opens the file
+and shows that chat in one action, only from its workspace Files page. Failed or
+stale requests do not navigate, and delayed receipts never navigate again.
+
+Browsing still retains the selected chat's draft, attachments, reading position
+and mounted Canvas editors. It does not stop work or revoke screen-sharing
+consent. Call controls and Stop sharing remain visible; to stop non-voice work,
+open that chat and use its normal Stop control. No selection or storage migration
+is involved. The shared `view.update {workSurface:"chat"}` presentation action
+remains available to authorized callers; it shows the selected conversation,
+not a separate saved return target.
+
 **Canvas** is an icon beside More in the top toolbar. On phones, it fills the
 content area and offers **Back to chat**; the chat's scroll and draft stay intact.
 On larger screens it docks when the chat and panel have usable widths.
@@ -38,8 +55,10 @@ Default UI typography uses 14 px normal text, 12–13 px supporting labels, and
 scale without zooming layouts or icons. Only exact unmodified historical default
 skins upgrade automatically; edited or renamed skins retain their saved CSS.
 
-The default sidebar has three independently collapsible sections: **Pinned**,
-**Workspaces**, and **Recent**. There is one pinned-chat control and one workspace
+The default sidebar has independently collapsible **Pinned**, **Workspaces**, and
+**Recent** sections. **Pinned** is hidden when there are no eligible pinned items;
+its saved collapse preference is retained. One ordered list holds pinned chats
+and workspaces together, and there is one workspace
 explorer. Pins keep the same title, workspace subtitle, activity time, and actions
 while browsing folders or filtering chats. Quiet Recent initially shows **20
 eligible unpinned chats**, not messages. Downward user scrolling within 120 px
@@ -146,10 +165,12 @@ stale, invalid or unavailable registrations before changing the draft. Opening
 setup creates neither a chat nor a model turn. Returning to the original chat
 restores its text, attachments and saved Canvas; another client's chat is unchanged.
 
-Workspace details offer **Pin workspace** / **Unpin workspace** independently of
-chat pins. Pinned workspaces lead the recent index in pin order, followed by
-unpinned recents without duplicate folder rows. Empty workspaces can be pinned.
-**Move up** / **Move down** reorder pins in the details flyout. Agents use the
+Workspace details offer **Pin workspace** / **Unpin workspace**. Pinned workspaces
+appear in **Pinned** alongside chats, with the same drag grip, keyboard ordering,
+and **Move up** / **Move down** controls. Empty workspaces can be pinned.
+The compact **Workspaces** shortcuts exclude pinned folders; the full workspace
+browser still includes them. Older clients' workspace-only recent index and
+ordering actions remain available. Agents use the
 same `workspace.pin {id,pinned}` and `workspace.pinOrder {ids}` actions; ordering
 requires every currently pinned ID exactly once, including unavailable folders.
 `shell.query.pinnedWorkspaceIds` is the complete vector, not just the visible
@@ -240,11 +261,15 @@ against the original candidate and corrected candidate:
    Syntax/AST/diff checks alone qualify only a source candidate; they do not
    establish deployed behavior or satisfy the conditional acceptance.
 
-Pins always follow the order in which they were pinned, independent of sorting.
+New pins append to the shared list, independent of sorting. Existing installations
+initially retain chat pin order followed by workspace pin order; subsequent mixed
+ordering is saved durably. Re-pinning an already pinned item does not move it.
 Drag a pin's grip to reorder it, focus the grip and press Up/Down (or Alt+Up/Down), or use
 **Move up** / **Move down** in its details. Reordering preserves pins outside the
-current search, workspace, or page. Agents use the same `session.pinOrder` action
-with the complete `pinnedSessionIds` vector returned by `shell.query`.
+current search, workspace, or page. Agents use `navigation.pinOrder` with the complete
+`pinnedItemIds` vector returned by `shell.query`, using `session:<id>` and
+`workspace:<id>` identities. The legacy `session.pinOrder` and `workspace.pinOrder`
+actions reorder only their own kind's slots without moving the other kind.
 Pins and Settings orders use the same `ReorderList` pointer/keyboard control:
 full row preview, placeholder, insertion marker, scroll assistance, focus return,
 and cancellation with Escape, pointer cancellation, or an outside drop. A concurrent
@@ -315,6 +340,9 @@ Agents use the same `shell.view.update` and `shell.command` paths as the UI:
   `chatNavigation` and `homeNavigation` projections remain available to older
   clients. Saved `navSimple` is accepted for compatibility but no longer selects
   a different renderer.
+- `shell.query.pinnedNavigation` exposes the combined 50-row pin page; each item
+  has a typed `id`, `kind`, and bounded `row` summary. `pinnedItemIds` includes
+  hidden and off-page pins. The original chat-only pinned projection is unchanged.
 - Workspace instance: `navWorkspaceMode` (`recent`, `folders`), plus the existing
   folder path, wildcard search, and page keys.
 - `shell.command` for `workspace.select` or `workspace.create` on the paired

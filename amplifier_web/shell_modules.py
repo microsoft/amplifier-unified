@@ -89,6 +89,7 @@ COMMAND_CAPABILITIES = {
     'workspace.prepare': 'workspaces.manage', 'workspace.add': 'workspaces.manage', 'workspace.list': 'navigation.read',
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.archive': 'workspaces.manage', 'workspace.restore': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
     'workspace.pin': 'workspaces.manage', 'workspace.pinOrder': 'workspaces.manage',
+    'navigation.pinOrder': 'chats.manage',
     'session.draft': 'chats.manage', 'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.naming.backfill': 'chats.manage', 'session.delete': 'chats.manage', 'session.deletePreview': 'chats.manage', 'session.pin': 'chats.manage',
     'session.markUnread': 'chats.manage', 'session.archive': 'chats.manage', 'session.restore': 'chats.manage', 'session.pinOrder': 'chats.manage',
     'attention.read': 'chats.manage',
@@ -338,6 +339,7 @@ class ShellModules:
         from .conversation_library import projection as organization_projection
         from .chat_navigation import SIDEBAR_FILTER_KEYS
         from .workspace_navigation import workspace_pins
+        from .pinned_navigation import ordered_ids
         state = self.service.state
         projections = self.service.projections
         scoped = {**self.scoped_state(client, instance), 'attention': projections.attention(state)}
@@ -373,8 +375,10 @@ class ShellModules:
         # so one client's fence cannot contaminate another's cached rows.
         recent_navigation = {**recent_navigation, 'scope': {**recent_navigation['scope'], **recent_scope}}
         recent_shortcuts = recent_navigation['items']
+        pinned_navigation = projections.pinned_navigation({**scoped, 'view': sidebar_home})
         visible_ids = {row['id'] for page in (chat_page, home, pins, recent, search, workspace_chats)
                        for row in page['items']} | {row['id'] for row in recent_shortcuts}
+        visible_ids.update(item['row']['id'] for item in pinned_navigation['items'] if item['kind'] == 'session')
         # Exact review receipts for these bounded rows; never error bodies or
         # unrelated settings/permission notices from the full attention inbox.
         error_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
@@ -391,8 +395,11 @@ class ShellModules:
                 'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
                 'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
                 'pinnedWorkspaceIds': workspace_pins(state),
+                'pinnedItemIds': ordered_ids(state),
+                'pinnedNavigation': pinned_navigation,
                 'homeNavigation': home, 'workspaceOverview': overview,
                 'workspaceShortcuts': [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
+                'unpinnedWorkspaceShortcuts': [row for row in projections.workspace_shortcuts(scoped) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
                 'recentShortcuts': recent_shortcuts,
                 'recentNavigation': recent_navigation,
                 'recentScope': recent_scope,
@@ -552,6 +559,8 @@ class ShellModules:
         capability = COMMAND_CAPABILITIES.get(args['action'])
         if not capability or capability not in self.manifest(instance['package'])['capabilities']:
             fail('Module has not declared this capability.', 403)
+        if args['action'] == 'navigation.pinOrder' and 'workspaces.manage' not in self.manifest(instance['package'])['capabilities']:
+            fail('Mixed pin ordering requires chat and workspace management capabilities.', 403)
         if args['action'] == 'attention.read':
             observed = args['args']
             ids, fingerprints = observed.get('ids'), observed.get('fingerprints')

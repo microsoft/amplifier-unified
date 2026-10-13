@@ -16,6 +16,12 @@ def open_file(service, args, origin):
     workspace_id = scope(service, sid)[1]
     if service.state.get('selectedWorkspaceId') != workspace_id:
         return {'status': 'unavailable', 'message': 'The workspace changed. Try again in the original chat.'}
+    current_view = service.state['view']
+    if args.get('showConversation') and (
+            current_view.get('workSurface') != 'workspace'
+            or current_view.get('workWorkspaceId') != workspace_id
+            or current_view.get('workWorkspaceTab') != 'files'):
+        return {'status': 'unavailable', 'message': 'The file browser changed. Open the file from its workspace Files page.'}
     scoped = {**service.state, 'selectedSessionId': sid, 'selectedWorkspaceId': workspace_id}
     file_root = None
     if args.get('referenceRequestId'):
@@ -48,6 +54,10 @@ def open_file(service, args, origin):
     remember(scoped, service.db)
     service.state['canvas'] = scoped['canvas']
     service.state['view'].setdefault('canvasDraft', {}).update(library=False, open=False, browser=False)
+    if args.get('showConversation'):
+        # One guarded command owns both effects. A delayed receipt must never
+        # dispatch another navigation after the user has chosen a newer page.
+        current_view['workSurface'] = 'chat'
     return {'status': 'opened', 'id': scoped['canvas']['id']}
 
 
