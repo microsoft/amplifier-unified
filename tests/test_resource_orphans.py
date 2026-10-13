@@ -189,10 +189,10 @@ async def test_maintenance_commit_gate_cursor_and_backup_deferral(app_factory,mo
     for i in range(260):
         files.put(app.db,{'orphan-maintenance':i});app.db.rollback()
     calls=[]
-    original=files.marked_references
-    def mark(*args):
-        calls.append(1);return original(*args)
-    monkeypatch.setattr(files,'marked_references',mark)
+    original=files.marked_references_async
+    async def mark(*args):
+        calls.append(1);return await original(*args)
+    monkeypatch.setattr(files,'marked_references_async',mark)
     app.backup_in_progress=True
     app._last_storage_sweep=0
     storage_migration.maintenance(app)
@@ -200,8 +200,10 @@ async def test_maintenance_commit_gate_cursor_and_backup_deferral(app_factory,mo
     app.backup_in_progress=False
     app._save_changes()
     assert not app.db.in_transaction
+    await app._storage_maintenance_task
     assert app._resource_scan is not None
     first=len(calls)
+    assert first == 1
     storage_migration.maintenance(app)
     assert len(calls)==first, '60-second gate should not mark again'
     app._last_storage_sweep=0
