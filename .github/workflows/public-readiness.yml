@@ -70,6 +70,7 @@ jobs:
           node tests/message-render-stability-browser.mjs
           node tests/delegate-activity-browser.mjs
           node tests/main-refresh-browser.mjs
+          node tests/document-card-browser.mjs
           node tests/chat-plan-browser.mjs
           node tests/questions-browser.mjs
           node tests/public-first-chat-browser.mjs
