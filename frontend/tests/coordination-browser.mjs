@@ -140,6 +140,7 @@ try{
   const id='browser-create-'+index,args={title:'Fixture implementation '+(index+1),text:'Root '+(index+1)+' round one'};
   const created=await agent('source','coordination.create',args,id);
   assert.equal(created.accepted,true);assert.ok(created.sessionId);assert.ok(created.initialInputId);
+  assert.equal(created.subscription.status,'reserved');
   assert.equal(created.result.sourceGenerationId,humanContext.generationId);
   assert.deepEqual(created.result.sourceInputIds,[human.inputId]);
   assert.equal(Object.hasOwn(created.result,'grantId'),false);
@@ -157,7 +158,7 @@ try{
   assert.deepEqual(task.collaboration.sourceInputIds,[human.inputId]);
   assert.equal(task.collaboration.configurationHash,created.result.configurationHash);
   assert.equal((await agent('source','coordination.create',args,id)).duplicate,true);
-  tasks.push({...task,brief:created.initialInputId,actor:index===0?'recipient':'recipient2'});
+  tasks.push({...task,operation:created.requestId,brief:created.initialInputId,actor:index===0?'recipient':'recipient2'});
  }
  assert.notEqual(tasks[0].id,tasks[1].id);
  assert.notEqual(tasks[0].collaboration.outputNamespace,tasks[1].collaboration.outputNamespace);
@@ -218,12 +219,14 @@ try{
    assert.equal(declaration.result.status,'staged');assert.equal(declaration.result.qualified,false);
    binding(await inspect(),requestId+':reply',task.id,context);
    const sourceContext=(await inspect()).contexts[current.selected];
-   const wait=await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait');
+   const wait=round===0
+    ?{accepted:true,result:(await agent('source','coordination.result',{requestId:task.operation},task.operation+':return')).result.initialRequest.subscription}
+    :await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait');
    assert.equal(wait.accepted,true);assert.equal(wait.result.status,'waiting');
-   binding(await inspect(),requestId+':wait',current.selected,sourceContext);
+   if(round===1)binding(await inspect(),requestId+':wait',current.selected,sourceContext);
    const continuation=wait.result.continuationId;
    assert.ok(continuation);assert.equal(continuations.has(continuation),false);continuations.add(continuation);
-   assert.equal((await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait')).duplicate,true);
+   if(round===1)assert.equal((await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait')).duplicate,true);
    const staged=await agent('source','coordination.result',{requestId},requestId+':staged');
    assert.equal(staged.result.qualified,false);assert.equal(staged.result.qualificationSupported,true);
    assert.deepEqual(staged.result.results,[]);
@@ -237,7 +240,7 @@ try{
    assert.equal(anchor.textDigest,sha256(JSON.stringify(terminal.text)));
    const canonical='['+[task.id,anchor.nativeIndex,'assistant',terminal.text].map(value=>JSON.stringify(value)).join(', ')+']';
    assert.equal(anchor.messageId,sha256(canonical).slice(0,32));
-   const qualified=await agent('source','coordination.result',{requestId},requestId+':result');
+   const qualified=await agent('source','coordination.result',{requestId:round===0?task.operation:requestId},requestId+':result');
    assert.equal(qualified.result.qualified,true);assert.equal(qualified.result.qualificationSupported,true);
    assert.equal(qualified.result.results.length,1);
    const exact=qualified.result.results[0];

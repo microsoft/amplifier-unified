@@ -33,6 +33,7 @@ on:
       - 'tests/test_child_file_policy.py'
       - 'tests/test_file_access_policy.py'
       - 'tests/test_workspace_repair_outcomes.py'
+      - 'tests/test_peer_creation_operation.py'
       - 'amplifier_web/canvas_files.py'
       - 'amplifier_web/worktrees.py'
       - 'skills/coordinate-work/**'
@@ -65,6 +66,7 @@ jobs:
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py
           tests/test_state_write_scopes.py tests/test_host_storage.py
           tests/test_workspace_repair_outcomes.py tests/test_worktrees.py
+          tests/test_peer_creation_operation.py
           tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
       - name: Verify mounted child identity and file boundaries

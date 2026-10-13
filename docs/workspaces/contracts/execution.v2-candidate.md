@@ -68,6 +68,23 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Coherent commissioned-task operation — 2026-10-13
+
+A new commissioned conversation has one durable creation handle. The host
+captures its configuration and execution placement, reserves the requester's
+return notification by default, and commits the initial request and that wait
+before admitting execution. An explicit `returnNotification:false` permits
+independent work without an automatic return. Inspecting the creation handle
+resolves its initial request; callers do not construct subordinate command IDs.
+
+Preparation phases distinguish a committed plan, requested root creation,
+retained root and committed input. Restart may resume a proven unperformed step
+or reconcile an existing exact receipt. An unproven root-creation effect remains
+unknown and is never blindly repeated. Stop, changed assignment, changed
+placement or revoked admission suppress remaining automatic preparation. Reads
+and duplicate requests remain passive. Private captured configuration is never
+included in public receipts or ambient coordination context.
+
 ### Approved initial repair implementation — 2026-10-13
 
 The initial program separates defect repairs from larger design experiments.

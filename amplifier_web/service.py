@@ -2185,6 +2185,7 @@ class AppService:
                                 json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
                             apply(self, session, creation[3])
                             session["collaboration"] = copy.deepcopy(creation[4])
+                            session['workingDirectory'] = creation[4]['workingDirectory']
                         from .new_chat import initial_model
                         initial = initial_model(self.state, args, session['workspace'], session['bundle'])
                         if initial:

@@ -23,6 +23,8 @@ class Transport:
 
     def write(self, line):
         request = json.loads(line)
+        if request.get("type") == "runtime.bridge":
+            return
         assert request["op"] == "bridge"
         self.requests.append(request)
         self.tasks.append(asyncio.create_task(self.respond(request)))
@@ -173,11 +175,13 @@ async def test_only_valid_long_polls_receive_bounded_margin(monkeypatch, operati
     with pytest.raises(TimeoutError, match="transport timeout"):
         await worker.bridge(operation, args)
     assert budgets == [expected]
-    assert len(published) == 1 and published[0]["args"] == original == args
+    requests = [row for row in published if row.get("op") == "bridge"]
+    assert len(requests) == 1 and requests[0]["args"] == original == args
+    assert [row["phase"] for row in published if row.get("type") == "runtime.bridge"] == ["requested", "timeout"]
     assert not worker.bridges
-    await worker.command({"op": "bridge.result", "id": published[0]["id"],
+    await worker.command({"op": "bridge.result", "id": requests[0]["id"],
                           "result": {"late": True}})
-    assert len(published) == 1 and not worker.bridges
+    assert len(published) == 3 and not worker.bridges
 
 
 async def test_mutation_response_timeout_is_unknown_and_never_replayed(transport, monkeypatch):
@@ -239,4 +243,35 @@ async def test_publish_disconnection_is_actionable_and_cleans_future(monkeypatch
     assert "outcome is unknown" in result.error["message"]
     assert "do not automatically replay" in result.error["message"]
     assert "Private value" not in str(result.error)
-    assert len(calls) == 1 and not worker.bridges
+    assert len([row for row in calls if row.get("op") == "bridge"]) == 1
+    assert not worker.bridges
+
+@pytest.mark.parametrize("outcome", ["returned", "failed", "cancelled"])
+async def test_diagnostic_failure_cannot_change_request_outcome(monkeypatch, outcome):
+    worker = runtime_worker.Worker()
+    requests, futures = [], []
+    error = ValueError("original host failure")
+    def publish(row):
+        if row.get("type") == "runtime.bridge":
+            raise OSError("diagnostics unavailable")
+        requests.append(row)
+        future = worker.bridges[row["id"]]
+        futures.append(future)
+        if outcome == "returned":
+            future.set_result({"accepted": True})
+        elif outcome == "failed":
+            future.set_exception(error)
+        else:
+            future.cancel()
+    monkeypatch.setattr(runtime_worker, "publish", publish)
+    if outcome == "returned":
+        assert await worker.bridge("dispatch", {}) == {"accepted": True}
+    elif outcome == "failed":
+        with pytest.raises(ValueError) as caught:
+            await worker.bridge("dispatch", {})
+        assert caught.value is error
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await worker.bridge("dispatch", {})
+    assert len(requests) == 1 and all(f.done() for f in futures)
+    assert not worker.bridges
