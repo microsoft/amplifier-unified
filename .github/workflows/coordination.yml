@@ -30,6 +30,7 @@ on:
       - 'tests/test_state_write_scopes.py'
       - 'tests/test_host_storage.py'
       - 'tests/test_child_app_authority.py'
+      - 'tests/test_child_resume_admission.py'
       - 'tests/test_child_file_policy.py'
       - 'tests/test_file_access_policy.py'
       - 'tests/test_workspace_repair_outcomes.py'
@@ -75,7 +76,7 @@ jobs:
           --with 'amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@08de4d442fde0210c4c89f7628c17846c5dfd67b'
           --with 'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@db641363013ff906b656f49498a87ab01f5c506f'
           pytest -q tests/test_child_app_authority.py tests/test_child_file_policy.py
-          tests/test_child_image_policy.py tests/test_runtime_worker.py
+          tests/test_child_image_policy.py tests/test_child_resume_admission.py tests/test_runtime_worker.py
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
       - run: npx --prefix frontend playwright install --with-deps chromium
