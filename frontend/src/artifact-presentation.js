@@ -8,6 +8,20 @@ export function publicationMode(item){
  return modes.has(item.publication?.chat)?item.publication.chat:inlineKinds.has(item.row.kind)?'inline':'compact';
 }
 
+// This is a trusted host projection, not a client-supplied assertion or visual
+// verification. Require its exact publication/output binding before consuming it.
+export function publicationImageGeneration(item,messageId,sessionId){
+ const link=item.publication,binding=link?.imageGeneration;
+ if(item.row.kind!=='image'||item.row.sessionId!==sessionId||
+  link?.messageId!==messageId||link.version!==item.version||
+  !Number.isSafeInteger(link.version)||link.version<1||
+  typeof link.outputId!=='string'||!link.outputId||
+  binding?.verified!==true||typeof binding.requestId!=='string'||!binding.requestId||
+  !['generate','edit'].includes(binding.operation)||
+  !(binding.parentId===null||typeof binding.parentId==='string'&&binding.parentId))return null;
+ return binding;
+}
+
 export function artifactPublications(rows,messageId){
  return rows.filter(row=>row.kind!=='settings').flatMap(row=>{
   const links=row.publications??[{messageId:row.messageId,version:row.app?.revision||row.revision||1}];

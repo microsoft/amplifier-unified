@@ -6,6 +6,7 @@ import {CanvasViewer,GifCanvasViewer,MediaCanvasViewer} from './canvas-viewer';
 import {BrowserPreview} from './canvas-library';
 import {McpAppViewer} from './mcp-app-viewer';
 import {A2UISurface} from './a2ui';
+import {inlineOwnership} from './conversation-navigation';
 import './canvas-workspace.css';
 
 const Surface=({canvas,act})=><A2UISurface surface={canvas.surface} act={act}/>;
@@ -45,7 +46,10 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
    const mapped={'view.update':'canvas.view','view.report':'canvas.report'}[action];
    if(!mapped)return Promise.reject(Error('Unsupported renderer capability.'));
    return dispatch('canvas.views.command',{...target,action:mapped,args});
-  },setDirty:dirty=>dispatch('canvas.views.dirty',{...target,dirty:!!dirty})
+  },setDirty:dirty=>{
+   const tickets=inlineOwnership.intent(target,!!dirty);
+   return dispatch('canvas.views.dirty',{...target,dirty:!!dirty},{inlineDirtyTickets:tickets}).then(receipt=>{inlineOwnership.settle(tickets,receipt);return receipt});
+  }
  }),[target,dispatch]);
  const report=useMemo(()=> (status,message)=>{
   const result=dispatch('canvas.views.status',{...target,status,message:String(message).slice(0,2000)});

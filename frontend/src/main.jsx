@@ -53,7 +53,7 @@ import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
-import {createConversationNavigation} from './conversation-navigation';
+import {createConversationNavigation,inlineOwnership,inlineEditNotice,normalizedAction,leavesSettings} from './conversation-navigation';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';
 import {VoiceClient} from './voice';
@@ -154,6 +154,7 @@ function App(){
    if(anchor){historyScrollAnchor.current={sessionId:nextSession.id,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top};stickToBottom.current=false}
   }
   serverState.current=next;conversationNavigation.current.remember(next);
+  if(inlineOwnership.reconcile(next))setError('The host removed access to an edited inline preview. Its private input could not be retained.');
   for(const wake of stateWaiters.current)wake(next);
   latest.current=conversationNavigation.current.apply(next);if(!document.hidden)setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
@@ -175,8 +176,12 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
-  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action);
+  const command=normalizedAction(action,args),leavingSettings=leavesSettings(action,args);
+  meta={...meta,id:meta.id||crypto.randomUUID()};
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,error:'Settings changes were kept.'});
+  const navigation=['session.select','session.draft','workspace.select','session.create'].includes(command.action);
+  if(navigation&&inlineOwnership.dirty())return Promise.reject(Error(inlineEditNotice));
+  const dirtyTickets=command.action==='canvas.views.dirty'?(meta.inlineDirtyTickets??inlineOwnership.intent(command.args,!!command.args.dirty)):[];
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
   const referenceAction=action==='message.reply'||action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
   if(referenceAction&&!meta.referencePrepared){
@@ -207,12 +212,14 @@ function App(){
    if(meta.before)await meta.before;
    // Chat navigation has its own queue; it must not overtake a declared edit.
    if(navigation&&dirtyBarrier)await dirtyBarrier;
+   if(navigation&&inlineOwnership.dirty())throw Error(inlineEditNotice);
+   if(command.action==='canvas.views.release'&&inlineOwnership.blocksTarget(command.args))throw Error(inlineEditNotice);
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(result.state)acceptState(result.state);
    else await awaitState(result);
+   inlineOwnership.settle(dirtyTickets,result);
    return result;
   };
-  const navigation=['session.select','session.draft','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','session.draft','workspace.select'].includes(args.action));
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
   const catalogRead=isProviderCatalogRead(action,meta);
@@ -461,7 +468,7 @@ function App(){
   const activeGeneration=session?.collaborationGeneration;
   const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
-  if(detail.focused)detail.latest(false);
+  if(detail.focused&&!detail.latest(false))return;
   chatScroll.current?.submitted(id);setError('');editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
   let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});

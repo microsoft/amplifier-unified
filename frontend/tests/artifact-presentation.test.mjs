@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,publicationOutputIds} from '../src/artifact-presentation.js';
-import {createArtifactOverrides} from '../src/conversation-navigation.js';
+import {createArtifactOverrides,createInlineOwnership,inlineEditNotice} from '../src/conversation-navigation.js';
 
 const item=(kind='image',chat,version=2)=>({row:{id:'saved-artifact',sessionId:'conversation',kind,title:'Saved result'},version,publication:{messageId:'turn',version,...(chat?{chat}:{})}});
 const state={client:{hostInstanceId:'fixture-host'},selectedSessionId:'conversation',canvasWorkspace:{views:[]}};
@@ -109,15 +109,15 @@ function component({dispatch,request=async()=>({id:'saved-artifact',kind:'image'
   }
  };
  const render=runInNewContext(`${source.slice(start,end).replace('export ','')}
- return {mode,loaded,refusal,notice,override,busy,root,owned,opening,changeMode,open};}\nGeneralArtifact`,{
-  ...hooks,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,overrides,
+ return {mode,loaded,revoked,refusal,notice,override,busy,root,owned,opening,changeMode,open};}\nGeneralArtifact`,{
+  ...hooks,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,overrides,inlineOwnership:createInlineOwnership(),inlineEditNotice,
   targetOf:view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]])),
   request,AbortController,URLSearchParams,crypto:{randomUUID:()=>`preview-command-${++serial}`},
   window:{amplifier:{getActions:()=>actions}},
   ...(!visible?{IntersectionObserver:class{observe(){}disconnect(){}}}:{})
  });
  return {writes,
-  render(patch={}){index=0;const result=render({item:saved,messageId:'turn',state,dispatch,...patch});result.root.current={};
+  render(patch={}){index=0;const result=render({item:saved,messageId:'turn',state:{...state,canvasWorkspace:{views:[inlineView]}},dispatch,...patch});result.root.current={};
    while(effects.length)effects.shift()();return result},
   dispose(){for(const entry of slots)entry?.cleanup?.()}
  };
@@ -163,11 +163,11 @@ test('actual publication default change cannot discard a dirty view or retarget 
  }});
  harness.render();harness.render();await settle();harness.render();
  const changed=item('image','compact');
- const refreshed={...state,canvasWorkspace:{views:[{...inlineView,generation:3,dirty:true}]}};
+ const refreshed={...state,canvasWorkspace:{views:[{...inlineView,dirty:true}]}};
  harness.render({item:changed,state:refreshed});await settle();
  const retained=harness.render({item:changed,state:refreshed});
  assert.equal(retained.mode,'inline');assert.ok(retained.loaded);assert.match(retained.notice,/Finish or cancel/);
- assert.equal(calls.at(-1).args.generation,3,'Release targets the current owned generation');
+ assert.equal(calls.at(-1).args.generation,1,'Release targets the original exact owned generation');
  assert.equal(calls.filter(row=>row.action==='canvas.views.inline').length,1,'Publication refresh does not remount or replay');
  dirty=false;await retained.changeMode('compact',true);harness.render({item:changed,state:refreshed});harness.dispose();
 });
@@ -199,4 +199,35 @@ test('actual clean unmount releases once and late body delivery never mounts or 
  assert.equal(harness.writes.length,writes);
  assert.equal(calls.filter(row=>row.action==='canvas.views.inline').length,1);
  assert.equal(calls.filter(row=>row.action==='canvas.views.release').length,1);
+});
+
+test('actual owned preview does not retarget a revoked generation or reused target from another client',async()=>{
+ for(const patch of [
+  {canvasWorkspace:{views:[{...inlineView,generation:2}]}},
+  {client:{hostInstanceId:'fixture-host',id:'another-client'},canvasWorkspace:{views:[inlineView]}},
+  {client:{hostInstanceId:'another-host'},canvasWorkspace:{views:[inlineView]}}
+ ]){
+  const harness=component({dispatch:async()=>({accepted:true,result:inlineView})});
+  harness.render();harness.render();await settle();harness.render();
+  const result=harness.render({state:{...state,...patch}});
+  assert.equal(result.revoked,true);assert.equal(result.owned.current.view.generation,1);
+  await settle();assert.match(harness.render({state:{...state,...patch}}).notice,/removed access/);
+  harness.dispose();
+ }
+});
+
+test('actual gallery retains initial and explicitly selected slots across job reorder/pruning',()=>{
+ const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('function ImageGallery('),end=source.indexOf(' return <div',start);
+ let selected,initialized=false;
+ const render=runInNewContext(source.slice(start,end)+'return {entry,selected,setSelected};} ImageGallery',{
+  useState:init=>{if(!initialized){selected=init();initialized=true}return [selected,value=>{selected=value}]},
+  useEffect:fn=>fn(),imageJobLabel:()=>'',titleOf:()=>''
+ });
+ const a={id:'request:a',item:item()},b={id:'request:b',item:item()};
+ assert.equal(render({entries:[a,b]}).entry,a);
+ assert.equal(render({entries:[b,a]}).entry,a,'Pruning/reorder cannot change the initially shown output');
+ render({entries:[b,a]}).setSelected(b.id);
+ assert.equal(render({entries:[a,b]}).entry,b,'Explicit selection remains on the same output slot');
+ assert.equal(render({entries:[a]}).entry,a,'Actual removal permits fallback');
 });

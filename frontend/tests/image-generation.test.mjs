@@ -7,7 +7,7 @@ test('saved results replace only matching image work in the same chat and turn',
   {id:'b',messageId:'origin',requestId:'b',phase:'running',operation:'edit'},
   {id:'c',messageId:'later',requestId:'c',phase:'running',operation:'generate'}];
  const state={selectedSessionId:'s',sessions:[{id:'s',execution:{imageGeneration:jobs}}],canvasArtifacts:[
-  {sessionId:'s',messageId:'origin',imageRequestId:'a'},
+  {kind:'image',sessionId:'s',messageId:'origin',imageRequestId:'a'},
   {sessionId:'other',messageId:'origin',imageRequestId:'b'},
   {sessionId:'s',messageId:'later',imageRequestId:'b'}]};
  assert.deepEqual(imageJobs(state,'origin').map(row=>row.id),['b']);
@@ -35,7 +35,7 @@ test('gallery retains request order and selection identity through out-of-order 
  assert.equal(finished[0].item,first);assert.equal(finished[1].item,second);
  assert.deepEqual(imageGalleryEntries(state,'later',[]),[]);
  const revised={...first,version:2};
- assert.equal(imageGalleryEntries(state,'origin',[first,revised]).length,4,'Additional versions are preserved');
+ assert.equal(imageGalleryEntries(state,'origin',[first,revised]).length,3,'An ordinary later revision does not inherit the initial generation marker');
  assert.deepEqual(imageGalleryEntries({...state,selectedSessionId:'other'},'origin',[first]),[],'An unmatched request ID is not verified generation evidence');
 });
 
@@ -75,11 +75,65 @@ test('completed edit and variation receipts retain stable slots and all exact ve
  const before=imageGalleryEntries(state,'origin',[original]);
  assert.equal(imageJobLabel(before[1].job),'Editing image…');
  const completed={...state,sessions:[{id:'s',execution:{imageGeneration:[jobs[0],{...jobs[1],phase:'completed'}]}}]};
- const after=imageGalleryEntries(completed,'origin',[edited,original,{...edited,version:2}]);
+ const after=imageGalleryEntries(completed,'origin',[edited,original,retained('variant','edited',2,'edit')]);
  assert.deepEqual(after.slice(0,2).map(row=>row.id),before.map(row=>row.id));
  assert.equal(after[1].item,edited);assert.equal(after[2].item.version,2);
  for(const chat of ['none','compact']){
   const hidden={...edited,publication:{chat}};
   assert.equal(imageGalleryEntries(completed,'origin',[original,hidden]).length,1,'A saved non-inline publication does not leave a false pending gallery slot');
  }
+});
+
+function retained(id,requestId,version=1,operation='generate',parentId=null,chat='inline'){
+ return {row:{id,kind:'image',sessionId:'s',imageRequestId:requestId},version,
+  publication:{messageId:'origin',version,chat,outputId:'output-'+id+'-'+version,
+   imageGeneration:{verified:true,requestId,operation,parentId}}};
+}
+
+test('trusted exact publications retain generation and edit identity beyond 32 jobs, no jobs and reload',()=>{
+ const original=retained('original','generated'),edited=retained('edited','edit-request',1,'edit','original');
+ const state={selectedSessionId:'s',sessions:[{id:'s',execution:{imageGeneration:[
+  {id:'job',requestId:'generated',messageId:'origin',operation:'generate',phase:'completed'},
+  {id:'edit',requestId:'edit-request',messageId:'origin',operation:'edit',phase:'completed'}
+ ]}}]};
+ const before=imageGalleryEntries(state,'origin',[original,edited]);
+ const pruned={...state,sessions:[{id:'s',execution:{imageGeneration:Array.from({length:32},(_,n)=>({id:'new-'+n,requestId:'new-'+n,messageId:'later',operation:'generate',phase:'completed'}))}}]};
+ const after=imageGalleryEntries(pruned,'origin',[original,edited]);
+ assert.deepEqual(after.map(entry=>entry.id),before.map(entry=>entry.id));
+ assert.equal(after[0].item,original);assert.equal(after[1].item,edited);
+ const reloaded=JSON.parse(JSON.stringify({...pruned,sessions:[{id:'s',execution:{imageGeneration:[]}}]}));
+ assert.deepEqual(imageGalleryEntries(reloaded,'origin',[original,edited]).map(entry=>entry.id),before.map(entry=>entry.id));
+});
+
+test('one request with multiple outputs and an edit has distinct stable slots through pruning',()=>{
+ const items=[retained('a','generate'),retained('b','generate'),retained('c','edit',1,'edit','a')];
+ const state={selectedSessionId:'s',sessions:[{id:'s',execution:{imageGeneration:[
+  {id:'j1',requestId:'generate',messageId:'origin',operation:'generate'},
+  {id:'j2',requestId:'edit',messageId:'origin',operation:'edit'}
+ ]}}]};
+ const before=imageGalleryEntries(state,'origin',items),pruned={...state,sessions:[{id:'s'}]};
+ const after=imageGalleryEntries(pruned,'origin',items);
+ assert.equal(new Set(before.map(entry=>entry.id)).size,3);
+ for(const item of items)assert.equal(after.find(entry=>entry.item===item).id,before.find(entry=>entry.item===item).id);
+ for(const chat of ['compact','none']){
+  const hidden=items.map(item=>({...item,publication:{...item.publication,chat}}));
+  assert.deepEqual(imageGalleryEntries(state,'origin',hidden),[]);
+ }
+});
+
+test('bare forgery, mismatched owner/output/publication version and ordinary new revision cannot classify generation',()=>{
+ const valid=retained('a','request',1),state={selectedSessionId:'s',sessions:[{id:'s',execution:{imageGeneration:[{id:'j',requestId:'request',messageId:'origin',operation:'generate'}]}}]};
+ for(const item of [
+  {...valid,row:{...valid.row,sessionId:'other'}},
+  {...valid,version:2},
+  {...valid,publication:{...valid.publication,messageId:'other'}},
+  {...valid,publication:{...valid.publication,outputId:null}},
+  {...valid,publication:{...valid.publication,imageGeneration:{...valid.publication.imageGeneration,verified:false}}},
+  {...valid,version:2,publication:{messageId:'origin',version:2,outputId:'ordinary',chat:'inline'}},
+  {row:{id:'forged',kind:'image',mimeType:'image/png',sessionId:'s',imageRequestId:'unmatched'},version:1}
+ ]){
+  assert.equal(imageGalleryEntries(state,'origin',[item]).filter(entry=>entry.item).length,0);
+ }
+ assert.equal(imageGalleryEntries({...state,sessions:[{id:'s'}]},'origin',[{row:{...valid.row},version:1}]).length,0);
+ assert.equal(imageGalleryEntries(state,'origin',[valid])[0].item,valid);
 });

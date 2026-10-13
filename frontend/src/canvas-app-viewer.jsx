@@ -3,6 +3,7 @@ import {clientUrl,request} from './api';
 import {registerSurfaceCheckpoint} from './surface-checkpoint';
 import './canvas-app-viewer.css';
 import {CanvasControl} from './canvas-controls';
+import {inlineOwnership} from './conversation-navigation';
 
 const targetOf=canvas=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,canvas[key]]));
 const tokens=['bg','surface','soft','ink','muted','line','accent','tint','green','danger'];
@@ -32,11 +33,17 @@ export function CanvasAppViewer({canvas,dispatch}){
  };
  const declare=(value,version=editVersion.current)=>{
   if(version!==editVersion.current)return Promise.resolve();
-  dirtyRef.current=value;setDirty(value);
+  dirtyRef.current=true;setDirty(true);
   const target=targetOf(shown.current),epoch=channel.current;
-  const write=dirtyWrites.current.catch(()=>{}).then(()=>dispatch('canvas.views.dirty',{...target,dirty:value,editVersion:version}));
+  const tickets=inlineOwnership.intent(target,value);
+  const write=dirtyWrites.current.catch(()=>{}).then(()=>dispatch('canvas.views.dirty',{...target,dirty:value,editVersion:version},{inlineDirtyTickets:tickets}));
   dirtyWrites.current=write;
-  return write.catch(e=>{if(epoch===channel.current){dirtyRef.current=true;setDirty(true);setError(e.message)}throw e});
+  return write.then(receipt=>{
+   if(receipt?.accepted===false)throw Error(receipt.error||'The edit declaration was not accepted.');
+   inlineOwnership.settle(tickets,receipt);
+   if(receipt?.accepted===true&&epoch===channel.current&&version===editVersion.current&&!value){dirtyRef.current=false;setDirty(false)}
+   return receipt;
+  }).catch(e=>{if(epoch===channel.current){dirtyRef.current=true;setDirty(true);setError(e.message)}throw e});
  };
  useEffect(()=>{
   if(canvas.app.revision!==mounted.app.revision&&!dirtyRef.current&&!busy.current){mount(canvas)}
