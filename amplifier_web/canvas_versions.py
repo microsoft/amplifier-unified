@@ -119,9 +119,8 @@ def match_file(state, canvas):
 
 def assert_clean(service, identity):
     from .service import AppError
-    for client in service.clients.records.values():
-        if client.get('canvasViews', {}).get('preferences', {}).get('primary:' + identity, {}).get('dirty'):
-            raise AppError('Finish or cancel the artifact edit before changing its saved version.', 409, code='canvas_view_dirty')
+    if any(view['dirty'] for view in service.canvas_views.bindings(identity)):
+        raise AppError('Finish or cancel the artifact edit before changing its saved version.', 409, code='canvas_view_dirty')
 
 
 def definitions(schema, string):
@@ -217,6 +216,8 @@ def sync(service):
         if canvas.get('revision', 1) != latest(row):
             scoped = {**service._state, **record}
             load(scoped, service.db, row['id'], open_panel=canvas.get('open', False))
+            if canvas.get('publishedVersion') is not None:
+                scoped['canvas']['publishedVersion'] = canvas['publishedVersion']
             record['canvas'] = scoped['canvas']
 
 

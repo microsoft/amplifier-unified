@@ -192,6 +192,25 @@ Mutations require `id`, `expectedRevision` and `expectedStateRevision` from
 inspection. Use stable command IDs when retrying an uncertain transport
 outcome. A stale revision is a conflict, not permission to overwrite state.
 
+The existing operations except creation also accept an optional strict view
+target: `viewId`, `resourceId`, `resourceRevision`, and `generation`, together or
+not at all. `clientId` can name its attached client. Browser state/event/request
+calls use the definition selected by that exact view: a numbered inline view is
+read-only even when primary Canvas is Latest; a live inline view remains writable
+when primary Canvas is historical or shows another artifact. Untargeted legacy UI
+calls retain historical primary protection. Authenticated agent edits without a
+browser target use calling-conversation authority and both expected revisions,
+not another client's primary selection.
+
+Inspection lists actual primary/inline bindings with client, exact target,
+selected version, dirty state and render evidence; stale saved preferences are
+not live grants. Any actual dirty binding blocks refine/restore. Live views see
+one canonical `app.stateRevision`; numbered views retain their definition-time
+state. Private unfinished input remains owned by its originating view.
+The backend admits these bindings, but inline frontend mounting, explicit
+Go to Latest/Return to published version controls and runtime/browser acceptance
+remain unqualified until the frontend delivery unit verifies them.
+
 `canvas.apps.revise` replaces HTML and optionally manifest/title, retaining the
 same artifact ID, tab and compatible state. If the new schema rejects current
 state, the action fails atomically. Supply an explicitly considered

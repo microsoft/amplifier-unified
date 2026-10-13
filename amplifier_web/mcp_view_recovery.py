@@ -35,10 +35,16 @@ def revision(binding):
         'allowedTools', 'contractFingerprint', 'accountIdentity')})
 
 
-def saved(service, identity, *, require_binding=True):
+def saved(service, identity, *, require_binding=True, view_target=None):
     from .service import AppError
     from .canvas_library import scope
-    canvas = service.state.get('canvas', {})
+    if view_target is not None:
+        selected, _ = service.canvas_views.target(view_target)
+        if selected['id'] != identity or selected['kind'] != 'mcp-app':
+            raise AppError('This target is not the requested tool view.', 409)
+        canvas = service.canvas_views.canvas(view_target['viewId'])
+    else:
+        canvas = service.state.get('canvas', {})
     if canvas.get('id') != identity or canvas.get('kind') != 'mcp-app' or not canvas.get('open') or not scope(service.state, canvas):
         raise AppError('This tool view is no longer active in this chat. Reopen its canvas tab.', 409)
     row = next((row for row in service.state.get('canvasArtifacts', [])
@@ -50,11 +56,11 @@ def saved(service, identity, *, require_binding=True):
     return canvas, row
 
 
-def source(service, identity):
+def source(service, identity, view_target=None):
     from .service import AppError
-    canvas, row = saved(service, identity, require_binding=False)
+    canvas, row = saved(service, identity, require_binding=False, view_target=view_target)
     from .canvas_versions import definition
-    row = definition(row, canvas.get('selectedVersion'))
+    row = definition(row, canvas.get('selectedVersion'), service.db)
     try:
         content = resource(service.db, row['body']['$resource'])['content']
         if not isinstance(content, str):
@@ -65,15 +71,15 @@ def source(service, identity):
                        404, code='canvas_source_unavailable') from None
 
 
-def inspect(service, identity):
+def inspect(service, identity, view_target=None):
     from .service import AppError
-    canvas, _ = saved(service, identity, require_binding=False)
+    canvas, _ = saved(service, identity, require_binding=False, view_target=view_target)
     binding = canvas.get('mcp') if isinstance(canvas.get('mcp'), dict) else {}
     result = {'canvasId': identity, 'bindingRevision': revision(binding), 'source': 'available', 'canReconnect': False}
     def state(code, message, reconnect=False):
         return {**result, 'status': code, 'message': message, 'canReconnect': reconnect}
     try:
-        source(service, identity)
+        source(service, identity, view_target)
     except AppError as error:
         result['source'] = 'unavailable'
         return state('source_unavailable', str(error))
@@ -110,7 +116,7 @@ def inspect(service, identity):
 
 def admit(service, args):
     from .service import AppError
-    status = inspect(service, args['canvasId'])
+    status = inspect(service, args['canvasId'], args if 'viewId' in args else None)
     if status['bindingRevision'] != args['expectedBindingRevision']:
         raise AppError('This tool view changed. Inspect it before reconnecting.', 409)
     if not status['canReconnect']:
@@ -120,10 +126,11 @@ def admit(service, args):
 
 async def reconnect(service, args):
     from .service import AppError
-    from .canvas_library import remember
+    from .resource_files import put
+    target = args if 'viewId' in args else None
     async with service.lock:
         admit(service, args)
-        canvas, _ = saved(service, args['canvasId'])
+        canvas, _ = saved(service, args['canvasId'], view_target=target)
         server_id = canvas['mcp']['serverId']
         configuration = canvas['mcp']['configuration']
     # connect retains an already healthy transport. Never interrupt its work or
@@ -136,7 +143,7 @@ async def reconnect(service, args):
                 return status
         elif status['status'] not in {'ready', 'reconnect_required'}:
             raise AppError(status['message'], 409, code=status['status'])
-        canvas, _ = saved(service, args['canvasId'])
+        canvas, row = saved(service, args['canvasId'], view_target=target)
         binding = canvas['mcp']
         server = service.smart_tools._server(server_id)
         current = contract(service, binding)
@@ -146,9 +153,12 @@ async def reconnect(service, args):
         # shared binding. Context and local iframe input remain client-owned.
         for record in [service._state, *service.clients.records.values()]:
             other = record.get('canvas', {})
-            if other.get('id') == canvas['id'] and other.get('sessionId') == canvas['sessionId']:
+            if (other.get('id') == canvas['id'] and other.get('sessionId') == canvas['sessionId']
+                    and other.get('selectedVersion') is None and isinstance(other.get('mcp'), dict)):
                 other['mcp'].update(copy.deepcopy(update))
         binding.update(update)
-        remember(service.state, service.db)
+        canonical = resource(service.db, row['mcpState']['$resource'])
+        canonical.update(update)
+        row['mcpState'] = put(service.db, canonical)
         service._publish_changes(globals={'canvas','canvasArtifacts','view'})
-        return inspect(service, args['canvasId'])
+        return inspect(service, args['canvasId'], target)

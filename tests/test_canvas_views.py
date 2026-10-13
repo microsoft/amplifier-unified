@@ -7,6 +7,54 @@ from amplifier_web.service import AppError, AppService
 from amplifier_web.canvas_views import PROFILE
 
 
+async def test_browser_and_a2ui_inline_controls_remain_exact_view_local(app):
+    app._message(app._session(), 'user', 'Two independent references')
+    await command(app, 'canvas.show', {'kind': 'browser', 'url': 'https://example.com/reference'})
+    browser = app.state['canvasArtifacts'][-1]
+    async def mount(row, preview):
+        return (await command(app, 'canvas.views.inline', {'resourceId': row['id'], 'version': 1,
+            'messageId': row['publications'][0]['messageId'], 'previewId': preview}))['result']
+    first = await mount(browser, 'browser-one')
+    second = await mount(browser, 'browser-two')
+    await update(app, first, {'reload': 1})
+    assert view(app, second['viewId'])['view'] == {}
+    with app.clients.bind('one'):
+        assert app.canvas_views.canvas(first['viewId'])['url'] == 'https://example.com/reference'
+    with pytest.raises(AppError, match='no qualified live owner'):
+        await command(app, 'canvas.views.follow', {**target(first), 'followLatest': True})
+    surface = {'surfaceId': 'fixture', 'root': 'button', 'components': [
+        {'id': 'button', 'component': {'Button': {'child': 'label', 'action': {'name': 'review'}}}},
+        {'id': 'label', 'component': {'Text': {'text': {'literalString': 'Review'}}}},
+    ]}
+    await command(app, 'canvas.show', {'kind': 'a2ui', 'surface': surface})
+    one = await mount(app.state['canvasArtifacts'][-1], 'surface-one')
+    two = await mount(app.state['canvasArtifacts'][-1], 'surface-two')
+    messages = deepcopy(app._session()['messages'])
+    await command(app, 'canvas.views.command', {**target(one), 'action': 'canvas.event',
+        'args': {'surfaceId': 'fixture', 'componentId': 'button', 'name': 'review'}})
+    assert len(view(app, one['viewId'])['events']) == 1
+    assert view(app, two['viewId']).get('events', []) == []
+    assert app._session()['messages'] == messages and not app.tasks
+    await command(app, 'canvas.views.release', target(one))
+    with pytest.raises(AppError):
+        await command(app, 'canvas.views.command', {**target(one), 'action': 'canvas.event',
+            'args': {'surfaceId': 'fixture', 'componentId': 'button', 'name': 'review'}})
+    assert view(app, two['viewId'])['resourceId'] == two['resourceId']
+
+
+async def test_follow_does_not_admit_unpublished_or_noninteractive_versions(app):
+    app._message(app._session(), 'user', 'A retained text')
+    await show(app, 'text', 'Not a live owner')
+    row = app.state['canvasArtifacts'][-1]
+    args = {'resourceId': row['id'], 'version': 1, 'messageId': row['publications'][0]['messageId'],
+            'previewId': 'text-live', 'followLatest': True}
+    with pytest.raises(AppError, match='no qualified live owner'):
+        await command(app, 'canvas.views.inline', args)
+    with pytest.raises(AppError, match='not published'):
+        await command(app, 'canvas.views.inline', {**args, 'messageId': 'unrelated'})
+    assert app.clients.records['one'].get('canvasViews', {}).get('inline', {}) == {}
+
+
 @pytest.fixture
 async def app(tmp_path):
     service = AppService(tmp_path / 'app', workspace=tmp_path)

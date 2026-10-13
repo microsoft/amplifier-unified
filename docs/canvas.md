@@ -98,8 +98,9 @@ Use a stable command ID for uncertain retries: identical retries return the
 original receipt without reopening; changed payloads with that ID are refused.
 
 Each definition projects native `presentationCapabilities`. GIF and MP4 use the
-existing retained-media viewer. Unqualified inline browser/A2UI/CanvasApp/MCP
-mounts remain explicit gaps, not successful empty views. Secondary media views
+existing retained-media viewer. The backend admits view-qualified browser, A2UI,
+CanvasApp and MCP bindings through the same owner; their inline frontend mounting
+and browser qualification remain separate delivery gaps. Secondary media views
 report with `canvas.views.mediaReport` and their exact
 `viewId/resourceId/resourceRevision/generation`; legacy inline media reports
 remain compatible.
@@ -400,9 +401,10 @@ separate pieces of evidence.
 Saved document and image publications also appear beside their originating chat
 message. The inline preview binds the publication's exact saved version; opening
 it in full view selects that same artifact/version in Canvas. A later revision
-does not silently replace a displayed earlier version. Tool apps, interactive
-surfaces and external websites retain their existing Canvas link until their
-inline lifecycle is qualified.
+does not silently replace a displayed earlier version. Backend inline admission
+also supports canonical CanvasApps, MCP Apps, browser URL references and the
+existing A2UI snapshot subset. This source contract does not establish that the
+frontend mounts those interactive inline views.
 
 CanvasViews owns both presentations. `canvas.views.inline` requires the artifact,
 message, version and a client-local preview mount identity. It validates the
@@ -413,6 +415,37 @@ resource/revision/generation checks. `canvas.views.release` closes only that
 inline view and refuses unsaved edits. Conversation transitions protect dirty
 views and clear clean inline leases; a new browser page never inherits leases
 from its predecessor. Saved content is unaffected by preview disposal.
+
+`canvas.views.inline` accepts optional `followLatest: boolean` (default false).
+The exact published message/version is always validated first. Only `canvas-app`
+and `mcp-app` have qualified live owners: explicit true selects Latest without
+changing `publishedVersion`. Other kinds refuse true. Numbered versions remain
+read-only, including a number equal to the current Latest.
+
+`canvas.views.follow {viewId, resourceId, resourceRevision, generation,
+followLatest, clientId?}` switches the **same** view between Latest and its
+original published number. Dirty input blocks a switch; a repeated mount cannot
+allocate another view to evade that guard. Projections distinguish
+`publishedVersion`, `selectedVersion`, `followLatest`, and `latestRevision`.
+Definition changes invalidate old generations; shared CanvasApp state updates do
+not replace private edits. Switching never publishes a version, executes a tool
+or changes the primary Canvas selection for an inline view.
+
+MCP source, saved result, status, tools and resource HTTP routes accept this same
+target in query fields. `smartTools.viewStatus`, `smartTools.reconnectView`,
+`smartTools.appCall` and `smartTools.context` accept it in their existing args.
+Incomplete, foreign, released or stale targets refuse; live authority and the
+exact target are checked again after awaited reads. Without a target, existing
+primary-view behavior remains. Historical source/results stay readable but tool
+calls, resource access, context writes and reconnect remain read-only.
+
+Per-view MCP context and last-operation observations stay on that client/view,
+not in another view's binding. Reconnect updates canonical connection authority
+without rewriting saved definitions or peer context. Mounting, inspecting and
+reading retained documents never invoke the launcher again. Release disposes one
+view, not the connector or its tool-owned work. Native interactive host paths do
+not add capabilities to contributed renderer packages. OutputRegistry snapshots
+labelled CanvasApp/MCP/Settings still cannot fabricate those canonical owners.
 
 Preview bodies load only near the viewport. A client may retain up to eight
 inline previews; additional artifacts remain available in full Canvas, and the

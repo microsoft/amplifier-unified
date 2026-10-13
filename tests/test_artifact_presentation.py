@@ -903,10 +903,16 @@ async def test_view_capabilities_follow_selected_definition_not_latest_row_kind(
         historical = await app.dispatch('canvas.views.inline', {'resourceId': row['id'], 'version': 1,
             'messageId': owner(app)['messages'][0]['id'], 'previewId': 'historical-reader'}, include_state=False)
         assert historical['result']['resource']['kind'] == 'markdown'
-        with pytest.raises(AppError, match='Canvas'):
+        browser = await app.dispatch('canvas.views.inline', {'resourceId': row['id'], 'version': 2,
+            'messageId': owner(app)['messages'][0]['id'], 'previewId': 'browser-inline'}, include_state=False)
+        assert browser['result']['resource']['kind'] == 'browser'
+        assert app.canvas_views.canvas(browser['result']['viewId'])['url'] == updated['url']
+        with pytest.raises(AppError, match='no qualified live owner'):
             await app.dispatch('canvas.views.inline', {'resourceId': row['id'], 'version': 2,
-                'messageId': owner(app)['messages'][0]['id'], 'previewId': 'unsupported-browser-inline'}, include_state=False)
+                'messageId': owner(app)['messages'][0]['id'], 'previewId': 'browser-inline',
+                'followLatest': True}, include_state=False)
     for kind in ('canvas-app', 'mcp-app', 'browser', 'a2ui'):
-        assert not capabilities(kind)['inline'] and capabilities(kind)['reason']
+        assert capabilities(kind)['inline']
+    assert not capabilities('settings')['inline']
     assert 'canvas.present' in ACTION_DEFINITIONS
     assert 'presentation' in ACTION_DEFINITIONS['canvas.show'][1]['properties']
