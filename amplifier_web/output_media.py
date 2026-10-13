@@ -240,8 +240,8 @@ def retained_facts(record, sid):
     Only the owning host registry or signed/reviewed transfer route supplies
     records. A payload flag or a content hash cannot admit a new record.
     """
-    def text(value, maximum):
-        return isinstance(value, str) and 0 < len(value) <= maximum
+    def text(value, maximum, minimum=1):
+        return isinstance(value, str) and minimum <= len(value) <= maximum
 
     def integer(value, low, high):
         return type(value) is int and low <= value <= high
@@ -259,7 +259,7 @@ def retained_facts(record, sid):
             or not integer(record.get('version'), 1, 2**63 - 1)
             or not isinstance(record.get('sha256'), str)
             or not re.fullmatch(r'[a-f0-9]{64}', record['sha256'])
-            or not text(record.get('title'), 200) or not text(record.get('filename'), 4000)
+            or not text(record.get('title'), 200, 0) or not text(record.get('filename'), 4000)
             or not isinstance(body, dict) or set(body) not in ({'$resource'}, {'$resource', 'bytes'})
             or not isinstance(body['$resource'], str)
             or not re.fullmatch(r'[a-f0-9]{64}', body['$resource'])
@@ -656,6 +656,40 @@ class Media:
                 detach(self.app.db, record['body']['$resource']),
                 self.client_scope(values['sessionId']))
 
+    def metadata_snapshot(self, sid, identity):
+        """Caller ownership belongs to app_bridge, not browser selection.
+
+        Byte delivery and UI observations retain their stricter client scope.
+        """
+        from .resource_files import detach
+        session = self.app._session(sid, hydrate=False)
+        self.authority(session, 'ui')
+        record = self.outputs.record(sid, identity)
+        facts = copy.deepcopy(retained_facts(record, sid))
+        return (facts, detach(self.app.db, facts['body']['$resource']))
+
+    async def metadata(self, sid, identity, args):
+        from .resource_files import settle_worker
+        async with self.app.lock:
+            before = self.metadata_snapshot(sid, identity)
+        async with self.workers:
+            await settle_worker(_signature, before[1])
+        async with self.app.lock:
+            if self.metadata_snapshot(sid, identity) != before:
+                raise ValueError('Retained media changed during metadata read.')
+            record = self.outputs.record(sid, identity)
+            observation = self.observation(record)
+            comments = self.outputs.store.comments(identity)
+            start, count = args.get('commentOffset', 0), args.get('commentLimit', 5)
+            return {**self.descriptor(record), 'kind': 'media',
+                    'origin': {key: record['origin'][key] for key in ('source', 'messageId')},
+                    'versionEvidence': record.get('versionEvidence', 'snapshot'),
+                    'saved': True, 'attached': bool(record.get('linked')),
+                    'browserObservation': observation,
+                    'playback': observation.get('playback', 'unknown'),
+                    'comments': comments[start:start + count],
+                    'nextCommentOffset': start + count if start + count < len(comments) else None}
+
     def report(self, values, origin, proof=None):
         if origin != 'ui':
             raise ValueError('Media observations must originate in the authenticated browser UI.')
@@ -699,10 +733,13 @@ class Media:
         async with self.app.lock:
             before = self.snapshot(values)
             record, source, _client = before
+            record = copy.deepcopy(record)
         # Bounded workers also serialize cache decisions: no durable byte store.
         async with self.workers:
             signature = await settle_worker(_signature, source)
-            key = (source.identity, record['sha256'])
+            # Reuse successful validation only for exact immutable metadata and
+            # resource/index identity, not merely an unchanged media hash.
+            key = (source, json.dumps(record, sort_keys=True, separators=(',', ':')))
             cached = self.cache.get(key)
             if cached and cached[1] == signature and time.monotonic() - cached[2] < 5:
                 data = cached[0]
@@ -710,10 +747,15 @@ class Media:
             else:
                 self.cache.pop(key, None)
                 data, signature = await settle_worker(_saved_bytes, source, record['sha256'])
+                await settle_worker(_validate_retained_source, source, signature, data, record)
                 self.cache[key] = (data, signature, time.monotonic())
                 while len(self.cache) > 2 or sum(len(row[0]) for row in self.cache.values()) > 64 * 1024 * 1024:
                     self.cache.popitem(last=False)
-            await settle_worker(_validate_retained_source, source, signature, data, record)
+            # Hits avoid body hashing/decoding but still recheck fresh index and
+            # backing signature after awaits, before scope revalidation.
+            if await settle_worker(_signature, source) != signature:
+                self.cache.pop(key, None)
+                raise ValueError('Media backing file changed during read.')
         async with self.app.lock:
             if self.snapshot(values) != before:
                 raise ValueError('Media source authority changed during read.')

@@ -1220,6 +1220,9 @@ async def test_old_canonical_media_restart_reopen_preserves_origin_without_displ
         reopened.clients.attach('canonical-reopen-browser')
         with reopened.clients.bind('canonical-reopen-browser'):
             await reopened.dispatch('session.select', {'id': sid})
+            # Selection schedules history loading; it does not await the tail.
+            # Establish the intended 100-message baseline before retained reads.
+            await reopened.history.load(sid)
             source = reopened._session(sid, hydrate=False)
             markers = copy.deepcopy(dict.get(source, '_coldFields', {}))
             items = (await reopened.outputs.media.describe(sid, old))['items']

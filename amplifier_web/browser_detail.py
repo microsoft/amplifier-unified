@@ -252,6 +252,8 @@ def sync_work(session, group, known):
 
 
 def project(session, *, resolver=None):
+    from .cold_display import detached
+    session = detached(session)
     result=dict(session)
     from .peer_attribution import display_annotations
     result['messageAnnotations'] = display_annotations(session)

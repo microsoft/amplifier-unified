@@ -133,6 +133,8 @@ class StateProjections:
         A scoped commit evicts its identities; an unknown save evicts all.
         No client draft/selection is retained in this shared body cache.
         """
+        from .cold_display import detached
+        row = detached(row)
         fields = ('messages', 'messageWindow', 'sharedHistoryUserTurnOffset',
                   'execution', 'executionWindow', 'workers', 'workerSummary', 'generations', 'historyActivity')
         body = self.detail_bodies.pop(row['id'], None)

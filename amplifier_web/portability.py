@@ -218,7 +218,8 @@ class Portability:
             await self.app.history.ensure_loaded(session['id'])
             await asyncio.to_thread(capture_workspace, session.get('workingDirectory') or session['workspace'], args['sourceRevision'], args['mode'])
             async with self.app.lock:
-                data.capture(self.app, session)
+                captured = data.capture(self.app, session, validate_payload=False)
+            await data.validate_async(captured, self.app.outputs.media.workers)
         async with self.app.lock:
             # Voice connect claims state.voice under this same lock. Recheck
             # after the awaited history/Git preflight, then fence atomically.
@@ -251,7 +252,12 @@ class Portability:
             workspace = await asyncio.to_thread(capture_workspace, session.get('workingDirectory') or session['workspace'], args['sourceRevision'], args['mode'])
             async with self.app.lock:
                 current = self.app._session(session['id'])
-                payload = data.capture(self.app, current)
+                payload = data.capture(self.app, current, validate_payload=False)
+            await data.validate_async(payload, self.app.outputs.media.workers)
+            async with self.app.lock:
+                current = self.app._session(session['id'])
+                if digest(data.capture(self.app, current, validate_payload=False)) != digest(payload):
+                    raise ValueError('Task history or outputs changed during export validation')
                 payload['workspace'] = workspace
                 result = self.node.prepared(row['id'], payload)
                 result['releaseEvidence'] = {key: evidence.get(key) for key in ('nativeSessionId', 'quiesced', 'transferFenced', 'inputsReplayed')}
@@ -351,7 +357,8 @@ class Portability:
     async def stage(self, args):
         envelope = read_capsule(Path(args['path']))
         body = self.node.verify(envelope, kind='capsule')
-        payload = body['payload']; data.validate(payload)
+        payload = body['payload']
+        await data.validate_async(payload, self.app.outputs.media.workers)
         if body['sessionId'] != payload['session']['id']:
             raise ValueError('Task identity does not match its package')
         # A retry is a receipt read, even though native staging already exists.
@@ -416,7 +423,11 @@ class Portability:
                 async with self.app.lock:
                     # UI edits and local file changes after staging must not
                     # disappear at the irreversible ownership boundary.
-                    current = data.capture(self.app, session)
+                    current = data.capture(self.app, session, validate_payload=False)
+                await data.validate_async(current, self.app.outputs.media.workers)
+                async with self.app.lock:
+                    if digest(data.capture(self.app, session, validate_payload=False)) != digest(current):
+                        raise ValueError('Task history or outputs changed during release validation')
                     if digest(current) != digest({key: value for key, value in payload.items() if key != 'workspace'}):
                         raise ValueError('Task history or outputs changed after export; keep both hosts fenced and inspect')
                     capture_workspace(session.get('workingDirectory') or session['workspace'], payload['workspace']['sourceRevision'], payload['workspace']['mode'])
@@ -495,7 +506,8 @@ class Portability:
         from amplifier_portability.protocol import encoded
         if digest(encoded(body)) != row['capsuleHash']:
             raise ValueError('The staged task package changed after readiness')
-        payload = body['payload']; data.validate(payload)
+        payload = body['payload']
+        await data.validate_async(payload, self.app.outputs.media.workers)
         if row['phase'] == 'active':
             result = self.node.activating(row['id'], certificate, args['expectedRevision'])
             session = self.app._session(row['sessionId'])

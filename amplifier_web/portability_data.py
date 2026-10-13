@@ -71,7 +71,7 @@ def _operation_event(sequence, event_id, value):
     return json.loads(value)
 
 
-def capture(app, session):
+def capture(app, session, *, validate_payload=True):
     identity = validate_id(session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
     native = native_directory(app, session)
     files = {}
@@ -149,7 +149,8 @@ def capture(app, session):
         resources[key] = copy.deepcopy(resource)
         pending.extend(references(resource))
     value['resources'] = resources
-    validate(value)
+    if validate_payload:
+        validate(value)
     return value
 
 
@@ -158,6 +159,13 @@ def validate(value):
         _validate(value)
     except (KeyError, TypeError, AttributeError, IndexError) as exc:
         raise ValueError('Malformed task transfer data') from exc
+
+
+async def validate_async(value, workers):
+    """Pure decoded-payload work only; callers retain SQLite/capture ownership."""
+    from .resource_files import settle_worker
+    async with workers:
+        await settle_worker(validate, value)
 
 
 def _receipt_belongs(record, sid, output_ids, comment_outputs):

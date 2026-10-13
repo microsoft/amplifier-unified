@@ -125,8 +125,25 @@ class Outputs:
         kept={row['id'] for row in target.get('messages',[]) if row.get('id')}
         rows=self.app.db.execute('SELECT value FROM output_records WHERE session_id=? ORDER BY created',(source_id,)).fetchall()
         mapping={}
-        for saved, in rows:
-            original=json.loads(saved)
+        originals = [json.loads(saved) for saved, in rows]
+        skipped = []
+
+        def clone(original, value):
+            value['parentId']=mapping.get(original.get('parentId'))
+            value['evidenceIds']=[mapping[key] for key in original.get('evidenceIds',[]) if key in mapping]
+            value.pop('canvasId', None)
+            if canvas_mapping and original.get('canvasId') in canvas_mapping:
+                value['canvasId'] = canvas_mapping[original['canvasId']]
+            saved=self.store.create(target['id'],value)
+            mapping[original['id']]=saved['id']
+            for comment in self.store.comments(original['id']):
+                self.store.comment(saved['id'],{**comment,'forkSourceCommentId':comment['id']})
+
+        pending = []
+        # Media mappings must exist before validating adapters, independently
+        # of legacy creation order. No dependent output reference is published
+        # until its Canvas mapping has survived the checks below.
+        for original in originals:
             if not original.get('linked'):
                 continue
             message_id = original.get('origin', {}).get('messageId')
@@ -145,28 +162,11 @@ class Outputs:
                 continue
             value={key:copy.deepcopy(value) for key,value in original.items() if key not in {'id','sessionId','createdAt','revision','version','linked','parentId','evidenceIds'}}
             value['forkSource']={'sessionId':source_id,'outputId':original['id'],'sha256':original.get('sha256')}
-            if original.get('canvasKind') == 'gif':
-                # Missing surviving-output mappings stay filtered. An adapter
-                # must never carry a source-owned pointer into its fork.
-                remapped = self.fork_media_body(original.get('canvasSource'), source_id, target['id'], mapping)
-                if remapped is None:
-                    continue
-                from .resource_files import put
-                body = self.app.state_resource(remapped['$resource'])
-                data = json.dumps(body, ensure_ascii=False, sort_keys=True).encode()
-                value.update(canvasSource=remapped, body=put(self.app.db, {'encoding': 'utf-8', 'data': data.decode()}),
-                             sha256=hashlib.sha256(data).hexdigest(), bytes=len(data))
             if original.get('kind') == 'media':
                 value['origin'] = {**value['origin'], 'messageId': message_id}
-            value['parentId']=mapping.get(original.get('parentId'))
-            value['evidenceIds']=[mapping[key] for key in original.get('evidenceIds',[]) if key in mapping]
-            if original.get('canvasId'):
-                value.pop('canvasId', None)
-                if canvas_mapping and original['canvasId'] in canvas_mapping:
-                    value['canvasId'] = canvas_mapping[original['canvasId']]
-            clone=self.store.create(target['id'],value);mapping[original['id']]=clone['id']
-            for comment in self.store.comments(original['id']):
-                self.store.comment(clone['id'],{**comment,'forkSourceCommentId':comment['id']})
+                clone(original, value)
+            else:
+                pending.append((original, value))
         # Canvas cutoff filtering ran first. Qualify every retained GIF version
         # against surviving output IDs, not equal text or source pointers.
         if canvas_mapping:
@@ -176,25 +176,53 @@ class Outputs:
                 if not row or row.get('kind') != 'gif':
                     continue
                 rewritten = copy.deepcopy(row)
-                valid = True
-                for entry in [rewritten, *rewritten.get('versions', [])]:
-                    if 'mediaReference' in entry:
-                        # Inline-only legacy definitions are retained in the
-                        # source library, not copied with a source-owned tuple.
-                        valid = False
-                        break
-                    for key in ('body', 'contentResource'):
-                        if entry.get(key):
-                            body = self.fork_media_body(entry[key], source_id, target['id'], mapping)
-                            if body is None:
-                                valid = False
-                                break
-                            entry[key] = body
-                if valid:
-                    row.update(rewritten)
-                else:
+                try:
+                    for entry in [rewritten, *rewritten.get('versions', [])]:
+                        if 'mediaReference' in entry or not entry.get('body'):
+                            raise ValueError('GIF adapter requires an exact saved body.')
+                        references = []
+                        for key in ('body', 'contentResource'):
+                            if entry.get(key):
+                                body = self.fork_media_body(entry[key], source_id, target['id'], mapping)
+                                if body is None:
+                                    raise ValueError('GIF adapter has no surviving owning output.')
+                                references.append(body['$resource'])
+                                entry[key] = body
+                        if len(set(references)) != 1:
+                            raise ValueError('GIF adapter has conflicting saved references.')
+                except (ValueError, KeyError, TypeError, OSError) as exc:
                     self.app.state['canvasArtifacts'].remove(row)
                     canvas_mapping.pop(source_canvas)
+                    skipped.append({'canvasId': source_canvas, 'reason': str(exc)})
+                else:
+                    row.update(rewritten)
+
+        for original, value in pending:
+            if original.get('canvasKind') == 'gif':
+                try:
+                    # Validate both original immutable snapshot and source
+                    # adapter before creating any target output relationship.
+                    source = original.get('canvasSource')
+                    if (not source or json.loads(self.content(original)) !=
+                            self.app.state_resource(source['$resource'])):
+                        raise ValueError('GIF output snapshot differs from its source adapter.')
+                    remapped = self.fork_media_body(source, source_id, target['id'], mapping)
+                    if remapped is None:
+                        raise ValueError('GIF output adapter has no surviving owning output.')
+                    if original.get('canvasId') and (
+                            not canvas_mapping or original['canvasId'] not in canvas_mapping):
+                        raise ValueError('GIF output Canvas adapter did not survive fork validation.')
+                    from .resource_files import put
+                    body = self.app.state_resource(remapped['$resource'])
+                    data = json.dumps(body, ensure_ascii=False, sort_keys=True).encode()
+                    value.update(canvasSource=remapped,
+                                 body=put(self.app.db, {'encoding': 'utf-8', 'data': data.decode()}),
+                                 sha256=hashlib.sha256(data).hexdigest(), bytes=len(data))
+                except (ValueError, KeyError, TypeError, OSError) as exc:
+                    skipped.append({'outputId': original['id'], 'reason': str(exc)})
+                    continue
+            clone(original, value)
+        return skipped
 
     def fork_media_body(self, body, source_id, target_id, mapping):
         """Remap only a compact GIF adapter; never clone its media bytes."""
@@ -230,24 +258,12 @@ class Outputs:
             if action == 'outputs.read':
                 async with self.app.lock:
                     record = self.record(args['sessionId'], args['id'])
-                    if record.get('kind') == 'media':
-                        values = {**record, 'messageId': record.get('origin', {}).get('messageId')}
-                        before = self.media.snapshot(values)
-                    else:
-                        before = None
-                if before is not None:
+                    media = record.get('kind') == 'media'
+                if media:
                     # Metadata-only indexed validation; never hydrate history
                     # or decode a media body for the agent's observation read.
-                    await self.media.head(values)
-                    async with self.app.lock:
-                        if self.media.snapshot(values) != before:
-                            raise ValueError('Retained media changed during metadata read.')
-                        record = self.media.guard(values)
-                        observation = self.media.observation(record)
-                        return {'accepted':True,'result':{**self.media.descriptor(record),
-                            'saved':True,'attached':bool(record.get('linked')),
-                            'browserObservation':observation,
-                            'playback':observation.get('playback', 'unknown')}}
+                    return {'accepted': True, 'result': await self.media.metadata(
+                        args['sessionId'], args['id'], args)}
             async with self.app.lock:
                 session=copy.deepcopy(self.app._session(args['sessionId']))
                 if action=='outputs.list':
