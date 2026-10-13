@@ -43,6 +43,10 @@ export function ImageGenerationSettings({state,session,providers,labels,draft,ed
  useEffect(()=>{discover()},[providers.map(p=>p.id).join('\n')]);
  const change=patch=>edit({...patch,imageEdited:true});
  const choice=mode==='selected'?'provider:'+requestedId:mode;
+ const persist=(patch={})=>{
+  const next={mode,id:requestedId,model,scope,...patch};
+  run('providers.configureImages',next.mode==='selected'?{id:next.id,enabled:true,exclusive:true,model:next.model,scope:next.scope}:{mode:next.mode,scope:next.scope});
+ };
  const choose=value=>{
   if(busy)return;
   const provider=available.find(p=>'provider:'+p.id===value);
@@ -71,14 +75,14 @@ export function ImageGenerationSettings({state,session,providers,labels,draft,ed
   {discoveryError&&<p className="a-danger" role="alert">{discoveryError}</p>}
   {mode!=='off'&&!checking&&!available.length&&<p>Connect a service that supports images, or check its credentials.</p>}
   <p className="a-caption">Creating an image may use your provider’s paid allowance.</p>
-  {(draft.imageEdited||pending?.action==='providers.configureImages')&&<button type="button" className="a-primary" disabled={busy||(mode==='selected'&&(!selected||!model))} onClick={()=>run('providers.configureImages',mode==='selected'?{id:selected.id,enabled:true,exclusive:true,model,scope:scope}:{mode,scope:scope})}>{pending?.action==='providers.configureImages'?'Saving…':'Save image settings'}</button>}
+  {draft.imageEdited&&!busy&&<button type="button" className="a-primary" disabled={busy||(mode==='selected'&&(!selected||!model))} onClick={()=>run('providers.configureImages',mode==='selected'?{id:selected.id,enabled:true,exclusive:true,model,scope:scope}:{mode,scope:scope})}>Retry image settings</button>}
   <details className="a-everyday-disclosure"><summary>Advanced preferences</summary><div>
-   {mode==='selected'&&selected&&<><label htmlFor={configId('ai-image-model')}>Image model</label><select id={configId('ai-image-model')} value={model} disabled={busy} onChange={e=>change({imageModel:e.target.value})}>
+   {mode==='selected'&&selected&&<><label htmlFor={configId('ai-image-model')}>Image model</label><select id={configId('ai-image-model')} value={model} disabled={busy} onChange={e=>{change({imageModel:e.target.value});persist({model:e.target.value})}}>
     {catalog.metadata?.imageGeneration?.automaticModel&&<option value={catalog.metadata.imageGeneration.automaticModel}>Automatic · latest supported</option>}
     {catalog.models.map(row=><option key={row.id} value={row.id}>{row.display_name||row.id}</option>)}
    </select></>}
    <button type="button" className="a-link" disabled={busy||checking} onClick={()=>discover(true)}><RefreshCw/>Refresh image connections</button>
-   <ConfigurationScopeSelect id={configId('image-scope')} value={scope} disabled={busy} onChange={scope=>change({scope})}/>
+   <ConfigurationScopeSelect id={configId('image-scope')} value={scope} disabled={busy} onChange={scope=>{change({scope});persist({scope})}}/>
    <button type="button" className="a-link" onClick={()=>navigate('providers')}>Advanced connection settings</button>
   </div></details>
  </section>;

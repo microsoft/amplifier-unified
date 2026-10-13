@@ -27,24 +27,22 @@ try{
  });
  await page.goto(url);await openSettingsPage(page,'diagnostics');
  const days=page.getByLabel('Index days',{exact:true}),records=page.getByLabel('Maximum indexed records',{exact:true});await days.fill('21');
- const save=page.getByRole('button',{name:'Save capture settings',exact:true}),width=(await save.boundingBox()).width;
- await save.click();await expect.poll(()=>count).toBe(1);
- const saving=page.getByRole('button',{name:'Saving…',exact:true});await expect(saving).toBeVisible();await expect(saving).toBeDisabled();
- assert.ok(Math.abs((await saving.boundingBox()).width-width)<.1);
+ await days.blur();await expect.poll(()=>count).toBe(1);
+ const saving=page.getByText('Saving diagnostics settings…',{exact:true});await expect(saving).toBeVisible();
  assert.equal(await page.locator('.a-diagnostics-fields').evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
- await expect(days).toBeDisabled();await expect(records).toBeDisabled();await expect(page.getByRole('button',{name:'Add server',exact:true})).toBeDisabled();
+ await expect(days).toBeEnabled();await expect(records).toBeEnabled();await expect(page.getByRole('button',{name:'Add server',exact:true})).toBeDisabled();
  await expect(page.getByRole('button',{name:'Close panel',exact:true})).toBeEnabled();
  await expect(page.getByLabel('Stream filter',{exact:true})).toBeEnabled();
  for(const scheme of ['light','dark'])for(const detail of ['minimal','standard','detailed']){
   await presentation({scheme,interfaceDetail:detail});
-  await expect(saving).toBeVisible();await expect(days).toBeDisabled();
+  await expect(saving).toBeVisible();await expect(days).toBeEnabled();
  }
  await page.emulateMedia({reducedMotion:'reduce',forcedColors:'active'});
  assert.equal(await page.locator('.a-check-result.pending .a-progress-spinner').evaluate(el=>getComputedStyle(el).animationName),'none');
- await saving.evaluate(el=>el.click());assert.equal(count,1);
+ assert.equal(count,1);
  release();release=null;
  await expect(page.getByRole('alert').filter({hasText:'Your entries are kept'})).toBeVisible();await expect(days).toHaveValue('21');await expect(days).toBeEnabled();
- rejected=false;await save.click();await expect.poll(()=>count).toBe(2);
+ rejected=false;await page.getByRole('button',{name:'Retry saving preference',exact:true}).click();await expect.poll(()=>count).toBe(2);
  // Read-only record filters are independent of the submitted capture settings.
  await page.getByLabel('Stream filter',{exact:true}).fill('updates');
  release();release=null;
@@ -52,12 +50,13 @@ try{
  await expect(days).toBeEnabled();await expect(page.getByLabel('Stream filter',{exact:true})).toHaveValue('updates');
  // A concurrent view update can supply a newer draft even while native inputs
  // are locked. The older accepted save must not erase that draft.
- await days.fill('22');await save.click();await expect.poll(()=>count).toBe(3);
+ await days.fill('22');await days.blur();await expect.poll(()=>count).toBe(3);
  await page.evaluate(()=>{const s=window.amplifier.getState(),d=s.view.diagnosticsDraft;void window.amplifier.dispatch('view.update',{patch:{diagnosticsDraft:{...d,config:{...d.config,retentionDays:23}}}},{presentation:true});});
  await expect(days).toHaveValue('23');release();release=null;
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().diagnostics.config.retentionDays)).toBe(22);
  await expect(days).toBeEnabled();await expect(days).toHaveValue('23');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().diagnostics.config.retentionDays),22);
- await save.click();await expect.poll(()=>count).toBe(4);release();release=null;await expect(days).toBeEnabled();
+ await days.focus();await days.blur();await expect.poll(()=>count).toBe(4);release();release=null;await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().diagnostics.config.retentionDays)).toBe(23);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().diagnostics.config.retentionDays),23);
  await page.getByRole('button',{name:'Add server',exact:true}).click();
  const name=page.getByLabel('Name',{exact:true});await name.fill('Synthetic disabled destination');await page.getByLabel('Server URL',{exact:true}).fill('https://example.invalid/diagnostics');
@@ -70,7 +69,7 @@ try{
  const stored=await page.evaluate(()=>window.amplifier.getState().diagnostics.config.destinations);assert.equal(stored.length,1);assert.equal(stored[0].enabled,false);
  await page.getByRole('button',{name:'Remove destination',exact:true}).click();await expect.poll(()=>count).toBe(6);
  await expect(page.getByRole('button',{name:'Removing…',exact:true})).toBeDisabled();await expect(name).toBeDisabled();release();release=null;
- await expect(page.getByRole('button',{name:'Save capture settings',exact:true})).toBeVisible();
+ await expect(days).toBeVisible();
  assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().diagnostics.config.destinations),[]);
  assert.deepEqual(errors,[]);assert.deepEqual((await(await page.request.get(url+'/fixture')).json()).sent,[]);
  console.log('Diagnostics save passed: stable working labels, scoped input locking, rejected-save retry, independent record filters, newer concurrent draft retained, disabled destination save/remove, narrow footer; no outbound delivery or model calls.');

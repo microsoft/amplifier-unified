@@ -22,7 +22,7 @@ GLOBAL_PAGES = {
     'app-bundles':'Configured bundles', 'add-bundles':'Discover bundles', 'defaults':'Conversation defaults',
     'registries':'Module & source registries', 'tool-connections':'Tool connections',
     'custom-appearance':'Custom appearance', 'repair':'Backup & repair', 'reset':'Advanced recovery',
-    'ready-conversations':'Ready conversations', 'automation':'Terminal & automation', 'install-app':'Install app'}
+    'image-generation':'Image generation', 'ready-conversations':'Ready conversations', 'automation':'Terminal & automation', 'install-app':'Install app'}
 
 def settings_state(state):
     view = state.get('view', {})

@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.126",
+      "title": "Settings that save as you change them",
+      "changes": [
+        "AI connections shows a loading state until provider discovery completes, preventing a brief first-time setup screen for configured accounts.",
+        "Diagnostic capture, recording and stream switches save immediately; capture limits and conversation readiness numbers save when you leave the field. Independent changes preserve unfinished connection details.",
+        "Notification preferences, existing connection model choices, registered default bundles and idle conversation modes apply on selection. Coordinated credentials, routing, permission and text editors retain explicit saves.",
+        "Image generation preferences live in Advanced. The default uses the first eligible provider by priority and is unavailable when none supports image generation.",
+        "The recording preference applies when a supported conversation runtime next prepares; already-running runtimes and earlier requests are unchanged."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.125",
       "title": "Larger model recordings, smoother chats and clearer progress",
       "changes": [

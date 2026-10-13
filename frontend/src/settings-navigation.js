@@ -9,10 +9,10 @@ export const settingsSections=[
  {id:'notifications',title:'Notifications',scope:'This app',pages:[['notifications','Notifications']]},
  {id:'privacy',title:'Privacy & files',scope:'Your work and access choices',pages:[['privacy','Privacy & files'],['permissions','File access'],['desktop','Screen & computer access'],['diagnostics','App diagnostic capture'],['history','Saved work'],['storage','Storage']]},
  {id:'updates',title:'Updates',scope:'This Amplifier host',pages:[['updates','Updates']]},
- {id:'advanced',title:'Advanced',scope:'Full configuration',pages:[['advanced','Advanced'],['providers','Provider configuration'],['routing','Model rules'],['app-bundles','Configured bundles'],['add-bundles','Discover bundles'],['defaults','Conversation defaults'],['registries','Module & source registries'],['tool-connections','Tool connections'],['custom-appearance','Custom appearance'],['repair','Backup & repair'],['reset','Advanced recovery'],['ready-conversations','Ready conversations'],['automation','Terminal & automation'],['install-app','Install app'],]},
+ {id:'advanced',title:'Advanced',scope:'Full configuration',pages:[['advanced','Advanced'],['image-generation','Image generation'],['providers','Provider configuration'],['routing','Model rules'],['app-bundles','Configured bundles'],['add-bundles','Discover bundles'],['defaults','Conversation defaults'],['registries','Module & source registries'],['tool-connections','Tool connections'],['custom-appearance','Custom appearance'],['repair','Backup & repair'],['reset','Advanced recovery'],['ready-conversations','Ready conversations'],['automation','Terminal & automation'],['install-app','Install app'],]},
 ];
 export const advancedGroups=[
- {title:'AI configuration',pages:['providers','routing']},
+ {title:'AI configuration',pages:['providers','image-generation','routing']},
  {title:'Bundles & modules',pages:['app-bundles','add-bundles','defaults','registries']},
  {title:'Tools & appearance',pages:['tool-connections','custom-appearance']},
  {title:'Performance & support',pages:['ready-conversations','repair','reset','automation','install-app']},

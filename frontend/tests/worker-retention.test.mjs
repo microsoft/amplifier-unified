@@ -9,25 +9,21 @@ const {WorkerRetentionSettings}=await server.ssrLoadModule('/src/worker-retentio
 test.after(()=>server.close());
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 
-test('readiness settings use the shared host action and reject invalid limits',async()=>{
- const calls=[],state={runtime:{retention:{max_warm_workers:32,idle_timeout_hours:12,prewarm_on_select:true}}};let root,release;
- const act=(action,args)=>{calls.push({action,args});return new Promise(resolve=>release=resolve)};
- await renderAct(async()=>{root=create(React.createElement(WorkerRetentionSettings,{state,act}))});
- const field=id=>root.root.findByProps({id}),save=()=>root.root.findByType('button');
- assert.equal(field('warm-worker-count').props.value,'32');
- assert.equal(field('warm-worker-hours').props.value,'12');
- await renderAct(async()=>field('warm-worker-count').props.onChange({target:{value:'1.5'}}));
- assert.equal(save().props.disabled,true);
- await renderAct(async()=>field('warm-worker-count').props.onChange({target:{value:'100'}}));
- await renderAct(async()=>field('warm-worker-hours').props.onChange({target:{value:'336'}}));
- await renderAct(async()=>root.root.findByProps({type:'checkbox'}).props.onChange({target:{checked:false}}));
- let pending;
- await renderAct(async()=>{pending=root.root.findByType('form').props.onSubmit({preventDefault(){}})});
- assert.equal(save().props.disabled,true);
- assert.deepEqual(calls,[{action:'runtime.retention.update',args:{patch:{max_warm_workers:100,idle_timeout_hours:336,prewarm_on_select:false}}}]);
- await renderAct(async()=>{release();await pending});
- assert.equal(save().props.disabled,false);
- await renderAct(async()=>field('warm-worker-count').props.onChange({target:{value:'0'}}));
- assert.equal(save().props.disabled,false,'zero is the supported disable policy');
- await renderAct(async()=>root.unmount());
+test('readiness saves valid individual fields on blur and switches immediately',async()=>{
+ const calls=[],state={runtime:{retention:{max_warm_workers:32,idle_timeout_hours:12,prewarm_on_select:true}}};let root;
+ const send=async(action,args)=>{calls.push({action,args});return {accepted:true}};
+ await renderAct(()=>{root=create(React.createElement(WorkerRetentionSettings,{state,act:send}))});
+ try{
+  const field=id=>root.root.findByProps({id});
+  const blur=(id,value,valid)=>renderAct(()=>field(id).props.onBlur({target:{value,checkValidity:()=>valid}}));
+  assert.equal(field('warm-worker-count').props.value,'32');
+  await blur('warm-worker-count','1.5',false);await blur('warm-worker-count','',true);
+  assert.deepEqual(calls,[]);
+  await blur('warm-worker-count','100',true);
+  await blur('warm-worker-hours','336',true);
+  await renderAct(()=>root.root.findByProps({type:'checkbox'}).props.onChange({target:{checked:false}}));
+  assert.deepEqual(calls.map(c=>c.args.patch),[{max_warm_workers:100},{idle_timeout_hours:336},{prewarm_on_select:false}]);
+  await blur('warm-worker-count','0',true);
+  assert.deepEqual(calls.at(-1),{action:'runtime.retention.update',args:{patch:{max_warm_workers:0}}});
+ }finally{await renderAct(()=>root.unmount())}
 });

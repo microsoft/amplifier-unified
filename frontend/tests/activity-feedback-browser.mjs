@@ -105,7 +105,7 @@ try{
  await openSettingsPage(page,'notifications');
  await page.getByText('Set up phone notifications',{exact:true}).click();
  await page.getByLabel(/^Topic/).fill('synthetic-private-topic');
- await page.getByRole('button',{name:'Save notifications',exact:true}).click();const notification=await pending('notifications.save');
+ await page.getByRole('button',{name:'Save phone connection',exact:true}).click();const notification=await pending('notifications.save');
  state.actionStatus['notifications.save']={phase:'working',commandId:notification.body.id};state.revision++;
  await notification.route.fulfill({json:{accepted:true,operationId:notification.body.id,state}});
  await page.waitForFunction(()=>!document.querySelector('button[data-action="notifications.save"][data-action-pending]'));
