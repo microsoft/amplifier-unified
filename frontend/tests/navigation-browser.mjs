@@ -15,7 +15,7 @@ const ready=new Promise((resolve,reject)=>{let output='';fixture.stdout.on('data
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/amplifier-navigation';
 try{
  await mkdir(out,{recursive:true});const port=await ready,target=`http://127.0.0.1:${port}`;
- if(process.env.AMPLIFIER_TEST_DEV){vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',r=>r.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen()}
+ if(process.env.AMPLIFIER_TEST_DEV){vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,r=>r.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen()}
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const api=(path,body)=>page.evaluate(async([path,body])=>{const headers={'X-Amplifier-Client':window.amplifier.getState().client.id};const r=await fetch(path,body===undefined?{headers}:{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error(await r.text());return r.json()},[path,body]);

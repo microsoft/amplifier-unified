@@ -18,7 +18,7 @@ try{
  const context=await browser.newContext({viewport:{width:1500,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];let streams=0,resourceReads=0;
  page.on('pageerror',error=>errors.push(error.message));
- page.on('request',request=>{if(request.url().includes('/api/events'))streams++;if(request.url().includes('/api/canvas/views/'))resourceReads++});
+ page.on('websocket',socket=>{if(new URL(socket.url()).pathname==='/api/events/ws')streams++});page.on('request',request=>{if(new URL(request.url()).pathname==='/api/events')streams++;if(request.url().includes('/api/canvas/views/'))resourceReads++});
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());

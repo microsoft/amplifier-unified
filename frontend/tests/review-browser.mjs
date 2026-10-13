@@ -16,7 +16,7 @@ let vite,browser;
 try{
  const port=await ready,target=`http://127.0.0.1:${port}`;
  execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(temp,'key.pem'),'-out',join(temp,'cert.pem'),'-days','1','-subj','/CN=localhost'],{stdio:'ignore'});
- vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,https:{key:readFileSync(join(temp,'key.pem')),cert:readFileSync(join(temp,'cert.pem'))},proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
+ vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,https:{key:readFileSync(join(temp,'key.pem')),cert:readFileSync(join(temp,'cert.pem'))},proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1280,height:900},ignoreHTTPSErrors:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),page=await context.newPage(),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
