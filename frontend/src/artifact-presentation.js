@@ -46,9 +46,12 @@ export function canvasOpenCommand(item,messageId,actions=[]){
 
 export function canvasOpenNotice(receipt){
  if(receipt?.accepted===false)return receipt.error||'The Canvas request was not accepted.';
- const outcome=receipt?.result?.canvas;
- if(outcome?.status==='opened')return '';
- return outcome?.reason||outcome?.status&&`Canvas was not opened (${outcome.status}).`||'Canvas opening could not be confirmed.';
+ const publication=receipt?.result?.publication,outcome=receipt?.result?.canvas;
+ const saved=publication&&!['published','unchanged'].includes(publication.status)?
+  publication.reason||`Publication was not confirmed (${publication.status||'unknown'}).`:'';
+ const opened=outcome?.status==='opened'?'':outcome?.reason||
+  (outcome?.status?`Canvas was not opened (${outcome.status}).`:'Canvas opening could not be confirmed.');
+ return [saved,opened].filter(Boolean).join(' ');
 }
 
 // Proposed explicit compact-summary binding: publication.outputId identifies

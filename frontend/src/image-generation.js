@@ -1,3 +1,5 @@
+import {publicationMode} from './artifact-presentation.js';
+
 export function imageJobs(state,messageId){
  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
  const saved=new Set((state.canvasArtifacts||[]).filter(row=>row.sessionId===session?.id&&row.messageId===messageId).map(row=>row.imageRequestId));
@@ -22,8 +24,11 @@ export function imageGalleryEntries(state,messageId,images){
  // it to a gallery; ordinary images keep the general artifact shell.
  const verified=images.filter(item=>item.row.kind==='image'&&
   item.row.sessionId===session?.id&&jobs.some(job=>job.requestId&&job.requestId===item.row.imageRequestId));
- const remaining=new Set(verified),entries=[],requests=new Map();
+ const visible=verified.filter(item=>publicationMode(item)==='inline');
+ const remaining=new Set(visible),entries=[],requests=new Map();
  for(const job of jobs){
+  if(verified.some(item=>item.row.imageRequestId===job.requestId)&&
+   !visible.some(item=>item.row.imageRequestId===job.requestId))continue;
   const key=job.requestId?JSON.stringify([job.operation,job.requestId]):job.id;
   const existing=requests.get(key);
   if(existing){existing.job=job;continue}
@@ -31,7 +36,7 @@ export function imageGalleryEntries(state,messageId,images){
  }
  for(const entry of entries){
   const {job}=entry;
-  const matches=verified.filter(item=>remaining.has(item)&&job.requestId&&item.row.imageRequestId===job.requestId);
+  const matches=visible.filter(item=>remaining.has(item)&&job.requestId&&item.row.imageRequestId===job.requestId);
   entry.item=matches[0];
   if(matches[0])remaining.delete(matches[0]);
  }

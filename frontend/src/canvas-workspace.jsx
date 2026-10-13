@@ -106,7 +106,7 @@ export function CanvasWorkspace({state,dispatch,hidden=false}){
  const retained=useRef(new Map()),allViews=(state.canvasWorkspace?.views||[]).filter(view=>view.viewId==='primary');
  // Do not initialize a newly selected hidden artifact. Retain the mounted
  // viewer while Library is open so local edits survive passive navigation.
- for(const id of retained.current.keys())if(!allViews.some(view=>view.viewId===id)||(state.canvas?.kind==='gif'&&!state.canvas.open))retained.current.delete(id);
+ for(const id of retained.current.keys())if(!allViews.some(view=>view.viewId===id)||(['gif','mp4'].includes(state.canvas?.kind)&&!state.canvas.open))retained.current.delete(id);
  const views=allViews.filter(view=>{
   if(state.canvas?.open)retained.current.set(view.viewId,view.resourceId);
   return retained.current.get(view.viewId)===view.resourceId;

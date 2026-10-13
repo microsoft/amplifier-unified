@@ -203,7 +203,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  return <section ref={root} className="a-general-artifact a-inline-artifact" data-artifact-id={row.id} data-artifact-version={version} data-chat-mode={inline?'inline':'compact'} aria-label={titleOf(item)}>
   <div className="a-general-artifact-heading">
    <Icon aria-hidden="true"/><span className="a-general-artifact-title"><strong>{titleOf(item)}</strong><small>{row.kind} · Version {version}</small></span>
-   <button type="button" className="a-soft" aria-label={`Open ${titleOf(item)} in Canvas`} disabled={busy||!caps.canvas} aria-busy={busy||undefined} onClick={open}><Maximize2 aria-hidden="true"/><span>Open in Canvas</span></button>
+   <button type="button" className="a-soft" aria-label={`Open ${titleOf(item)} in Canvas`} data-action={canvasOpenCommand(item,messageId,globalThis.window?.amplifier?.getActions?.()||[]).action} disabled={busy||!caps.canvas} aria-busy={busy||undefined} onClick={open}><Maximize2 aria-hidden="true"/><span>Open in Canvas</span></button>
    {inline?<button type="button" className="a-soft" aria-label={`Collapse ${titleOf(item)}`} disabled={busy} aria-expanded={true} onClick={()=>changeMode('compact',true)}><ChevronUp aria-hidden="true"/>Collapse</button>:caps.inline&&<button type="button" className="a-soft" aria-label={`Expand ${titleOf(item)} in chat`} disabled={busy} aria-expanded={false} onClick={()=>changeMode('inline',true)}><ChevronDown aria-hidden="true"/>{refusal?'Retry preview':'Expand'}</button>}
   </div>
   {(notice||!caps.inline&&caps.reason||!caps.canvas)&&<p className="a-inline-artifact-notice" role="status">{notice||(!caps.canvas?'Canvas is unavailable for this artifact.':caps.reason)}</p>}
@@ -215,7 +215,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
 
 export function ArtifactLinks({state,message,act,dispatch}){
  const rows=artifactPublications(chatArtifacts(state),message.id);
- const entries=imageGalleryEntries(state,message.id,rows.filter(item=>publicationMode(item)!=='none'));
+ const entries=imageGalleryEntries(state,message.id,rows);
  const generated=new Set(entries.filter(entry=>entry.item).map(entry=>entry.item));
  if(!rows.length&&!entries.length)return null;
  const fullView=async({row,version})=>{const result=await act('canvas.select',{id:row.id,version});if(result?.accepted)await act('view.update',{patch:{canvasFocused:false}})};

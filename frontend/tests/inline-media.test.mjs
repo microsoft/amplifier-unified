@@ -334,6 +334,28 @@ function openGifClosure(dispatch){
  return {hooks,render(patch={}){hooks.begin();return render({...props,...patch})}};
 }
 
+test('the generalized typed MP4 adapter reports independently for inline and Canvas mounts',async()=>{
+ const first=canvasReportAdapters(),second=canvasReportAdapters(),posts=[];
+ const dispatch=async(action,args)=>{posts.push({action,args});return {accepted:true}};
+ const target=viewId=>({viewId,resourceId:'retained-video',resourceRevision:'saved-version',generation:1});
+ const canvas={id:'retained-video',kind:'mp4',sessionId:'media-session',mediaReference:{messageId:'media-turn',
+  item:{id:'video-output',sessionId:'media-session',version:1,sha256:'c'.repeat(64),
+   title:'Synthetic video',filename:'clip.mp4',media:{mimeType:'video/mp4'}}}};
+ const view={renderer:'builtin.canvas.mp4',available:true};
+ const inline=first.gif(canvas,first.render(view,dispatch,target('inline-video')));
+ const primary=second.gif(canvas,second.render(view,dispatch,target('primary')));
+ await inline(snapshot(0,'paused','loading'));await primary(snapshot(1,'paused'));
+ assert.equal(posts.length,4);
+ assert.deepEqual(posts.map(row=>row.args.viewId),['inline-video','inline-video','primary','primary']);
+ assert.ok(posts.every(row=>row.action!=='outputs.mediaReport'));
+ assert.equal(posts[0].args.action,'canvas.report');assert.equal(posts[2].args.action,'canvas.report');
+ assert.match(posts[2].args.args.message,/paused/,'A new media mount is not autoplay evidence');
+ const invalid=canvasReportAdapters();
+ invalid.gif({...canvas,kind:'gif'},invalid.render({renderer:'builtin.canvas.gif',available:true},dispatch,target('invalid')));
+ await settle();
+ assert.ok(posts.some(row=>row.args.viewId==='invalid'&&row.args.status==='error'&&/retained media type/.test(row.args.message)));
+});
+
 test('actual GIF open retains the exact envelope after unknown delivery, including local cancellation',async()=>{
  const calls=[];
  let outcome=()=>Promise.reject(Object.assign(Error('Unconfirmed'),{unconfirmed:true}));
