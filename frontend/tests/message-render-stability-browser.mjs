@@ -24,7 +24,8 @@ try{
   plugins:[{name:'render-test-counts',enforce:'pre',transform(code,id){
    if(id.endsWith('/src/main.jsx')){
     const needle='function App(){';assert.equal(code.split(needle).length,2);
-    return code.replace(needle,needle+' globalThis.renderProbe.apps++;');
+    return "import {flushSync as flushRenderProbe} from 'react-dom';\nglobalThis.flushRenderProbe=flushRenderProbe;\n"+
+     code.replace(needle,needle+' globalThis.renderProbe.apps++;');
    }
    if(id.endsWith('/src/markdown.js')){
     const needle='remarkPlugins:[remarkGfm,';assert.equal(code.split(needle).length,2);
@@ -51,18 +52,27 @@ try{
  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const stableText=await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).messages.find(row=>row.id==='message-79').text);
  const counts=()=>page.evaluate(text=>({apps:renderProbe.apps,stableParses:renderProbe.parses.filter(value=>value===text).length}),stableText);
- // Acknowledged view change lets initial observation traffic settle; no timer sleeps.
+ // Fence the clock probe in one browser task. A host/view acknowledgment can
+ // still have a pending React commit; asynchronous observation traffic must not
+ // be mistaken for a render caused by the timer. flushSync also makes a real
+ // parent-render regression observable on every tick, without timing sleeps.
  await action('view.update',{patch:{draft:'Ready'}});
- let before=await counts(),elapsed=await page.getByRole('timer').innerText();
- for(let i=0;i<3;i++){
-  await page.evaluate(()=>window.tickActivity());
-  await expect(page.getByRole('timer')).not.toHaveText(elapsed);elapsed=await page.getByRole('timer').innerText();
- }
- let after=await counts();evidence.clock={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses,ticks:3};
- before=await counts();
+ evidence.clock=await page.evaluate(text=>{
+  flushRenderProbe(()=>{});
+  const count=()=>renderProbe.parses.filter(value=>value===text).length;
+  const apps=renderProbe.apps,parses=count(),timer=document.querySelector('[role="timer"]');
+  let elapsed=timer.textContent;
+  for(let i=0;i<3;i++){
+   flushRenderProbe(()=>window.tickActivity());
+   if(timer.textContent===elapsed)throw Error('The activity timer did not advance');
+   elapsed=timer.textContent;
+  }
+  return {apps:renderProbe.apps-apps,stableParses:count()-parses,ticks:3};
+ },stableText);
+ let before=await counts();
  await composer.fill('Private draft');
  await action('view.update',{patch:{draft:'Private draft'}});
- after=await counts();evidence.draft={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses};
+ let after=await counts();evidence.draft={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses};
  await expect(composer).toHaveDraft('Private draft');
  before=await counts();
  for(let i=0;i<3;i++){
