@@ -44,6 +44,12 @@ make the user memorize what unlabeled colors mean. Native clients use the curren
 platform controls and accessibility behavior; platform presentation remains the
 client's responsibility rather than a browser imitation of a native widget.
 
+For native Apple clients, apply [Liquid Glass guidance](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)
+by context: elevated navigation and controls stay distinct from ordinary content.
+Standard components inherit platform treatment; this does not require making every
+field, card or settings group glass. Avoid nested glass layers and repeated prominent
+tints. An artwork finish preference must not override system appearance or accessibility.
+
 ## Waiting and saving
 
 | Situation | Feedback | Interaction |
