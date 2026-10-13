@@ -1,6 +1,6 @@
 import React,{useEffect,useState} from 'react';
 import {Check,Circle,Copy,LoaderCircle} from 'lucide-react';
-import {request,download} from './api';
+import {request,download,clientUrl} from './api';
 import {providerRecordExport} from './provider-record-export';
 import {readDetail} from './detail-read';
 import {UsageDetails} from './usage-details.jsx';
@@ -86,13 +86,14 @@ function ModelPayload({node,field,act}){
  // This local disclosure deliberately ignores persisted detail preferences:
  // even small payloads and restored expanded calls require an explicit click.
  const [open,setOpen]=useState(false),loaded=useExecutionField(node,field,open);
- const reference=node[field+'Detail'],capture=node[field+'Capture'],label=field[0].toUpperCase()+field.slice(1);
+ const reference=node[field+'Detail'],capture=node[field+'Capture'],recording=node[field+'Recording'],label=field[0].toUpperCase()+field.slice(1);
  if(!reference)return <p className="a-caption">{isRunning(node)?`Waiting for the recorded ${field}…`:`No provider ${field} was recorded for this call.`} {!isRunning(node)&&field==='request'&&<>To record future calls, open recording settings and choose Save capture settings. Start a new chat to check; earlier calls cannot be recovered. {act&&<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:settingsPatch('diagnostics')})}>Open recording settings</button>}</>}</p>;
  return <section className="a-model-payload" aria-label={`Recorded ${field}`}>
+  {recording&&<><a className="a-link" download href={clientUrl('/api/conversation/provider-recording?'+new URLSearchParams({sessionId:reference.sessionId,id:node.id,field,digest:recording.sha256}))}>Download {recording.truncated?'partial':'full'} recorded {field} (JSON)</a><small>Redacted provider event · {(recording.bytes/1024/1024).toFixed(1)} MB{recording.truncated?' · Capture limit reached; some content is omitted.':''}</small></>}
   <button type="button" className="a-link a-execution-request-toggle" aria-expanded={open} onClick={()=>setOpen(!open)}>{open?'Hide':'View'} {field}{!open&&Number.isFinite(reference.length)&&` · ${reference.length.toLocaleString()} characters`}</button>
   {open&&<>
    {capture?.redacted&&<small>Recognizable credentials redacted.</small>}
-   {capture?.truncated&&<small>This record reached the capture limit; part of the {field} is omitted.</small>}
+   {capture?.truncated&&<small>{recording?'This is a bounded preview. Use the recorded download above for the larger payload.':`This record reached the capture limit; part of the ${field} is omitted.`}</small>}
    <FieldStatus label={label} field={loaded}/>
    {!loaded.incomplete&&loaded.value!=null&&<><button type="button" className="a-link" onClick={()=>{const record=providerRecordExport(node,field,loaded.value);download(record.filename,record.content)}}>Download recorded {field} (JSON)</button><ExecutionBlock label={`Raw ${field}`} text={loaded.value}><JsonPayload text={loaded.value} label={label}/></ExecutionBlock></>}
   </>}

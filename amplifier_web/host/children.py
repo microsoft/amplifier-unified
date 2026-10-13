@@ -372,7 +372,10 @@ class Children:
                 approval_system=self.approvals, display_system=getattr(parent.coordinator, "display_system", None),
                 session_cwd=cwd, is_resumed=resumed)
             coordinator = child.coordinator
-            install_request_redaction(coordinator)
+            from ..session_files import capture_dir
+            history_workspace = parent.coordinator.get_capability('web.history_workspace') or cwd
+            install_request_redaction(coordinator, directory=capture_dir(history_workspace, identity))
+            coordinator.register_capability('web.history_workspace', str(history_workspace))
             if selection:
                 from .session import SelectedProvider
                 providers = coordinator.get("providers") or {}

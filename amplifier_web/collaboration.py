@@ -27,7 +27,11 @@ def definitions(schema, string):
     message = {**sid, "senderSessionId": string(200), "grantId": string(200),
                "text": {**string(16000), "minLength": 1},
                "mode": {"enum": ["notify", "queue", "steer"]},
-               "replyToRequestId": string(200), "references": references}
+               "replyToRequestId": string(200), "references": references,
+               "scheduleRepair": schema({"sourceMessageId": string(200),
+                   "schedules": {"type": "array", "minItems": 1, "maxItems": 16,
+                       "items": schema({"id": string(200), "expectedRevision": {"type": "integer", "minimum": 0}}, ["id", "expectedRevision"])}},
+                   ["sourceMessageId", "schedules"])}
     return {
         "coordination.grant": ("Retired. Historical grants remain readable; fresh collaboration uses authenticated root generations.", schema({
             **sid, "participants": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": True, "items": string(200)},
@@ -41,7 +45,7 @@ def definitions(schema, string):
         "coordination.decide": ("Retired. Legacy pending proposals cannot authorize new work.", schema({
             **sid, "proposalId": string(200), "decision": {"enum": ["allow", "deny"]},
         }, ["sessionId", "proposalId", "decision"])),
-        "coordination.send": ("Commit attributed same-workspace task input and return its receipt promptly. Notify never wakes; queue preparation continues under service ownership. Read results, never replay uncertain input.", schema(message, ["sessionId", "text"])),
+        "coordination.send": ("Commit attributed same-workspace task input and return its receipt promptly. Notify never wakes; queue preparation continues under service ownership. Read results, never replay uncertain input. For explicit human repair of existing schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
         "coordination.create": ("Create an ordinary durable root task chat inheriting source configuration. Returns a committed receipt before runtime preparation; does not select it or request separate approval.", schema({
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
@@ -799,6 +803,12 @@ class Collaboration:
                 if target.get("collaboration"):
                     envelope["task"] = {key: target["collaboration"][key] for key in
                         ("creatorSessionId", "requestId", "outputNamespace", "configurationHash")}
+                repair = None
+                if args.get('scheduleRepair'):
+                    if origin != 'agent' or mode == 'notify':
+                        self.error('Schedule repair requires a current human-rooted agent handoff using queue or steer.')
+                    from .schedule_handoff import prepare
+                    repair = prepare(self.service, source, target, args['scheduleRepair'], lineage)
                 target["historyManaged"] = False
                 message = self.service._message(target, "user", args["text"], "peer", inputId=identity,
                                                inputOrigin="peer", peerEnvelope=envelope)
@@ -812,6 +822,8 @@ class Collaboration:
                     # claims from args, message prose, or the peer envelope.
                     "origin": origin if origin in {"agent", "ui", "user"} else None,
                     "displayBinding": fingerprint([envelope, args["text"]])}
+                if repair:
+                    receipt['scheduleRepair'] = repair
                 if mode == "steer":
                     receipt.update(delivery="pending_steer", targetGenerationId=active["id"])
             if receipt is not None:

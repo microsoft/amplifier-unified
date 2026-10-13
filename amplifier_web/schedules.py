@@ -23,7 +23,7 @@ def definitions(schema, string):
         'schedule.create': ('Save and activate exactly the reviewed prompt/timing for an explicit user request. Agents must cite the actual user sourceMessageId. A pending question never authorizes a schedule. Tool permissions still apply at execution.', schema({**sid, **revision, **fields, **destination, **authorization}, [*sid, *revision, *fields, 'previewHash'])),
         'schedule.update': ('Review and replace the saved prompt/timing against the latest task correction. Requires exact revision, concrete preview and renewed explicit user provenance.', schema({**identity, **revision, **fields, **destination, **authorization}, [*identity, *revision, *fields, 'previewHash'])),
         'schedule.pause': ('Pause future due runs. Current admitted work can finish; no rollback is claimed.', schema({**identity, **revision})),
-        'schedule.resume': ('Deliberately resume after concrete review. Requires current preview and explicit user provenance; does not replay past uncertain runs.', schema({**identity, **revision, **authorization}, [*identity, *revision, 'previewHash'])),
+        'schedule.resume': ('Deliberately resume after concrete review. Requires current preview and explicit user provenance. An admitted scheduleRepair handoff may supply handoffRequestId and the original human sourceMessageId for unchanged existing schedules. Never replays uncertain runs.', schema({**identity, **revision, **authorization, 'handoffRequestId': string(200)}, [*identity, *revision, 'previewHash'])),
         'schedule.cancel': ('Cancel future due runs while preserving run evidence. Does not undo admitted work.', schema({**identity, **revision})),
         'schedule.report': ('Record attributable monitor evidence for this scheduled run. Compared values are retained; agent-reported unchanged is labelled as a claim, not proof. This does not complete the task or grant permission.', schema({**sid, 'runId': string(200), **revision, 'outcome': {'enum': ['changed', 'unchanged']}, 'detail': string(4000), 'values': {}}, [*sid, 'runId', *revision, 'outcome', 'detail'])),
         'schedule.reconcile': ('Explicitly reconcile an uncertain run as completed or abandoned with user-provided evidence. Never resubmits the old input. Schedule resume remains separate.', schema({**sid, 'runId': string(200), **revision, 'resolution': {'enum': ['completed', 'abandoned']}, 'evidence': {**string(4000), 'minLength': 1}, 'sourceMessageId': string(200)}, [*sid, 'runId', *revision, 'resolution', 'evidence'])),
@@ -112,15 +112,20 @@ class Schedules:
             binding['newTaskConfiguration'] = template(self.app, self.app._session(sid))[1]
         return {'previewHash': fingerprint(binding), 'binding': binding, 'occurrences': preview(config['spec'], self.clock(), 5), 'daylightSaving': 'Nonexistent local times are skipped; repeated local times run once at the first occurrence.', 'missedRunPolicy': config['missedRunPolicy'], 'notificationPolicy': config['notificationPolicy']}
 
-    def authorization(self, sid, args, origin, *, previous=None):
+    def authorization(self, sid, args, origin, *, previous=None, action=None):
         if origin == 'ui': return {'origin': 'ui', 'at': self.clock()}
         if origin not in {'agent', 'voice', 'user'}: raise ValueError('Only an explicit user request can authorize scheduled work')
-        source = next((row for row in self.app._session(sid)['messages'] if row['id'] == args.get('sourceMessageId') and row.get('role') == 'user'), None)
+        handoff = None
+        if args.get('handoffRequestId'):
+            from .schedule_handoff import authorize
+            _, source, handoff = authorize(self.app, sid, args, previous, action)
+        else:
+            source = next((row for row in self.app._session(sid)['messages'] if row['id'] == args.get('sourceMessageId') and row.get('role') == 'user'), None)
         if not source or source.get('inputOrigin') not in {'ui', 'user', 'voice'} or source.get('questionId') or source.get('scheduledRunId'):
             raise ValueError('Cite the actual user message requesting this schedule; an agent message or question answer is not schedule authorization')
         if previous and previous.get('status') == 'needs_review' and (previous.get('authorization', {}).get('messageId') == source['id'] or source.get('createdAt', 0) <= previous.get('authorization', {}).get('at', 0)):
             raise ValueError('Cite the new user request or correction that authorizes this schedule review')
-        return {'origin': origin, 'messageId': source['id'], 'text': source.get('text', ''), 'inputOrigin': source['inputOrigin'], 'messageCreatedAt': source.get('createdAt', 0), 'textDigest': fingerprint(source.get('text', '')), 'voiceId': source.get('voiceId'), 'voiceItemId': source.get('voiceItemId'), 'at': self.clock()}
+        return {**({'handoff': handoff} if handoff else {}), 'origin': origin, 'messageId': source['id'], 'text': source.get('text', ''), 'inputOrigin': source['inputOrigin'], 'messageCreatedAt': source.get('createdAt', 0), 'textDigest': fingerprint(source.get('text', '')), 'voiceId': source.get('voiceId'), 'voiceItemId': source.get('voiceItemId'), 'at': self.clock()}
 
     async def dispatch(self, action, args, origin, command_id):
         sid = args['sessionId']
@@ -140,6 +145,12 @@ class Schedules:
         if action == 'schedule.resume': config = self.configuration(self.store.get(sid, args['id']))
         task = await self.task(sid, config) if action in {'schedule.preview', 'schedule.create', 'schedule.update', 'schedule.resume'} else None
         if action == 'schedule.preview': return self.reviewed(sid, config, task)
+        if args.get('handoffRequestId'):
+            receipt = self.app.collaboration.receipt(args['handoffRequestId'])
+            if (receipt.get('commandAction') != 'coordination.send' or not receipt.get('scheduleRepair')
+                    or receipt.get('target', {}).get('sessionId') != sid):
+                raise ValueError('Choose a schedule repair handoff addressed to this owner.')
+            await self.app.history.ensure_loaded(receipt['senderSessionId'])
         async with self.app.lock:
             def build(previous):
                 now = self.clock()
@@ -155,7 +166,7 @@ class Schedules:
                     reviewed = self.reviewed(sid, effective, task)
                     if args['previewHash'] != reviewed['previewHash']: raise ValueError('The task, stop intent, or schedule preview changed; preview again')
                     if any(run['phase'] == 'unknown' for run in self.store.runs(sid, record['id'])): raise ValueError('Reconcile the uncertain prior run before resuming')
-                    authorization = self.authorization(sid, args, origin, previous=previous)
+                    authorization = self.authorization(sid, args, origin, previous=previous, action=action)
                     next_due = next_after(effective['spec'], now)
                     if next_due is None: raise ValueError('Choose a future occurrence; past one-shot work is not replayed')
                     for key in ('newTaskConfiguration', 'newTaskTitle', 'newTaskMaxTurns'): record.pop(key, None)
@@ -200,8 +211,19 @@ class Schedules:
         if session.get('interruptionRevision', 0) != schedule['interruptionRevision']:
             return 'The user stopped this conversation. Review the schedule before resuming.'
         authorization = schedule.get('authorization', {})
+        authority_session = session
+        if handoff := authorization.get('handoff'):
+            try:
+                authority_session = self.app._session(handoff['senderSessionId'], hydrate=False)
+            except Exception:
+                return 'The schedule repair authorizing chat is unavailable. Review authorization.'
+            if (authority_session.get('workspace') != session.get('workspace') or
+                    authority_session.get('interruptionRevision', 0) != handoff['sourceInterruptionRevision']):
+                return 'The authorizing chat was stopped or changed workspace. Review authorization.'
         if authorization.get('messageId'):
-            source = next((row for row in session['messages'] if row['id'] == authorization['messageId']), None)
+            source = next((row for row in authority_session['messages'] if row['id'] == authorization['messageId']), None)
+            if handoff and source is None:
+                return 'The original schedule repair request is unavailable. Review authorization.'
             if source is not None and fingerprint(source.get('text', '')) != authorization.get('textDigest'):
                 return 'The original schedule request was edited. Review the saved authorization.'
         if schedule.get('destination') == 'new_task':
@@ -236,6 +258,8 @@ class Schedules:
             session = self.app._session(sid)
             if session.get('configurationBusy') or session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
             try:
+                if handoff := schedule.get('authorization', {}).get('handoff'):
+                    await self.app.history.ensure_loaded(handoff['senderSessionId'])
                 task = await self.task(sid, schedule)
             except Exception as exc:
                 async with self.app.lock:
@@ -287,8 +311,8 @@ class Schedules:
                     if not self.store.owns(self.clock()): return 'Scheduler ownership changed before admission.'
                     owner = self.app._session(sid)
                     if owner.get('configurationBusy') or owner.get('executionRevision', 0) != current.get('executionRevision', 0): return 'The task execution folder changed or is moving; this occurrence was skipped.'
-                    if current.get('destination') == 'new_task':
-                        reason = self.dependency_reason(owner, None, current)
+                    if current.get('destination') == 'new_task' or current.get('authorization', {}).get('handoff'):
+                        reason = self.dependency_reason(owner, task, current)
                         if reason: return reason
                     destination = self.app._session(target)
                     if run.get('destinationConfigurationHash'):
