@@ -9,7 +9,7 @@ import pytest
 
 from test_output_media import (
     canonical_corpus, cold_alias_corpus, freeze_alias_display, gif,
-    gif_open_args, media_app, media_args_without_hydration,
+    gif_open_args, media_app, media_args, media_args_without_hydration,
 )
 
 
@@ -366,4 +366,341 @@ async def test_fork_legacy_gif_wrapper_remaps_every_saved_reference_and_filters_
         assert media[0]['body'] == originals[6]['body']
         for index, original in wrappers.items():
             assert next(row for row in app.state['canvasArtifacts'] if row['id'] == original['id']) == original
+    assert (store.directory(source['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+async def test_zero_loaded_restart_fast_reads_leave_exact_display_unchanged(media_app, monkeypatch):
+    from amplifier_web import cold_display
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    app = media_app
+    session, _, _, directory, mid = canonical_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': mid}
+    saved = (await app.outputs.media.attach(args, 'ui', 'zero-loaded-save'))['result']
+    sid, workspace = session['id'], session['workspace']
+    original = app.outputs.record(sid, saved['id'])
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    await app.close()
+    reopened = AppService(app.data_dir, workspace=workspace, runtime=Runtime())
+    try:
+        source = reopened._session(sid, hydrate=False)
+        before = copy.deepcopy(cold_display.raw(source))
+        assert len(dict.get(source, 'messages', [])) == 0
+        assert not source.get('historyLoaded')
+        reopened.clients.attach('zero-loaded-reader')
+        reopened.clients.records['zero-loaded-reader']['selectedSessionId'] = sid
+        with monkeypatch.context() as patch:
+            forbid_history(patch, reopened)
+            def no_loader(*args, **kwargs):
+                pytest.fail('Fast retained read invoked the intentional unrun history loader')
+            patch.setattr(reopened.history, 'load', no_loader)
+            with reopened.clients.bind('zero-loaded-reader'):
+                values = gif_open_args(args, saved)
+                assert (await reopened.outputs.media.describe(sid, mid))['items'][0]['id'] == saved['id']
+                assert await reopened.outputs.media.head(values) == len(gif())
+                assert await reopened.outputs.media.bytes(values) == gif()
+                metadata = (await reopened.dispatch('outputs.read', {'sessionId': sid,
+                    'id': saved['id']}, include_state=False))['result']
+                assert metadata['origin'] == original['origin']
+                assert (await reopened.dispatch('canvas.openGif', values, include_state=False))['result']['status'] == 'opened'
+            assert cold_display.raw(source) == before
+        assert reopened.outputs.record(sid, saved['id']) == original
+        assert (directory / 'transcript.jsonl').read_bytes() == raw
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize('admission', ['new', 'legacy'])
+async def test_empty_title_preserves_media_record_adapter_bytes_and_library(media_app, admission):
+    from amplifier_web import resource_files
+    app = media_app
+    args = media_args(app)
+    args['title'] = '' if admission == 'new' else 'Previously titled'
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    if admission == 'legacy':
+        legacy = app.outputs.record(args['sessionId'], saved['id'])
+        legacy['title'] = ''
+        app.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(legacy), saved['id']))
+        app.db.commit()
+    original = app.outputs.record(args['sessionId'], saved['id'])
+    path = resource_files.root(app.db) / (original['body']['$resource'] + '.json')
+    encoded = path.read_bytes()
+    app.clients.attach('empty-title-reader')
+    with app.clients.bind('empty-title-reader'):
+        values = gif_open_args(args, saved)
+        assert (await app.outputs.media.describe(args['sessionId'], args['messageId']))['items'][0]['title'] == ''
+        assert app.outputs.store.list(args['sessionId'])['items'][0]['title'] == ''
+        metadata = (await app.dispatch('outputs.read', {'sessionId': args['sessionId'],
+            'id': saved['id']}, include_state=False))['result']
+        assert metadata['title'] == '' and metadata['origin'] == original['origin']
+        assert await app.outputs.media.head(values) == len(gif())
+        assert await app.outputs.media.bytes(values) == gif()
+        opened = (await app.dispatch('canvas.openGif', values, include_state=False))['result']
+        canvas = next(row for row in app.state['canvasArtifacts'] if row['id'] == opened['id'])
+        for definition in [canvas, *canvas['versions']]:
+            ref = app.state_resource(definition['body']['$resource'])['mediaReference']
+            assert ref['item']['title'] == ''
+        assert app.outputs.record(args['sessionId'], saved['id']) == original
+        assert path.read_bytes() == encoded
+
+
+@pytest.mark.parametrize('title', [None, {}, 'x' * 201])
+async def test_malformed_retained_title_fails_loudly_without_empty_list_fallback(media_app, title):
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    broken = app.outputs.record(args['sessionId'], saved['id'])
+    broken['title'] = title
+    app.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(broken), saved['id']))
+    app.db.commit()
+    app.clients.attach('bad-title-reader')
+    with app.clients.bind('bad-title-reader'):
+        with pytest.raises(ValueError, match='retained'):
+            await app.outputs.media.describe(args['sessionId'], args['messageId'])
+        with pytest.raises(AppError, match='retained'):
+            await app.dispatch('outputs.read', {'sessionId': args['sessionId'], 'id': saved['id']})
+        for operation in ('head', 'bytes'):
+            with pytest.raises(ValueError, match='retained'):
+                await getattr(app.outputs.media, operation)(gif_open_args(args, saved))
+
+
+async def test_http_small_ranges_cache_exact_successful_validation_not_only_hash(
+        authenticated_client, tmp_path, monkeypatch):
+    from amplifier_web import output_media, resource_files
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    server = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
+                              voice=False, preload_providers=False, background_updates=False)
+    app = server['service']
+    await app.dispatch('session.create', {})
+    await app.on_runtime_event('assistant.message', {'sessionId': app._session()['id'],
+        'text': 'Cache validation origin', 'generationId': 'cache-generation'})
+    args = media_args(app)
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    original = app.outputs.record(args['sessionId'], saved['id'])
+    app.clients.attach('cache-http')
+    client = await authenticated_client(server)
+    client.session.headers['X-Amplifier-Client'] = 'cache-http'
+    query = {'sessionId': args['sessionId'], 'messageId': args['messageId'],
+             'version': str(saved['version']), 'sha256': saved['sha256']}
+    route = '/api/outputs/' + saved['id'] + '/media'
+    validations, owner = [], threading.get_ident()
+    real = output_media.validate_retained_body
+
+    def validated(data, record):
+        validations.append((threading.get_ident(), copy.deepcopy(record)))
+        return real(data, record)
+
+    monkeypatch.setattr(output_media, 'validate_retained_body', validated)
+
+    async def small_range():
+        response = await client.get(route, params=query, headers={'Range': 'bytes=2-4'})
+        if response.status == 206:
+            assert await response.read() == gif()[2:5]
+        return response.status
+
+    for _ in range(3):
+        assert await small_range() == 206
+    assert len(validations) == 1
+    changed = {**original, 'title': 'Changed immutable descriptor, same bytes and hash'}
+    app.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(changed), saved['id']))
+    app.db.commit()
+    assert await small_range() == 206
+    assert len(validations) == 2
+    # Same media SHA is insufficient when structurally valid saved metadata
+    # disagrees with the body; failure must never become a successful cache hit.
+    bad = {**changed, 'media': {**changed['media'], 'durationMs': 270}}
+    app.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(bad), saved['id']))
+    app.db.commit()
+    assert await small_range() == 400
+    assert len(validations) == 3
+    assert await small_range() == 400
+    assert len(validations) == 4
+    app.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(changed), saved['id']))
+    app.db.commit()
+    # Explicit expiry, not an arbitrary speed or wall-clock assertion.
+    for key, (data, signature, at) in list(app.outputs.media.cache.items()):
+        app.outputs.media.cache[key] = (data, signature, at - 6)
+    assert await small_range() == 206
+    assert len(validations) == 5
+    path = resource_files.root(app.db) / (original['body']['$resource'] + '.json')
+    encoded = path.read_bytes()
+    path.write_bytes(encoded.replace(b'base64', b'broken'))
+    assert await small_range() == 400
+    path.write_bytes(encoded)
+    assert await small_range() == 206
+    assert len(validations) == 6
+    assert all(thread != owner for thread, _ in validations)
+    assert len(app.outputs.media.cache) <= 2
+    assert sum(len(entry[0]) for entry in app.outputs.media.cache.values()) <= 64 * 1024 * 1024
+
+
+@pytest.mark.parametrize('change', ['index', 'client', 'metadata'])
+async def test_warm_validated_hit_rechecks_scope_index_and_metadata_after_await(
+        media_app, monkeypatch, change):
+    from amplifier_web import output_media
+    app = media_app
+    args = media_args(app)
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    original = app.outputs.record(args['sessionId'], saved['id'])
+    app.clients.attach('warm-race-reader')
+    values = gif_open_args(args, saved)
+    entered, release = threading.Event(), threading.Event()
+    real = output_media._signature
+
+    def blocked(source):
+        signature = real(source)
+        entered.set()
+        assert release.wait(10)
+        return signature
+
+    with app.clients.bind('warm-race-reader'):
+        assert await app.outputs.media.bytes(values) == gif()
+        monkeypatch.setattr(output_media, '_signature', blocked)
+        pending = asyncio.create_task(app.outputs.media.bytes(values))
+        try:
+            assert await asyncio.to_thread(entered.wait, 10)
+            async with app.lock:
+                if change == 'client':
+                    app.clients.records['warm-race-reader']['selectedSessionId'] = None
+                elif change == 'index':
+                    app.db.execute('UPDATE state_resources SET value=? WHERE id=?',
+                                   ('{}', original['body']['$resource']))
+                else:
+                    changed = {**original, 'title': 'Different during warm read'}
+                    app.db.execute('UPDATE output_records SET value=? WHERE id=?',
+                                   (json.dumps(changed), saved['id']))
+                app.db.commit()
+            release.set()
+            with pytest.raises(ValueError):
+                await asyncio.wait_for(pending, 10)
+        finally:
+            release.set()
+            await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize('change', ['navigate', 'metadata', 'index', 'delete'])
+async def test_metadata_retained_recheck_not_browser_selection_across_worker_await(
+        media_app, monkeypatch, change):
+    from amplifier_web import output_media
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    record = app.outputs.record(args['sessionId'], saved['id'])
+    app.clients.attach('metadata-race-reader')
+    entered, release = threading.Event(), threading.Event()
+    real = output_media._signature
+
+    def blocked(source):
+        value = real(source)
+        entered.set()
+        assert release.wait(10)
+        return value
+
+    monkeypatch.setattr(output_media, '_signature', blocked)
+    with app.clients.bind('metadata-race-reader'):
+        pending = asyncio.create_task(app.app_bridge('dispatch', {
+            'action': 'outputs.read', 'args': {'id': saved['id']},
+            '_inputClients': ['metadata-race-reader']}, args['sessionId']))
+        try:
+            assert await asyncio.to_thread(entered.wait, 10)
+            async with app.lock:
+                if change == 'navigate':
+                    app.clients.records['metadata-race-reader']['selectedSessionId'] = None
+                elif change == 'metadata':
+                    changed = {**record, 'title': 'Changed metadata across await'}
+                    app.db.execute('UPDATE output_records SET value=? WHERE id=?',
+                                   (json.dumps(changed), saved['id']))
+                elif change == 'index':
+                    app.db.execute('UPDATE state_resources SET value=? WHERE id=?',
+                                   ('{}', record['body']['$resource']))
+                else:
+                    app.db.execute('DELETE FROM output_records WHERE id=?', (saved['id'],))
+                app.db.commit()
+            release.set()
+            if change == 'navigate':
+                result = (await asyncio.wait_for(pending, 10))['result']
+                assert result['browserObservation']['status'] == 'unbound'
+                assert result['origin'] == record['origin']
+            else:
+                with pytest.raises(AppError):
+                    await asyncio.wait_for(pending, 10)
+        finally:
+            release.set()
+            await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize('defect', [None, 'cross-output-canvas', 'cross-output-snapshot'])
+async def test_real_attached_gif_snapshot_fork_skips_invalid_adapters_before_dependents(
+        media_app, defect):
+    from amplifier_web.automatic_history import display_message
+    from amplifier_web import resource_files
+    from test_output_media import _exact_media_fork_corpus
+    app = media_app
+    source, corpus, store = _exact_media_fork_corpus(app, partial=True)
+    app.clients.attach('snapshot-fork-reader')
+    raw = (store.directory(source['id']) / 'transcript.jsonl').read_bytes()
+    with app.clients.bind('snapshot-fork-reader'):
+        mid = display_message(corpus[6], 6, source)['id']
+        args = {**media_args_without_hydration(source), 'messageId': mid}
+        saved = (await app.dispatch('outputs.attachMedia', args))['result']
+        opened = (await app.dispatch('canvas.openGif', gif_open_args(args, saved),
+                                     include_state=False))['result']
+        wrapper = next(row for row in app.state['canvasArtifacts'] if row['id'] == opened['id'])
+        assert wrapper['messageId'] is None and wrapper['publications'] == []
+        # Historical compatibility anchor, not a new general publication policy.
+        anchor = display_message(corpus[2], 2, source)['id']
+        wrapper['messageId'] = anchor
+        wrapper['versions'][0]['messageId'] = anchor
+        wrapper['publications'] = [{'messageId': anchor, 'version': 1}]
+        # The public generic attach route needs a currently visible message.
+        source['messages'].insert(0, display_message(corpus[2], 2, source))
+        snapshot = (await app.dispatch('outputs.attach', {'sessionId': source['id'],
+            'kind': 'canvas', 'canvasId': wrapper['id'], 'title': 'Saved GIF adapter',
+            'messageId': anchor}, include_state=False))['result']
+        if defect:
+            malformed = copy.deepcopy(app.state_resource(wrapper['body']['$resource']))
+            # A real source-owned nonmedia output with a kept anchor is not
+            # authority for the media adapter, despite its valid output ID.
+            other = (await app.dispatch('outputs.write', {'sessionId': source['id'],
+                'title': 'Nonmedia output', 'content': 'No GIF authority', 'variant': 'document',
+                'messageId': anchor}, include_state=False))['result']
+            malformed['mediaReference']['item']['id'] = other['id']
+            body = resource_files.put(app.db, malformed)
+            if defect == 'cross-output-canvas':
+                wrapper['body'] = body
+                wrapper['versions'][0]['body'] = body
+            else:
+                broken = app.outputs.record(source['id'], snapshot['id'])
+                broken['canvasSource'] = body
+                app.db.execute('UPDATE output_records SET value=? WHERE id=?',
+                               (json.dumps(broken), snapshot['id']))
+            app.db.commit()
+        before_source = copy.deepcopy(wrapper)
+        forked = await app.dispatch('session.fork', {'id': source['id'], 'turn': 2},
+                                    include_state=False)
+        target = app._session()
+        records = app.outputs.store.list(target['id'])['items']
+        canvases = [row for row in app.state['canvasArtifacts'] if row.get('sessionId') == target['id']]
+        for record in records:
+            if record.get('canvasId'):
+                assert any(row['id'] == record['canvasId'] for row in canvases)
+        clones = [row for row in records if row.get('forkSource', {}).get('outputId') == snapshot['id']]
+        if defect:
+            assert not clones
+            assert forked['result']['retainedAdapterSkips']
+            if defect == 'cross-output-canvas':
+                assert not any(row['kind'] == 'gif' for row in canvases)
+        else:
+            assert len(clones) == 1
+            clone = clones[0]
+            media = next(row for row in records if row['kind'] == 'media')
+            body = json.loads(app.outputs.content(clone))
+            assert body == app.state_resource(clone['canvasSource']['$resource'])
+            assert body['mediaReference']['item']['id'] == media['id']
+            assert body['mediaReference']['item']['sessionId'] == target['id']
+            assert clone['canvasId'] in {row['id'] for row in canvases}
+        assert next(row for row in app.state['canvasArtifacts'] if row['id'] == wrapper['id']) == before_source
     assert (store.directory(source['id']) / 'transcript.jsonl').read_bytes() == raw

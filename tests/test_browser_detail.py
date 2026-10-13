@@ -353,3 +353,109 @@ def test_delegate_owner_survives_message_boundary_paging_and_sync(monkeypatch):
     assert result['revision'] != old_revision
     assert 'delegate' not in session['execution']['nodes'][1]
     assert next(x for x in work_segments(session)[1] if x['id']=='turn@paused')['nodeCounts']=={'tools':1,'models':1}
+
+
+@pytest.mark.parametrize('read_path', ['project', 'detail-miss', 'detail-hit'])
+async def test_cold_detail_reads_preserve_live_fields_and_exact_bounded_recovery(
+        app_factory, read_path):
+    from amplifier_web.cold_display import ColdRecord, raw
+    from amplifier_web.resource_files import put
+    from amplifier_web.state_projections import StateProjections
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    original = heavy(app._session()['id'])
+    original['messages'].append({'id': 'recovered-notice', 'role': 'user',
+        'text': 'Recovered work', 'observation': {'source': 'local-job-recovery',
+                                                 'recovery': {'call_id': 'recovered-call'}}})
+    original['execution']['nodes'].append({'id': 'recovered-output', 'kind': 'tool',
+        'toolCallId': 'recovered-call', 'label': 'Saved work',
+        'output': 'Retained full recovery result ' * 10000})
+    original['workers'] = [
+        {'id': 'recovered-worker', 'sessionId': 'recovered-child', 'name': 'Saved reviewer',
+         'toolCallId': 'recovered-call', 'status': 'completed', 'report': 'Private full report ' * 10000},
+        {'id': 'active-worker', 'sessionId': 'active-child', 'name': 'Active reviewer',
+         'status': 'working'}]
+    expected = project(copy.deepcopy(original))
+    refs = {key: put(app.db, original[key]) for key in ('messages', 'execution')}
+    app.db.commit()
+    touches = []
+    cold = ColdRecord({**{key: value for key, value in original.items() if key not in refs},
+                       '_coldFields': refs}, app.db, lambda: touches.append(True))
+    before = copy.deepcopy(raw(cold))
+    projections = StateProjections()
+    if read_path == 'project':
+        result = project(cold)
+    else:
+        result = projections.detail(cold)
+        if read_path == 'detail-hit':
+            cold['error'] = 'Current visible error'
+            before['error'] = expected['error'] = 'Current visible error'
+            result = projections.detail(cold)
+    assert result == expected
+    assert raw(cold) == before and touches == []
+    assert not dict.__contains__(cold, 'messages')
+    assert not dict.__contains__(cold, 'execution')
+    assert len(result['messages']) == 60 and result['execution']['nodes'] == []
+    recovery = result['messages'][-1]['recoveryResult']
+    assert recovery['outputDetail']['id'] == 'recovered-output'
+    assert 'output' not in recovery
+    assert result['messages'][-1]['recoveryWorker'] == {
+        'id': 'recovered-worker', 'sessionId': 'recovered-child', 'name': 'Saved reviewer'}
+    assert result['workers'][0]['id'] == 'active-worker'
+    assert result['workerSummary']['total'] == 2
+    if read_path != 'project':
+        assert 'Retained full recovery result ' * 10000 not in repr(projections.detail_bodies)
+        assert 'Private full report ' * 10000 not in repr(projections.detail_bodies)
+        assert len(projections.detail_bodies[cold['id']]['messages']) == 60
+
+
+async def test_selected_subscribed_cold_detail_publication_keeps_canonical_cold(app_factory):
+    from amplifier_web.cold_display import ColdRecord, raw
+    from amplifier_web.resource_files import put
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    source = app._session()
+    sid = source['id']
+    fixture = {**copy.deepcopy(source), **heavy(sid), 'status': 'idle'}
+    fixture['workers'] = [{'id': 'selected-worker', 'sessionId': 'selected-child',
+                           'name': 'Selected active worker', 'status': 'working'}]
+    expected = project(copy.deepcopy(fixture))
+    refs = {key: put(app.db, fixture[key]) for key in ('messages', 'execution')}
+    app.db.commit()
+    cold = ColdRecord({**{key: value for key, value in fixture.items() if key not in refs},
+                       '_coldFields': refs}, app.db)
+    app.state['sessions'] = [cold]
+    app.projections.invalidate()
+    app.clients.attach('cold-detail-subscriber')
+    with app.clients.bind('cold-detail-subscriber'):
+        queue = app.subscribe()
+        try:
+            before = copy.deepcopy(raw(cold))
+            app._publish_changes(sessions={sid})
+            published = next(row for row in queue.get_nowait()['sessions'] if row['id'] == sid)
+            assert published['messages'] == expected['messages']
+            assert published['execution'] == expected['execution']
+            assert published['workers'] == expected['workers']
+            assert raw(cold) == before
+        finally:
+            app.unsubscribe(queue)
+
+
+def test_cold_projection_resource_error_remains_visible(tmp_path):
+    import sqlite3
+    from amplifier_web.cold_display import ColdRecord, raw
+    from amplifier_web.resource_files import put
+    from amplifier_web.state_projections import StateProjections
+    db = sqlite3.connect(':memory:')
+    db.execute('CREATE TABLE state_resources(id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    try:
+        body = put(db, [{'id': 'message', 'role': 'assistant', 'text': 'Saved'}])
+        cold = ColdRecord({'id': 'broken-cold', '_coldFields': {'messages': body}}, db)
+        before = copy.deepcopy(raw(cold))
+        db.execute('DELETE FROM state_resources WHERE id=?', (body['$resource'],))
+        for read in (project, StateProjections().detail):
+            with pytest.raises(ValueError):
+                read(cold)
+            assert raw(cold) == before
+    finally:
+        db.close()

@@ -260,6 +260,7 @@ def retained_facts(record, sid):
             or not isinstance(record.get('sha256'), str)
             or not re.fullmatch(r'[a-f0-9]{64}', record['sha256'])
             or not text(record.get('title'), 200, 0) or not text(record.get('filename'), 4000)
+            or ('versionEvidence' in record and not text(record['versionEvidence'], 200))
             or not isinstance(body, dict) or set(body) not in ({'$resource'}, {'$resource', 'bytes'})
             or not isinstance(body['$resource'], str)
             or not re.fullmatch(r'[a-f0-9]{64}', body['$resource'])
@@ -296,7 +297,7 @@ def retained_facts(record, sid):
     # Linking and its CAS revision are publication state, not object lifetime.
     return {key: copy.deepcopy(record[key]) for key in (
         'id', 'sessionId', 'kind', 'origin', 'title', 'filename',
-        'version', 'sha256', 'bytes', 'media', 'body')}
+        'version', 'sha256', 'bytes', 'media', 'body', 'versionEvidence') if key in record}
 
 
 def validate_retained_body(data, record):

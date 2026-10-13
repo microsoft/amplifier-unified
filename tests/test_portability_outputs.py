@@ -383,7 +383,7 @@ def test_shared_session_store_still_denies_cold_task_writes(cold_fence_task):
         app.portability.write_context(session['id'])
 
 
-async def attach_saved_media(app, sid, workspace, *, large=False):
+async def attach_saved_media(app, sid, workspace, *, large=False, title='Portable synthetic animation'):
     import hashlib
     from test_output_media import gif
     await app.on_runtime_event('assistant.message', {
@@ -396,21 +396,36 @@ async def attach_saved_media(app, sid, workspace, *, large=False):
     path = workspace / 'portable.gif'
     path.write_bytes(data)
     result = (await app.dispatch('outputs.attachMedia', {'sessionId': sid, 'messageId': message['id'],
-        'title': 'Portable synthetic animation', 'path': path.name,
+        'title': title, 'path': path.name,
         'expectedSha256': hashlib.sha256(data).hexdigest()}))['result']
     path.unlink()
     return result, message['id'], data
 
 
 @pytest.mark.parametrize('origin', ['active', 'historical'])
-async def test_media_transfer_rebinds_destination_context_without_changing_history_or_nested_outputs(tmp_path, monkeypatch, origin):
+@pytest.mark.parametrize(('title', 'admission'), [
+    ('', 'new'), ('', 'legacy'), ('Portable synthetic animation', 'new')])
+async def test_media_transfer_rebinds_destination_context_without_changing_history_or_nested_outputs(tmp_path, monkeypatch, origin, title, admission):
     from amplifier_web.host.storage import SessionStore
     from amplifier_web import resource_files
     from test_output_images import png
     app, target, source, destination, root, destrepo, sid, out1, out2 = await setup_hosts(tmp_path, monkeypatch)
     try:
         host_env(monkeypatch, source)
-        media, mid, data = await attach_saved_media(app, sid, root)
+        media, mid, data = await attach_saved_media(app, sid, root,
+            title='Previously titled' if admission == 'legacy' else title)
+        if admission == 'legacy':
+            import json
+            legacy = app.outputs.record(sid, media['id'])
+            legacy['title'] = title
+            app.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(legacy), media['id']))
+            app.db.commit()
+        original = app.outputs.record(sid, media['id'])
+        app.clients.attach('source-media-adapter')
+        with app.clients.bind('source-media-adapter'):
+            await app.dispatch('canvas.openGif', {
+                **{key: media[key] for key in ('sessionId', 'id', 'version', 'sha256')},
+                'messageId': mid}, include_state=False)
         await app.on_runtime_event('assistant.message', {'sessionId': sid, 'text': 'A later assistant page.'})
         store = SessionStore.for_app(app.data_dir, root)
         if origin == 'historical':
@@ -447,8 +462,17 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
             await target.dispatch('session.select', {'id': sid})
             items = (await target.outputs.media.describe(sid, mid))['items']
             assert len(items) == 1 and items[0]['id'] == media['id']
+            assert items[0]['title'] == title
             values = {**items[0], 'messageId': mid}
             assert await target.outputs.media.bytes(values) == data
+            assert await target.outputs.media.head(values) == len(data)
+            assert target.outputs.record(sid, media['id']) == original
+            opened = (await target.dispatch('canvas.openGif', {
+                **{key: media[key] for key in ('sessionId', 'id', 'version', 'sha256')},
+                'messageId': mid}, include_state=False))['result']
+            canvas = next(row for row in target.state['canvasArtifacts'] if row['id'] == opened['id'])
+            reference = target.state_resource(canvas['body']['$resource'])['mediaReference']
+            assert reference['item']['title'] == title
             assert target.outputs.media.observation(target.outputs.record(sid, media['id']))['status'] == 'not_observed'
             with pytest.raises(ValueError):
                 await target.outputs.media.bytes({**values, 'messageId': session['messages'][-1]['id']})
@@ -580,10 +604,84 @@ async def test_signed_media_transfer_data_rejects_unbound_adapters_and_malformed
                                                   signer=app.portability.node.identity['id'])
         with pytest.raises(ValueError):
             portability_data.validate(verified['payload'])
+        from amplifier_portability.capsule import write_capsule
+        package = tmp_path / 'invalid-signed-media.json'
+        write_capsule(package, signed)
+        host_env(monkeypatch, destination)
+        with pytest.raises(AppError):
+            await target.dispatch('portability.stage', {'path': str(package), 'repository': str(destrepo)})
+        assert target.portability.node.records() == []
         assert target.state['sessions'] == []
         assert target.db.execute('SELECT COUNT(*) FROM output_records').fetchone()[0] == 0
         assert not target.runtime.workers and not app.runtime.workers
     finally:
+        host_env(monkeypatch, source)
+        await app.close()
+        host_env(monkeypatch, destination)
+        await target.close()
+
+
+async def test_all_production_payload_validation_runs_off_owner_with_responsive_barrier(
+        tmp_path, monkeypatch):
+    import threading
+    from amplifier_web import output_media, portability_data
+    app, target, source, destination, root, destrepo, sid, *_ = await setup_hosts(tmp_path, monkeypatch)
+    pending = None
+    releases = []
+    try:
+        host_env(monkeypatch, source)
+        await attach_saved_media(app, sid, root, title='')
+        loop, owner = asyncio.get_running_loop(), threading.get_ident()
+        entered = asyncio.Queue()
+        real_validate, real_capture = output_media.validate_retained_body, portability_data.capture
+        witnesses = []
+
+        def capture(*args, **kwargs):
+            # SQLite, app state and native capture remain on their owner thread.
+            assert threading.get_ident() == owner
+            return real_capture(*args, **kwargs)
+
+        def validation(data, record):
+            thread = threading.get_ident()
+            assert thread != owner
+            release = Event()
+            releases.append(release)
+            loop.call_soon_threadsafe(entered.put_nowait, (thread, release))
+            assert release.wait(10)
+            return real_validate(data, record)
+
+        monkeypatch.setattr(portability_data, 'capture', capture)
+        monkeypatch.setattr(output_media, 'validate_retained_body', validation)
+
+        async def transfer():
+            staged, released = await release_to(app, target, sid, source, destination,
+                                               destrepo, monkeypatch)
+            host_env(monkeypatch, destination)
+            return await activate(target, sid, staged, released)
+
+        pending = asyncio.create_task(transfer())
+        # Export preflight, final export capture, stage, release and activate:
+        # no phase may parse decoded media while blocking the app owner.
+        for phase in ('export-preflight', 'export-final', 'stage', 'release', 'activate'):
+            thread, release = await asyncio.wait_for(entered.get(), 10)
+            witnesses.append((phase, thread))
+            try:
+                async with app.lock:
+                    assert app._session(sid, hydrate=False)['id'] == sid
+                async with target.lock:
+                    assert target.state['revision'] >= 0
+            finally:
+                release.set()
+        active = await asyncio.wait_for(pending, 10)
+        assert active['phase'] == 'active'
+        assert len(witnesses) == 5 and all(thread != owner for _, thread in witnesses)
+        assert entered.empty()
+    finally:
+        for release in releases:
+            release.set()
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
         host_env(monkeypatch, source)
         await app.close()
         host_env(monkeypatch, destination)

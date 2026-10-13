@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from amplifier_web.service import AppError, AppService
+from test_output_media import media_app, media_args, gif_open_args, gif
 
 
 async def command(app, client, action, args):
@@ -268,3 +269,97 @@ async def test_legacy_default_without_attached_clients_still_works(tmp_path):
         assert result['state']['canvasContext']['status'] == 'default'
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('binding', ['attached', 'no-input-client', 'navigated-away'])
+@pytest.mark.parametrize('linked', [True, False])
+async def test_retained_media_metadata_uses_real_worker_caller_not_browser_lifetime(
+        media_app, monkeypatch, binding, linked):
+    from types import SimpleNamespace
+    from amplifier_web import output_media
+    from amplifier_web.runtime_worker import Worker
+    from test_collaborative_workspaces import generation
+    app = media_app
+    args = media_args(app)
+    sid = args['sessionId']
+    app.clients.attach('metadata-owner')
+    with app.clients.bind('metadata-owner'):
+        queue = app.subscribe()
+    session = app._session(sid)
+    await generation(app, session, 'metadata-generation', ['metadata-input'])
+    worker = Worker()
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(session_id=sid))
+    worker.runtime = SimpleNamespace(generation={'id': 'metadata-generation'})
+    worker.context_inputs = ['metadata-input']
+    worker.context_bindings = {'metadata-input': {'clientId': 'metadata-owner'}}
+
+    async def transport(operation, values):
+        # A captured browser context is not permission to borrow that browser
+        # when the worker stamps [] for the current input's client bindings.
+        with app.clients.bind('metadata-owner'):
+            return await app.app_bridge(operation, values, sid)
+
+    worker.bridge = transport
+    bridge = worker.app_access_bridge(worker.session.coordinator)
+    try:
+        saved = (await bridge('dispatch', {'action': 'outputs.attachMedia', 'args': args,
+                                          'id': 'agent-metadata-save'}))['result']
+        original = app.outputs.record(sid, saved['id'])
+        assert original['origin']['source'] == 'agent'
+        for index in range(3):
+            await app.dispatch('outputs.comment', {'sessionId': sid, 'id': saved['id'],
+                                                   'body': f'Bounded review {index}'})
+        values = gif_open_args(args, saved)
+        with app.clients.bind('metadata-owner'):
+            await app.outputs.media.observe({**values, 'generation': 1, 'sequence': 1,
+                'renderState': 'ready', 'playback': 'paused', 'presentedFrames': 2}, 'ui')
+        if not linked:
+            await app.dispatch('outputs.unlink', {'sessionId': sid, 'id': saved['id'],
+                                                  'expectedRevision': 1})
+        foreign = app._new_session({'title': 'Foreign metadata conversation'})
+        app.state['sessions'].append(foreign)
+        if binding == 'no-input-client':
+            worker.context_inputs = []
+            worker.context_bindings = {}
+        elif binding == 'navigated-away':
+            with app.clients.bind('metadata-owner'):
+                await app.dispatch('session.select', {'id': foreign['id']})
+
+        def no_body(*args, **kwargs):
+            pytest.fail('Metadata read decoded media bytes')
+
+        with monkeypatch.context() as patch:
+            patch.setattr(output_media, '_saved_bytes', no_body)
+            patch.setattr(output_media, 'validate_retained_body', no_body)
+            result = (await bridge('dispatch', {'action': 'outputs.read', 'args': {
+                'id': saved['id'], 'commentOffset': 1, 'commentLimit': 1}}))['result']
+        assert result['kind'] == 'media' and result['origin'] == original['origin']
+        assert result['versionEvidence'] == 'snapshot'
+        assert result['saved'] and result['attached'] is linked
+        assert result['comments'][0]['body'] == 'Bounded review 1'
+        assert result['nextCommentOffset'] == 2
+        assert not {'body', '$resource', 'data', 'canvasSource'} & result.keys()
+        expected = 'observed' if binding == 'attached' else 'unbound'
+        assert result['browserObservation']['status'] == expected
+        if binding != 'attached':
+            assert result['playback'] == 'unknown'
+            assert 'presentedFrames' not in result['browserObservation']
+            with app.clients.bind('metadata-owner' if binding == 'navigated-away' else None):
+                for operation in ('bytes', 'head'):
+                    with pytest.raises(ValueError, match='client'):
+                        await getattr(app.outputs.media, operation)(values)
+                with pytest.raises(AppError):
+                    await app.dispatch('canvas.openGif', values, include_state=False)
+        else:
+            with app.clients.bind('metadata-owner'):
+                assert await app.outputs.media.bytes(values) == gif()
+        with pytest.raises(AppError, match='calling conversation'):
+            await bridge('dispatch', {'action': 'outputs.read', 'args': {
+                'sessionId': foreign['id'], 'id': saved['id']}})
+        # Even with callerSessionId injected, another conversation's output ID
+        # is not readable by the foreign root's transport.
+        with pytest.raises(AppError, match='another conversation'):
+            await app.app_bridge('dispatch', {'action': 'outputs.read',
+                'args': {'id': saved['id']}, '_inputClients': []}, foreign['id'])
+    finally:
+        app.unsubscribe(queue)

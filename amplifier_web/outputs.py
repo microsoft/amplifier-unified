@@ -177,7 +177,10 @@ class Outputs:
                     continue
                 rewritten = copy.deepcopy(row)
                 try:
-                    for entry in [rewritten, *rewritten.get('versions', [])]:
+                    versions = rewritten.get('versions', [])
+                    if not isinstance(versions, list) or any(not isinstance(entry, dict) for entry in versions):
+                        raise ValueError('GIF adapter versions must be saved definitions.')
+                    for entry in [rewritten, *versions]:
                         if 'mediaReference' in entry or not entry.get('body'):
                             raise ValueError('GIF adapter requires an exact saved body.')
                         references = []
