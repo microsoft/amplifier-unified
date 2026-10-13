@@ -31,7 +31,9 @@ A two-round real-provider check through a fresh worker and the installed
 candidate wheel creates both clean copies, preserves an uncommitted original,
 then inspects both retained records without creating extra copies or changing
 execution placement. The final package's 285 application/worktree Python files
-match the candidate source. This qualifies explicit selection through the
+match the candidate source. All 41 selected-repository, existing worktree and
+reservation checks pass against that wheel outside the source checkout.
+This qualifies explicit selection through the
 actual agent tool, not automatic dependency mapping or concurrent model efficacy.
 
 ## Cooperative resource reservations — 2026-10-13
