@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.128",
+      "title": "Responsive controls with multiple chat windows",
+      "changes": [
+        "Live browser updates use a dedicated socket so multiple chat windows cannot occupy every HTTP connection needed for images, settings and actions.",
+        "Each window retains its own chat, draft and Canvas selection. Reconnect restores current state without replaying messages or model work."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.127",
       "title": "More useful chat diagnostics and smoother message delivery",
       "changes": [

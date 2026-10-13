@@ -54,7 +54,7 @@ const receipt={status:'STARTING',scope:'Synthetic packaged embedded-stage invari
  sourceSHA:flags['source-sha'],baseSHA:flags['base-sha'],version:flags.version,wheelSHA:flags['wheel-sha'],
  sourceHashes:{css:flags['css-sha'],viewer:flags['viewer-sha'],harness:flags['harness-sha']},
  readinessSHA:digest(readFileSync(beneath(flags.readiness))),budgetSeconds:budget,contextCount:0,pageCount:0,
- models:0,pageErrors:[],blocked:[],actions:[],reports:[],sse:[],cells:[],lifecycle:[],standalone:[],
+ models:0,pageErrors:[],blocked:[],actions:[],reports:[],streams:[],cells:[],lifecycle:[],standalone:[],
  pixelJudgment:'PENDING_MANAGER: inspect retained top/bottom and dense 390px PNGs; bounds do not prove legibility',
  originalCase:'NOT_CHECKED: original reporter Markdown and platform unavailable'};
 const save=()=>writeFileSync(path.join(out,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');
@@ -562,7 +562,7 @@ async function standalone(){
  await page.screenshot({path:path.join(out,'standalone-dot.png')});save();
 }
 async function run(){
- const require=createRequire(path.join(source,'frontend/package.json')),{chromium}=require('@playwright/test');
+ const require=createRequire(path.join(source,'frontend/package.json')),{chromium,expect}=require('@playwright/test');
  const childEnv=Object.fromEntries(Object.entries(process.env).filter(([k])=>!k.startsWith('AMPLIFIER')&&!k.endsWith('_API_KEY')&&!k.endsWith('_TOKEN')&&!k.endsWith('_SECRET')));
  childEnv.PYTHONPATH='';childEnv.PYTHONDONTWRITEBYTECODE='1';childEnv.TMPDIR=tmp;
  server=spawn(python,['-I','-B','-u',path.join(out,'server.py'),JSON.stringify(flags)],{cwd:out,env:childEnv,stdio:['ignore','pipe','pipe']});
@@ -585,7 +585,8 @@ async function run(){
  page=await context.newPage();receipt.pageCount++;cdp=await context.newCDPSession(page);
  page.setDefaultTimeout(8000);await context.tracing.start({screenshots:true,snapshots:true,sources:true});
  page.on('pageerror',e=>{receipt.pageErrors.push(clean(e.message));save()});
- page.on('response',r=>{if(new URL(r.url()).pathname==='/api/events')receipt.sse.push({status:r.status(),contentType:r.headers()['content-type']})});
+ page.on('response',r=>{if(new URL(r.url()).pathname==='/api/events')receipt.streams.push({transport:'sse',status:r.status(),contentType:r.headers()['content-type']})});
+ page.on('websocket',socket=>{if(new URL(socket.url()).pathname==='/api/events/ws')socket.on('framereceived',frame=>{try{if(JSON.parse(String(frame.payload)).event==='state')receipt.streams.push({transport:'websocket',status:101})}catch{}})});
  await page.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());
   if(url.origin!==ready.origin){receipt.blocked.push({url:request.url()});save();return route.abort()}
@@ -602,9 +603,8 @@ async function run(){
  await page.getByRole('textbox',{name:'Message Amplifier',exact:true}).waitFor();
  await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id,null,{timeout:timeout(15000)});
  await page.waitForFunction(async()=>{const r=await fetch('/api/state');return r.status===200},null,{timeout:timeout(5000)});
- if(!receipt.sse.length)await page.waitForResponse(r=>new URL(r.url()).pathname==='/api/events'&&r.status()===200,{timeout:timeout(10000)});
- assert.ok(receipt.sse.some(r=>r.status===200&&r.contentType?.includes('text/event-stream')),'Actual installed SSE missing');
- receipt.realCookieHTTPAndSSE=true;
+ await expect.poll(()=>receipt.streams.some(r=>r.transport==='websocket'&&r.status===101||r.status===200&&r.contentType?.includes('text/event-stream')),{timeout:timeout(10000)}).toBe(true);
+ receipt.realCookieHTTPAndStream=true;
  receipt.servedCSS=[];
  for(const url of await page.evaluate(()=>[...document.querySelectorAll('link[rel="stylesheet"]')].map(e=>e.href))){
   assert.equal(new URL(url).origin,ready.origin);const response=await context.request.get(url);assert.ok(response.ok());
@@ -637,7 +637,7 @@ try{
  deadline=setTimeout(()=>{receipt.deadlineExceeded=true;receipt.status='CANT_CHECK_DEADLINE';save();server?.kill('SIGTERM');browser?.close().catch(()=>{})},budget*1000);
  await run();
 }catch(e){
- receipt.status=receipt.realCookieHTTPAndSSE?'FAILED_SYNTHETIC_CHECK':'CANT_CHECK_PREREQUISITE';
+ receipt.status=receipt.realCookieHTTPAndStream?'FAILED_SYNTHETIC_CHECK':'CANT_CHECK_PREREQUISITE';
  receipt.failure=clean(e.stack||e);process.exitCode=1;save();
 }finally{
  clearTimeout(deadline);

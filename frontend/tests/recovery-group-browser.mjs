@@ -15,7 +15,7 @@ try{
  const control=async body=>{const response=await fetch(target+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(response.status,200);return response.json()};
  const {alpha}=await control({op:'heavy',messages:1,otherMessages:1,chars:50,nodes:0});
  await control({op:'patch',sessions:{[alpha]:{messages,execution:{turns:[],nodes:[{id:'saved-tool',kind:'tool',sessionId:alpha,toolCallId:'call-34',output:'Retained worker report',label:'Research'}]}}}});
- vite=await createServer({configFile:false,root:root+'frontend',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
+ vite=await createServer({configFile:false,root:root+'frontend',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers});page.on('pageerror',e=>errors.push(e.message));
  page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST')calls.push(request.postDataJSON())});
  await page.goto(vite.resolvedUrls.local[0]);

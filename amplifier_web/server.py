@@ -364,43 +364,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         )
 
     async def events(request):
-        response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-        await response.prepare(request)
-        queue = None
-        task = asyncio.current_task()
-        streams.add(task)
-        try:
-            await service._flush_pending_progress()
-            queue = service.subscribe()
-            snapshot = service.browser_state()
-            selected = next((row for row in snapshot['sessions'] if row['id'] == snapshot.get('selectedSessionId')), None)
-            if selected and selected.get('nativeProject'):
-                # Reconnecting restores a client's selection without dispatching
-                # session.select. Load its display history without warming or
-                # starting a runtime, while the initial snapshot paints promptly.
-                service._task(service.history.refresh_session(selected['id']))
-            previous = None
-            compact = request.query.get('transport') == 'delta-v1'
-            while True:
-                if "shellClientId" in snapshot:
-                    await response.write(("event: shell\ndata: " + json.dumps(snapshot) + "\n\n").encode())
-                else:
-                    from .state_transport import delta
-                    event = 'state-delta' if compact and previous is not None else 'state'
-                    payload = delta(previous, snapshot) if event == 'state-delta' else snapshot
-                    await response.write(("event: " + event + "\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(payload) + "\n\n").encode())
-                    previous = snapshot
-                try:
-                    snapshot = await asyncio.wait_for(queue.get(), 20)
-                except TimeoutError:
-                    await response.write(b": heartbeat\n\n")
-        except (ConnectionResetError, asyncio.CancelledError):
-            pass
-        finally:
-            streams.discard(task)
-            if queue is not None:
-                service.unsubscribe(queue)
-        return response
+        from .browser_events import serve
+        return await serve(request, service, streams)
 
     async def attachment(request):
         from .attachments import file_path
@@ -610,6 +575,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_post("/api/actions", actions)
     app.router.add_post("/api/view", view)
     app.router.add_get("/api/events", events)
+    app.router.add_get("/api/events/ws", events, allow_head=False)
     from .live_clients import setup_routes as setup_clients
     setup_clients(app, streams)
     from .client_observations import setup_routes as setup_observations

@@ -1,7 +1,9 @@
 # Browser state transport and idle work
 
 Browsers opt into compact action receipts with `X-Amplifier-State-Transport:
-delta-v1` and connect to `/api/events?transport=delta-v1`. Actions retain their
+delta-v1`. Current hosts advertise `websocket` at client attachment; browsers
+connect to `/api/events/ws?transport=delta-v1` with their attached `clientId`.
+Older clients and hosts retain `/api/events?transport=delta-v1` SSE. Actions retain their
 result, effects, idempotency receipt and revision. `stateRevision` and
 `hostInstanceId` identify the authoritative state that must arrive before an
 optimistic control settles. Shell composition receipts use a separate revision
@@ -60,7 +62,7 @@ is weakened by these CPU-path changes.
 
 ## Acceptance
 
-`npm run test:state-transport-browser` starts a disposable real HTTP/SSE server
+`npm run test:state-transport-browser` starts a disposable real HTTP/WebSocket server
 and serves the production build. Its synthetic catalog and initial state exceed
 3 MB. It measures actual action and stream bytes, checks immediate painting with
 500 ms delayed writes, verifies failed-save rollback and reconnects a fresh
@@ -97,3 +99,19 @@ The integration workflow rebuilds the client and requires a clean
 `git diff --exit-code -- amplifier_web/static`; a passing build alone does not
 prove that the committed application serves the changed source. Verify a repeat
 build reproduces the committed assets, without editing generated bundles by hand.
+
+## Multiple browser windows
+
+Each page retains its own private presentation identity. Its live observations
+use a WebSocket so long-lived streams do not exhaust the HTTP/1.1 connection
+pool shared by tabs and installed app windows. Frames carry the existing event
+name and data; snapshots, delta revision fences, shell events and bounded
+subscriber coalescing retain the same owners and semantics. Commands still use
+HTTP with existing receipts. The socket rejects application messages and never
+starts workers, retries model requests or replays commands.
+
+The handshake passes the same Host, Origin and authentication gates as HTTP and
+requires an attached client. Transport close releases the subscriber promptly.
+Reconnect uses bounded backoff and a fresh snapshot, preserving private drafts
+and mounted Canvas state. SSE is a compatibility path for hosts that do not
+advertise WebSocket support, not an automatic response to a broken socket.

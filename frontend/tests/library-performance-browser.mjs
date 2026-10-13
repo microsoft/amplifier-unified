@@ -78,7 +78,7 @@ try{
 
    let browserTarget=target;
    if(options.has('--dev')){
-    vite=await createServer({configFile:false,root:resolve(appRoot,'frontend'),server:{host:'127.0.0.1',port:0,hmr:false,fs:{allow:[appRoot,repository]},proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
+    vite=await createServer({configFile:false,root:resolve(appRoot,'frontend'),server:{host:'127.0.0.1',port:0,hmr:false,fs:{allow:[appRoot,repository]},proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
     await vite.listen();browserTarget=vite.resolvedUrls.local[0];
    }
    page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:headers.Authorization}});
@@ -95,9 +95,11 @@ try{
     }
    };
    await page.addInitScript(()=>{
-    window.performanceFixture={sseFrames:0,sseBytes:0,sseMaxBytes:0,longTasks:[]};
-    const Original=window.EventSource;
-    window.EventSource=class extends Original{constructor(...args){super(...args);this.addEventListener('state',event=>{window.performanceFixture.sseFrames++;const bytes=new TextEncoder().encode(event.data).length;window.performanceFixture.sseBytes+=bytes;window.performanceFixture.sseMaxBytes=Math.max(window.performanceFixture.sseMaxBytes,bytes)})}};
+    window.performanceFixture={streamFrames:0,streamBytes:0,streamMaxBytes:0,longTasks:[]};
+    const record=data=>{window.performanceFixture.streamFrames++;const bytes=new TextEncoder().encode(data).length;window.performanceFixture.streamBytes+=bytes;window.performanceFixture.streamMaxBytes=Math.max(window.performanceFixture.streamMaxBytes,bytes)};
+    const Source=window.EventSource,Socket=window.WebSocket;
+    window.EventSource=class extends Source{constructor(...args){super(...args);for(const kind of ['state','state-delta'])this.addEventListener(kind,event=>record(event.data))}};
+    window.WebSocket=class extends Socket{constructor(...args){super(...args);this.addEventListener('message',event=>{const frame=JSON.parse(event.data);if(['state','state-delta'].includes(frame.event))record(event.data)})}};
     try{new PerformanceObserver(entries=>{window.performanceFixture.longTasks.push(...entries.getEntries().map(entry=>entry.duration))}).observe({entryTypes:['longtask']})}catch{}
    });
    const navigationStart=performance.now();await page.goto(browserTarget);await page.locator('#amp-one').waitFor();
@@ -108,7 +110,7 @@ try{
    const domNodes=await page.locator('*').count();
    await page.waitForTimeout(600); // Let initial observational /api/view settle; outside measured window.
    await api('/api/fixture/reset',{});
-   await page.evaluate(()=>{window.performanceFixture={sseFrames:0,sseBytes:0,sseMaxBytes:0,longTasks:[]}});
+   await page.evaluate(()=>{window.performanceFixture={streamFrames:0,streamBytes:0,streamMaxBytes:0,longTasks:[]}});
    const settings=[],capabilities=[],maintenance=[],maintenanceSettled=[];
    const painted=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(performance.now())))));
    for(let sample=0;sample<samples;sample++){
@@ -135,18 +137,18 @@ try{
     stateDecodeMs:stats(stateSamples.map(row=>row.decodeMs)),stateServer:readMetrics,
     viewRoundtripMs:stats(actionSamples.map(row=>row.totalMs)),viewResponseBytes:actionSamples.map(row=>row.bytes),viewServer:actionMetrics,
     initialVisibleMs:round(initialVisibleMs),settingsClickToPaintMs:stats(settings),capabilitiesClickToPaintMs:stats(capabilities),maintenanceClickToPaintMs:stats(maintenance),maintenanceSettledMs:stats(maintenanceSettled),
-    domNodes,browserServer:browserMetrics,sseFrames:observations.sseFrames,sseBytes:observations.sseBytes,sseMaxBytes:observations.sseMaxBytes,
+    domNodes,browserServer:browserMetrics,streamFrames:observations.streamFrames,streamBytes:observations.streamBytes,streamMaxBytes:observations.streamMaxBytes,
     longTaskCount:observations.longTasks.length,maxLongTaskMs:round(Math.max(0,...observations.longTasks)),agentNavigationParity:true};
    result.cases.push(row);
    console.log(JSON.stringify({label:result.label,summaries:row.summaries,workspaces:row.workspaces,roots:row.roots,stateBytes:row.stateBytes,stateMedianMs:row.stateTotalMs.median,
     viewMedianMs:row.viewRoundtripMs.median,settingsMedianMs:row.settingsClickToPaintMs.median,maintenanceMedianMs:row.maintenanceClickToPaintMs.median,
-    publications:row.viewServer.publications,sseBytes:row.sseBytes,domNodes}));
+    publications:row.viewServer.publications,streamBytes:row.streamBytes,domNodes}));
    if(options.has('--assert-bounded')){
     assert.ok(row.stateBytes<=maxBytes,`state payload ${row.stateBytes} exceeds ${maxBytes}`);
     assert.ok(row.viewResponseBytes.every(value=>value<=maxBytes),'view commands must not return the unbounded library');
     assert.ok(row.stateSessionCount<=250,`wire contains ${row.stateSessionCount} session rows`);
     assert.ok(row.stateWorkspaceCount<=250,`wire contains ${row.stateWorkspaceCount} workspace rows`);
-    assert.ok(row.sseMaxBytes<=maxBytes,`SSE frame ${row.sseMaxBytes} exceeds ${maxBytes}`);
+    assert.ok(row.streamMaxBytes<=maxBytes,`SSE frame ${row.streamMaxBytes} exceeds ${maxBytes}`);
    }
   }catch(error){
    await page?.screenshot({path:`/tmp/library-performance-${scenario.summaries}-failure.png`}).catch(()=>{});

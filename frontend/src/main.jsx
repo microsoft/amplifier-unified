@@ -1,3 +1,4 @@
+import {createStateStream} from './state-stream.js';
 import {recordActionTiming} from './api.js';
 import {useConnectionSetup} from './setup-journey';
 import {chatDeepLink} from './chat-deep-link';
@@ -280,13 +281,13 @@ function App(){
   const restored=event=>{if(event.persisted)wake()};
   window.addEventListener('online',wake);window.addEventListener('pageshow',restored);document.addEventListener('visibilitychange',visible);
   const timer=setTimeout(()=>{controller.abort();if(alive&&!latest.current)setError('The workspace is taking too long to respond. You can retry the connection.')},10000);
-  attachClient(controller.signal).then(()=>{
+  attachClient(controller.signal).then(attachment=>{
    if(!alive)return;
    // The stream supplies the authoritative baseline. A separate state GET would
    // duplicate it and race it; explicit recovery still uses /api/state.
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
    let streamState;
-   setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
+   setFeedbackEventStream('connecting');source=createStateStream(clientUrl('/api/events?transport=delta-v1'),attachment.transports);source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
    source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setBootAttempt(value=>value+1)}});
    source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
    source.onopen=()=>{setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
