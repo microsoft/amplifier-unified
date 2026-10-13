@@ -72,3 +72,22 @@ legacy full-state clients. Native history tests cover real file notifications,
 watch failure, late metadata, external workers and missed-event reconciliation.
 Event-log tests cover idle reuse, append and atomic replacement. The complete
 usage ledger remains intact in the projection regression test.
+
+## Unchanged conversation rendering
+
+Keep immutable browser-branch identity through message annotations and paging
+overlays. Memoized transcript derivations depend on their actual inputs, not a
+global state revision. The elapsed activity clock belongs to its leaf component.
+Message controls still receive current permissions, delivery and edit state;
+only the text body is memoized, with text, detail reference, role, chat/message
+identity, workspace and action explicitly passed. Never compare only message IDs
+or text: that would retain stale file actions or detail references.
+
+`npm run test:message-render-stability-browser` uses the real disposable service
+and a test-instrumented Vite client. It counts actual Markdown processor visits,
+drives three activity ticks, and checks draft edits, changed text, streaming,
+editing, older paging and cross-chat drafts. It requires zero unchanged-message
+parses on ticks/draft updates and zero parent renders on ticks. `--measure-only`
+records the same workload on a baseline without asserting those new limits.
+This is work-count evidence, not a production CPU percentage or latency claim.
+The unit suite also checks loaded-detail retention and rejection of late results.

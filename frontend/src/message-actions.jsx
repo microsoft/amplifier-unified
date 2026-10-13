@@ -2,7 +2,7 @@ import {messageTime} from './message-time';
 import {MessageInteractions,QuoteCard} from './message-interactions';
 import {MessageDelivery} from './message-delivery';
 import {DetailText,readDetail} from './conversation-detail';
-import React,{useEffect,useRef,useState} from 'react';
+import React,{memo,useEffect,useMemo,useRef,useState} from 'react';
 import {Copy,Check,Pencil,GitBranch,ArrowUp,AlertCircle,RotateCcw,LoaderCircle} from 'lucide-react';
 import {AttachmentStrip} from './chat-controls';
 import {RecoveryNotice} from './recovery-notice';
@@ -44,6 +44,14 @@ export function RecoveryGroup({messages,renderArtifacts,...props}){
  return <details className="a-recovery-group" onToggle={e=>{if(e.currentTarget.open)setOpened(true)}}><summary>Saved work notices ({messages.length})</summary><p>Recorded when this chat resumed. These notices are part of its history.</p>{opened&&messages.map(message=><React.Fragment key={message.id}><article data-message-id={message.id}><RecoveryNotice message={message} {...props}/></article>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
 }
 
+// Controls still observe every current permission, edit and delivery state.
+// Only text rendering is isolated, with all of its inputs explicit.
+const MessageText=memo(function MessageText({text,reference,role,sessionId,messageId,workspace,act}){
+ const writingContext=useMemo(()=>role==='assistant'?{sessionId,messageId,act}:undefined,[role,sessionId,messageId,act]);
+ const fileContext=useMemo(()=>role==='assistant'?{sessionId,workspace,act}:undefined,[role,sessionId,workspace,act]);
+ return <DetailText text={text} reference={reference} markdown userContent={role==='user'} automatic={role==='assistant'} writingContext={writingContext} fileContext={fileContext}/>;
+});
+
 export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false}){
  const [loadingEdit,setSaving]=useState(false),[localCopied,setLocalCopied]=useState(false),[copying,setCopying]=useState(false),[detailError,setDetailError]=useState(''),edit=state.view?.messageEdit,editing=edit?.sessionId===session.id&&edit?.messageId===m.id;
  const pendingEdit=usePendingMessageEdit(JSON.stringify([state.client?.hostInstanceId,state.client?.id,session.id,m.inputId||m.commandId||m.id]),setDetailError),saving=loadingEdit||pendingEdit.pending;
@@ -74,7 +82,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    <p className="a-caption">{localDelivery?'Update this unsent message and try again.':edit?.fork?'Create and open a separate edited chat. This original chat and its pin stay unchanged.':'Continue in this chat, keeping its name, workspace and pin. Later messages leave the active conversation; saved event history and earlier tool effects remain.'}</p>
    {!localDelivery&&<label className="a-inline-checkbox"><input type="checkbox" checked={!!edit?.fork} disabled={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch({...edit,text,fork:e.target.checked})}}/>Create a separate chat (fork)</label>}
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={editLocked} data-action="view.update" onClick={()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch(null)}}>Cancel</button><button className="a-primary" type="submit" disabled={editLocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':!localDelivery&&edit?.fork?'Create edited chat':'Save & regenerate'}</button></div>
-  </form>:<DetailText text={m.text|| (working?'…':'')} reference={m.textDetail} markdown userContent={m.role==='user'} automatic={m.role==='assistant'} writingContext={m.role==='assistant'?{sessionId:session.id,messageId:m.id,act}:undefined} fileContext={m.role==='assistant'?{sessionId:session.id,workspace:session.workspace,act}:undefined}/>}
+  </form>:<MessageText text={m.text|| (working?'…':'')} reference={m.textDetail} role={m.role} sessionId={session.id} messageId={m.id} workspace={session.workspace} act={act}/>}
   {m.role==='assistant'&&!editing&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0}/>}
   </div>
   {attribution&&<p className="a-message-attribution">{attribution}</p>}
