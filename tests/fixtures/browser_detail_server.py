@@ -140,8 +140,14 @@ async def main():
                     raw={'model':'fixture','instructions':'Owner-recorded instructions',
                          'input':[{'role':'user','content':'Recorded message '+str(i)+' '+('content '*100)} for i in range(100)],
                          'tools':[{'name':'read_file'},{'name':'bash'}], 'reasoning':{'effort':'high'}, 'max_output_tokens':4096}
+                    from amplifier_web.provider_payloads import save
+                    from amplifier_web.provider_recording import redact_request
+                    raw['largeDiagnostic'] = 'x' * 1_100_000
+                    raw['end'] = 'FULL-RECORDING-END'
+                    saved = save(event_path(row,aid).parent, raw)
+                    preview, limited = redact_request(raw)
                     log_hook(aid,'provider:request',{'kind':'llm','id':'model-first','sessionId':aid,'model':'fixture','provider':'test','startedAt':base+3,'phase':'running'},base+3)
-                    log_hook(aid,'llm:request',{'request_id':'first','provider':'test','model':'fixture','message_count':100,'has_instructions':True,'raw':raw},base+3)
+                    log_hook(aid,'llm:request',{'request_id':'first','provider':'test','model':'fixture','message_count':100,'has_instructions':True,'raw':preview,'provider_payloads':{'raw':saved},'request_capture':{'redacted':True,'truncated':limited}},base+3)
                     log_hook(aid,'llm:response',{'request_id':'first','provider':'test','model':'fixture','duration_ms':1000,'raw_response':{'output':[{'type':'message','content':[{'type':'output_text','text':'Recorded response content'}]}],'status':'completed'},'usage':{'input_tokens':10,'output_tokens':2,'cost_usd':.001}},base+4)
                     log_hook(aid,'llm:response',{'kind':'llm','id':'model-first','sessionId':aid,'model':'fixture','provider':'test','startedAt':base+3,'endedAt':base+4,'phase':'completed','usage':{'inputTokens':10,'outputTokens':2,'totalTokens':12,'costUsd':.001,'costType':'reported'}},base+4)
                     for count,start in [(15,11),(16,13)]:
@@ -236,7 +242,8 @@ async def main():
         site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
         port=site._server.sockets[0].getsockname()[1]
         app['allowed_origins']=app['allowed_origins']|{f'http://127.0.0.1:{port}'}
-        print(json.dumps({'port':port,'alpha':aid,'beta':bid}),flush=True)
+        from amplifier_web.auth import new_session
+        print(json.dumps({'port':port,'alpha':aid,'beta':bid,'cookie':new_session(app['session_secret'])}),flush=True)
         stopped=asyncio.Event()
         for sig in [signal.SIGTERM,signal.SIGINT]:asyncio.get_running_loop().add_signal_handler(sig,stopped.set)
         await stopped.wait();await runner.cleanup()

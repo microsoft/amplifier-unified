@@ -89,7 +89,7 @@ def merge_model_observations(rows, *, aliases=()):
         if row['id'] in omitted or closest['id'] in matched:
             continue
         matched.add(closest['id']);omitted.add(row['id'])
-        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'responseDetail', 'responseCapture', '_eventFields', 'error', 'errorDetail'):
+        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'requestRecording', 'responseDetail', 'responseCapture', 'responseRecording', '_eventFields', 'error', 'errorDetail'):
             if field in row:closest[field] = row[field]
         for field in ('request', 'response'):
             if closest.get(field + 'Detail'):closest[field + 'Detail']['id'] = closest['id']
@@ -120,7 +120,7 @@ def event_path(session, identity):
     return root / project / 'sessions' / identity / 'context-intelligence' / 'events.jsonl'
 
 
-def read_field(reference):
+def read_event_data(reference):
     """References originate in this server's index, never in request parameters."""
     try:
         with Path(reference['path']).open('rb') as stream:
@@ -130,7 +130,11 @@ def read_field(reference):
         raise ValueError('The recorded action is temporarily unavailable. Try loading it again.') from exc
     if hashlib.sha256(raw).hexdigest() != reference['sha256']:
         raise ValueError('The event log changed. Refresh this conversation to read its current content.')
-    return text(json.loads(raw)['data'][reference['key']])
+    return json.loads(raw)['data']
+
+
+def read_field(reference):
+    return text(read_event_data(reference)[reference['key']])
 
 
 class EventIndex:
@@ -200,6 +204,12 @@ class EventIndex:
         if preview:
             node[field] = value[:512]
         node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
+        if field in ('request', 'response'):
+            from .provider_payloads import metadata
+            files = data.get('provider_payloads')
+            payload = metadata(files.get(key)) if isinstance(files, dict) else None
+            if payload:
+                node[field + 'Recording'] = payload
         node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
                                  'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if not preview or len(value) > 512 else None
         if field in ('request', 'response'):node[field + 'Detail']['lines'] = value.count('\n') + 1

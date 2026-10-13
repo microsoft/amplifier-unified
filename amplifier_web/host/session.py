@@ -804,7 +804,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
         coordinator = session.coordinator
         from ..provider_recording import install_request_redaction
-        install_request_redaction(coordinator)
+        from ..session_files import capture_dir
+        install_request_redaction(coordinator, directory=capture_dir(config.workspace, runtime.session_id))
         coordinator.register_capability('web.history_workspace', str(config.workspace))
         coordinator.register_capability('web.provider_credentials_bound',
                                         getattr(loaded, '_host_provider_credentials_bound', False))
