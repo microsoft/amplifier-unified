@@ -51,6 +51,8 @@ def remember(state, db, *, message=_CURRENT_MESSAGE):
     canvas = state.get('canvas', {})
     if not canvas.get('kind') or canvas.get('placeholder') or canvas.get('app'):
         return
+    if canvas.get('selectedVersion') is not None:
+        return  # Historical viewing cannot write or replace any saved body.
     if canvas.get('renderReports', {}).get('stored-source', {}).get('status') == 'error' and not any(key in canvas for key in ('content', 'surface', 'mediaReference')):
         return
     if 'sessionId' not in canvas:  # Migrate the one legacy preview.
@@ -76,8 +78,6 @@ def remember(state, db, *, message=_CURRENT_MESSAGE):
             # receipts, the agent context, or every subsequent state write.
             canvas['contentResource']=reference
             canvas.pop('content',None)
-    if canvas.get('selectedVersion') is not None:
-        return  # Historical viewing can never replace the latest saved body.
     if previous and not canvas.get('_versionWrite'):
         # A passive, older client snapshot must not undo another client's edit.
         if canvas.get('revision', 1) != previous.get('revision', 1):
