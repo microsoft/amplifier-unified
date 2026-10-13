@@ -6,6 +6,7 @@ from ChatRequest, and never edits the request that goes to a provider.
 from __future__ import annotations
 
 import json
+import asyncio
 import re
 from pathlib import Path
 
@@ -17,7 +18,7 @@ MAX_CAPTURE_CHARS = 1_000_000
 _DEFAULT_MARKER = '_unified_request_recording_default'
 _SECRET_KEY = re.compile(r'(?i)(api.?key|password|secret|authorization|cookie|credential|access.?token|refresh.?token|id.?token|(?:^|[-_])token$)')
 _TOKEN_ASSIGNMENT = re.compile(
-    r'''(?ix)(["']?(?:token|[\w-]+[-_]token)["']?\s*[:=]\s*)
+    r'''(?ix)(?<![\w-])(["']?(?:token|[\w-]+[-_]token)["']?\s*[:=]\s*)
     (?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)''')
 
 
@@ -113,7 +114,7 @@ def redact_request(value, *, limit=MAX_CAPTURE_CHARS):
     return result, truncated
 
 
-def install_request_redaction(coordinator):
+def install_request_redaction(coordinator, *, directory=None):
     """Sanitize diagnostic copies ahead of CI's priority-100 logging hook."""
     from amplifier_core import HookResult
     if coordinator.get_capability('web.provider_request_redaction'):
@@ -124,10 +125,21 @@ def install_request_redaction(coordinator):
         if not fields:
             return HookResult()
         result = dict(data)
+        # A provider cannot supply trusted host file references.
+        result.pop('provider_payloads', None)
         truncated = False
         for key in fields:
             try:
                 result[key], limited = redact_request(data[key])
+                if limited and directory is not None:
+                    from .provider_payloads import save
+                    try:
+                        saved = await asyncio.to_thread(save, directory, data[key])
+                        result.setdefault('provider_payloads', {})[key] = saved
+                    except Exception:
+                        # Preserve the bounded redacted log copy and the real
+                        # provider operation when diagnostic storage fails.
+                        result['provider_payload_unavailable'] = True
             except Exception:
                 # A diagnostic failure must never pass the unsanitized copy
                 # to later loggers or interrupt the actual provider call.

@@ -5,8 +5,8 @@ import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe']});
-let log='';fixture.stderr.on('data',chunk=>log+=chunk);
-const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);resolve(JSON.parse(line).port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))})});
+let log='',fixtureCookie;fixture.stderr.on('data',chunk=>log+=chunk);
+const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);fixtureCookie=JSON.parse(line).cookie;resolve(JSON.parse(line).port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))})});
 const base=`http://127.0.0.1:${port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
 const control=async body=>{const response=await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});if(!response.ok)throw Error(await response.text()+' '+log);return response.json()};
 await control({op:'canonical-work'});
@@ -15,6 +15,9 @@ try{
  const page=await browser.newPage({viewport:{width:1280,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers}),errors=[],requestReads=[],responseReads=[];
  page.on('request',r=>{if(r.url().includes('/api/conversation/detail?')){const field=new URL(r.url()).searchParams.get('field');if(field==='request')requestReads.push(r.url());if(field==='response')responseReads.push(r.url())}});
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+ // Browser-managed downloads use the real signed session cookie; Chromium
+ // does not forward Playwright's extra Authorization header to downloads.
+ await page.context().addCookies([{name:'amplifier_unified_session',value:fixtureCookie,url:base,httpOnly:true,sameSite:'Strict'}]);
  await page.goto(base);
  const groups=page.locator('[data-group-id]'),before=page.locator('[data-group-id$="@before"]'),interim=page.locator('[data-group-id$="@interim"]');
  await expect(groups).toHaveCount(2);
@@ -47,6 +50,12 @@ try{
  await model.locator('button.a-execution-action-line').click();
  assert.match(await model.innerText(),/Messages\s+100/);assert.match(await model.innerText(),/Tools\s+2/);assert.match(await model.innerText(),/Reasoning effort\s+high/);
  assert.equal(requestReads.length,0);assert.equal(await model.locator('pre').count(),0);
+ const fullDownload=page.waitForEvent('download');
+ await model.getByRole('link',{name:'Download full recorded request (JSON)',exact:true}).click();
+ const fullFile=await fullDownload,fullRecord=JSON.parse(await readFile(await fullFile.path(),'utf8'));
+ assert.equal(fullRecord.payload.end,'FULL-RECORDING-END');
+ assert.equal(fullRecord.payload.largeDiagnostic.length,1_100_000);
+ assert.equal(fullRecord.capture.truncated,false);assert.equal(requestReads.length,0);
  let failRequest=true;await page.route('**/api/conversation/detail?**',route=>{if(failRequest&&new URL(route.request().url()).searchParams.get('field')==='request'){failRequest=false;return route.fulfill({status:503,json:{error:'Request temporarily unavailable'}})}return route.continue()});
  await model.getByRole('button',{name:/^View request/}).click();await model.getByRole('button',{name:'Retry request',exact:true}).click();
  await expect(model.getByRole('button',{name:'Copy raw request',exact:true})).toBeEnabled();
@@ -59,7 +68,7 @@ try{
  assert.equal(await requestTree.getByRole('button',{name:/^\[50\] Object/}).count(),0);
  await requestTree.getByRole('button',{name:'Show next 50 of 50 remaining',exact:true}).click();
  await requestTree.getByRole('button',{name:/^\[99\] Object/}).click();await expect(requestTree).toContainText('Recorded message 99');
- await requestTree.getByRole('button',{name:/^Show more text/}).click();
+ await requestTree.getByRole('button',{name:'Show more text (580 characters left)',exact:true}).click();
  await model.getByRole('button',{name:/^View response/}).click();
  const responseTree=model.getByRole('group',{name:'Response payload'});
  await expect(responseTree.getByRole('button',{name:/^Response Object/})).toHaveAttribute('aria-expanded','false');
