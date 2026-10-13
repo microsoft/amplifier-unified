@@ -28,6 +28,93 @@ async def test_file_open_preserves_chat_draft_and_other_client(app, tmp_path):
     assert app.clients.records['two'] == other
 
 
+async def browse_files(app):
+    with app.clients.bind('one'):
+        workspace_id = app.state['selectedWorkspaceId']
+    await command(app, 'view.update', {'patch': {
+        'workSurface': 'workspace', 'workWorkspaceId': workspace_id, 'workWorkspaceTab': 'files'}})
+
+
+async def test_named_file_preview_and_chat_presentation_commit_together(app, tmp_path):
+    (tmp_path / 'plan.md').write_text('# Named preview')
+    await command(app, 'view.update', {'patch': {'draft': 'Keep my draft'}})
+    await browse_files(app)
+    request = {**args(app, 'plan.md'), 'showConversation': True}
+    other = copy.deepcopy(app.clients.records['two'])
+    result = await command(app, 'canvas.openFile', request)
+    assert result['result']['status'] == 'opened'
+    with app.clients.bind('one'):
+        assert app.state['view']['workSurface'] == 'chat'
+        assert app.state['selectedSessionId'] == request['sessionId']
+        assert app.state['view']['draft'] == 'Keep my draft'
+        assert app.state['canvas']['id'] == result['result']['id']
+        assert app.state['canvas']['content'] == '# Named preview'
+    assert app.clients.records['two'] == other
+    # Later navigation and a new Canvas are not overwritten by processing the
+    # old opened receipt: there is no follow-up selection command.
+    await command(app, 'view.update', {'patch': {'workSurface': 'chats'}})
+    await command(app, 'canvas.show', {'kind': 'text', 'content': 'Newer artifact'})
+    with app.clients.bind('one'):
+        assert app.state['view']['workSurface'] == 'chats'
+        assert app.state['canvas']['id'] != result['result']['id']
+
+
+@pytest.mark.parametrize('patch', [
+    {'workSurface': 'chats'},
+    {'workSurface': 'chat'},
+    {'workWorkspaceTab': 'details'},
+    {'workWorkspaceId': None},
+])
+async def test_named_file_preview_rejects_a_changed_browser_before_mutating(app, tmp_path, patch):
+    (tmp_path / 'plan.md').write_text('# Do not open')
+    await browse_files(app)
+    request = {**args(app, 'plan.md'), 'showConversation': True}
+    await command(app, 'view.update', {'patch': patch})
+    with app.clients.bind('one'):
+        before = copy.deepcopy({key: app.state[key] for key in ('view', 'canvas', 'selectedSessionId')})
+    result = await command(app, 'canvas.openFile', request)
+    assert result['result']['status'] == 'unavailable'
+    with app.clients.bind('one'):
+        assert all(app.state[key] == value for key, value in before.items())
+
+
+async def test_named_file_preview_missing_dirty_and_changed_chat_do_not_navigate(app, tmp_path):
+    await browse_files(app)
+    request = {**args(app, 'missing.md'), 'showConversation': True}
+    result = await command(app, 'canvas.openFile', request)
+    assert result['result']['status'] == 'unavailable'
+    with app.clients.bind('one'):
+        assert app.state['view']['workSurface'] == 'workspace'
+    (tmp_path / 'plan.md').write_text('# Keep edit')
+    request['path'] = 'plan.md'
+    await command(app, 'canvas.show', {'kind': 'text', 'content': 'Unsaved editor'})
+    await command(app, 'canvas.views.dirty', {**target(view(app)), 'dirty': True})
+    with pytest.raises(AppError, match='viewer edit'):
+        await command(app, 'canvas.openFile', request)
+    with app.clients.bind('one'):
+        assert app.state['view']['workSurface'] == 'workspace'
+        assert app.state['canvas']['content'] == 'Unsaved editor'
+    await command(app, 'canvas.views.dirty', {**target(view(app)), 'dirty': False})
+    await command(app, 'session.create', {})
+    with app.clients.bind('one'):
+        current = app.state['selectedSessionId']
+    await browse_files(app)
+    result = await command(app, 'canvas.openFile', request)
+    assert result['result']['status'] == 'unavailable'
+    with app.clients.bind('one'):
+        assert app.state['selectedSessionId'] == current
+        assert app.state['view']['workSurface'] == 'workspace'
+
+
+async def test_legacy_file_open_does_not_change_browser_presentation(app, tmp_path):
+    (tmp_path / 'plan.md').write_text('# Legacy preview')
+    await browse_files(app)
+    result = await command(app, 'canvas.openFile', args(app, 'plan.md'))
+    assert result['result']['status'] == 'opened'
+    with app.clients.bind('one'):
+        assert app.state['view']['workSurface'] == 'workspace'
+
+
 async def test_missing_escape_and_symlink_do_not_replace_canvas(app, tmp_path):
     await command(app, 'canvas.show', {'kind': 'text', 'content': 'Preserve me'})
     original = view(app)['resourceId']

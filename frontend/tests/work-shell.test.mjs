@@ -6,7 +6,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {WorkNavigationContext,browsePatch}=await vite.ssrLoadModule('/src/work-navigation.js');
-const {WorkSurface,LiveChatActivity}=await vite.ssrLoadModule('/src/work-shell.jsx');
+const {WorkSurface,LiveChatActivity,WorkspaceFiles}=await vite.ssrLoadModule('/src/work-shell.jsx');
 const {ConversationList,useRecentShortcuts}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceExplorer}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
 const {AgentCanvas}=await vite.ssrLoadModule('/src/shell-panels.jsx');
@@ -119,6 +119,104 @@ test('collapsed sidebar toggle lives in the header without duplicate chat contro
  const draft=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{workspaces:[workspace],selectedWorkspaceId:'b',view:{newSessionDraft:{workspace:'',location:{kind:'managed'}}}},presentation:{},act:host.dispatch})));
  assert.doesNotMatch(draft,/Research/);
 });
+test('browsing headers have no return control with or without a retained chat',()=>{
+ for(const surface of ['workspace','workspaces','chats'])for(const narrow of [false,true])for(const session of [undefined,{id:'a',title:'Retained chat',status:'working'}]){
+  const state={view:{workSurface:surface,workWorkspaceId:'b'},workspaces:[workspace]};
+  const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state,session,narrow,presentation:{},act:host.dispatch})));
+  assert.doesNotMatch(html,/Back to chat|>Back<|Retained chat/);
+  assert.match(html,/Open navigation/);
+ }
+});
+
+const filesState=()=>({selectedSessionId:'original',selectedWorkspaceId:'b',sessions:[{id:'original',title:'Research notes',workspace:'/research'}],
+ view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'files'},
+ locationListing:{controlId:'workspace-files-b',path:'/research',entries:[{name:'plan.md',path:'/research/plan.md',directory:false}]}});
+async function filesFixture(result){
+ const calls=[];let state=filesState(),finish,root;
+ const dispatch=async(name,args)=>{
+  calls.push([name,args]);
+  if(name==='canvas.openFile')return result?result:new Promise(resolve=>{finish=resolve});
+  return {accepted:true};
+ };
+ const element=()=>React.createElement(WorkspaceFiles,{workspace,state,act:dispatch});
+ await act(async()=>{root=create(element())});
+ return {calls,root,button:()=>root.root.findByProps({'data-action':'canvas.openFile'}),
+  change:async patch=>{state={...state,...patch};await act(async()=>root.update(element()))},
+  settle:async value=>{await act(async()=>finish(value))}};
+}
+test('file preview names its captured destination in one host command with no follow-up navigation',async()=>{
+ const fixture=await filesFixture();
+ assert.ok(fixture.button().findByType('small').children.includes('Open in “Research notes”'));
+ await act(async()=>{fixture.button().props.onClick();fixture.button().props.onClick()});
+ assert.equal(fixture.button().props.disabled,true);
+ assert.equal(fixture.calls.filter(([name])=>name==='canvas.openFile').length,1);
+ await fixture.settle({accepted:true,result:{status:'opened',id:'artifact'}});
+ assert.deepEqual(fixture.calls.slice(1),[
+  ['canvas.openFile',{sessionId:'original',workspace:'/research',path:'/research/plan.md',showConversation:true}],
+ ]);
+ await act(async()=>fixture.root.unmount());
+});
+for(const result of [
+ {accepted:true,result:{status:'unavailable',message:'File unavailable'}},
+ {accepted:false,error:'Dirty editor'},
+ {accepted:true},
+])test('file preview does not navigate without an opened receipt: '+JSON.stringify(result),async()=>{
+ const fixture=await filesFixture(result);
+ await act(async()=>fixture.button().props.onClick());
+ assert.equal(fixture.calls.filter(([name])=>name==='session.select'||name==='view.update').length,0);
+ assert.ok(fixture.root.root.findByProps({role:'alert'}));
+ assert.equal(!!fixture.button().props.disabled,false);
+ await act(async()=>fixture.root.unmount());
+});
+for(const [name,patch] of [
+ ['selected chat',{selectedSessionId:'other'}],
+ ['selected workspace',{selectedWorkspaceId:'elsewhere'}],
+ ['pending same-chat selection',{navigationPending:true}],
+ ['browsed workspace',{view:{workSurface:'workspace',workWorkspaceId:'other',workWorkspaceTab:'files'}}],
+ ['surface',{view:{workSurface:'chats'}}],
+ ['tab',{view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'details'}}],
+])test('late file preview never navigates after changing '+name+' and returning',async()=>{
+ const fixture=await filesFixture();
+ await act(async()=>{fixture.button().props.onClick()});
+ await fixture.change(patch);
+ await fixture.change({...filesState(),navigationPending:false});
+ await fixture.settle({accepted:true,result:{status:'opened',id:'artifact'}});
+ assert.equal(fixture.calls.filter(([name])=>name==='session.select'||name==='view.update').length,0);
+ await act(async()=>fixture.root.unmount());
+});
+test('unmounted file browser drops late navigation; duplicate titles expose the exact destination',async()=>{
+ const fixture=await filesFixture();
+ const original=filesState();
+ await fixture.change({sessions:[...original.sessions,{...original.sessions[0],id:'duplicate'}]});
+ assert.ok(fixture.button().findByType('small').children.includes('Open in “Research notes” · original'));
+ await act(async()=>{fixture.button().props.onClick()});
+ await act(async()=>fixture.root.unmount());
+ await fixture.settle({accepted:true,result:{status:'opened'}});
+ assert.equal(fixture.calls.filter(([name])=>name==='session.select').length,0);
+});
+test('an opened receipt never selects or restores an artifact that has since been replaced',async()=>{
+ const fixture=await filesFixture();
+ await act(async()=>{fixture.button().props.onClick()});
+ await fixture.change({canvas:{id:'newer-artifact',open:true}});
+ await fixture.settle({accepted:true,result:{status:'opened',id:'original-artifact'}});
+ assert.deepEqual(fixture.calls.map(([name])=>name),['locations.list','canvas.openFile']);
+ await act(async()=>fixture.root.unmount());
+});
+test('folder navigation cannot displace a pending named file preview',async()=>{
+ const fixture=await filesFixture(),base=filesState().locationListing;
+ await fixture.change({locationListing:{...base,entries:[...base.entries,{name:'docs',path:'/research/docs',directory:true}]}});
+ const folder=()=>fixture.root.root.findAllByType('button').find(button=>button.findAllByType('span').some(span=>span.children.includes('docs')));
+ await act(async()=>folder().props.onClick());
+ await fixture.change({locationListing:{...base,path:'/research/docs',parent:'/research',entries:[base.entries[0],{name:'docs',path:'/research/docs/nested',directory:true}]}});
+ const parent=()=>fixture.root.root.findByProps({'aria-label':'Parent folder'});
+ assert.equal(parent().props.disabled,false);
+ await act(async()=>{fixture.button().props.onClick();folder().props.onClick();parent().props.onClick()});
+ assert.equal(folder().props.disabled,true);assert.equal(parent().props.disabled,true);
+ assert.equal(fixture.root.root.findByType('code').children.join(''),'/research/docs');
+ await fixture.settle({accepted:true,result:{status:'unavailable'}});
+ assert.equal(parent().props.disabled,false);
+ await act(async()=>fixture.root.unmount());
+});
 test('workspace picker searches the host catalog, pages results, and keeps actions separate',async()=>{
  let root;const calls=[],choices=[];
  const dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true,result:{items:[{id:'w'+args.offset,name:'Reports',path:'/deep/team/'+(args.query||'q1')+'/reports'}],nextOffset:args.offset===0?40:null,total:41}}};
@@ -139,23 +237,28 @@ test('workspace picker searches the host catalog, pages results, and keeps actio
  await act(async()=>root.unmount());
 });
 
-test('browsing retains live call controls and an explicitly scoped stop action',async()=>{
+test('browsing has no remembered-chat strip but retains call controls and screen sharing',async()=>{
  const calls=[];let root;
- await act(async()=>{root=create(React.createElement(LiveChatActivity,{browsing:true,working:true,session:{id:'running',title:'Report'},callActive:true,voice:{status:'connected',muted:false},act:async(...args)=>calls.push(args)},React.createElement('div',{'aria-label':'Screen sharing active'},'Stop sharing')))});
- await act(async()=>root.root.findByProps({'data-action':'conversation.stop'}).props.onClick());
+ const sharing=React.createElement('div',{'aria-label':'Screen sharing active'},'Stop sharing');
+ // Legacy props deliberately exercise the removed branch as a regression.
+ const retained={browsing:true,working:true,session:{id:'running',title:'Report'},onReturn:()=>calls.push(['return'])};
+ await act(async()=>{root=create(React.createElement(LiveChatActivity,{...retained,act:async(...args)=>calls.push(args)},sharing))});
+ assert.equal(root.root.findAllByType('button').length,0);
+ assert.ok(root.root.findByProps({'aria-label':'Screen sharing active'}));
+ await act(async()=>root.update(React.createElement(LiveChatActivity,{...retained,callActive:true,voice:{status:'connected',muted:false},act:async(...args)=>calls.push(args)},sharing)));
+ assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
  await act(async()=>root.root.findByProps({'data-action':'call.end'}).props.onClick());
  await act(async()=>root.root.findByProps({'data-action':'call.mute'}).props.onClick());
- assert.deepEqual(calls,[['conversation.stop',{sessionId:'running'}],['call.end'],['call.mute',{muted:true}]]);
+ assert.deepEqual(calls,[['call.end'],['call.mute',{muted:true}]]);
  assert.ok(root.root.findByProps({'aria-label':'Screen sharing active'}));
- await act(async()=>root.update(React.createElement(LiveChatActivity,{browsing:false,working:true,session:{id:'running'}})));
- assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
+ assert.ok(root.root.findAllByType('button').every(button=>!button.children.includes('Back to chat')));
  await act(async()=>root.unmount());
 });
 
 test('call work stays stoppable in chat and targets the call even after navigating elsewhere',async()=>{
  const calls=[];let root;
  const callSession={id:'voice-chat',title:'Voice task',status:'working'};
- const render=props=>React.createElement(LiveChatActivity,{callActive:true,browsing:false,working:false,session:{id:'other-chat'},voice:{status:'connected',muted:true},callSession,act:async(...args)=>calls.push(args),...props});
+ const render=props=>React.createElement(LiveChatActivity,{callActive:true,voice:{status:'connected',muted:true},callSession,act:async(...args)=>calls.push(args),...props});
  await act(async()=>{root=create(render())});
  const stop=()=>root.root.findByProps({'data-action':'conversation.stop'});
  assert.equal(stop().props.disabled,false);

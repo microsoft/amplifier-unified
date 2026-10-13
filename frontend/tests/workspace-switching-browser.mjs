@@ -29,7 +29,7 @@ try{
  const [a,b]=workspaces;
  const [aChat,bChat]=chats;
  // Keep the destination chat outside the bounded Recent shortcut page.
- for(let index=0;index<9;index++)assert.equal((await action('session.create',{workspace:a.path,title:'Recent filler '+index})).accepted,true);
+ for(let index=0;index<25;index++)assert.equal((await action('session.create',{workspace:a.path,title:'Recent filler '+index})).accepted,true);
  await action('session.select',{id:aChat});
  await action('session.pin',{id:aChat,pinned:true});
  await expect(page.locator('[data-sidebar-section=recent] [data-session-id="'+bChat+'"]')).toHaveCount(0);
@@ -48,7 +48,8 @@ try{
   await expect(body.getByText(workspace.name+' chat',{exact:true})).toBeVisible();
   await expect(body.getByText(other.name+' chat',{exact:true})).toHaveCount(0);
   const current=await state();assert.equal(current.selectedSessionId,aChat);assert.equal(current.selectedWorkspaceId,a.id);
-  await expect(page.getByRole('status').filter({hasText:'Project A chat · Working…'})).toBeVisible();
+  await expect(page.getByRole('status').filter({hasText:'Project A chat · Working…'})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:/^Back(?: to chat)?$/})).toHaveCount(0);
  }
  const pinStatus=page.locator('[data-sidebar-section=pinned] [data-session-id="'+aChat+'"] .a-navigation-status');
  async function expectColor(locator,token){
@@ -69,7 +70,7 @@ try{
  await shortcut(a).click();await expectWorkspace(a,b);
  await shortcut(b).click();await expectWorkspace(b,a);
  await page.screenshot({path:out+'/project-b-while-a-working.png'});
- await action('view.update',{patch:{workSurface:'chat',workWorkspaceId:null}});
+ await page.locator('[data-sidebar-section=pinned] [data-session-id="'+aChat+'"] .a-nav-chat-select').click();
  await expect(composer).toHaveDraft('Unsent draft belongs to Project A');
  await expect(page.getByRole('button',{name:'Remove draft.txt',exact:true})).toBeVisible();
  await shortcut(b).click();await expectWorkspace(b,a);
@@ -77,6 +78,85 @@ try{
  await expect.poll(async()=>(await state()).selectedSessionId).toBeNull();
  const draft=await state();assert.equal(draft.selectedSessionId,null);assert.equal(draft.view.newSessionDraft.workspace,b.path);
  await action('session.select',{id:aChat});await expect(composer).toHaveDraft('Unsent draft belongs to Project A');await expect(page.getByRole('button',{name:'Remove draft.txt',exact:true})).toBeVisible();
+ // File previews explicitly name their chat, and a late preview response never
+ // follows the user into a newer visit (including leaving and returning to A).
+ const browseFiles=()=>action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:a.id,workWorkspaceTab:'files'}});
+ for(const width of [1440,390]){
+  await page.setViewportSize({width,height:1000});await browseFiles();
+  await expect(page.getByRole('button',{name:/^Back(?: to chat)?$/})).toHaveCount(0);
+  const file=body.getByRole('button',{name:'Project A.txt Open in “Project A chat”',exact:true});
+  await expect(file).toBeVisible();
+  await page.screenshot({path:out+'/named-preview-'+width+'.png'});
+  await file.click();await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
+  await expect.poll(async()=>(await state()).canvas.title).toBe('Project A.txt');
+  assert.equal((await state()).selectedSessionId,aChat);
+  await action('canvas.visibility',{sessionId:aChat,canvasId:(await state()).canvas.id,open:false});
+  await expect(composer).toBeVisible();await expect(composer).toHaveDraft('Unsent draft belongs to Project A');
+ }
+ await page.setViewportSize({width:1440,height:1000});
+ await mkdir(path.join(a.path,'docs'));
+ await writeFile(path.join(a.path,'docs','notes.txt'),'Nested preview');
+ await mkdir(path.join(a.path,'docs','nested'));
+ await browseFiles();
+ // Refresh the Files mount after adding a synthetic directory.
+ await body.getByRole('button',{name:'Details',exact:true}).click();
+ await body.getByRole('button',{name:'Files',exact:true}).click();
+ await body.getByRole('button',{name:'docs',exact:true}).click();
+ // Hold before host execution to prove folder/parent controls cannot advance
+ // independently of the one pending preview intent.
+ let releaseRequest,requestHeld=false;
+ const requestGate=new Promise(resolve=>{releaseRequest=resolve});
+ const holdRequest=async route=>{
+  if(route.request().postDataJSON()?.action==='canvas.openFile'){requestHeld=true;await requestGate}
+  await route.continue();
+ };
+ await page.route('**/api/actions',holdRequest);
+ await body.getByRole('button',{name:'notes.txt Open in “Project A chat”',exact:true}).click();
+ await expect.poll(()=>requestHeld).toBe(true);
+ await expect(body.getByRole('button',{name:'Parent folder',exact:true})).toBeDisabled();
+ await expect(body.getByRole('button',{name:'nested',exact:true})).toBeDisabled();
+ releaseRequest();
+ await expect.poll(async()=>(await state()).view.workSurface).toBe('chat');
+ await page.unroute('**/api/actions',holdRequest);
+ await action('canvas.visibility',{sessionId:aChat,canvasId:(await state()).canvas.id,open:false});
+ const fileActions=[];
+ page.on('request',request=>{if(request.method()==='POST'&&request.url().endsWith('/api/actions'))fileActions.push(request.postDataJSON())});
+ for(const leaveAndReturn of [false,true]){
+  await browseFiles();
+  let release,responseReady=false;
+  const gate=new Promise(resolve=>{release=resolve});
+  const hold=async route=>{
+   const request=route.request().postDataJSON();
+   if(request?.action!=='canvas.openFile'){await route.continue();return}
+   const response=await route.fetch();responseReady=true;await gate;await route.fulfill({response});
+  };
+  await page.route('**/api/actions',hold);
+  const file=body.getByRole('button',{name:'Project A.txt Open in “Project A chat”',exact:true});
+  await file.click();await expect.poll(()=>responseReady).toBe(true);
+  const visits=[];
+  if(leaveAndReturn){
+   // Presentation paints optimistically while its writes wait behind the
+   // held file command. Do not await those receipts before releasing it.
+   visits.push(action('view.update',{patch:{workSurface:'chats'}}));
+   await expect.poll(async()=>(await state()).view.workSurface).toBe('chats');
+   visits.push(browseFiles());
+   await expect.poll(async()=>(await state()).view.workSurface).toBe('workspace');
+  }else await action('session.select',{id:bChat});
+  const before=fileActions.length;
+  release();await Promise.all(visits);
+  // This harmless queued action acknowledges after the held command settles.
+  await action('view.update',{patch:{notice:null}});
+  await page.unroute('**/api/actions',hold);
+  assert.ok(!fileActions.slice(before).some(request=>request.action==='session.select'),'Late file response must not select a chat');
+  assert.equal((await state()).selectedSessionId,leaveAndReturn?aChat:bChat);
+  assert.equal((await state()).view.workSurface,leaveAndReturn?'workspace':'chat');
+  await action('session.select',{id:aChat});
+ }
+ // The normal Stop remains available after explicitly opening a running chat.
+ await composer.fill('');await page.getByRole('button',{name:'Remove draft.txt',exact:true}).click();
+ await action('canvas.visibility',{sessionId:aChat,canvasId:(await state()).canvas.id,open:false});
+ await page.getByRole('button',{name:'Stop response',exact:true}).click();
+ await expect.poll(async()=>(await (await page.request.get(url+'/fixture')).json()).stopped).toEqual([aChat]);
  await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect(body.getByText('Project A chat',{exact:true})).toBeVisible();await expect(body.getByText('Project B chat',{exact:true})).toBeVisible();
  await page.request.post(url+'/fixture/activity',{data:{sessionId:aChat,status:'error'}});
  await expect(pinStatus).toHaveAttribute('data-kind','attention');await expectColor(pinStatus,'--a-danger');
@@ -86,8 +166,8 @@ try{
  await expect(recentStatus).toHaveAttribute('data-kind','attention');await expectColor(recentStatus,'--a-danger');
  await page.request.post(url+'/fixture/activity',{data:{sessionId:recentId,status:'idle'}});
  await expect(recentStatus).toHaveAttribute('data-kind','idle');await expectColor(recentStatus,'--a-muted');
- const fixtureState=await (await page.request.get(url+'/fixture')).json();assert.deepEqual(fixtureState.sent,[]);assert.deepEqual(fixtureState.stopped,[]);
+ const fixtureState=await (await page.request.get(url+'/fixture')).json();assert.deepEqual(fixtureState.sent,[]);assert.deepEqual(fixtureState.stopped,[aChat]);
  assert.equal(fixtureState.registeredWorkspaces.length,3);assert.notEqual(aChat,bChat);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',scenarios:['destination absent from pinned/recent','gray idle, accent working, red attention in pinned/recent/browser','repeated workspace clicks','shared navigation action','header/body/sidebar/list coherence','details/files scope','active chat preserved','draft and attachment preserved','new chat destination','all chats scope','no send or stop'],screenshots:out}));
+ console.log(JSON.stringify({status:'passed',scenarios:['destination absent from pinned/recent','gray idle, accent working, red attention in pinned/recent/browser','repeated workspace clicks','shared navigation action','header/body/sidebar/list coherence','details/files scope','active chat preserved','draft and attachment preserved','new chat destination','no return controls or working strip','named file preview on desktop/mobile','late preview cannot navigate','explicit same-chat reopen and stop','all chats scope','no sends'],screenshots:out}));
 }catch(error){if(page)await page.screenshot({path:out+'/failure.png'});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}
