@@ -9,9 +9,7 @@ try{
  const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(stderr)),30000);fixture.stdout.on('data',data=>{const match=String(data).match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(timer);resolve(match[0]);}});fixture.on('exit',code=>reject(new Error('Fixture exited '+code+': '+stderr)));});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(base);await page.waitForSelector('#amp-one');
- await page.evaluate(()=>{const session=window.amplifier.getState().sessions.find(row=>row.title==='Settings test');return window.amplifier.dispatch('session.select',{id:session.id})});
- await openSettingsPage(page,'registries');
+ await page.goto(base);await page.waitForSelector('#amp-one');await openSettingsPage(page,'registries');
  await page.getByRole('button',{name:'Source overrides',exact:true}).click();
  await page.getByLabel('Registered name',{exact:true}).fill('tool-fixture');
  const source=page.getByLabel('Repository URL or local path',{exact:true});
@@ -35,7 +33,8 @@ try{
  await expect(page.getByText('Candidate validated; nothing saved',{exact:true})).toBeVisible();
  const localReceipt=await page.evaluate(()=>window.amplifier.getState().registry.sourceValidation);
  assert.equal(localReceipt.kind,'module');assert.equal(localReceipt.submittedSource,'./valid-candidate');
- assert.ok(localReceipt.source.startsWith('/'));assert.ok(localReceipt.source.endsWith('/workspace/valid-candidate'));
+ assert.ok(localReceipt.source.startsWith('/'));assert.ok(localReceipt.source.endsWith('/valid-candidate'));
+ assert.ok(!localReceipt.source.endsWith('/workspace/valid-candidate'),'Global Settings uses the host configuration owner');
  assert.notEqual(localReceipt.source,localReceipt.submittedSource);assert.equal(localReceipt.saved,false);
  assert.equal((await page.evaluate(()=>window.amplifier.getState().registry.sources)).at(-1).source,'git+https://github.com/example/valid-candidate');
  await page.getByLabel('Source type',{exact:true}).selectOption('bundle');

@@ -11,7 +11,8 @@ async def serve():
     with tempfile.TemporaryDirectory(prefix='registry-validation-') as tmp:
         home=Path(tmp)
         app=await base.main(home)
-        (home/'workspace'/'valid-candidate').mkdir()
+        # Global Settings resolves relative sources from the host data home.
+        (home/'valid-candidate').mkdir()
         helper=home/'validator.py'
         helper.write_text('import sys,json,time\na=json.loads(sys.stdin.readline())\ntime.sleep(.15)\nprint(json.dumps({"type":"module.validation","id":a["id"],"passed":"valid-candidate" in a.get("source",""),"checks":[]}))\n')
         original=RegistryManager.__init__
