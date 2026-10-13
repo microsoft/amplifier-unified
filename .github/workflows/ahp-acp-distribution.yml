@@ -28,6 +28,17 @@ jobs:
         working-directory: distribution
     steps:
       - uses: actions/checkout@v4
+      - name: Require one immutable operations dependency revision
+        working-directory: .
+        run: |
+          python3 - <<'PYCODE'
+          import pathlib, re
+          source = pathlib.Path('.github/workflows/ahp-acp-distribution.yml').read_text()
+          refs = re.findall(r"amplifier-operations @ git\+https://github.com/microsoft/amplifier-foundation@([^#'\s]+)#subdirectory=libraries/operations", source)
+          if len(refs) != 6 or len(set(refs)) != 1 or not re.fullmatch(r'[0-9a-f]{40}', refs[0]):
+              raise SystemExit('Pin all six operations installs to one reviewed full commit SHA')
+          print('Operations revision:', refs[0])
+          PYCODE
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
