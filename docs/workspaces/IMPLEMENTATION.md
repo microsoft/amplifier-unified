@@ -1,5 +1,39 @@
 # Implementation and evidence
 
+## Coherent commissioned-task operation — 2026-10-13
+
+New `coordination.create` operations retain one public handle and a private
+captured configuration. The host reserves the requester's return capacity before
+creating a root and commits the initial request, saved wait and completed
+creation receipt together before execution can be admitted. Explicitly independent
+work can use `returnNotification:false`. Result inspection through the creation
+handle includes its exact initial request, without caller-generated subordinate IDs.
+
+Restart resumes committed plans and reconciles root creation only through its
+existing committed command receipt. It can then finish the known-unperformed
+initial-input step. A missing acknowledgment leaves root effects unknown and
+retained. Lost acknowledgment after input commit keeps the committed outcome.
+Recorded Stop, changed assignment or changed execution placement suppresses
+remaining preparation. Root identity and captured configuration are checked
+before the initial brief. These are local preparation guarantees, not an
+exactly-once promise for arbitrary tool effects or external systems.
+
+The private preparation record contains configuration rather than transcripts,
+uses existing provider credential references, and is removed when input commits.
+Public receipts and ambient context never include that private record. Legacy
+operations remain read-only evidence and are not retroactively made resumable.
+Automatic preparation and refused/uncertain admission notices are host observations; they do not claim
+an uncreated peer produced a report, satisfy a dependency, or authorize replay.
+
+Local validation: 283 focused coordination, creation, recovery and inheritance
+tests pass. All 19 new operation/recovery checks also pass against the built
+wheel imported outside the source checkout. Three actual Core guidance probes
+pass. The production-service Chromium journey completes two rounds for two
+peers, using automatic first-request returns and creation-handle result reads;
+its runtime and terminal evidence remain scripted. Wheel and source distribution
+builds pass. These checks do not establish real-provider behavior, live-host
+worker adoption, or the broader multi-client assignment experience.
+
 ## Initial repair tranche — 2026-10-13
 
 The implementation program starts with reproduced defects and established
@@ -37,8 +71,7 @@ existing view and draft. The native child tests used real Core/Foundation with
 scripted orchestration. None of these checks claims provider efficacy, publication,
 installed-worker adoption, or live-host acceptance.
 
-Follow-up scope remains explicit: one creation operation with automatic result
-subscription; resumable multi-step creation; multi-repository resource bindings;
+Follow-up scope remains explicit: multi-repository resource bindings;
 assignment budgets and scoped Stop across independent roots; full capability
 grants; expiry/fair scheduling beyond the initial inbox bounds; live-provider,
 installed-package and multi-client qualification. These are not marked complete

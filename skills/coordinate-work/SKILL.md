@@ -44,10 +44,17 @@ compare those exact links, not equal message text.
    same host-configured instance/source, never copied secrets or a different
    account. Missing authorized bindings stay an explicit preparation failure.
    Keep source files and unrelated settings intact.
-   The committed receipt returns before service-owned preparation. Inspect its
-   `requestId`, `sessionId` and `initialInputId` through `coordination.result`.
+   The committed receipt returns before service-owned preparation. The host
+   reserves a return notification and commits it with the initial brief before
+   the peer can run. Use `returnNotification:false` only for intentional work
+   that should not automatically return. Inspect the creation `requestId` through
+   `coordination.result`; it includes the initial request and exact result when
+   available. Do not construct subordinate IDs or add a second subscription.
    A response timeout does not cancel the task. Reusing the identical command ID
-   reads the receipt; it never creates another root or replays a brief. There is
+   reads the receipt; it never creates another root or replays a brief. On host
+   restart, known unperformed preparation can resume from the captured plan;
+   an unacknowledged root effect remains unknown. Stop and changed assignment
+   or placement suppress remaining preparation. There is
    a bound of eight outstanding tasks per source, not eight historical chats.
    First-child runtime qualification may take longer than worker startup.
    The peer keeps the source's actual execution folder while retaining the
