@@ -118,12 +118,22 @@ async def test_slow_read_allows_navigation_and_cancel_has_a_terminal_receipt(app
     assert not app.management.lock.locked()
 
 
-async def test_cancel_queued_refresh_preserves_active_operation(app):
+async def test_cancel_queued_refresh_preserves_active_operation(app, monkeypatch):
+    queued = asyncio.Event()
+    publish_status = app.management.provider_status
+
+    async def publish(*args, **kwargs):
+        await publish_status(*args, **kwargs)
+        queued.set()
+
+    monkeypatch.setattr(app.management, 'provider_status', publish)
     app.state['management'] = {'phase': 'working', 'operation': 'bundles.add', 'error': None}
     await app.management.lock.acquire()
     task = asyncio.create_task(app.management.command('bundles.list', {}, 'queued'))
     try:
-        await asyncio.sleep(0)
+        # Startup work can briefly own the service lock. Observe publication,
+        # not one scheduler tick, before cancelling the queued operation.
+        await asyncio.wait_for(queued.wait(), 5)
         assert app.state['actionStatus']['bundles.list']['phase'] == 'queued'
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
