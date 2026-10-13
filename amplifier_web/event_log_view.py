@@ -770,6 +770,10 @@ class EventLogView:
                     row['turnId'] = member_turn if member_turn in host_turns else worker['turnId']
                 ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
                 if ends:worker.update(endedAt=max(ends), phase='completed')
+                if binding and binding.get('kind') == 'worker':
+                    for field in ('phase', 'endedAt'):
+                        if field in binding:
+                            worker[field] = binding[field]
                 live_worker = live_by_id.get(model_key(worker))
                 if live_worker:
                     for field in ('phase', 'endedAt', 'runId', 'routing', 'parentProvider', 'provider', 'model'):

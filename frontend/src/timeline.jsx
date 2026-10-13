@@ -27,7 +27,7 @@ function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle,d
  const phase=node.workerPhase||node.status||node.phase,elapsed=elapsedLabel(node,now),usage=node.kind==='llm'?node.usage:node.kind==='worker'?node.aggregateUsage:null;
  const label=action?.title||node.label||node.model||node.kind,model=[node.provider,node.model].filter(Boolean).join(' · ');
  const activityId=`activity:${node.id}`,activityOpen=detailOpen(expanded,activityId,detail);
- const entries=children.filter(child=>child.kind!=='worker'&&child.exchange).map(child=>child.exchange),steps=children.filter(child=>child.kind==='worker'||!child.exchange);
+ const entries=children.filter(child=>child.kind!=='worker'&&child.exchange).sort((a,b)=>(a.startedAt??0)-(b.startedAt??0)).map(child=>child.exchange),steps=children.filter(child=>child.kind==='worker'||!child.exchange);
  const activity=steps.length>0&&<div className="a-execution-children">{steps.map(child=><ExecutionNode key={child.id} node={child} depth={depth+1} ancestors={[...ancestors,node.id]} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle} detail={detail}/>)}</div>;
  return <div className="a-execution-node" data-kind={node.kind} data-node-id={node.id} data-action-kind={action?.kind}>
   <Header className="a-execution-line a-execution-action-line" {...(collapsible?{type:"button",'data-action':'view.update','data-view-label':[label,action?.target,model,phase].filter(Boolean).join(' · '),'aria-expanded':open,onClick:()=>toggle(node.id)}:{})}>

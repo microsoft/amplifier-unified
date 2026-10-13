@@ -170,3 +170,19 @@ def test_paged_nested_delegate_retains_ancestor_and_reuses_bounded_descriptor(mo
     owner = items[-1]['delegate']
     assert owner['parentWorkerId'] == 'w1'
     assert owner['ancestors'][0]['exchange']['delegateRequest'] == 'Outer'
+
+
+@pytest.mark.parametrize('phase', ['error', 'cancelled', 'interrupted'])
+def test_worker_terminal_outcome_survives_restart_despite_completed_child_step(tmp_path, monkeypatch, phase):
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    session = {'id': 'root', 'workspace': str(tmp_path / 'project'), 'messages': [], 'workers': [],
+               'execution': {'nodes': [], 'turns': [{'id': 'turn'}],
+                   'retiredUsageNodes': [{'id': 'worker:child:d', 'kind': 'worker', 'sessionId': 'child',
+                       'rootSessionId': 'root', 'parentId': 'tool:root:d', 'turnId': 'turn', 'phase': phase, 'endedAt': 40}]}}
+    path = event_path(session, 'root')
+    append(path, 'tool:pre', {'session_id': 'root', 'tool_call_id': 'd', 'tool_name': 'delegate'}, 10)
+    append(path, 'delegate:agent_spawned', {'session_id': 'root', 'sub_session_id': 'child', 'tool_call_id': 'd'}, 11)
+    append(event_path(session, 'child'), 'tool:post', {'session_id': 'child', 'tool_call_id': 'read', 'result': 'Done'}, 20)
+    tree = EventLogView(None).read(session)
+    worker = next(row for row in tree['nodes'] if row['kind'] == 'worker')
+    assert worker['phase'] == phase and worker['endedAt'] == 40

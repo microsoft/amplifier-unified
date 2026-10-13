@@ -82,7 +82,7 @@ export function treeForTurn(data,turnId){
  const workerRows=data.nodes.filter(node=>node.kind==='worker'&&node.sessionId),workersById=new Map(workerRows.map(node=>[node.id,node]));
  const counts=new Map();for(const worker of workerRows)counts.set(worker.sessionId,(counts.get(worker.sessionId)||0)+1);
  const workers=new Map(workerRows.filter(node=>counts.get(node.sessionId)===1).map(node=>[node.sessionId,node]));
- for(const node of nodes)if(node.delegate){for(const ancestor of node.delegate.ancestors||[])workersById.set(ancestor.id,{...workersById.get(ancestor.id),...ancestor});workersById.set(node.delegate.id,{...workersById.get(node.delegate.id),...node.delegate})}
+ for(const node of nodes){const owner=node.delegate||(node.kind==='worker'?node:null);if(owner?.sessionId){for(const ancestor of owner.ancestors||[])workersById.set(ancestor.id,{...workersById.get(ancestor.id),...ancestor});workersById.set(owner.id,{...workersById.get(owner.id),...owner})}}
  const sourceById=new Map(data.nodes.map(node=>[node.id,node]));
  const groups=new Map();
  const ensureGroup=(owner,seen=new Set())=>{

@@ -40,6 +40,18 @@ test('rejected follow-up is not labeled submitted and running worker is not comp
  assert.match(html,/aria-label="running"/);
 });
 
+test('persistent reports remain chronological and cannot hide terminal worker failure',()=>{
+ const worker={id:'w',kind:'worker',turnId:'t',sessionId:'child',label:'Review',phase:'cancelled',exchange:{id:'d',phase:'running',delegateRequest:'Review',delivery:'separate'}};
+ const data={turns:[{id:'t',phase:'completed'}],nodes:[worker,
+  {id:'followup',kind:'tool',turnId:'t',delegate:worker,startedAt:21,exchange:{id:'followup',delegateRequest:'SECOND REQUEST',phase:'completed'}},
+  {id:'report1',kind:'exchange',turnId:'t',delegate:worker,startedAt:20,exchange:{id:'report1',delegateResponse:'FIRST REPORT',report:true}},
+  {id:'report2',kind:'exchange',turnId:'t',delegate:worker,startedAt:22,exchange:{id:'report2',delegateResponse:'SECOND REPORT',report:true}}]};
+ const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'t',state:{view:{executionExpanded:['turn:t','delegate:t:w']}},act}));
+ assert.ok(html.indexOf('FIRST REPORT')<html.indexOf('SECOND REQUEST'));
+ assert.ok(html.indexOf('SECOND REQUEST')<html.indexOf('SECOND REPORT'));
+ assert.match(html,/Worker cancelled/);assert.doesNotMatch(html,/Waiting for response|delegate below/);
+});
+
 test('advanced registries expose scoped source controls through the shared registry',()=>{
  const state={view:{settingsExpanded:['registries'],registryDraft:{open:true,tab:'sources'}},registry:{sources:[{kind:'module',name:'tool-custom',source:'/workspace/tool',scope:'project'}]}};
  const html=renderToStaticMarkup(React.createElement(RegistrySettings,{state,act}));

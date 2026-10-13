@@ -171,3 +171,11 @@ test('nested delegate stays under its parent when ancestor and spawning tools ar
  assert.equal(nested.ownerId,'w2');assert.equal(nested.workerPhase,'running');
  assert.deepEqual(tree.children.get(nested.id).map(n=>n.id),['call']);
 });
+
+test('new nested worker-only page still reconstructs its ancestor',()=>{
+ const outer={id:'w1',sessionId:'one',label:'Outer',phase:'running',exchange:{id:'d1'}};
+ const inner={id:'w2',kind:'worker',turnId:'t',sessionId:'two',label:'Inner',parentWorkerId:'w1',ancestors:[outer],phase:'starting',exchange:{id:'d2'}};
+ const tree=treeForTurn({nodes:[inner]},'t');
+ assert.equal(tree.roots.length,1);assert.equal(tree.roots[0].ownerId,'w1');
+ assert.equal(tree.children.get(tree.roots[0].id)[0].ownerId,'w2');
+});
