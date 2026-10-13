@@ -3987,7 +3987,7 @@ class AppService:
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_coordination = args['action'].startswith('coordination.')
+            compact_coordination = args['action'].startswith('coordination.') or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -4049,7 +4049,7 @@ class AppService:
                 # call can exhaust a single, non-compactable human turn.
                 return {**result, 'state': {
                     'revision': self.state['revision'], 'sessionId': session_id,
-                    '_stateAccess': {'note': 'Coordination receipts contain the full action result. Use get_state with a JSON Pointer when other app state is needed.'}}}
+                    '_stateAccess': {'note': 'The domain receipt contains the full action result. Use get_state with a JSON Pointer when other app state is needed.'}}}
             if compact_smart_tool:
                 context = {'revision': self.state['revision'], 'sessionId': session_id,
                            '_stateAccess': {'note': 'Use smartTools.readResult with the receipt operationId to read status and results. Use get_state with a JSON Pointer for other app state.'}}
