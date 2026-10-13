@@ -67,7 +67,7 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows),2)
         child=next(row for row in rows if row['sessionId']=='child')
         self.assertEqual(child['turnId'],'turn-a')
-        self.assertEqual(child['parentId'],'worker:child')
+        self.assertEqual(child['parentId'],'worker:child:delegate-1')
         self.assertEqual(events.children['child']['parentId'],'tool:root:delegate-1')
         self.assertEqual(events.usage()['usage']['totalTokens'],14)
         self.assertNotIn('private',str(emitted))

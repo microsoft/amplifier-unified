@@ -124,6 +124,23 @@ async def test_setup_checkpoint_does_not_publish_partially_restored_history(admi
     assert h.store.load(h.identity)[1]["status"] == "completed"
 
 
+@pytest.mark.parametrize("dispatch", ["job", "task", "unknown"])
+async def test_resume_never_reuses_saved_spawn_call_identity(admission, dispatch):
+    from amplifier_web.host.children import JOB_CALL
+    h = admission
+    h.store.save(h.identity, h.original, {**h.metadata, "tool_call_id": "old-spawn"})
+    if dispatch == "task":
+        h.parent.coordinator._tool_dispatch_contexts = {asyncio.current_task(): {"tool_call_id": "new-resume"}}
+    token = JOB_CALL.set("new-resume" if dispatch == "job" else None)
+    try:
+        await h.children.resume(h.identity, "New instruction", h.parent)
+    finally:
+        JOB_CALL.reset(token)
+    expected = None if dispatch == "unknown" else "new-resume"
+    assert h.children.rows[h.identity]["callId"] == expected
+    assert h.store.load(h.identity)[1]["tool_call_id"] == expected
+
+
 @pytest.mark.parametrize("cancelled", [False, True])
 async def test_execution_failure_after_admission_still_checkpoints(admission, cancelled):
     h = admission

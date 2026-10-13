@@ -89,7 +89,10 @@ class ExecutionEvents:
             parent_sid = event.get("parentSessionId") or self.root_id
             parent = self.calls.get((parent_sid, call_id), {})
             previous = self.children.get(identity, {})
-            row = {"id": "worker:" + identity, "parentId": parent.get("id") or previous.get("parentId"),
+            if event.get("runId") and event["runId"] != previous.get("runId"):
+                previous = {}
+            from .delegate_exchange import worker_id
+            row = {"id": worker_id(identity, call_id), "parentId": parent.get("id") or previous.get("parentId"),
                    "turnId": previous.get("turnId") or parent.get("turnId") or self.turn_id,
                    "sessionId": identity, "rootSessionId": self.root_id, "parentSessionId": parent_sid, "kind": "worker",
                    "phase": event.get("status", "running"), "label": event.get("agent") or "Worker",
