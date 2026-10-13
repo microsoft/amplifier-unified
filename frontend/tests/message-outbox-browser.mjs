@@ -256,8 +256,8 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  assert.equal(boundary.body.args.expectedGenerationId,'original-run');
  chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
  await boundary.route.fulfill({status:409,json:{accepted:false,code:'steering_target_changed',error:'The run changed. Your message was not sent.'}});
- const rejected=page.locator(`[data-input-id="${boundary.body.id}"]`);
- await rejected.getByRole('button',{name:'Retry',exact:true}).click();
+ const boundaryRejected=page.locator(`[data-input-id="${boundary.body.id}"]`);
+ await boundaryRejected.getByRole('button',{name:'Retry',exact:true}).click();
  const retried=await next();assert.notEqual(retried.body.id,boundary.body.id);
  assert.equal(retried.body.args.expectedGenerationId,undefined,'Explicit retry refreshes the expired generation');
  assert.equal(retried.body.args.allowNextTurn,true);assert.equal(retried.body.args.text,boundary.body.args.text);

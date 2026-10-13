@@ -27,3 +27,30 @@ An explicit Retry of a confirmed rejected browser submission uses a new command
 identity and the conversation's current generation. Unknown delivery retains the
 original identity and arguments for reconciliation, never an automatic resend.
 The UI calls the submitted content a message without classifying its intent.
+
+## Portable failure diagnosis
+
+Copy diagnostics uses a versioned, bounded metadata report. It retains the host's
+original failure identity and timestamp when correlated native evidence offers a
+more specific classification. Unknown native evidence must not replace another
+unknown failure. Reports include application/Python/platform versions, generation
+and bridge timing, operation identifiers, and log availability/truncation limits.
+Bridge timeouts are internal transport failures with uncertain operation outcomes;
+they must not be described as provider failures or trigger automatic action replay.
+Prompt contents, tool arguments, response bodies and arbitrary SDK exception text
+are excluded. Provider recordings remain a separate, explicit diagnostic facility.
+
+HTTP responses expose a request ID and `Server-Timing` handler duration. The
+support report includes bounded client and host request timing rings to separate
+browser/network elapsed time from host handling. These contain route templates,
+status and timing only, never query strings, request arguments or response bodies.
+Handler timing cannot measure an event-loop stall before connection acceptance;
+a fast health probe between stalls does not rule out intermittent host stalls.
+
+The owning worker repeats the completion check after input preparation. If the
+exact run finished normally during that interval, an opted-in ordinary message
+enters the next turn once, with a `next_turn` receipt rather than a false claim of
+insertion into the old context. Failed, stopped, detached or uncertain attempts do
+not qualify. Read-only media discovery similarly requalifies its entire identity
+proof after a transient revision race, with at most three attempts; this does not
+relax byte access, mutation or identity-collision checks.

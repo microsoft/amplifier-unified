@@ -1,3 +1,4 @@
+import {recordActionTiming} from './api.js';
 import {useConnectionSetup} from './setup-journey';
 import {chatDeepLink} from './chat-deep-link';
 import {DictationButton} from './dictation-controls';
@@ -215,7 +216,9 @@ function App(){
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
   const catalogRead=isProviderCatalogRead(action,meta);
   const queue=action.startsWith('coordination.')||meta.presentation?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
-  const promise=enqueueSettings.current(queue,execute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
+  const queuedAt=performance.now();
+  const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
+  const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
    // Each caller owns an optimistic token even when several waiting editor
    // snapshots share the final request. Settle all callers after its receipt.
    if(pending)pendingView.current.settle(pending);

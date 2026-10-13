@@ -233,3 +233,42 @@ async def test_ordinary_message_still_steers_its_live_generation(active):
     assert result['steering']['disposition'] == 'queued'
     assert not runtime.sent
     runtime.steer.assert_awaited_once()
+
+
+@pytest.mark.parametrize('terminal,allow,stopped,expected', [
+    ('generation.finished', True, False, True),
+    ('generation.finished', False, False, False),
+    ('generation.failed', True, False, False),
+    ('generation.detached', True, False, False),
+    ('generation.finished', True, True, False),
+])
+async def test_worker_admission_handoff_is_exact_and_never_replays(monkeypatch, terminal, allow, stopped, expected):
+    from amplifier_module_loop_live.runtime import Runtime as NativeRuntime
+    from amplifier_web.conversation_steering import submit
+    runtime = NativeRuntime(session_id='root')
+    runtime.stop_requested = stopped
+    await runtime.emit(terminal, generation_id='g', disposition='manager_turn_finished', active_job_ids=[])
+    controls = SimpleNamespace(coordinator=object())
+    monkeypatch.setattr('amplifier_web.message_interactions.prepare_input', AsyncMock(return_value='ordinary message'))
+    capability = AsyncMock(return_value={'accepted': False})
+    monkeypatch.setattr('amplifier_web.collaboration_input._steering_capability', lambda controls: {'submit': capability})
+    args = {'text': 'ordinary message', 'inputId': 'i', 'targetGenerationId': 'g', 'allowNextTurn': allow}
+    result = await submit(controls, runtime, args, None, lambda: 0)
+    assert result['accepted'] is expected
+    assert ('i' in runtime.accepted) is expected
+    if expected:
+        assert runtime.accepted['i'].kind == 'user'
+        assert result['disposition'] == 'next_turn'
+        again = await submit(controls, runtime, args, None, lambda: 0)
+        assert again['accepted'] is False
+        assert runtime.queued_inputs == 1
+    capability.assert_not_awaited()
+
+
+async def test_worker_handoff_receipt_does_not_claim_old_context_insertion(active):
+    app, runtime, session = active
+    runtime.steer.return_value = {'accepted': True, 'disposition': 'next_turn'}
+    result = await correction(app, expectedGenerationId='generation', allowNextTurn=True)
+    assert result['delivery'] == 'accepted'
+    assert result['steering']['disposition'] == 'next_turn'
+    assert 'contextAt' not in result['steering']

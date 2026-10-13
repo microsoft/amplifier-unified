@@ -25,24 +25,24 @@ def record(service, session, input_id, disposition, reason=None, *, preserve_pen
         return
     steering = message['steering']
     # Runtime evidence can arrive before the transport acknowledgement.
-    if steering['disposition'] == 'applied' or (
+    if steering['disposition'] in {'applied', 'next_turn'} or (
             steering['disposition'] in {'held', 'unknown'} and disposition == 'queued'):
         return
     steering['disposition'] = disposition
     # Restart is not admission evidence. Keep an unresolved fence available for
     # an exact later held/applied observation, without replay or new promotion.
     if not (preserve_pending_post and (message.get('navigationPost') or {}).get('disposition') == 'pending'):
-        service._post_disposition(session, message, 'accepted' if disposition in {'queued', 'applied'}
+        service._post_disposition(session, message, 'accepted' if disposition in {'queued', 'applied', 'next_turn'}
                                   else 'rejected' if disposition == 'held' else 'retained')
-    if disposition in {'queued', 'applied'}:
+    if disposition in {'queued', 'applied', 'next_turn'}:
         # Host observation times distinguish admission from context insertion.
         # Neither timestamp asserts that the model obeyed the instruction.
-        steering.setdefault('queuedAt' if disposition == 'queued' else 'contextAt', time.time())
+        steering.setdefault('contextAt' if disposition == 'applied' else 'queuedAt', time.time())
     if reason:
         steering['reason'] = reason
     else:
         steering.pop('reason', None)
-    delivery = 'accepted' if disposition in {'queued', 'applied'} else 'failed' if disposition == 'held' else 'unknown'
+    delivery = 'accepted' if disposition in {'queued', 'applied', 'next_turn'} else 'failed' if disposition == 'held' else 'unknown'
     message['delivery'] = {'status': delivery}
     row = service.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
     if row:
@@ -88,7 +88,9 @@ async def send(service, session, text, input_id, preserve_draft):
         if not isinstance(result, dict) or type(result.get('accepted')) is not bool:
             raise RuntimeError('Steering acknowledgement was not recognized.')
         disposition = result.get('disposition', 'queued') if result['accepted'] else 'held'
-        if disposition not in {'queued', 'applied', 'held', 'unknown'}:
+        if disposition == 'next_turn' and not (result['accepted'] and message['steering'].get('allowNextTurn')):
+            raise RuntimeError('Unexpected next-turn acknowledgement.')
+        if disposition not in {'queued', 'applied', 'next_turn', 'held', 'unknown'}:
             raise RuntimeError('Steering disposition was not recognized.')
         reason = result.get('reason')
     except Exception:
@@ -99,7 +101,7 @@ async def send(service, session, text, input_id, preserve_draft):
         current = service._session(session['id'])
         record(service, current, input_id, disposition, reason)
         saved = find_message(current, input_id)
-        if saved['steering']['disposition'] in {'queued', 'applied'}:
+        if saved['steering']['disposition'] in {'queued', 'applied', 'next_turn'}:
             service._clear_sent_draft(current, message, text, preserve_draft)
         service._publish_changes(sessions={current['id']}, globals={'view'})
         return {'delivery': saved['delivery']['status'], 'steering': copy.deepcopy(saved['steering'])}
@@ -114,6 +116,22 @@ async def submit(controls, runtime, args, activation, stop_epoch):
     epoch = stop_epoch()
     text = await prepare_input(controls.coordinator, args['text'], args.get('reply_context'),
                                max_chars=runtime.max_input_chars)
+    # Preparation may yield while the manager finishes. Native admission is
+    # synchronous up to queue insertion: recheck the exact terminal evidence
+    # here, beside the owning inbox, rather than resend from the browser.
+    if (args.get('allowNextTurn') is True and runtime.generation is None
+            and not runtime.closed and not runtime.stop_requested and stop_epoch() == epoch
+            and args['inputId'] not in runtime.accepted):
+        terminal = next((event for event in reversed(runtime.events)
+            if event.get('type') in {'generation.started', 'generation.finished',
+                                    'generation.failed', 'generation.detached'}), None)
+        if (terminal and terminal.get('type') == 'generation.finished'
+                and terminal.get('generation_id') == args['targetGenerationId']
+                and terminal.get('disposition') == 'manager_turn_finished'
+                and not terminal.get('active_job_ids')):
+            await runtime.submit(Input('user', text, id=args['inputId'],
+                attachments=tuple(args.get('attachments', [])), activation=activation))
+            return {'accepted': True, 'disposition': 'next_turn', 'inputId': args['inputId']}
     capability = _steering_capability(controls)
     if capability is None:
         return {'accepted': False, 'reason': 'This runtime does not support steering an active run.'}
