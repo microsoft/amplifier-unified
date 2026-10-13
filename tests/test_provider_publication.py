@@ -148,7 +148,12 @@ async def test_old_managed_model_completion_cannot_overwrite_workspace_catalog(a
     manager = SetupManager(app.data_dir, catalog=app.management.provider_catalog, global_only=True)
     app.state['setup'] = {'providersWorkspace': workspace, 'providersLocation': {'kind': 'managed'}}
     old = asyncio.create_task(app.management.warm_providers(manager, workspace))
-    await entered.wait()
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+    except TimeoutError:
+        finish.set()
+        await old
+        pytest.fail('Managed probe was never entered: ' + repr(app.state['setup'].get('providerCatalogs')))
     app.state['setup'].update(providersLocation={'kind': 'workspace'}, providerCatalogs={'new': {'phase': 'ready'}})
     finish.set()
     await old

@@ -50,9 +50,11 @@ def project(result):
     if page not in {'smart-tools', 'tool-connections'}:
         result['smartTools'] = {'servers': [pick(row, ('id', 'name', 'status', 'capabilities'))
                                          for row in smart.get('servers', [])]}
-    # Composer connections and their cached model capabilities are always ready.
+    catalog_settings = page in {'ai-connections', 'overview', 'image-generation', 'providers', 'routing', 'voice', 'defaults', 'desktop'}
+    from .model_catalogs import project as project_models
+    project_models(result, settings=catalog_settings, runtime=runtime)
     # Setup operation receipts, matrices and diagnostic metadata are page resources.
-    if page not in {'ai-connections', 'overview', 'image-generation', 'providers', 'routing', 'voice', 'defaults', 'desktop'}:
+    if not catalog_settings:
         result['setup'] = pick(result.get('setup', {}), ('providers', 'providerCatalogs', 'metadata',
             'providersWorkspace', 'providersRequestedWorkspace', 'providersLocation', 'providersLoadedAt'))
     if not runtime:

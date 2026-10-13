@@ -64,6 +64,13 @@ try{
  await action('view.update',{patch:{draft:'Private draft'}});
  after=await counts();evidence.draft={apps:after.apps-before.apps,stableParses:after.stableParses-before.stableParses};
  await expect(composer).toHaveDraft('Private draft');
+ before=await counts();
+ for(let i=0;i<3;i++){
+  await change({workers:[{id:'active-child',kind:'session',callId:'active-call',status:'working',detail:'Progress '+i}]});
+  await page.waitForFunction(i=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).workers[0]?.detail==='Progress '+i,i);
+ }
+ after=await counts();evidence.workerUpdates={stableParses:after.stableParses-before.stableParses,updates:3};
+ await change({workers:[]});
  // Changed body and streaming remain live; these are positive controls.
  const replacement='Changed **response** with `code`';
  await change({text:replacement,streaming:'New **streamed** text'});
@@ -87,7 +94,7 @@ try{
  assert.deepEqual(errors,[]);
  evidence.controls={changedText:true,streaming:true,editing:true,olderPage:true,privateDraft:true,pageErrors:errors};
  console.log(JSON.stringify(evidence,null,2));
- if(!measureOnly){assert.equal(evidence.clock.stableParses,0);assert.equal(evidence.clock.apps,0);assert.equal(evidence.draft.stableParses,0)}
+ if(!measureOnly){assert.equal(evidence.clock.stableParses,0);assert.equal(evidence.clock.apps,0);assert.equal(evidence.draft.stableParses,0);assert.equal(evidence.workerUpdates.stableParses,0)}
 }finally{
  if(process.env.AMPLIFIER_PERF_EVIDENCE)await writeFile(process.env.AMPLIFIER_PERF_EVIDENCE,JSON.stringify(evidence,null,2)+'\n');
  await browser?.close();await vite?.close();
