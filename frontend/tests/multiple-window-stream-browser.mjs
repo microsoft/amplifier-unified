@@ -33,5 +33,10 @@ try{
  },image);
  assert.equal(loaded.status,200);assert.equal(loaded.canvas.content,image);
  await pages[0].close();await pages[7].reload();await pages[7].getByRole('button',{name:'View error details',exact:true}).waitFor();
- assert.deepEqual(errors,[]);console.log(JSON.stringify({windows:8,privateClients:true,imageLoaded:true,reconnected:true,requests:results}));
+ const retry=await context.newPage();let first=true;
+ await retry.routeWebSocket('**/api/events/ws?**',socket=>{if(first){first=false;socket.close()}else socket.connectToServer()});
+ await retry.goto(url);await retry.getByRole('button',{name:'Retry connection',exact:true}).waitFor({timeout:15000});
+ await retry.getByRole('button',{name:'Retry connection',exact:true}).click();
+ await retry.getByRole('button',{name:'View error details',exact:true}).waitFor();
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({windows:8,privateClients:true,imageLoaded:true,reconnected:true,startupRetry:true,requests:results}));
 }finally{await browser?.close();fixture.kill('SIGTERM')}
