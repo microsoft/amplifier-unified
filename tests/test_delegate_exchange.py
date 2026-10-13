@@ -186,3 +186,50 @@ def test_worker_terminal_outcome_survives_restart_despite_completed_child_step(t
     tree = EventLogView(None).read(session)
     worker = next(row for row in tree['nodes'] if row['kind'] == 'worker')
     assert worker['phase'] == phase and worker['endedAt'] == 40
+
+
+def test_focused_old_return_and_lazy_group_reads_agree_without_expanding_retained_history(monkeypatch):
+    from amplifier_web import conversation_navigation as navigation
+    from amplifier_web.browser_detail import MESSAGE_LIMIT, project, sync_work
+    tool = {'id': 'd', 'kind': 'tool', 'sessionId': 'root', 'toolCallId': 'call', 'label': 'delegate',
+            'turnId': 'turn', 'startedAt': 2, 'anchorMessageId': 'request',
+            'input': '{"instruction":"Review"}', 'output': '{"output":{"response":"before delivery"}}'}
+    worker = {'id': 'w', 'kind': 'worker', 'sessionId': 'child', 'parentId': 'd',
+              'turnId': 'turn', 'runId': 'run', 'startedAt': 3, 'anchorMessageId': 'request'}
+    exact = 'Exact archived delivery café\n' * 1500
+    delivery = service_message('delivery', 'amplifier-delegate', {
+        'call_id': 'call', 'job_id': 'job', 'tool_report': json.dumps({'output': {'response': exact}})}, at=4)
+    messages = [{'id': 'request', 'role': 'user', 'text': 'Review', 'createdAt': 1}, delivery,
+                *[{'id': f'later-{i}', 'role': 'user', 'text': 'Later', 'createdAt': 10+i} for i in range(160)]]
+    for i, row in enumerate(messages):
+        row['nativeIndex'] = i
+    session = {'id': 'root', 'nativeProject': 'project', 'historyManaged': True, 'messages': messages[-60:],
+               'workers': [{'id': 'child', 'kind': 'session', 'status': 'completed', 'report': 'not a delivery'}],
+               'execution': {'nodes': [tool, worker], 'turns': [{'id': 'turn', 'phase': 'completed'}]}}
+    before = copy.deepcopy(session)
+    reads = []
+    def source(_):
+        def read(indices):
+            indices = list(indices); reads.append(indices)
+            return [messages[i] for i in indices]
+        return [(row['id'], row['role'], not bool(row.get('observation')), i)
+                for i, row in enumerate(messages)], read
+    monkeypatch.setattr(navigation, 'source', source)
+    focused = navigation.query(session, message_id='request', window=True)
+    segment = next(row for row in focused['execution']['segments'] if row['id'] == 'turn@delivery')
+    detail = page(session, 'nodes', group=segment['id'], revision=segment['detailRevision'], window_message_id=segment['windowMessageId'])
+    report = next(row for row in detail['items'] if row['kind'] == 'exchange')
+    ref = report['exchange']['delegateResponseDetail']
+    full = ''; offset = 0
+    while offset is not None:
+        result = read_text(session, {**ref, 'offset': offset})
+        full += result['value']; offset = result['nextOffset']
+    assert full == exact
+    assert report['delegate']['exchange']['delivery'] == 'separate'
+    assert 'delegateResponse' not in report['delegate']['exchange']
+    sync = sync_work(session, segment['id'], {row['id']: row['detailVersion'] for row in detail['items']},
+                     window_message_id=segment['windowMessageId'])
+    assert sync['items'] == []
+    assert all(len(indices) <= MESSAGE_LIMIT for indices in reads)
+    assert project(session)['workers'] == []
+    assert session == before

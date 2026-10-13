@@ -89,6 +89,24 @@ try{
  await deliveredDelegate.locator(':scope > button').click();
  await expect(deliveredDelegate.getByRole('region',{name:'Response to parent',exact:true})).toContainText('The exact delivered async answer.');
  await expect(page.getByText('Pre-delivery tool record',{exact:true})).toHaveCount(0);
+ // Return to an old focused window after the delegate exchange leaves the
+ // browser tail. Lazy reads must carry that window identity, not re-center it.
+ await control({op:'patch',sessions:{[alpha]:{messages:[...messages,reportMessage,...Array.from({length:100},(_,i)=>({
+  id:`later-${i}`,role:i%2?'assistant':'user',text:`Later conversation ${i}`,createdAt:start+100+i
+ }))]}}});
+ await page.setViewportSize({width:1440,height:1000});
+ await page.reload();
+ await expect(page.locator('[data-message-id="question"]')).toHaveCount(0);
+ const focusedReads=[];page.on('request',r=>{if(r.url().includes('/api/conversation/detail?'))focusedReads.push(new URL(r.url()).searchParams)});
+ await page.locator('.a-rail-mark[data-turn-id="question"]').click();
+ await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toBeVisible();
+ const focusedWork=page.locator('[data-part="execution-group"] > button').first();
+ if(await focusedWork.getAttribute('aria-expanded')!=='true')await focusedWork.click();
+ const focusedDelegate=page.locator('[data-group-id="turn-one@report-message"] [data-kind="worker"]');
+ await expect(focusedDelegate).toBeVisible();
+ if(await focusedDelegate.locator(':scope > button').getAttribute('aria-expanded')!=='true')await focusedDelegate.locator(':scope > button').click();
+ await expect(focusedDelegate).toContainText('The exact delivered async answer.');
+ assert.ok(focusedReads.some(args=>args.get('windowMessageId')==='question'&&args.get('group')==='turn-one@report-message'));
  const header=page.locator('.a-work-header');
  await expect(header.getByRole('button',{name:'Chat overview',exact:true})).toHaveCount(0);
  await expect(header.getByRole('button',{name:'Chat',exact:true}).locator('.lucide-sliders-horizontal')).toHaveCount(1);
