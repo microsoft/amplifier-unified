@@ -58,6 +58,11 @@ try{
  const expandRecovery=async()=>{for(const summary of await page.locator('details.a-recovery-group:not([open]) > summary').all())await summary.click()};
  await expandRecovery();
  await expect(page.locator('[data-message-id="1-m-119"]')).toContainText('Historical worker 0');
+ const notice=page.locator('[data-message-id="1-m-119"]');
+ const savedResult=page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/conversation/detail'&&url.searchParams.get('field')==='output'&&response.ok()});
+ await notice.getByText('View saved result',{exact:true}).click();
+ await savedResult;
+ await expect(notice).toContainText('End of retained result.');
  await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
  await expect(page.locator('[data-message-id="1-m-1"]')).toBeAttached();
  await expandRecovery();
@@ -119,7 +124,7 @@ try{
  await expect(page.getByRole('dialog',{name:'Chat options'})).toHaveCount(0);
  if(!measureOnly){await expect.poll(async()=>(await snapshot()).view.composerModel?.open).toBe(false)}
  await settle();const final=await api('/fixture/demand');assert.deepEqual(final.runtimeCalls,[]);assert.equal(final.workersUnchanged,true);assert.deepEqual(errors,[]);
- evidence.controls={olderRecovery:true,focusedRecovery:true,terminalPrecedenceBothOrders:true,desktopPicker:true,accountIsolation:true,privateDrafts:true,reconnect:true,mobilePicker:true,workerEvidenceUnchanged:true};evidence.pageErrors=errors;
+ evidence.controls={olderRecovery:true,focusedRecovery:true,savedResult:true,terminalPrecedenceBothOrders:true,desktopPicker:true,accountIsolation:true,privateDrafts:true,reconnect:true,mobilePicker:true,workerEvidenceUnchanged:true};evidence.pageErrors=errors;
  console.log(JSON.stringify(evidence,null,2));
 }finally{
  await peerBrowser?.close();await browser?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await Promise.race([once(fixture,'exit'),new Promise((_,reject)=>setTimeout(()=>reject(Error('Fixture teardown timeout')),10000))])}

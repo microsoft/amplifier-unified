@@ -58,7 +58,7 @@ async def main(home):
                    historyLoading=False, status='idle', messages=[{'id': f'{i}-m-{j}', 'role': 'user' if j % 2 == 0 else 'assistant',
                        'text': f'Saved message {j}. ' + 'Ordinary **formatted** content. ' * 30, 'createdAt': 1700000000+j} for j in range(120)],
                    execution={'nodes': [{'id': 'node', 'kind': 'tool', 'toolCallId': 'old-call', 'turnId': 'turn', 'phase': 'completed',
-                                         'anchorMessageId': f'{i}-m-118', 'output': 'Saved worker result'}],
+                                         'anchorMessageId': f'{i}-m-118', 'output': 'Saved worker result. '*1000+'End of retained result.'}],
                               'turns': [{'id': 'turn', 'phase': 'completed'}]},
                    workers=[{'id': f'old-{j}', 'sessionId': f'child-{j}', 'callId': 'old-call' if j == 0 else f'call-{j}',
                              'kind': 'session', 'name': f'Historical worker {j}', 'status': 'completed', 'report': 'Saved report. '*1000} for j in range(1000)],

@@ -82,6 +82,10 @@ Browser model options are requested by an open picker/settings surface, not by
 an optimistic navigation placeholder. Closed controls receive only the selected
 connection's display metadata. Exact connection keys and configuration revisions
 remain separate from model-list content equality.
+Explicit refresh bypasses the private cache's 60-second failure backoff.
+Fresh options replace the browser fallback even at the same configuration
+revision, including a successful empty list; saved/default selections remain
+visible independently of available options.
 
 Worker observations remain in the existing durable store. Browser summaries keep
 raw nonterminal rows and their terminal job overrides, recent finished rows and

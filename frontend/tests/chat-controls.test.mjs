@@ -67,6 +67,34 @@ test('late catalogs preserve selector choices and shared provider actions',async
  await renderAct(async()=>root.unmount());
 });
 
+for(const isDraft of [false,true])test('authoritative empty refresh replaces cached options, not the saved selection: '+(isDraft?'draft':'chat'),async()=>{
+ const calls=[],providers=[{id:'one',sharedCatalogKey:'account-one',info:{defaults:{model:'saved'}}}];
+ let entry={phase:'ready',models:['saved','retired']},root;
+ const render=()=>{
+  const state={configurationRevision:1,view:{composerModel:{open:true,sessionId:isDraft?null:'chat',instance:'one',model:'saved'},newSessionDraft:{workspace:'/trial',selection:{instance:'one',model:'saved'}}},
+   modelCatalogs:{'account-one':entry},runtimeControl:{chat:{'configuration.catalog':{configurationRevision:1,providers,effective:{instance:'one',model:'saved'}}}},
+   setup:{providersRequestedWorkspace:'/trial',providers,providerCatalogs:{one:entry}},
+   draftDefaults:{'["/trial",""]':{phase:'ready',providers,effective:{instance:'one',model:'saved'}}}};
+  return React.createElement(ModelControl,{state,session:isDraft?null:{id:'chat'},act:async(name,args)=>calls.push({name,args})});
+ };
+ const values=()=>root.root.findByProps({id:'chat-model'}).findAllByType('option').map(n=>n.props.value);
+ try{
+  await renderAct(async()=>root=create(render()));assert.deepEqual(values(),['saved','retired']);
+  for(const transient of [{phase:'working'},{phase:'error'},{phase:'ready',modelsDeferred:true}]){
+   entry=transient;await renderAct(async()=>root.update(render()));assert.ok(values().includes('retired'));
+  }
+  const refresh=root.root.findAllByType('button').find(n=>n.children.includes('Refresh models'));
+  await renderAct(async()=>refresh.props.onClick());
+  assert.equal(isDraft?calls.at(-1).args.refresh:calls.at(-1).args.args.refresh,true);
+  entry={phase:'ready',models:[]};await renderAct(async()=>root.update(render()));
+  assert.deepEqual(values(),['saved']);assert.equal(root.root.findByProps({id:'chat-model'}).props.value,'saved');
+  entry={phase:'ready',modelsDeferred:true};await renderAct(async()=>root.update(render()));assert.deepEqual(values(),['saved']);
+  entry={phase:'ready',models:['saved','fresh']};await renderAct(async()=>root.update(render()));assert.deepEqual(values(),['saved','fresh']);
+  assert.equal(calls.some(c=>c.args?.operation==='provider.queueSelection'),false);
+  assert.equal(calls.some(c=>c.name==='view.update'&&c.args?.patch?.newSessionDraft),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
 
 test('draft model controls discover without creating a session and save choices through shared view actions',async()=>{
  const calls=[];let state={settings:{workspace:'/future'},view:{newSessionDraft:{workspace:'/future',bundle:'work',selection:{}}}},root;

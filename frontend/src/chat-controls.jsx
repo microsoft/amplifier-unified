@@ -72,7 +72,9 @@ export function ModelControl({state,session,act,working,embedded=false}){
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:state.modelCatalogs?.[selected?.sharedCatalogKey]||controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
  const lastModels=useRef(new Map()),modelCacheKey=JSON.stringify([isDraft?draftDefaultsKey(setup):sessionId,configurationRevision,draft.instance,selected?.sharedCatalogKey||entry?.sharedCatalogKey||null]);let models=modelOptions(entry?.models||[]);
- if(models.length){lastModels.current.delete(modelCacheKey);lastModels.current.set(modelCacheKey,models);while(lastModels.current.size>16)lastModels.current.delete(lastModels.current.keys().next().value)}
+ // An explicit successful empty list replaces old choices. Deferred/loading
+ // views can reuse them; the saved/default selection is retained separately.
+ if(models.length||(entry?.phase==='ready'&&!entry.modelsDeferred&&Array.isArray(entry.models))){lastModels.current.delete(modelCacheKey);lastModels.current.set(modelCacheKey,models);while(lastModels.current.size>16)lastModels.current.delete(lastModels.current.keys().next().value)}
  else models=lastModels.current.get(modelCacheKey)||[];
  // Model catalogs belong to a connection, even when several use the same type.
  const available=new Map(models.map(row=>[row.id,row]));

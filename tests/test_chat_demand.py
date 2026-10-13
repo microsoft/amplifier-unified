@@ -136,10 +136,11 @@ def test_filter_precedes_report_hashing_and_keeps_unknown_groups(monkeypatch):
     assert result['workerSummary']['recentFinished'][-1]['id'] == 'new-state'
 
 
-async def test_catalog_pruning_conserves_connected_running_and_incoming(tmp_path):
+async def test_catalog_pruning_conserves_connected_running_and_incoming(tmp_path, monkeypatch):
     from amplifier_web.service import AppService
     from amplifier_web.management import Management
-    from amplifier_web.conversation_models import publish_catalogs
+    from amplifier_web.conversation_models import publish_catalogs, browse
+    from amplifier_web import draft_defaults
     from test_service import Runtime
     service = AppService(tmp_path / 'app', Runtime(), workspace=tmp_path)
     service.management = Management(service)
@@ -167,6 +168,20 @@ async def test_catalog_pruning_conserves_connected_running_and_incoming(tmp_path
         assert not publish_catalogs(service.management, {'incoming': {'models': ['new']}})
         # Full-state readers also see derived eviction, never lost worker evidence.
         assert 'obsolete' not in service.get_state()['modelCatalogs']
+        assert 'dormant' not in service.get_state()['modelCatalogs']
+        dormant = service._session(ids[-1])
+        dormant['selection'] = {'instance': 'saved', 'model': 'saved-model'}
+        service._state['configurationRevision'] = 1
+        async def resolve(*args, **kwargs):
+            return {'providers': [{'id': 'current', 'sharedCatalogKey': 'current-account'}],
+                    'catalogs': {'current-account': {'phase': 'ready', 'models': ['current-model'], 'metadata': {'info': {}}}}}
+        monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+        await browse(service.management, dormant)
+        full = service.get_state()
+        assert 'dormant' not in full['modelCatalogs']
+        assert full['modelCatalogs']['current-account']['models'] == ['current-model']
+        assert full['runtimeControl'][dormant['id']]['configuration.catalog']['providers'][0]['id'] == 'current'
+        assert dormant['selection'] == {'instance': 'saved', 'model': 'saved-model'}
     finally:
         for queue in queues: service.unsubscribe(queue)
         await service.close()
