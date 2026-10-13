@@ -1,8 +1,5 @@
 name: Public readiness
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -37,10 +34,10 @@ jobs:
           uv run --no-sync pytest -q --tb=short
           tests/test_service.py tests/test_client_layout.py tests/test_browser_detail.py tests/test_execution.py tests/test_cold_execution_compaction.py
           tests/test_bundle_selection.py tests/test_worker_install_overrides.py
-          tests/test_worker_diagnostics.py tests/test_session_health.py tests/test_runtime.py tests/test_coordination_wait_transport.py
+          tests/test_worker_diagnostics.py tests/test_session_health.py tests/test_runtime.py tests/test_coordination_wait_transport.py tests/test_request_recovery.py
           tests/test_worker_background_naming.py tests/test_agent_canvas_scope.py tests/test_client_navigation.py tests/test_live_clients.py
           tests/test_history_revision.py tests/test_session_fork.py tests/test_fork_input_boundaries.py
-          tests/test_conversation_navigation.py tests/test_peer_attribution.py tests/test_active_client_projections.py tests/test_event_log_view.py
+          tests/test_conversation_navigation.py tests/test_delegate_exchange.py tests/test_peer_attribution.py tests/test_active_client_projections.py tests/test_event_log_view.py
           tests/test_conversation_export.py tests/test_history_query.py tests/test_voice_input_projection.py tests/test_voice.py tests/test_portability_voice.py
           tests/test_questions.py tests/test_auth.py tests/test_browser_auth.py tests/test_server_auth.py tests/test_browser_events.py tests/test_companion.py tests/test_client_observations.py
           tests/test_reset.py tests/test_repository_access.py tests/test_friendly_reset.py tests/test_feedback_diagnostics.py
@@ -70,6 +67,7 @@ jobs:
           node tests/message-render-stability-browser.mjs
           node tests/delegate-activity-browser.mjs
           node tests/main-refresh-browser.mjs
+          node tests/document-card-browser.mjs
           node tests/chat-plan-browser.mjs
           node tests/questions-browser.mjs
           node tests/public-first-chat-browser.mjs
@@ -194,6 +192,7 @@ jobs:
           uv run --no-sync pytest -q tests/test_storage_usage.py tests/test_storage_scan.py tests/test_storage_workspace_scope.py tests/test_browser_demand.py tests/test_configuration_target.py tests/test_history_cleanup.py tests/test_canvas_paths.py tests/test_chat_plan.py tests/test_completion_attention.py tests/test_workspace_navigation.py tests/test_schedules.py tests/test_conversation_export.py tests/test_voice.py
           cd frontend
           node tests/attention-inbox-browser.mjs
+          node tests/workspace-switching-browser.mjs
           node tests/readiness102-browser.mjs
           CHROMIUM_SINGLE_PROCESS=0 node tests/canonical-work-browser.mjs
           node tests/readiness102-workspace-browser.mjs

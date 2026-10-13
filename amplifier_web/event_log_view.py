@@ -134,7 +134,13 @@ def read_event_data(reference):
 
 
 def read_field(reference):
-    return text(read_event_data(reference)[reference['key']])
+    value = read_event_data(reference)[reference['key']]
+    if reference.get('delegateField'):
+        from .delegate_exchange import select
+        value = select(value, reference['delegateField'])
+        if value is None:
+            raise ValueError('This delegation message is no longer available.')
+    return text(value)
 
 
 class EventIndex:
@@ -147,6 +153,8 @@ class EventIndex:
         self.file_id = None
         self.nodes = OrderedDict()
         self.children = {}
+        self.worker_runs = {}
+        self.tool_owners = {}
         self.pending = {}
         self.last = None
         self.revision = None
@@ -214,6 +222,19 @@ class EventIndex:
                                  'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if not preview or len(value) > 512 else None
         if field in ('request', 'response'):node[field + 'Detail']['lines'] = value.count('\n') + 1
 
+    def delegate_field(self, node, field, data, keys, reference):
+        from .delegate_exchange import select
+        key = next((key for key in keys if key in data), None)
+        if key is None:
+            return
+        value = select(data[key], field)
+        if value is None:
+            return
+        node[field] = value[:512]
+        node.setdefault('_eventFields', {})[field] = {**reference, 'key': key, 'delegateField': field}
+        node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
+            'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if len(value) > 512 else None
+
     def ingest(self, event, reference):
         name, data = event.get('event'), event['data']
         if not isinstance(name, str):
@@ -223,6 +244,13 @@ class EventIndex:
         # Older app-only diagnostic receipts have no tool body. They must not
         # restart a completed native tool or replace its precise timestamps.
         if data.get('kind') == 'tool' and isinstance(data.get('id'), str):
+            # App receipts contribute exact ownership only. Never use their
+            # content or lifecycle in place of the native tool event.
+            call = data.get('toolCallId')
+            owner_sid = data.get('sessionId') or sid
+            if isinstance(call, str) and isinstance(data.get('parentId'), str):
+                self.tool_owners[f'tool:{owner_sid}:{call}'] = {
+                    key: data[key] for key in ('parentId', 'turnId') if data.get(key)}
             return
         if name == 'prompt:submit' or name.startswith(('tool:', 'llm:', 'provider:')):
             from amplifier_foundation.session.history import event_association_record
@@ -237,13 +265,24 @@ class EventIndex:
                 'toolCallId': call, 'label': data.get('tool_name') or data.get('tool') or 'Tool',
                 'canonicalHistory': True, 'eventOrder': reference['offset']})
             if name == 'tool:pre' and node.get('endedAt') is not None:
-                for field in ('output', 'error'):
+                for field in ('output', 'error', 'delegateResponse'):
                     node.pop(field, None)
                     node.pop(field + 'Detail', None)
                     node.get('_eventFields', {}).pop(field, None)
                 node.pop('endedAt', None)
                 node['startedAt'] = at
             self.field(node, 'input', data, ('tool_input', 'arguments', 'input'), reference)
+            from .delegate_exchange import tool_name
+            if tool_name(node) == 'delegate':
+                self.delegate_field(node, 'delegateRequest', data, ('tool_input', 'arguments', 'input'), reference)
+            elif tool_name(node) == 'live_worker':
+                from .delegate_exchange import parsed
+                args = parsed(data.get('tool_input', data.get('arguments', data.get('input'))))
+                if isinstance(args, dict) and args.get('action') in {'message', 'steer'}:
+                    self.delegate_field(node, 'delegateRequest', data, ('tool_input', 'arguments', 'input'), reference)
+                    owner = self.children.get(args.get('session_id'))
+                    if owner:
+                        node['exchangeOwnerId'] = owner['id']
             if at is not None:
                 node.setdefault('startedAt', at)
             node['phase'] = 'running' if name == 'tool:pre' else 'error' if name == 'tool:error' else 'completed'
@@ -251,18 +290,25 @@ class EventIndex:
                 node['endedAt'] = at
                 self.field(node, 'output', data, ('result', 'tool_result'), reference)
                 self.field(node, 'error', data, ('error', 'error_message'), reference)
+                if tool_name(node) == 'delegate':
+                    self.delegate_field(node, 'delegateResponse', data, ('result', 'tool_result'), reference)
                 result = data.get('result', data.get('tool_result'))
                 if isinstance(result, dict) and result.get('success') is False:
                     node['phase'] = 'error'
             from .image_generation import observe
             observe(node, name, data)
             return
-        if name == 'delegate:agent_spawned':
-            child = data.get('sub_session_id')
+        if name in {'delegate:agent_spawned', 'delegate:agent_resumed'}:
+            child = data.get('sub_session_id') if name == 'delegate:agent_spawned' else data.get('session_id')
             if isinstance(child, str):
-                self.children[child] = {'id': 'worker:' + child, 'kind': 'worker', 'sessionId': child,
-                    'parentId': f"tool:{sid}:{data.get('tool_call_id')}", 'label': data.get('agent') or 'Worker',
+                from .delegate_exchange import worker_id
+                parent_sid = data.get('parent_session_id') or (self.identity if name == 'delegate:agent_resumed' else sid)
+                call = data.get('tool_call_id')
+                self.children[child] = {'id': worker_id(child, call), 'kind': 'worker', 'sessionId': child,
+                    'parentId': f"tool:{parent_sid}:{call}", 'toolCallId': call,
+                    'parentSessionId': parent_sid, 'label': data.get('agent') or 'Worker',
                     'startedAt': at, 'phase': 'recorded', 'canonicalHistory': True}
+                self.worker_runs[self.children[child]['id']] = self.children[child]
             return
         if data.get('kind') == 'llm' and isinstance(data.get('id'), str):
             # App lifecycle IDs are also recorded in the canonical log. Keep
@@ -374,6 +420,9 @@ class EventIndex:
     def rows(self, model_binding=None, *, coalesce=True):
         pending = [items[0] for items in self.pending.values() if len(items) == 1 and items[0]['id'] not in self.nodes]
         rows = copy.deepcopy([*self.nodes.values(), *pending])
+        for row in rows:
+            if row.get('kind') == 'tool':
+                row.update(self.tool_owners.get(row['id'], {}))
         app = [row for row in rows if row.get('_appModel')]
         if model_binding:
             for row in app:
@@ -530,7 +579,7 @@ class EventLogView:
                 self._forget_index(str(path))
                 continue
             indexes.append(index)
-            workers.update(index.children)
+            workers.update(index.worker_runs)
             queue.extend(index.children)
         self.read_paths[session['id']] = tuple(path for path, _ in inputs)
         self.read_revisions[session['id']] = tuple((str(path), stamp) for path, stamp in inputs)
@@ -685,13 +734,20 @@ class EventLogView:
                     node['anchorMessageId'] = None  # Undated, unassociated evidence stays before the page.
                 turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
                                       'canonicalHistory': True, 'phase': 'completed'})
-            for field in ('input', 'output', 'error', 'request', 'response'):
+            for field in ('input', 'output', 'error', 'request', 'response', 'delegateRequest', 'delegateResponse'):
                 if node.get(field + 'Detail'):
                     node[field + 'Detail'].update(id=node['id'], sessionId=session['id'])
         by_id = {row['id']: row for row in nodes}
-        for child, worker in workers.items():
+        for worker in workers.values():
+            child = worker['sessionId']
             worker = copy.deepcopy(worker)
             worker['parentId'] = remap.get(worker['parentId'], worker['parentId'])
+            runs = [row for row in workers.values() if row.get('sessionId') == child]
+            # Keep exact old accounting identities when unambiguous. A resumed
+            # session with several admissions must never borrow this fallback.
+            legacy = bindings.get(model_key({'id': 'worker:' + child, 'sessionId': child}))
+            if len(runs) == 1 and legacy and legacy.get('parentId') == worker['parentId']:
+                worker['id'] = legacy['id']
             parent = by_id.get(worker['parentId'])
             if parent:
                 binding = bindings.get(model_key(worker))
@@ -705,7 +761,8 @@ class EventLogView:
                     parent['turnId'] = bound_turn
                     if parent.get('anchorMessageId') is None:
                         parent.pop('anchorMessageId', None)
-                members = [row for row in nodes if row.get('sessionId') == child]
+                members = [row for row in nodes if row.get('sessionId') == child and
+                           (row.get('parentId') == worker['id'] or len(runs) == 1 and not row.get('parentId'))]
                 for row in members:
                     row['parentId'] = worker['id']
                     member_binding = bindings.get(model_key(row))
@@ -713,6 +770,15 @@ class EventLogView:
                     row['turnId'] = member_turn if member_turn in host_turns else worker['turnId']
                 ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
                 if ends:worker.update(endedAt=max(ends), phase='completed')
+                if binding and binding.get('kind') == 'worker':
+                    for field in ('phase', 'endedAt'):
+                        if field in binding:
+                            worker[field] = binding[field]
+                live_worker = live_by_id.get(model_key(worker))
+                if live_worker:
+                    for field in ('phase', 'endedAt', 'runId', 'routing', 'parentProvider', 'provider', 'model'):
+                        if field in live_worker:
+                            worker[field] = live_worker[field]
                 nodes.append(worker)
         # Metadata may arrive just before the logging hook flushes. It can
         # describe in-flight work, but never supplies an alternate tool body.

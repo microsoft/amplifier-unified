@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 pytest.importorskip('amplifier_module_loop_live')
+pytest.importorskip('amplifier_module_context_simple')
 
 
 @pytest.mark.parametrize('mode', ['finite', 'resumed', 'persistent', 'nested', 'nested-reprepare'])

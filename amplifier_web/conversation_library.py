@@ -17,6 +17,7 @@ def definitions(schema, string):
         'session.archive': ('Archive a root conversation without stopping its work, changing selection, or deleting history.', schema({'id': identity})),
         'session.restore': ('Restore an archived conversation to the active library without replaying work.', schema({'id': identity})),
         'session.pinOrder': ('Reorder every currently pinned root chat; include every ID exactly once.', schema({'ids': ids})),
+        'navigation.pinOrder': ('Reorder all pinned chats and workspaces together. Include every typed ID from pinnedItemIds exactly once, including hidden pins.', schema({'ids': {**ids, 'maxItems': 20000, 'items': string(300)}})),
         'session.sharePreview': ('Freeze a readable conversation snapshot for inspection. Creates no public link. Includes visible text and voice history; artifact/attachment references do not embed their contents.', schema({'sessionId': identity})),
         'session.shareRead': ('Read a bounded page of an immutable snapshot by ID.', schema({'id': identity, 'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 16000}}, ['id'])),
         'session.shareCreate': ('Publish the exact preview to anyone who has the link and can reach this host. Requires its content hash; later chat edits never alter the snapshot.', schema({'id': identity, 'contentHash': string(64), 'visibility': {'const': 'anyone_with_link'}, 'expiresInSeconds': {'type': 'integer', 'minimum': 60, 'maximum': 31536000}}, ['id', 'contentHash', 'visibility'])),
@@ -90,6 +91,8 @@ class ConversationLibrary:
             return {'id': row['id'], 'archived': row['id'] in value['archived']}
         if action == 'session.pinOrder':
             _same_ids(args['ids'], state.get('pinnedSessionIds', []))
+            from .pinned_navigation import reorder_kind
+            reorder_kind(state, 'session', args['ids'])
             state['pinnedSessionIds'] = list(args['ids'])
             state['pinOrderCustomized'] = True
             return {'ids': list(args['ids'])}

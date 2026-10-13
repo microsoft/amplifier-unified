@@ -457,9 +457,15 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         assert working != root and working.is_dir()
         assert session['messages'] == before_messages
         assert SessionStore.for_app(target.data_dir, session['workspace']).history(sid).transcript_path.read_bytes() == raw
+        # Media inspection must work with the optional worker prewarming disabled.
+        target.runtime.configure_retention({**target.runtime.retention.settings,
+                                            'prewarm_on_select': False})
         target.clients.attach('destination-media')
         with target.clients.bind('destination-media'):
             await target.dispatch('session.select', {'id': sid})
+            # Selection schedules native-history loading. The stable transfer
+            # assertion starts after that owner has finished changing its view.
+            await target.history.refresh_session(sid)
             items = (await target.outputs.media.describe(sid, mid))['items']
             assert len(items) == 1 and items[0]['id'] == media['id']
             assert items[0]['title'] == title

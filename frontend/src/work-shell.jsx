@@ -1,6 +1,6 @@
 import {WorkspaceConfiguration} from './workspace-configuration';
 import {useChatTitle} from './use-chat-title';
-import React,{useContext,useEffect,useRef,useState} from 'react';
+import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
@@ -57,7 +57,6 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
-   {browsing&&<button type="button" className="a-link" onClick={()=>nav.browse('chat')}><ArrowLeft/>{session?'Back to chat':'Back'}</button>}
    {!browsing&&session&&<><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
     <button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin'}</button>
@@ -72,14 +71,32 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   </div>
  </header>;
 }
-function WorkspaceFiles({workspace,state,act}){
+export function WorkspaceFiles({workspace,state,act}){
  const [path,setPath]=useState(workspace.path),[error,setError]=useState(''),[loading,setLoading]=useState(false),[copied,setCopied]=useState('');
+ const [opening,setOpening]=useState(null),pending=useRef(false),navigation=useRef(null);
+ // Ignore notices from an obsolete visit. File opening and destination
+ // presentation are one host action, never a navigation after its receipt.
+ useLayoutEffect(()=>{const visit={};navigation.current=visit;setError('');return()=>{navigation.current=null}},[state.selectedSessionId,state.selectedWorkspaceId,state.navigationPending,state.view?.workSurface,state.view?.workWorkspaceId,state.view?.workWorkspaceTab,state.view?.panel,workspace.id,path]);
  const controlId='workspace-files-'+workspace.id,listing=state.locationListing?.controlId===controlId?state.locationListing:null;
  const status=state.actionStatus?.['locations.list'],operation=status?.target?.controlId===controlId?status:null;
  const busy=loading||['queued','working'].includes(operation?.phase),failure=error||(operation?.phase==='error'?operation.error:'');
  useEffect(()=>{let live=true;setLoading(true);setError('');Promise.resolve(act('locations.list',{controlId,path,directoriesOnly:false})).then(result=>{if(result?.accepted===false&&live)setError(result.error||'Could not list files.')}).catch(e=>{if(live)setError(e.message)}).finally(()=>{if(live)setLoading(false)});return()=>{live=false}},[path,workspace.id]);
  const selected=state.sessions?.find(row=>row.id===state.selectedSessionId),canOpen=selected?.workspace===workspace.path;
- return <section className="a-work-files" aria-label="Workspace files"><p className="a-caption">Files on {state.workspaceDefaults?.hostLabel||'this host'}. Viewing this list does not add files to a message.</p><div className="a-work-file-path"><button className="a-icon" type="button" disabled={path===workspace.path} aria-label="Parent folder" onClick={()=>setPath(listing?.parent||workspace.path)}><ArrowLeft/></button><code>{path}</code></div>{busy&&<p role="status">Loading files…</p>}{failure&&<p role="alert">{failure}</p>}{listing?.path===path&&listing.entries.map(row=><div className="a-work-file-row" key={row.path}>{row.directory?<Folder/>:<FileText/>}<button type="button" disabled={!row.directory&&!canOpen} onClick={()=>row.directory?setPath(row.path):act('canvas.openFile',{sessionId:selected.id,workspace:workspace.path,path:row.path}).then(result=>{if(result?.accepted)act('view.update',{patch:{workSurface:'chat'}})})}>{row.name}</button><button type="button" className="a-icon" aria-label={'Copy path for '+row.name} onClick={()=>navigator.clipboard.writeText(row.path).then(()=>setCopied(row.name),()=>setError('Clipboard unavailable.'))}><Copy/></button></div>)}{listing?.truncated&&<p>Showing the first 300 entries. Browse a subfolder to see more.</p>}{!canOpen&&<p className="a-caption">Open a chat in this workspace to preview a file beside it.</p>}{copied&&<p role="status">Path copied: {copied}</p>}</section>;
+ const title=selected?.title||'Untitled chat',duplicate=canOpen&&state.sessions.some(row=>row.id!==selected.id&&row.workspace===workspace.path&&(row.title||'Untitled chat')===title);
+ const destination=`Open in “${title}”${duplicate?' · '+selected.id:''}`;
+ const browseFolder=next=>{if(!pending.current)setPath(next)};
+ async function openFile(file){
+  if(!canOpen||state.navigationPending||pending.current)return;
+  const visit=navigation.current,target={sessionId:selected.id,workspace:workspace.path,path:file.path,showConversation:true};
+  pending.current=true;setOpening(file.path);setError('');
+  try{
+   const result=await act('canvas.openFile',target);
+   if(navigation.current!==visit)return;
+   if(result?.accepted!==true||result.result?.status!=='opened')setError(result?.result?.message||result?.error||'This file could not be opened.');
+  }catch(error){if(navigation.current===visit)setError(error.message||'This file could not be opened.')}
+  finally{pending.current=false;if(navigation.current)setOpening(null)}
+ }
+ return <section className="a-work-files" aria-label="Workspace files"><p className="a-caption">Files on {state.workspaceDefaults?.hostLabel||'this host'}. Viewing this list does not add files to a message.</p><div className="a-work-file-path"><button className="a-icon" type="button" disabled={path===workspace.path||!!opening} aria-label="Parent folder" onClick={()=>browseFolder(listing?.parent||workspace.path)}><ArrowLeft/></button><code>{path}</code></div>{busy&&<p role="status">Loading files…</p>}{failure&&<p role="alert">{failure}</p>}{listing?.path===path&&listing.entries.map(row=><div className="a-work-file-row" key={row.path}>{row.directory?<Folder/>:<FileText/>}<button type="button" disabled={!!opening||!row.directory&&(!canOpen||state.navigationPending)} data-action={row.directory?undefined:'canvas.openFile'} aria-busy={opening===row.path||undefined} onClick={()=>row.directory?browseFolder(row.path):openFile(row)}><span>{row.name}</span>{!row.directory&&canOpen&&<small>{opening===row.path?'Opening…':destination}</small>}</button><button type="button" className="a-icon" aria-label={'Copy path for '+row.name} onClick={()=>navigator.clipboard.writeText(row.path).then(()=>setCopied(row.name),()=>setError('Clipboard unavailable.'))}><Copy/></button></div>)}{listing?.truncated&&<p>Showing the first 300 entries. Browse a subfolder to see more.</p>}{!canOpen&&<p className="a-caption">Open a chat in this workspace to preview a file beside it.</p>}{copied&&<p role="status">Path copied: {copied}</p>}</section>;
 }
 function WorkBrowser({host,workspaceHost,state,act}){
  const model=useNavigationController(host,'chats'),workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),now=useActivityClock(),nav=useContext(WorkNavigationContext);
@@ -108,12 +125,11 @@ export function WorkSurface({shell,state,act}){
 }
 
 // Live controls stay outside the conversation, which is hidden during browsing.
-export function LiveChatActivity({voice={},callSession,callActive,browsing,working,session,act,onReturn,children}){
+export function LiveChatActivity({voice={},callSession,callActive,act,children}){
  const callWorking=sessionStatus(callSession).busy||(callSession?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
  const callUnavailable=callSession?.workspaceAvailable===false||!!callSession?.historyReadOnlyReason||ownershipState(callSession).blocked;
  return <div className="a-work-live-controls">
   {callActive&&<div className="a-call-strip" data-part="voice"><AudioLines/><span>{voice.model||'Voice'}{voice.voice?' · '+voice.voice:''} · {voice.status}</span><button className="a-icon" aria-label={voice.muted?'Unmute microphone':'Mute microphone'} title={voice.muted?'Unmute microphone':'Mute microphone; replies and work continue'} data-action="call.mute" onClick={()=>act('call.mute',{muted:!voice.muted})}>{voice.muted?<MicOff/>:<Mic/>}</button><button className="a-soft" title="End audio; work continues" data-action="call.end" onClick={()=>act('call.end')}>End call</button>{callWorking&&callSession&&<button type="button" className="a-soft" data-action="conversation.stop" title={'Stop work in '+(callSession.title||'this call’s conversation')+'; keep the call connected'} disabled={callSession.status==='stopping'||callUnavailable} onClick={()=>act('conversation.stop',{sessionId:callSession.id})}>{callSession.status==='stopping'?'Stopping work…':'Stop work'}</button>}{voice.muted&&<small role="status">Microphone muted. Replies and work continue.</small>}<button className="a-link" data-action="call.keepAwake" aria-pressed={voice.keepAwake!==false} onClick={()=>act('call.keepAwake',{enabled:voice.keepAwake===false})}>{voice.wakeLock==='active'?'Screen staying awake':'Keep screen awake'}</button>{voice.keepAwake!==false&&['unsupported','unavailable','released'].includes(voice.wakeLock)&&<small role="status">Screen may lock. Keep this page visible; battery-saving settings can prevent staying awake.</small>}{voice.audioSessionState==='interrupted'&&<small role="status">Call audio interrupted by your device. Waiting for audio to become available.</small>}{voice.microphoneEnded?<small role="status">Microphone stopped. End this call and start again.</small>:voice.microphoneInterrupted&&<small role="status">Microphone temporarily unavailable.</small>}{voice.playbackBlocked&&<small role="status">Voice playback paused. <button type="button" className="a-link" data-action="call.resumeAudio" onClick={()=>act('call.resumeAudio')}>Resume audio</button></small>}{voice.fallbackReason&&<small>{voice.fallbackReason}</small>}</div>}
   {children}
-  {browsing&&working&&session&&<div className="a-call-strip" role="status"><span>{session.title||'Chat'} · Working…</span><button type="button" className="a-link" onClick={onReturn}>Back to chat</button><button type="button" className="a-soft" data-action="conversation.stop" onClick={()=>act('conversation.stop',{sessionId:session.id})}>Stop</button></div>}
  </div>;
 }

@@ -100,7 +100,7 @@ class StateProjections:
     def workspace_pins_changed(self):
         """Workspace order changes no chat facts, queries or client pages."""
         self.values = {key: value for key, value in self.values.items()
-                       if key[0] not in {'workspaces', 'shell-data-key'}}
+                       if key[0] not in {'workspaces', 'pinned-navigation', 'workspace-shortcuts', 'shell-data-key'}}
         if self.previous_navigation is not None:
             previous, retained = self.previous_navigation
             self.previous_navigation = (previous, {key: value for key, value in retained.items()
@@ -183,7 +183,7 @@ class StateProjections:
         index = self.get(('workspace-index', state.get('view', {}).get('navWorkspaceArchive', 'active')), lambda: _index(state))
         return self.get(('workspaces', *self.workspace_scope(state)), lambda: snapshot(state, index=index))
 
-    def chats(self, state, *, section=None):
+    def chat_catalog(self, state, *, section=None):
         self.refresh_navigation(state)
         from .chat_navigation import catalog, registry, snapshot
         view = state.get('view', {})
@@ -194,7 +194,39 @@ class StateProjections:
         catalog_state = {**state, 'view': {**view, 'navStatusFilter': 'all'}} if section else state
         registrations = self.get(('chat-registry',), lambda: registry(state))
         index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True)), lambda: catalog(catalog_state, indexed=registrations))
+        return index
+
+    def chats(self, state, *, section=None):
+        from .chat_navigation import snapshot
+        index = self.chat_catalog(state, section=section)
         return self.get(('chats', section, *self.chat_scope(state)), lambda: snapshot(state, indexed=index, section=section))
+
+    def pinned_navigation(self, state):
+        from .pinned_navigation import ordered_ids
+        key = ('pinned-navigation', tuple(ordered_ids(state)), *self.chat_scope(state))
+        return self.get(key, lambda: self._pinned_navigation(state))
+
+    def _pinned_navigation(self, state):
+        from .workspace_navigation import _index, snapshot as workspace_snapshot
+        from .pinned_navigation import snapshot
+        scoped = {**state, 'view': {**state.get('view', {}), 'navWorkspaceMode': 'recent',
+                                   'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}}
+        rows = []
+        if state.get('pinnedWorkspaceIds'):
+            index = self.get(('workspace-index', 'active'), lambda: _index(scoped))
+            rows = workspace_snapshot(scoped, index=index, pinned_only=True)['rows']
+        workspace = state.get('selectedWorkspaceId')
+        if state.get('view', {}).get('navChatScope') != 'all':
+            rows = [row for row in rows if row['workspaceId'] == workspace]
+        return snapshot(state, self.chat_catalog(state, section='pinned')[0], rows)
+
+    def workspace_shortcuts(self, state):
+        from .workspace_navigation import _index, snapshot
+        scoped = {**state, 'view': {**state.get('view', {}), 'navWorkspaceMode': 'recent',
+                                   'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}}
+        index = self.get(('workspace-index', 'active'), lambda: _index(scoped))
+        return self.get(('workspace-shortcuts', *self.workspace_scope(scoped)),
+                        lambda: snapshot(scoped, index=index, exclude_pinned=True)['rows'])
 
     def browser(self, state):
         from .browser_state import navigation
@@ -228,7 +260,7 @@ class StateProjections:
                               error_reviewed=row['id'] in reviewed_errors,
                               blocked=task_blocked(state, row['id'])))
                     for row in self.sessions(state).roots]
-            facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'), state.get('pinnedWorkspaceIds', []),
+            facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'), state.get('pinnedWorkspaceIds', []), state.get('pinnedItemIds', []),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'badgeUnread', 'sections', 'sessions')},
                      [[item['id'], item['fingerprint'], item['read']] for item in attention['items']

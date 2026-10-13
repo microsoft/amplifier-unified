@@ -16,5 +16,7 @@
 #amp-one .a-pinned-chats .a-nav-chat:hover .a-reorder-grip,#amp-one .a-pinned-chats .a-reorder-grip:focus{opacity:1}
 #amp-one .a-pinned-drag .a-nav-chat{margin:0;background:transparent}
 #amp-one .a-pinned-drag .a-navigation-more{opacity:1;visibility:visible}
+#amp-one .a-pinned-chats .a-workspace-row,#amp-one .a-pinned-drag .a-workspace-row{display:flex;align-items:center;min-width:0}
+#amp-one .a-pinned-chats .a-workspace-select,#amp-one .a-pinned-drag .a-workspace-select{flex:1;min-width:0}
 
 #amp-one .a-nav-chat-rename .a-nav-name-help{flex-basis:100%;color:var(--a-muted);white-space:normal}

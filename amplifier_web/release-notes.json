@@ -2,6 +2,24 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.129",
+      "title": "Faster chat controls and clearer navigation",
+      "changes": [
+        "Provider choices load when needed and reuse account-specific cached results. Reading existing chats avoids unnecessary provider discovery, while worker detail remains available on demand.",
+        "Long chats spend less time recalculating historical model usage during live updates. Other causes of intermittent server delays remain under investigation.",
+        "Transient model timeouts and connection failures can retry the same unfinished request while its worker remains active, without repeating completed tools. Stop, changed turns and partial responses prevent automatic retries.",
+        "Diagnostic publication failures no longer hide bridge request outcomes or leave disconnected requests pending.",
+        "Workspace and chat pins share one saved order with keyboard, touch and drag controls; an empty Pinned section stays hidden. Unread dots remain visible in workspace chat lists, search and details.",
+        "Delegate details show requests, recorded responses and follow-ups with their owning run and expandable activity.",
+        "Delegated workers retain their own app identity and inherited file boundaries. Reported artifacts open only when their recorded location and exact bytes can be verified.",
+        "Commissioned task chats save their creation request and return notification before the initial brief runs, with explicit outcomes for interrupted preparation.",
+        "Installed web-app chat links preserve the intended destination through recoverable launch failures.",
+        "Workspace navigation uses explicit destinations instead of implicit return-to-chat controls. Saved document cards show progress while opening and preserve the selected version.",
+        "Automatic model-request recovery does not restore a terminated worker or resume a partially delivered response. Native live runtimes retain their own recovery policy."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.128",
       "title": "Responsive controls with multiple chat windows",
       "changes": [

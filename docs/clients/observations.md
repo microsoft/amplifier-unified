@@ -88,7 +88,7 @@ Sessions additionally accept `workspace=<exact-host-path>` (up to 512 UTF-8 byte
 `pinned=all|true|false`, and `activity=all|execution|preparing|loading|idle|active|active-or-pinned`.
 Filters intersect. `active` is execution or preparation; `active-or-pinned`
 includes pinned idle chats too. Returned fields are ID, bounded title, status,
-role, pinned flag and the three independent activity flags. No transcript or
+role, pinned flag, `agentCreated`, and the three independent activity flags. No transcript or
 workspace paths are returned in this view.
 
 ## Activity and polling
@@ -205,3 +205,10 @@ are rejected. Observation/reconnection never submits or replays commands.
    client IDs, generic actions, session commands or alternate transports. A public
    setup flow must not require copying a full-control host token. No native
    enrollment rollout, deployment or shared-host adoption is part of this PR.
+
+Session and attention rows also expose `agentCreated`, using the same positive
+host-retained creation evidence as Recent chats (`is_agent_created`). It does not
+expose creator IDs or prompts and does not change the generic root/delegate scope.
+Clients wanting Recent-like presentation can hide these roots unless pinned or
+explicitly followed. Missing metadata on an older host is unknown, not proof of
+agent creation. Tempo's compatibility adapter preserves this field in both rows.

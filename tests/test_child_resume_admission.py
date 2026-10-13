@@ -70,8 +70,8 @@ def assert_original(h):
     h.child.cleanup.assert_awaited_once()
 
 
-@pytest.mark.parametrize("failure", ["selection", "activity", "restore", "partial_restore", "install", "app_control",
-                                      "cancel_activity", "cancel_restore"])
+@pytest.mark.parametrize("failure", ["selection", "activity", "restore", "partial_restore", "install", "app_access",
+                                      "cancel_activity", "cancel_restore", "cancel_app_access"])
 async def test_failed_child_resume_keeps_transcript_and_metadata_bytes(admission, failure):
     h = admission
     error = asyncio.CancelledError() if failure.startswith("cancel") else ValueError("admission rejected")
@@ -94,11 +94,18 @@ async def test_failed_child_resume_keeps_transcript_and_metadata_bytes(admission
     elif failure == "install":
         h.children.install.side_effect = error
     else:
-        h.parent_mounts["tools"]["app_control"] = object()
-        h.coordinator.mount.side_effect = error
+        # App tools are installed with the child's authority, rather than
+        # copied from the parent's mounted tool instances.
+        async def fail_access(coordinator):
+            assert coordinator is h.coordinator
+            await coordinator.get_capability("live.checkpoint")()
+            raise error
+        h.parent_capabilities["web.app_access.install"] = AsyncMock(side_effect=fail_access)
     with pytest.raises(asyncio.CancelledError if failure.startswith("cancel") else ValueError):
         await h.children.resume(h.identity, "Do not execute", h.parent)
     assert_original(h)
+    if failure in {"app_access", "cancel_app_access"}:
+        h.parent_capabilities["web.app_access.install"].assert_awaited_once_with(h.coordinator)
     expected = "cancelled" if failure.startswith("cancel") else "error"
     assert h.children.snapshot()[0]["status"] == expected
     events = []
@@ -122,6 +129,23 @@ async def test_setup_checkpoint_does_not_publish_partially_restored_history(admi
     assert h.store.load(h.identity)[0] == h.original
     h.child.execute.assert_awaited_once_with("New instruction")
     assert h.store.load(h.identity)[1]["status"] == "completed"
+
+
+@pytest.mark.parametrize("dispatch", ["job", "task", "unknown"])
+async def test_resume_never_reuses_saved_spawn_call_identity(admission, dispatch):
+    from amplifier_web.host.children import JOB_CALL
+    h = admission
+    h.store.save(h.identity, h.original, {**h.metadata, "tool_call_id": "old-spawn"})
+    if dispatch == "task":
+        h.parent.coordinator._tool_dispatch_contexts = {asyncio.current_task(): {"tool_call_id": "new-resume"}}
+    token = JOB_CALL.set("new-resume" if dispatch == "job" else None)
+    try:
+        await h.children.resume(h.identity, "New instruction", h.parent)
+    finally:
+        JOB_CALL.reset(token)
+    expected = None if dispatch == "unknown" else "new-resume"
+    assert h.children.rows[h.identity]["callId"] == expected
+    assert h.store.load(h.identity)[1]["tool_call_id"] == expected
 
 
 @pytest.mark.parametrize("cancelled", [False, True])

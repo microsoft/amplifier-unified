@@ -59,7 +59,7 @@ try{
  await action('session.create',{workspace:path.join(root,'research'),title:'Third pinned chat'});const third=(await state()).selectedSessionId;
  for(const id of [first,second,third])await action('session.pin',{id,pinned:true});
  await action('session.select',{id:first});await composer.fill('Keep this unsent draft while moving pins');
- const pinned=page.getByRole('region',{name:'Pinned chats'}),handle=title=>pinned.getByRole('button',{name:'Reorder '+title,exact:true});
+ const pinned=page.getByRole('region',{name:'Pinned items'}),handle=title=>pinned.getByRole('button',{name:'Reorder '+title,exact:true});
  const order=()=>pinned.locator('[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
  await expect.poll(order).toEqual([first,second,third]);
  await handle('Second pinned chat').focus();await page.keyboard.press('Alt+ArrowUp');

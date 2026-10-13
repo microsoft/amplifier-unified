@@ -104,3 +104,22 @@ def test_usage_breakdown_retains_metric_coverage_and_reasoning_without_double_co
     assert result['metricKnownCalls']['inputTokens'] == 2
     assert result['metricKnownCalls']['cacheReadTokens'] == 1
     assert result['metricKnownCalls']['reasoningTokens'] == 1
+
+
+def test_usage_refresh_does_not_multiply_history_reads_by_turn_count():
+    from amplifier_web.execution import refresh_usage
+    reads = []
+    class ObservedCall(dict):
+        def get(self, key, default=None):
+            if key == 'turnId':
+                reads.append(key)
+            return super().get(key, default)
+    turns = [{'id': str(i)} for i in range(300)]
+    calls = [ObservedCall(id='call-' + str(i), kind='llm', turnId=str(i // 2),
+                         usage={'inputTokens': 3, 'outputTokens': 2}) for i in range(600)]
+    tree = {'turns': turns, 'nodes': calls}
+    refresh_usage(tree)
+    assert len(reads) <= len(calls) * 3
+    assert tree['aggregateUsage']['calls'] == 600
+    assert all(turn['aggregateUsage']['calls'] == 2 for turn in turns)
+    assert all(turn['aggregateUsage']['grossTotalTokens'] == 10 for turn in turns)

@@ -58,6 +58,19 @@ The target AHP/ACP boundary follows [HP](host-protocol.v1.md) and [AP](agent-pro
    label and a usable reference; unsupported rich/device actions are explained with an available handoff. Agent actions use the same authoritative operations.
    Broken: a terminal silently loses an artifact or a client-local shortcut grants different authority. Affected: people and agents changing interfaces.
 
+8. **CX8 — Minimize interaction cost without overwhelming the interface.** Treat UX
+   like golf: fewer strokes to achieve the intended result wins, provided choices
+   remain understandable and accessible. Expose small, frequently used choice sets
+   directly; reserve disclosure for large sets or uncommon complexity. Apply
+   reversible preferences immediately. Explicit submission remains appropriate for
+   drafts, credentials, destructive actions and actions with external effects.
+   Removing a click must never remove required authority, meaningful feedback or
+   recovery. Evaluate the whole journey, including menu opening and repeated setup,
+   alongside cognitive load and keyboard/focus behavior.
+   Broken: two clicks to choose between two finishes, an unnecessary Save after a
+   harmless preference, or a crowded screen that makes the shortest path harder to find.
+   Affected: everyone completing routine tasks.
+
 ## Not in v1
 
 Identical widgets, compulsory voice/video/canvas rendering in a terminal, or a new runtime.
@@ -68,6 +81,9 @@ CX3 forbids misleading equivalence while that work is incomplete.
 
 Use the [acceptance journeys](../docs/clients/development-plan.md), with browser and actual
 terminal evidence, delayed responses, failed/unknown delivery and keyboard operation.
+For interaction changes, record the entry point, intended result, before/after
+action counts, and any justified disclosure or confirmation. Check keyboard
+equivalence and discoverability; few clicks alone do not establish good UX.
 Document/link checks establish structure only; ratification establishes no implementation verdict.
 
 ## Open questions
@@ -79,6 +95,7 @@ Which existing names should be normalized without making platform commands unfam
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-13 | Add CX8: interaction economy without clutter or lost authority. | User direction: UX is golf; minimize strokes. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Link target protocol owners; preserve existing experience promises. | [Architecture direction](../docs/architecture/README.md). |
 | 2026-09-20 | Initial draft, CX1–7. | User journeys and current implementation assessment. |
