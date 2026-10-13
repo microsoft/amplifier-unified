@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.125",
+      "title": "Larger model recordings, smoother chats and clearer progress",
+      "changes": [
+        "New large model requests and responses can be downloaded separately from the bounded preview, with conversation and delegate identity preserved. Partial recordings are labeled with their limits.",
+        "Long chats avoid reparsing stable message content when activity clocks tick or you type. Editing, streaming and chat-specific drafts keep their existing behavior.",
+        "Canvas accepts GIFs up to 64 MiB within its frame and pixel limits, with playback controls and downloads of the original file.",
+        "An explicitly approved schedule repair can be handed to another chat in the same workspace. Resuming still checks the original approval, exact schedule revision, and current stop state.",
+        "Activity status aligns with the composer, scrollbars use subtler tracks, and middle-click closes an individual Canvas tab.",
+        "After enough comparable completed turns, live status can show a historical duration range. Sparse history, pending decisions and active delegates keep the elapsed-time display."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.124",
       "title": "Chat links, GIF Canvas playback and reliable coordination waits",
       "changes": [
