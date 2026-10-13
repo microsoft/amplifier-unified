@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import * as api from './api';
 import {GifPlayer} from './gif-player';
 import {MediaReporter} from './media-reporter';
+import {publicationOutputIds} from './artifact-presentation';
 import './inline-media.css';
 
 let observationGeneration=0;
@@ -147,7 +148,8 @@ export function MediaFigure({item,messageId,reportMedia,dispatch,openInCanvas=fa
  </figure>;
 }
 
-export function InlineMedia({sessionId,messageId,mediaRevision=0,dispatch}){
+export function InlineMedia({sessionId,messageId,mediaRevision=0,dispatch,artifactRows=[]}){
+ const adapted=publicationOutputIds(artifactRows.filter(row=>row.sessionId===sessionId),messageId);
  const anchor=useRef(null),[visible,setVisible]=useState(false),[result,setResult]=useState(null),[error,setError]=useState(''),[retry,setRetry]=useState(0);
  useEffect(()=>{
   if(!globalThis.IntersectionObserver){setVisible(true);return}
@@ -164,7 +166,7 @@ export function InlineMedia({sessionId,messageId,mediaRevision=0,dispatch}){
   return ()=>{disposed=true;abort.abort()};
  },[sessionId,messageId,mediaRevision,visible,retry]);
  return <div ref={anchor} className="a-inline-media">
-  {result?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId} dispatch={dispatch} openInCanvas/>)}
+  {result?.items.filter(item=>!adapted.has(item.id)).map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId} dispatch={dispatch} openInCanvas/>)}
   {error&&<p role="alert">{error} <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry media metadata</button></p>}
   {result?.overflow&&<p>Only the first 20 media attachments are displayed.</p>}
  </div>;

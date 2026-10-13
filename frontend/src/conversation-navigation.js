@@ -1,3 +1,27 @@
+// Tab-local overrides survive reload without sharing writes with another client.
+// sessionStorage copies on tab duplication, then each tab evolves independently.
+export function createArtifactOverrides(storage=()=>sessionStorage,limit=128){
+ const name='amplifier.artifactPresentation.v1';let rows;
+ const load=()=>{
+  if(rows)return;
+  rows=new Map();
+  try{const saved=JSON.parse(storage().getItem(name)||'[]');
+   if(Array.isArray(saved))for(const entry of saved.slice(-limit)){
+    if(Array.isArray(entry)&&typeof entry[0]==='string'&&['compact','inline'].includes(entry[1]))rows.set(...entry);
+   }
+  }catch{}
+ };
+ return {
+  get(identity){load();return rows.get(identity)},
+  set(identity,mode){
+   load();if(!['compact','inline'].includes(mode))return false;
+   rows.delete(identity);rows.set(identity,mode);
+   while(rows.size>limit)rows.delete(rows.keys().next().value);
+   try{storage().setItem(name,JSON.stringify([...rows]));return true}catch{return false}
+  }
+ };
+}
+
 // A bounded per-client display cache. Server state and execution stay authoritative.
 export function createConversationNavigation(limit=32){
  const cache=new Map(),pending=new Map();let epoch;

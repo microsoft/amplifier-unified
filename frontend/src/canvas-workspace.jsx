@@ -2,7 +2,7 @@ import {CanvasControl,CanvasViewControls} from './canvas-controls';
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {request} from './api';
 import {CanvasAppViewer} from './canvas-app-viewer';
-import {CanvasViewer,GifCanvasViewer} from './canvas-viewer';
+import {CanvasViewer,GifCanvasViewer,MediaCanvasViewer} from './canvas-viewer';
 import {BrowserPreview} from './canvas-library';
 import {McpAppViewer} from './mcp-app-viewer';
 import {A2UISurface} from './a2ui';
@@ -13,6 +13,7 @@ const Surface=({canvas,act})=><A2UISurface surface={canvas.surface} act={act}/>;
 const builtins=Object.fromEntries(['markdown','text','code','json','jsonl','image','pdf','html','babylon','mermaid','dot'].map(kind=>['builtin.canvas.'+kind,CanvasViewer]));
 // Native retained references are not new contributed-renderer SDK kinds.
 builtins['builtin.canvas.gif']=GifCanvasViewer;
+builtins['builtin.canvas.mp4']=MediaCanvasViewer;
 Object.assign(builtins,{'builtin.canvas.settings':({canvas,dispatch})=><button type="button" className="a-soft" onClick={()=>dispatch('canvas.select',{id:canvas.id})}>Open Settings in Canvas</button>,'builtin.canvas.browser':BrowserPreview,'builtin.canvas.mcp-app':McpAppViewer,'builtin.canvas.a2ui':Surface});
 const targetOf=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
 const factoryCache=new Map();
@@ -73,7 +74,7 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
  const Builtin=builtins[selected],Component=external;
  return <>
   {(error||!choice||recovery)&&<div role="status" className="a-renderer-notice">{recovery?'Recovery mode uses standard viewers.':error?`This renderer needs attention: ${error}`:'The saved renderer is unavailable. Showing the standard viewer; your artifact is retained.'}<button type="button" className="a-link" onClick={()=>dispatch('canvas.views.recover',target)}>Use standard viewer</button></div>}
-  {Builtin?<><Builtin canvas={canvas} act={act} dispatch={dispatch} reportStatus={reportMounted} connectionKey={connectionKey}/>{canvas.kind!=='gif'&&<Mounted report={reportMounted}/>}</>:Component?<RendererBoundary onError={fail} fallback={fallback}><Component host={host}/><Mounted report={reportMounted}/></RendererBoundary>:error?fallback:<p role="status">Loading viewer…</p>}
+  {Builtin?<><Builtin canvas={canvas} act={act} dispatch={dispatch} reportStatus={reportMounted} connectionKey={connectionKey}/>{!['gif','mp4'].includes(canvas.kind)&&<Mounted report={reportMounted}/>}</>:Component?<RendererBoundary onError={fail} fallback={fallback}><Component host={host}/><Mounted report={reportMounted}/></RendererBoundary>:error?fallback:<p role="status">Loading viewer…</p>}
  </>;
 }
 

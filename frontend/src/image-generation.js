@@ -17,7 +17,12 @@ export function imageJobLabel(job){
 export function imageGalleryEntries(state,messageId,images){
  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
  const jobs=(session?.execution?.imageGeneration||[]).filter(job=>job.messageId===messageId);
- const remaining=new Set(images),entries=[],requests=new Map();
+ // imageRequestId is a host receipt projection, but a free-standing/unmatched
+ // identifier is not generation evidence. Only this turn's projected work binds
+ // it to a gallery; ordinary images keep the general artifact shell.
+ const verified=images.filter(item=>item.row.kind==='image'&&
+  item.row.sessionId===session?.id&&jobs.some(job=>job.requestId&&job.requestId===item.row.imageRequestId));
+ const remaining=new Set(verified),entries=[],requests=new Map();
  for(const job of jobs){
   const key=job.requestId?JSON.stringify([job.operation,job.requestId]):job.id;
   const existing=requests.get(key);
@@ -26,7 +31,7 @@ export function imageGalleryEntries(state,messageId,images){
  }
  for(const entry of entries){
   const {job}=entry;
-  const matches=images.filter(item=>remaining.has(item)&&job.requestId&&item.row.imageRequestId===job.requestId);
+  const matches=verified.filter(item=>remaining.has(item)&&job.requestId&&item.row.imageRequestId===job.requestId);
   entry.item=matches[0];
   if(matches[0])remaining.delete(matches[0]);
  }

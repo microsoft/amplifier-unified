@@ -23,12 +23,13 @@ export function GifCanvasViewer({canvas,act,reportStatus}){
   try{
    const value=canvas.mediaReference;
    if(!value||typeof value.messageId!=='string'||!value.messageId||value.messageId.length>200)
-    throw Error('The retained GIF reference is unavailable.');
+    throw Error('The retained media reference is unavailable.');
    validateMediaMetadata({items:[value.item],overflow:false,mediaRevision:0},canvas.sessionId);
-   if(value.item.media.mimeType!=='image/gif')throw Error('This artifact is not a retained GIF.');
+   const expected=canvas.kind==='mp4'?'video/mp4':'image/gif';
+   if(value.item.media.mimeType!==expected)throw Error('This artifact does not match its retained media type.');
    return value;
   }catch(error){return {error:error.message}}
- },[canvas.mediaReference,canvas.sessionId]);
+ },[canvas.mediaReference,canvas.sessionId,canvas.kind]);
  const statusRef=useRef(reportStatus);statusRef.current=reportStatus;
  const reportMedia=useMemo(()=>payload=>{
   const status=payload.renderState==='loading'?'pending':payload.renderState;
@@ -45,6 +46,9 @@ export function GifCanvasViewer({canvas,act,reportStatus}){
   <MediaFigure item={reference.item} messageId={reference.messageId} reportMedia={reportMedia}/>
  </div>;
 }
+// Keep the old GIF export for existing callers; the body/report/cleanup owner
+// also handles an exact typed MP4 reference without another playback pipeline.
+export const MediaCanvasViewer=GifCanvasViewer;
 function cleanSvg(svg){
  return DOMPurify.sanitize(svg,{USE_PROFILES:{svg:true,svgFilters:true},FORBID_TAGS:['foreignObject','script','image','a','use','animate','set'],FORBID_ATTR:['href','xlink:href']});
 }
