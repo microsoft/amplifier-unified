@@ -29,7 +29,7 @@ try{
  const [a,b]=workspaces;
  const [aChat,bChat]=chats;
  // Keep the destination chat outside the bounded Recent shortcut page.
- for(let index=0;index<9;index++)assert.equal((await action('session.create',{workspace:a.path,title:'Recent filler '+index})).accepted,true);
+ for(let index=0;index<21;index++)assert.equal((await action('session.create',{workspace:a.path,title:'Recent filler '+index})).accepted,true);
  await action('session.select',{id:aChat});
  await action('session.pin',{id:aChat,pinned:true});
  await expect(page.locator('[data-sidebar-section=recent] [data-session-id="'+bChat+'"]')).toHaveCount(0);
@@ -86,8 +86,63 @@ try{
  await expect(recentStatus).toHaveAttribute('data-kind','attention');await expectColor(recentStatus,'--a-danger');
  await page.request.post(url+'/fixture/activity',{data:{sessionId:recentId,status:'idle'}});
  await expect(recentStatus).toHaveAttribute('data-kind','idle');await expectColor(recentStatus,'--a-muted');
+  // The same unread marker must paint outside the sidebar, not merely exist in
+  // the DOM. Browsing and peeking must leave the active chat and unread state alone.
+  assert.equal((await action('session.markUnread',{id:recentId})).accepted,true);
+  await shortcut(a).click();
+  const workspaceRow=body.locator('[data-session-id="'+recentId+'"]');
+  const workspaceStatus=workspaceRow.locator('.a-navigation-status');
+  async function expectUnread(locator){
+   await expect(locator).toHaveAttribute('data-kind','unread');
+   await expect(locator).toHaveAttribute('aria-label','New response');
+   const dot=locator.locator('.a-navigation-unread');
+   await expect(dot).toBeVisible();
+   await expect(dot).toHaveCSS('width','6px');
+   await expect(dot).toHaveCSS('height','6px');
+   await expect(dot).toHaveCSS('border-radius','50%');
+   await expect.poll(()=>dot.evaluate(node=>getComputedStyle(node).backgroundColor===getComputedStyle(node.parentElement).color)).toBe(true);
+   await expectColor(locator,'--a-accent');
+  }
+  for(const scheme of ['light','dark']){
+   await action('view.update',{patch:{scheme}});
+   for(const width of [1440,390]){
+    await page.setViewportSize({width,height:1000});
+    await expectUnread(workspaceStatus);
+    if(width===1440)await expectUnread(recentStatus);
+    await page.screenshot({path:out+'/unread-'+scheme+'-'+width+'.png'});
+   }
+  }
+  await page.setViewportSize({width:1440,height:1000});
+  await action('view.update',{patch:{scheme:'light',navPinned:true,navExpanded:true}});
+  await workspaceRow.hover();
+  const details=page.getByRole('dialog',{name:/^Details for Recent filler/});
+  await expect(details).toBeVisible();
+  await expectUnread(details.locator('.a-navigation-status'));
+  await page.keyboard.press('Escape');
+  assert.equal((await state()).selectedSessionId,aChat);
+  assert.ok((await state()).attention.sessions[recentId]);
+  // Work and errors retain precedence over unread in both views.
+  for(const [status,kind,token] of [['working','working','--a-accent'],['error','attention','--a-danger']]){
+   await page.request.post(url+'/fixture/activity',{data:{sessionId:recentId,status}});
+   for(const locator of [recentStatus,workspaceStatus]){
+    await expect(locator).toHaveAttribute('data-kind',kind);
+    await expect(locator.locator('svg')).toBeVisible();
+    await expect(locator.locator('.a-navigation-unread')).toHaveCount(0);
+    await expectColor(locator,token);
+   }
+  }
+  await page.request.post(url+'/fixture/activity',{data:{sessionId:recentId,status:'idle'}});
+  await expectUnread(workspaceStatus);await expectUnread(recentStatus);
+  await action('view.update',{patch:{workSurface:'chats'}});
+  await expectUnread(body.locator('[data-session-id="'+recentId+'"] .a-navigation-status'));
+  await page.reload();
+  await expectUnread(body.locator('[data-session-id="'+recentId+'"] .a-navigation-status'));
+  assert.equal((await state()).selectedSessionId,aChat);
+  await action('view.update',{patch:{workSurface:'chat'}});
+  await expect(composer).toHaveDraft('Unsent draft belongs to Project A');
+  await expect(page.getByRole('button',{name:'Remove draft.txt',exact:true})).toBeVisible();
  const fixtureState=await (await page.request.get(url+'/fixture')).json();assert.deepEqual(fixtureState.sent,[]);assert.deepEqual(fixtureState.stopped,[]);
  assert.equal(fixtureState.registeredWorkspaces.length,3);assert.notEqual(aChat,bChat);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',scenarios:['destination absent from pinned/recent','gray idle, accent working, red attention in pinned/recent/browser','repeated workspace clicks','shared navigation action','header/body/sidebar/list coherence','details/files scope','active chat preserved','draft and attachment preserved','new chat destination','all chats scope','no send or stop'],screenshots:out}));
+  console.log(JSON.stringify({status:'passed',scenarios:['destination absent from pinned/recent','gray idle, accent working, red attention in pinned/recent/browser','repeated workspace clicks','shared navigation action','header/body/sidebar/list coherence','details/files scope','active chat preserved','draft and attachment preserved','new chat destination','all chats scope','painted unread dots in Recent/workspace/search/details, light/dark desktop/mobile and reload','working/error precedence over unread','no send or stop'],screenshots:out}));
 }catch(error){if(page)await page.screenshot({path:out+'/failure.png'});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}
