@@ -25,6 +25,21 @@ The sidebar presents Pinned, Workspaces and Recent. All chats retains the existi
 
 ## Shared actions
 
+`worktree.inspect/create/attach` accept `repositoryPath` for a repository inside
+the task's workspace, execution folder or an already associated ready checkout.
+Relative paths use the execution folder. Inspect first and carry the returned
+absolute `repository.root` and `sourceRevision` into creation. This supports
+several child repositories beneath a non-Git workspace; each checkout retains
+its own source and Git identity. Chat → Advanced → Work & automation exposes
+the same repository selection and shows each checkout's source.
+
+Creating or attaching these checkouts preserves the current execution folder,
+history and unrelated dirty files. Use the returned paths explicitly for
+commands, imports and previews; automatic multi-repository dependency remapping
+is not provided. Existing handoff remains the separate operation for moving
+the task's default execution folder. Native children cannot mutate their root's
+worktree placement or ownership through either dispatch entry point.
+
 ## Workspace starters
 
 New workspace creation offers **Start from…**. **Blank** keeps the empty-folder

@@ -1,5 +1,9 @@
 """Explicit repository selection without relocating a multi-repository chat."""
 import copy
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -79,6 +83,26 @@ async def test_attach_rejects_different_repository_and_accepts_correct_source(mu
     result = (await app.dispatch('worktree.attach', {'sessionId': sid, 'repositoryPath': str(repos[0]),
         'path': first['path']}, command_id='correct-repository'))['result']
     assert not result['owned'] and result['repository'] == first['repository']
+    with pytest.raises(AppError, match='another checkout or source'):
+        await app.dispatch('worktree.attach', {'sessionId': sid, 'repositoryPath': first['path'],
+            'path': first['path']}, command_id='correct-repository')
+
+
+async def test_explicit_command_and_import_paths_use_selected_copies(multi):
+    app, sid, _, repos = multi
+    (repos[0] / 'calculator.py').write_text('VALUE = 42\n')
+    git(repos[0], 'add', 'calculator.py'); git(repos[0], 'commit', '-m', 'test module')
+    (repos[1] / 'verify.py').write_text('import calculator,json,os\nprint(json.dumps(dict(value=calculator.VALUE, module=calculator.__file__, cwd=os.getcwd())))\n')
+    git(repos[1], 'add', 'verify.py'); git(repos[1], 'commit', '-m', 'test client')
+    first = await create(app, sid, repos[0], 'api-copy')
+    second = await create(app, sid, repos[1], 'client-copy')
+    (repos[0] / 'calculator.py').write_text('VALUE = 99\n')
+    completed = subprocess.run([sys.executable, 'verify.py'], cwd=second['path'],
+        env={**os.environ, 'PYTHONPATH': first['path']}, capture_output=True, text=True, check=True)
+    result = json.loads(completed.stdout)
+    assert result == {'value': 42, 'module': str(Path(first['path']) / 'calculator.py'), 'cwd': second['path']}
+    # This qualifies the explicit paths, not automatic dependency rebinding.
+    assert (repos[0] / 'calculator.py').read_text() == 'VALUE = 99\n'
 
 
 async def test_selection_refuses_symlink_escape_and_foreign_checkouts(multi, tmp_path):

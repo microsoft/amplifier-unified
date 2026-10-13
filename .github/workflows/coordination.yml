@@ -40,6 +40,10 @@ on:
       - 'amplifier_web/workspace_resources.py'
       - 'frontend/src/workspace-resource-*.jsx'
       - 'tests/test_resource_reservations.py'
+      - 'tests/test_multi_repository_worktrees.py'
+      - 'frontend/src/worktrees.jsx'
+      - 'tests/fixtures/worktrees_ui_server.py'
+      - 'frontend/tests/multi-repository-worktrees-browser.mjs'
       - 'frontend/tests/resource-reservations-browser.mjs'
       - 'skills/coordinate-work/**'
       - 'tests/fixtures/coordination_ui_server.py'
@@ -73,6 +77,7 @@ jobs:
           tests/test_workspace_repair_outcomes.py tests/test_worktrees.py
           tests/test_peer_creation_operation.py
           tests/test_resource_reservations.py
+          tests/test_multi_repository_worktrees.py
           tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
       - name: Verify mounted child identity and file boundaries
@@ -91,3 +96,6 @@ jobs:
       - name: Exercise resource reservations through the browser
         working-directory: frontend
         run: node tests/resource-reservations-browser.mjs
+      - name: Exercise explicit repository selection through the browser
+        working-directory: frontend
+        run: node tests/multi-repository-worktrees-browser.mjs

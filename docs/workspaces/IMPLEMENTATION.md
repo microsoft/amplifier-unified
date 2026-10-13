@@ -1,5 +1,29 @@
 # Implementation and evidence
 
+## Explicit repository selection — 2026-10-13
+
+Tasks can inspect, create or attach working copies for individual repositories
+under a non-Git workspace using `repositoryPath`. Selection resolves within the
+task's canonical/execution folders or a ready associated checkout. Inspections
+return the absolute root, and the browser carries that root and its exact source
+revision into creation. Each existing worktree record retains its separate Git
+identity and source. Selection never relocates the conversation or includes
+dirty files unless `carry_dirty` was explicitly chosen.
+
+The affected control class now enforces root authority for all five worktree
+mutations, including handoff and reconciliation. A native child cannot borrow
+the enclosing root's placement controls. Attach retries also reject a changed
+source binding. Existing handoff, preservation and revision checks remain.
+
+Local evidence covers two real repositories under a non-Git folder, clean and
+explicit dirty copies, stale source refusal, wrong-repository attachment,
+symlink/out-of-scope refusal, five child-control denials and explicit command/
+import paths that keep using the copied dependency after the canonical source
+changes. Both the new multi-repository browser journey and the existing
+create/handoff/restart/reconcile/cleanup journey pass. Their runtime is scripted;
+this is not qualification of automatic runtime dependency rebinding or preview
+provisioning. Those broader binding and integration gates remain below.
+
 ## Cooperative resource reservations — 2026-10-13
 
 The existing workspace resource owner now provides explicit reservations in
