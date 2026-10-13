@@ -22,6 +22,62 @@ export function createArtifactOverrides(storage=()=>sessionStorage,limit=128){
  };
 }
 
+export const inlineEditNotice='Finish or cancel the inline preview edit before leaving these messages.';
+const targetFields=['viewId','resourceId','resourceRevision','generation'];
+const sameTarget=(a,b)=>targetFields.every(field=>a?.[field]===b?.[field]);
+const scopeOf=state=>JSON.stringify([state?.client?.hostInstanceId??null,state?.client?.id??state?.client?.clientId??null]);
+
+// Only live mounts and edit intent, never private text or a second artifact store.
+// The publication anchor belongs to the mount, not to the resource's first row.
+export function createInlineOwnership(){
+ const mounts=new Set();
+ return {
+  register(state,target,owner){
+   const record={scope:scopeOf(state),target:{...target},...owner,dirty:!!target.dirty,sequence:0};
+   mounts.add(record);return ()=>mounts.delete(record);
+  },
+  hasMounts:()=>mounts.size>0,
+  dirty:()=>[...mounts].some(record=>record.dirty),
+  intent(target,dirty){
+   const tickets=[];
+   for(const record of mounts)if(sameTarget(record.target,target)){
+    const sequence=++record.sequence;
+    // A clean intent is not a clean receipt. Rejection/uncertainty stays dirty.
+    record.dirty=true;tickets.push({record,sequence,dirty});
+   }
+   return tickets;
+  },
+  settle(tickets,receipt){
+   if(receipt?.accepted!==true)return;
+   for(const {record,sequence,dirty} of tickets)if(mounts.has(record)&&record.sequence===sequence)record.dirty=!!dirty;
+  },
+  blocksTarget:target=>[...mounts].some(record=>record.dirty&&sameTarget(record.target,target)),
+  blocksWindow(sessionId,messages){
+   const ids=new Set((messages||[]).map(row=>row.id));
+   return [...mounts].some(record=>record.dirty&&(record.sessionId!==sessionId||!ids.has(record.messageId)));
+  },
+  reconcile(state){
+   let revoked=false;
+   for(const record of mounts){
+    if(record.scope!==scopeOf(state)||!(state?.canvasWorkspace?.views||[]).some(view=>sameTarget(record.target,view))){
+     revoked ||= record.dirty;mounts.delete(record);
+    }
+   }
+   return revoked;
+  }
+ };
+}
+export const inlineOwnership=createInlineOwnership();
+export function normalizedAction(action,args={}){
+ return action==='shell.command'?{action:args.action,args:args.args||{}}:{action,args};
+}
+export function leavesSettings(action,args={}){
+ const command=normalizedAction(action,args);
+ return ['session.select','session.draft','workspace.select','session.create','canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(command.action)||
+  command.action==='canvas.visibility'&&command.args.open===false||
+  command.action==='canvas.present'&&command.args.presentation?.canvas==='open';
+}
+
 // A bounded per-client display cache. Server state and execution stay authoritative.
 export function createConversationNavigation(limit=32){
  const cache=new Map(),pending=new Map();let epoch;
@@ -36,7 +92,7 @@ export function createConversationNavigation(limit=32){
  }
  function begin(state,id,hint){
   // A dirty renderer must remain mounted until the server accepts navigation.
-  if(state?.canvasWorkspace?.views?.some(row=>row.dirty))return null;
+  if(inlineOwnership.hasMounts()||state?.canvasWorkspace?.views?.some(row=>row.dirty))return null;
   const row=state?.sessions?.find(row=>row.id===id)||cache.get(id)?.session||(hint?.id===id?hint:null);
   if(!row)return null;
   const current=selected(state);

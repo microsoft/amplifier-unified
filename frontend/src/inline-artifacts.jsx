@@ -7,7 +7,7 @@ import {ImageActions} from './image-actions';
 import {CanvasControlsHost} from './canvas-controls';
 import {imageGalleryEntries,imageJobLabel} from './image-generation';
 import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice} from './artifact-presentation';
-import {createArtifactOverrides} from './conversation-navigation';
+import {createArtifactOverrides,inlineOwnership,inlineEditNotice} from './conversation-navigation';
 import './inline-artifacts.css';
 
 const overrides=createArtifactOverrides();
@@ -112,17 +112,25 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  const [notice,setNotice]=useState(''),[refusal,setRefusal]=useState(''),[busy,setBusy]=useState(false),[attempt,setAttempt]=useState(0);
  const root=useRef(null),owned=useRef(null),run=useRef(dispatch),changing=useRef(false),opening=useRef(null),mounted=useRef(false);
  run.current=dispatch;
- const view=loaded&&((state.canvasWorkspace?.views||[]).find(value=>value.viewId===loaded.view.viewId)||loaded.view);
+ const authorized=loaded&&(state.canvasWorkspace?.views||[]).find(value=>value.viewId===loaded.view.viewId&&value.resourceId===loaded.view.resourceId&&value.resourceRevision===loaded.view.resourceRevision&&value.generation===loaded.view.generation);
+ const view=authorized||loaded?.view;
+ const revoked=!!loaded&&!authorized;
  if(owned.current&&view)owned.current.view=view;
  const release=async record=>{
   if(!record||record.released)return;
+  if(inlineOwnership.blocksTarget(record.view))throw Error(inlineEditNotice);
   if(!record.pending)record.pending=run.current('canvas.views.release',targetOf(record.view)).then(receipt=>{
    if(receipt?.accepted===false)throw Error(receipt.error||'The preview could not be closed.');
    record.released=true;
+   record.unregister?.();
   }).finally(()=>{record.pending=null});
   await record.pending;
  };
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
+ useEffect(()=>{
+  if(!revoked)return;
+  owned.current?.unregister?.();setNotice('The host removed access to this preview. Private input could not be retained.');
+ },[revoked]);
  useEffect(()=>{
   if(mode==='none'||!root.current)return;
   if(!globalThis.IntersectionObserver){setNear(true);return}
@@ -139,7 +147,10 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    record={view:receipt.result,released:false};owned.current=record;
    if(!active){await release(record);return}
    const canvas=await request(`/api/canvas/views/${record.view.viewId}/resource?`+new URLSearchParams(targetOf(record.view)),{signal:controller.signal});
-   if(active)setLoaded({view:record.view,canvas});
+   if(active){
+    record.unregister=inlineOwnership.register(state,record.view,{sessionId:row.sessionId,messageId,version});
+    setLoaded({view:record.view,canvas});
+   }
   }).catch(error=>{
    if(active&&error.name!=='AbortError'){
     // Capacity/resource refusal leaves a useful compact handoff, not an empty
@@ -147,7 +158,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
     setRefusal(error.message);setNotice(error.message);
    }
   });
-  return()=>{active=false;controller.abort();void release(record).catch(()=>{})};
+  return()=>{active=false;controller.abort();record?.unregister?.();void release(record).catch(()=>{})};
  // Capability refreshes do not tear down a live editor. A newly available
  // capability can be tried explicitly; publication/mode changes use release.
  },[near,mode,refusal,attempt,row.id,version,messageId]);
@@ -176,9 +187,6 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    if(!opening.current){
     const actions=globalThis.window?.amplifier?.getActions?.()||[];
     const command=canvasOpenCommand(item,messageId,actions);
-    // The older shell does not yet include canvas.present in its Settings
-    // leave guard. Do not bypass an unfinished Settings editor.
-    if(command.action==='canvas.present'&&state.view?.settingsCanvas)throw Error('Close Settings before opening this artifact in Canvas.');
     opening.current={...command,id:crypto.randomUUID()};
    }
    const command=opening.current;
@@ -199,7 +207,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  if(mode==='none')return null;
  const inline=mode==='inline'&&(caps.inline||!!loaded)&&!refusal;
  const Icon=row.kind==='image'?ImageIcon:['gif','mp4'].includes(row.kind)?Film:row.kind==='browser'?Globe:['code','html','json','jsonl'].includes(row.kind)?Code:FileText;
- const canvas=loaded&&{...loaded.canvas,...targetOf(view),view:view.view,renderReports:view.renderReports,document:view.document,interaction:view.interaction,events:view.events};
+ const canvas=loaded&&!revoked&&{...loaded.canvas,...targetOf(view),view:view.view,renderReports:view.renderReports,document:view.document,interaction:view.interaction,events:view.events};
  return <section ref={root} className="a-general-artifact a-inline-artifact" data-artifact-id={row.id} data-artifact-version={version} data-chat-mode={inline?'inline':'compact'} aria-label={titleOf(item)}>
   <div className="a-general-artifact-heading">
    <Icon aria-hidden="true"/><span className="a-general-artifact-title"><strong>{titleOf(item)}</strong><small>{row.kind} · Version {version}</small></span>
@@ -208,7 +216,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
   </div>
   {(notice||!caps.inline&&caps.reason||!caps.canvas)&&<p className="a-inline-artifact-notice" role="status">{notice||(!caps.canvas?'Canvas is unavailable for this artifact.':caps.reason)}</p>}
   {inline&&<div className="a-general-artifact-body" data-kind={row.kind}>
-   {canvas?<CanvasControlsHost.Provider value={undefined}><Renderer key={view.viewId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch}/></CanvasControlsHost.Provider>:<div className="a-inline-artifact-placeholder" role="status">{near?'Loading preview…':'Saved artifact'}</div>}
+   {revoked?<p role="status">Preview access was removed by the host.</p>:canvas?<CanvasControlsHost.Provider value={undefined}><Renderer key={view.viewId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch}/></CanvasControlsHost.Provider>:<div className="a-inline-artifact-placeholder" role="status">{near?'Loading preview…':'Saved artifact'}</div>}
   </div>}
  </section>;
 }

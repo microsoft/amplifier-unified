@@ -1,7 +1,8 @@
-import React,{useEffect,useMemo,useRef,useState} from 'react';
+import React,{useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {request} from './api';
 import {Markdown} from './markdown';
 import {readDetail} from './detail-read';
+import {inlineOwnership,inlineEditNotice} from './conversation-navigation';
 export {readDetail} from './detail-read';
 export function DetailText({text,reference,markdown=false,automatic=false,writingContext,fileContext,userContent=false}){
  const [loaded,setLoaded]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[visible,setVisible]=useState(false);
@@ -54,20 +55,33 @@ export function useConversationDetail(source,beforeApply,dispatch){
   execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])]),segments:unique([...(extra.segments||[]),...(source.execution?.segments||[])])},
   executionWindow:{...source.executionWindow,...extra.groupWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected,[source,extra,projected,expandedMessages]);
  const focusedHere=focused?.sessionId===source?.id?focused:null;
- const session=useMemo(()=>focusedHere?{...projected,messages:focusedHere.messages,streaming:'',execution:focusedHere.execution,
+ const candidate=useMemo(()=>focusedHere?{...projected,messages:focusedHere.messages,streaming:'',execution:focusedHere.execution,
   sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular,[focusedHere,projected,regular]);
+ const committed=useRef(null);
+ // Decide before React reconciles the message children. Keep the actual nodes,
+ // not a reconstructed editor snapshot. Revoked mounts are removed by the host
+ // reconciliation boundary, so no old privileged window can veto that removal.
+ const blocked=inlineOwnership.blocksWindow(candidate?.id,candidate?.messages);
+ const session=blocked&&committed.current?.id===candidate?.id?committed.current:candidate;
+ useLayoutEffect(()=>{committed.current=session},[session]);
  async function around(messageId,{jump=true,isCurrent=()=>true}={}){
   if(paging.current||!originalSource)return false;
   const id=originalSource.id,token={id};paging.current=token;setBusy('conversation');setError('');
   try{
    const result=await request('/api/conversation/navigation?'+new URLSearchParams({sessionId:id,messageId,window:'true'}));
    if(!Array.isArray(result?.messages)||!result.messages.some(row=>row.id===messageId))throw Error('This message could not be loaded. Try again.');
-   if(originalId.current===id&&paging.current===token&&isCurrent()){setFocused({...result,sessionId:id});if(jump)setJumpTarget({id:messageId});return true}
+   if(originalId.current===id&&paging.current===token&&isCurrent()){
+    if(inlineOwnership.blocksWindow(id,result.messages)){setError(inlineEditNotice);return false}
+    setFocused({...result,sessionId:id});if(jump)setJumpTarget({id:messageId});return true;
+   }
    return false;
   }catch(error){if(originalId.current===id&&paging.current===token&&isCurrent())setError(error.message);return false}
   finally{if(paging.current===token){paging.current=null;setBusy('')}}
  }
- function latest(jump=true){paging.current=null;setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
+ function latest(jump=true){
+  if(inlineOwnership.blocksWindow(originalSource?.id,originalSource?.messages)){setError(inlineEditNotice);return false}
+  paging.current=null;setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null);return true;
+ }
  async function earlier(part){
   if(paging.current||!session)return;
   const id=session.id,token={id};paging.current=token;
@@ -107,5 +121,5 @@ export function useConversationDetail(source,beforeApply,dispatch){
  if(originalId.current!==originalSource?.id){originalId.current=originalSource?.id;paging.current=null}
  const hasEarlier=session?.messageWindow?.offset>0||session?.executionWindow?.offset>0||session?.sharedHistoryOffset>0;
  const controls=focusedHere?<><div className="a-history-window-controls"><button className="a-soft" disabled={!!busy||!focusedHere.before} onClick={()=>around(focusedHere.before)}>Earlier messages</button><button className="a-soft" disabled={!!busy||!focusedHere.after} onClick={()=>around(focusedHere.after)}>Later messages</button><button className="a-link" disabled={!!busy} onClick={latest}>Return to latest</button></div>{busy&&<p role="status">Loading conversation…</p>}{error&&<p role="alert">{error}</p>}</>:<>{hasEarlier&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier()}>{busy?'Loading earlier conversation…':'Load earlier conversation'}</button>}{error&&<p role="alert">{error}</p>}</>;
- return {session,controls,earlier,busy,around,latest,focused:!!focusedHere,jumpRequest:jumpTarget};
+ return {session,controls:<>{controls}{blocked&&error!==inlineEditNotice&&<p role="status">{inlineEditNotice}</p>}</>,earlier,busy,around,latest,focused:!!focusedHere,jumpRequest:jumpTarget};
 }
