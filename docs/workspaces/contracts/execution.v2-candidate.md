@@ -79,6 +79,10 @@ into later actions. A different repository's checkout cannot be attached under
 the selected source identity. Existing exact source revision and dirty-copy
 rules continue to apply independently to each repository.
 
+Creation and attachment command identities are serialized across repositories
+sharing managed storage. Concurrent reuse with different contents must preserve
+the first retained record and reject the competing request.
+
 Selection and creation do not move the conversation or remap shell imports,
 dependencies or file tools. Checkouts retain their repository identity, source
 and location in the existing worktree owner. Choosing a default execution

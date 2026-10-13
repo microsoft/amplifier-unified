@@ -149,7 +149,21 @@ class GitWorktrees:
         root, repository = common(path)
         with self.lock(repository): return snapshot(root)[0]
 
+    @contextmanager
+    def command_lock(self, action, command_id):
+        # Receipts/checkouts share one storage namespace even when their Git
+        # repositories have different locks. The same command cannot race two
+        # repositories into overwriting one retained ownership record.
+        path = self.directory / 'command-locks' / digest([action, command_id])
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with FileLock(str(path), timeout=30): yield
+
     def create(self, source, *, command_id, expected_revision, mode='clean', ref='HEAD', branch=None, session_id=None):
+        with self.command_lock('create', command_id):
+            return self._create(source, command_id=command_id, expected_revision=expected_revision,
+                                mode=mode, ref=ref, branch=branch, session_id=session_id)
+
+    def _create(self, source, *, command_id, expected_revision, mode='clean', ref='HEAD', branch=None, session_id=None):
         identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'managed-worktree:' + command_id))
         signature = digest([str(source), expected_revision, mode, ref, branch, session_id])
         root, repository = common(source)
@@ -214,6 +228,10 @@ class GitWorktrees:
             return record
 
     def attach(self, path, *, source, command_id, session_id=None):
+        with self.command_lock('attach', command_id):
+            return self._attach(path, source=source, command_id=command_id, session_id=session_id)
+
+    def _attach(self, path, *, source, command_id, session_id=None):
         target, repository = common(path)
         _, expected = common(source)
         if repository != expected: raise ValueError('The checkout must belong to this task’s repository')

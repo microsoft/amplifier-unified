@@ -14,6 +14,9 @@ The affected control class now enforces root authority for all five worktree
 mutations, including handoff and reconciliation. A native child cannot borrow
 the enclosing root's placement controls. Attach retries also reject a changed
 source binding. Existing handoff, preservation and revision checks remain.
+Creation and attachment also serialize command identities across repository
+locks, so simultaneous reuse cannot overwrite another repository's ownership
+record. Two independent managers exercise both races against shared storage.
 
 Local evidence covers two real repositories under a non-Git folder, clean and
 explicit dirty copies, stale source refusal, wrong-repository attachment,
@@ -23,6 +26,13 @@ changes. Both the new multi-repository browser journey and the existing
 create/handoff/restart/reconcile/cleanup journey pass. Their runtime is scripted;
 this is not qualification of automatic runtime dependency rebinding or preview
 provisioning. Those broader binding and integration gates remain below.
+
+A two-round real-provider check through a fresh worker and the installed
+candidate wheel creates both clean copies, preserves an uncommitted original,
+then inspects both retained records without creating extra copies or changing
+execution placement. The final package's 285 application/worktree Python files
+match the candidate source. This qualifies explicit selection through the
+actual agent tool, not automatic dependency mapping or concurrent model efficacy.
 
 ## Cooperative resource reservations — 2026-10-13
 
@@ -172,7 +182,7 @@ those broader acceptance journeys.
 
 ## Program delivery gates
 
-The approved program remains staged. The two implementation slices above are
+The approved program remains staged. The implementation slices above are
 bounded deliveries, not completion of every workstream in the program.
 Existing native history, command receipts, worktree records and usage receipts
 remain the owners; the remaining work must extend them rather than create
@@ -182,7 +192,7 @@ competing stores.
 | --- | --- | --- |
 | Equivalent authority across supported routes | Host, runtime adapters, configuration controls | Explicit capability grants and revocation across schedules, recipes and background admission; preserve authorized configuration changes |
 | Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Later correlated replies, question/deferral revisions, expiring one-shot watches and fair bounded delivery; no duplicate continuation or false dependency success |
-| Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations delivered above. Remaining: bind two child repositories under a non-Git workspace; integrate managed resource provisioning; verify actual commands, imports and previews against bindings |
+| Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
 | Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context for user-created and commissioned peers; overlap warnings and supported stale-write conflicts without leaking drafts or loading dormant agents |
 | Assignment control | Existing task, capacity and interruption owners | Aggregate reservations and scoped Stop across commissioned roots and nested work, while unrelated project chats keep running |
 | Durable results and integration | Artifact/resource owner and worktree integration | Retain exact versions before mutable sources disappear; validate the combined candidate and preserve uncertain cleanup effects |
