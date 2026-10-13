@@ -91,3 +91,9 @@ parses on ticks/draft updates and zero parent renders on ticks. `--measure-only`
 records the same workload on a baseline without asserting those new limits.
 This is work-count evidence, not a production CPU percentage or latency claim.
 The unit suite also checks loaded-detail retention and rejection of late results.
+
+Source changes must include the regenerated `amplifier_web/static` assets.
+The integration workflow rebuilds the client and requires a clean
+`git diff --exit-code -- amplifier_web/static`; a passing build alone does not
+prove that the committed application serves the changed source. Verify a repeat
+build reproduces the committed assets, without editing generated bundles by hand.
