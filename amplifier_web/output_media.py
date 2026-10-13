@@ -19,11 +19,12 @@ import time
 import uuid
 
 
-MAX_BYTES = 32 * 1024 * 1024
+MAX_BYTES = 64 * 1024 * 1024
+MAX_MP4_BYTES = 32 * 1024 * 1024
 MAX_SIDE = 4096
 MAX_PIXELS = 4_000_000
 MAX_FRAMES = 500
-MAX_DECODED_ESTIMATE = 128 * 1024 * 1024
+MAX_DECODED_ESTIMATE = 512 * 1024 * 1024
 
 
 def _dimensions(width, height):
@@ -124,7 +125,7 @@ def _gif(data):
             delay = 0
             pending_control = False
             if frames > MAX_FRAMES or width * height * 4 * frames > MAX_DECODED_ESTIMATE:
-                raise ValueError("GIF exceeds 500 frames or the 128 MiB decoded-pixel estimate.")
+                raise ValueError("GIF exceeds 500 frames or the 512 MiB decoded-pixel estimate.")
         else:
             raise ValueError("Invalid GIF block marker.")
     raise ValueError("GIF trailer is missing.")
@@ -223,10 +224,12 @@ def _mp4(data):
 
 def validate_media(data):
     if not data or len(data) > MAX_BYTES:
-        raise ValueError("Choose nonempty media up to 32 MiB.")
+        raise ValueError("Choose nonempty GIF media up to 64 MiB or MP4 up to 32 MiB.")
     if data[:6] in {b"GIF87a", b"GIF89a"}:
         return _gif(data)
     if len(data) >= 8 and data[4:8] == b"ftyp":
+        if len(data) > MAX_MP4_BYTES:
+            raise ValueError("Choose MP4 media up to 32 MiB.")
         return _mp4(data)
     raise ValueError("Only structurally valid GIF or MP4 media is supported.")
 
@@ -262,7 +265,7 @@ def read_verified(root, value, expected_sha256):
         with os.fdopen(fd, "rb") as stream:
             before = os.fstat(stream.fileno())
             if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_BYTES:
-                raise ValueError("Choose a regular media file up to 32 MiB.")
+                raise ValueError("Choose a regular GIF file up to 64 MiB or MP4 up to 32 MiB.")
             data = stream.read(MAX_BYTES + 1)
             after = os.fstat(stream.fileno())
             fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")

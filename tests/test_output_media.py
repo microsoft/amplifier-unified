@@ -53,7 +53,7 @@ def test_gif_metadata_preserves_nonuniform_delay_and_loop():
     gif().replace(b"\x21\xf9\x04", b"\x21\xf9\x03", 1),
     gif().replace(b"\x02\x02\x44\x01\x00", b"\x01\x02\x44\x01\x00", 1),
     gif(width=0), gif(width=4097), gif(width=2048, height=2048),
-    gif(frames=501), gif(width=1280, height=720, frames=37),
+    gif(frames=501), gif(width=1920, height=802, frames=88),
 ])
 def test_gif_damaged_or_over_budget_refused(data):
     with pytest.raises(ValueError):
@@ -3608,3 +3608,13 @@ async def test_gif_canvas_stale_alias_and_generic_forgery_refused(media_app):
         with pytest.raises(ValueError):
             await app.outputs.media.bytes(gif_open_args(args, record))
         assert (directory / 'transcript.jsonl').read_bytes() == raw
+
+def test_full_resolution_gif_admission_keeps_format_and_budgets():
+    from amplifier_web.output_media import MAX_MP4_BYTES
+    result = validate_media(gif(width=1920, height=802, frames=68))
+    assert (result['width'], result['height'], result['frameCount']) == (1920,802,68)
+    assert result['decodedPixelBytesEstimate'] == 1920 * 802 * 4 * 68
+    # Same-size MP4 is still outside its independent 32 MiB contract.
+    oversized = mp4() + b'x' * MAX_MP4_BYTES
+    with pytest.raises(ValueError, match='MP4.*32 MiB'):
+        validate_media(oversized)
