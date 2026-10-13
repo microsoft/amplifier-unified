@@ -36,7 +36,13 @@ USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','t
 def ensure_turn(session,identity,label=''):
     tree=session.setdefault('execution',{'nodes':[],'turns':[],'currentTurnId':None})
     if identity and not any(t['id']==identity for t in tree['turns']):
-        tree['turns'].append({'id':identity,'inputId':identity,'label':label[:100],'startedAt':time.time(),'phase':'running','aggregateUsage':rollup([])})
+        from .duration_hints import shape, estimate
+        request_shape = shape(session, identity, label)
+        hint = estimate(tree['turns'], request_shape)
+        started = time.time()
+        tree['turns'].append({'id':identity,'inputId':identity,'label':label[:100],'startedAt':started,'phase':'running','aggregateUsage':rollup([]),
+                             **({'durationShape': request_shape} if request_shape else {})})
+        session['turnDurationHint'] = {**hint, 'inputId': identity, 'startedAt': started} if hint else None
     anchor_turns(session)
     if identity:tree['currentTurnId']=identity
     return tree
