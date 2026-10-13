@@ -9,7 +9,8 @@ const require=createRequire(new URL('../frontend/package.json',import.meta.url))
 const {chromium,expect}=require('@playwright/test');
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--canvas-versions'],{stdio:['ignore','pipe','inherit']});
-let browser;
+let browser,context;
+async function bounded(promise,label){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`${label} did not settle within 30 seconds`)),30000)})])}finally{clearTimeout(timer)}}
 try{
  const url=await new Promise((resolve,reject)=>{
   let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),15000);
@@ -17,7 +18,9 @@ try{
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}});
  });
  browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
- const context=await browser.newContext({viewport:{width:1500,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ context=await browser.newContext({viewport:{width:1500,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ context.setDefaultTimeout(30000);context.setDefaultNavigationTimeout(30000);
+ await context.tracing.start({screenshots:true,snapshots:true});
  const page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push({name:error.name,message:error.message,stack:error.stack,topURL:page.url()}));
  const exceptionSession=await context.newCDPSession(page),exceptionContexts=new Map(),exceptions=[];
@@ -32,9 +35,9 @@ try{
    constructor(...args){super(...args);this.addEventListener('state',()=>{window.blockCopyBaselineReceived=true})}
   };
  });
- const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ const action=(name,args={})=>bounded(page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),`App action ${name}`);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- const clipboard=()=>page.evaluate(()=>navigator.clipboard.readText());
+ const clipboard=()=>bounded(page.evaluate(()=>navigator.clipboard.readText()),'Read clipboard');
  const canvas=page.locator('.a-canvas-viewer');
  async function ready(){
   // Current startup is SSE-first. Do not send actions against an empty baseline.
@@ -242,4 +245,4 @@ try{
  console.log(JSON.stringify({pageErrors:errors,frameExceptions:exceptions}));
  assert.deepEqual(errors,[]);
  console.log('PASS block-copy browser: SSE-first baseline, exact source clipboard, assistant/Canvas list/quote/table blocks, diagrams, code/text/JSON, saved-source readiness/failure, reference spans, reload, permission denial, unsupported API, pending/version race, keyboard/touch, writing/message regression.');
-}finally{await browser?.close();fixture.kill()}
+}finally{try{await context?.tracing.stop({path:'/tmp/unified-block-copy-trace.zip'})}finally{await browser?.close();fixture.kill()}}

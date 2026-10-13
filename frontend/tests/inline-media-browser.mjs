@@ -72,7 +72,14 @@ async function phase(name,work,{required=true}={}){
    {reason:String(error.message).replaceAll(root,'<source>/'),snapshots},required);
  }
 }
-const action=(page,name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+async function action(page,name,args={}){
+ // Playwright's action timeout does not bound promises returned by evaluate.
+ // Keep an unresolved app receipt from consuming the entire hosted job budget.
+ let timer;
+ const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`App action ${name} did not settle within 30 seconds`)),30000)});
+ try{return await Promise.race([page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),timeout])}
+ finally{clearTimeout(timer)}
+}
 const canvasPixels=figure=>figure.locator('canvas').evaluate(node=>{
  const data=node.getContext('2d').getImageData(0,0,node.width,node.height).data;
  // Small synthetic pixels are exact; large proof is sampled, not a memory copy.
@@ -194,6 +201,7 @@ async function newClient(options={}){
   sharedContext=await browser.newContext({baseURL:boot.url,viewport:{width:1280,height:950},storageState:sharedStorage});
   // Library-mode Playwright otherwise waits forever for actions/events. Keep
   // failures local so phase evidence and cleanup survive a missing control.
+  await sharedContext.tracing.start({screenshots:true,snapshots:true});
   sharedContext.setDefaultTimeout(30000);
   sharedContext.setDefaultNavigationTimeout(30000);
  }
@@ -249,7 +257,7 @@ async function unmountAndClose(client){
  await expect.poll(async()=>{const p=await probeState(page);return p.frames+p.decoders+p.active}).toBe(0);
  const evidence=await probeState(page);
  await page.close();assert.equal(page.isClosed(),true);pages.delete(page);
- if(context.pages().length===0){await context.close();contexts.delete(context);sharedContext=null}
+ if(context.pages().length===0){await context.tracing.stop({path:join(evidenceDir,`browser-trace-${Date.now()}.zip`)});await context.close();contexts.delete(context);sharedContext=null}
  return evidence;
 }
 async function restoreSession(page){
@@ -976,7 +984,10 @@ try{
    try{
     large=await attach(page,'large');
     assert.equal(large.bytes,boot.samples.large.bytes);
-    assert.ok(large.bytes>5*1024*1024&&large.bytes>=19_000_000&&large.bytes<=20_100_000);
+    if(process.env.INLINE_MEDIA_FULL_RESOLUTION==='1'){
+     assert.ok(large.bytes>=60_000_000&&large.bytes<=64*1024*1024);
+     assert.deepEqual([large.media.width,large.media.height,large.media.frameCount],[1920,802,68]);
+    }else assert.ok(large.bytes>5*1024*1024&&large.bytes>=19_000_000&&large.bytes<=20_100_000);
     assert.equal(large.sha256,boot.samples.large.sha256);
     await action(peer.page,'canvas.show',{kind:'text',title:'Peer selected artifact',content:'Keep this peer Canvas'});
     await peer.page.getByRole('textbox',{name:'Message Amplifier'}).fill('GIF peer unsent draft');
@@ -1026,7 +1037,7 @@ try{
     await expect(canvasRoot(page).getByRole('button',{name:'Open in Canvas',exact:true})).toHaveCount(0);
     await expect(canvasRoot(page).getByRole('button',{name:/Copy canvas source|Download canvas source|Restore as new version/})).toHaveCount(0);
     const initial=await canvasPixels(figure),defaultDraws=(await canvasDraws(page,large.id)).length;
-    assert.deepEqual([initial.width,initial.height],[1280,720]);
+    assert.deepEqual([initial.width,initial.height],process.env.INLINE_MEDIA_FULL_RESOLUTION==='1'?[1920,802]:[1280,720]);
     assert.ok(initial.pixels.some(pixel=>pixel[3]===255),'Actual decoded first-frame pixels');
     await clockWait(page,350);assert.equal((await canvasDraws(page,large.id)).length,defaultDraws);
     await figure.getByRole('button',{name:'Play GIF',exact:true}).click();
@@ -1386,7 +1397,7 @@ try{
      catch(error){errors.push('Page close: '+error.message)}
     }
    }
-   try{await context.close();contexts.delete(context)}catch(error){errors.push('Context close: '+error.message)}
+   try{await context.tracing.stop({path:join(evidenceDir,`browser-trace-${Date.now()}.zip`)});await context.close();contexts.delete(context)}catch(error){errors.push('Context close: '+error.message)}
   }
   if(browser)try{await browser.close();assert.equal(browser.isConnected(),false)}catch(error){errors.push('Browser close: '+error.message)}
   if(fixture&&fixture.exitCode===null){
