@@ -50,10 +50,12 @@ clients should verify TLS with the host's trusted certificate.
 Reusing an existing client ID intentionally reconnects to that same presentation.
 Use a different ID for each concurrently independent client.
 
-## Browser chat links
+## Optional observations and browser links
 
-[Browser chat links](chat-links.md) select the exact chat in the opening window,
-including through sign-in, without submitting input or changing another window.
+See [client observations v1](observations.md) for optional capability discovery,
+lightweight attachment without browser state, revision-bound collection pages,
+activity counts and acknowledgement semantics. [Browser chat links](chat-links.md)
+are independent of observation support.
 
 ## Session operations
 
