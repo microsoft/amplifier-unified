@@ -240,8 +240,8 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
   await page.locator('.a-message-editor').getByRole('button',{name:'Cancel',exact:true}).click();await editor().waitFor({state:'detached'});await until(()=>state.view.messageEdit===null,'Settled editor can be canceled');
  }
  chat().status='working';chat().collaborationGeneration={id:'original-run',terminal:false};await emit();
- await composer().fill('Please find a good pause point.');await page.getByRole('button',{name:'Send a correction',exact:true}).click();
- const correction=await next();assert.equal(correction.body.args.expectedGenerationId,'original-run','Composer binds steering to the observed run');
+ await composer().fill('Please find a good pause point.');await page.getByRole('button',{name:'Send message',exact:true}).click();
+ const correction=await next();assert.equal(correction.body.args.expectedGenerationId,'original-run','Composer binds steering to the observed run');assert.equal(correction.body.args.allowNextTurn,true,'Ordinary messages may cross normal completion');
  const steered={id:'steered',inputId:correction.body.id,role:'user',text:correction.body.args.text,delivery:{status:'accepted'},steering:{generationId:'original-run',disposition:'queued'}};
  chat().messages.push(steered);state.revision++;await correction.route.fulfill({json:{accepted:true,delivery:'accepted',steering:steered.steering,state}});
  await page.getByText('Received by the active run; waiting for its next step…',{exact:true}).waitFor();
@@ -250,6 +250,18 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  steered.steering.disposition='applied';await emit();await page.getByText('Added to the active run’s context',{exact:true}).waitFor();
  assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Steering updates and checks never resend');
  await page.screenshot({path:'/tmp/amplifier-steering-applied.png'});
+
+ // A rejected send keeps its text, but an explicit Retry must not reuse the expired run.
+ const boundary=await send('This is another message, not a correction.');
+ assert.equal(boundary.body.args.expectedGenerationId,'original-run');
+ chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
+ await boundary.route.fulfill({status:409,json:{accepted:false,code:'steering_target_changed',error:'The run changed. Your message was not sent.'}});
+ const rejected=page.locator(`[data-input-id="${boundary.body.id}"]`);
+ await rejected.getByRole('button',{name:'Retry',exact:true}).click();
+ const retried=await next();assert.notEqual(retried.body.id,boundary.body.id);
+ assert.equal(retried.body.args.expectedGenerationId,undefined,'Explicit retry refreshes the expired generation');
+ assert.equal(retried.body.args.allowNextTurn,true);assert.equal(retried.body.args.text,boundary.body.args.text);
+ await received(retried);
  chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
  await page.screenshot({path:'/tmp/amplifier-optimistic-messages.png'});await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key==='amplifier.messageOutbox.v1')throw new DOMException('Fixture quota','QuotaExceededError');return save.call(this,key,value)}});const mobile=await send('Mobile failed message');await mobile.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-message-retry-mobile.png'});
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();

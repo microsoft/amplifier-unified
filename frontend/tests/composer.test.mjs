@@ -12,7 +12,7 @@ test('content keeps Send during voice, work, and pending attachments',()=>{
  for(const input of [{draft:'A message'},{attachments:[{id:'file'}]}]){
   for(const voiceStatus of ['idle','connecting','connected','ending']){
    const action=composerPrimaryAction({...input,voiceStatus,working:true,responseActive:true});
-   assert.equal(action.action,'conversation.send');assert.equal(action.label,'Send a correction');assert.equal(action.disabled,false);
+   assert.equal(action.action,'conversation.send');assert.equal(action.label,'Send message');assert.equal(action.disabled,false);
   }
  }
  const upload=composerPrimaryAction({uploading:true,voiceStatus:'connected',responseActive:true});

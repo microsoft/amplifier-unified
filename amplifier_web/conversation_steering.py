@@ -1,4 +1,4 @@
-"""Human corrections belong to one live generation, never an implicit next run."""
+"""Generation-bound steering and explicit ordinary-message completion handoff."""
 import copy
 import json
 import time
@@ -6,12 +6,15 @@ import time
 from .message_delivery import find_message
 
 
-def target(session, expected=None):
+def target(session, expected=None, allow_next_turn=False):
     from .service import AppError
     active = session.get('collaborationGeneration') or {}
     identity = active.get('id') if not active.get('terminal') else None
+    if (allow_next_turn and expected is not None and active.get('id') == expected
+            and active.get('terminal') and active.get('completed')):
+        return None
     if expected is not None and identity != expected:
-        raise AppError('The run you were steering has ended or changed. Your correction was not sent.',
+        raise AppError('The run you were steering has ended or changed. Your message was not sent.',
                        409, code='steering_target_changed')
     return identity
 
@@ -91,7 +94,7 @@ async def send(service, session, text, input_id, preserve_draft):
     except Exception:
         # A lost acknowledgement says nothing about effects. Do not mark the
         # running conversation failed, restart its worker, or replay the input.
-        disposition, reason = 'unknown', 'Delivery could not be confirmed. This correction will not be sent again automatically.'
+        disposition, reason = 'unknown', 'Delivery could not be confirmed. This message will not be sent again automatically.'
     async with service.lock:
         current = service._session(session['id'])
         record(service, current, input_id, disposition, reason)

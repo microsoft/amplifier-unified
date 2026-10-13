@@ -13,3 +13,17 @@ Current-conversation edits require idle execution and exclusive Foundation owner
 Prepared revision evidence is private and durable. After interruption, recovery classifies the saved transcript; it never overwrites a newer owner's changes or automatically retries the edited input. A committed edit with an unconfirmed response is shown as interrupted for review.
 
 Validation covers delayed admission and identical newer drafts, duplicate delivery across clients and restart, uncertain results without replay, failed local edits, current/fork selection, preserved earlier tool context, rollback and interrupted edits. `RUN_HISTORY_EDIT_WORKER=1 pytest tests/test_history_edit_worker.py` additionally runs the actual worker with a local fixture provider through edit, parking and restart. It uses isolated session files and does not contact a model provider.
+
+## Ordinary messages at turn completion
+
+The composer sends ordinary messages with `allowNextTurn: true`. It still supplies
+`expectedGenerationId` while a run is active. Admission under the service lock may
+start a new turn if that exact generation has positive normal-completion evidence
+and no active jobs. An unrelated generation, restart, failure, detached runtime,
+or uncertain steering acknowledgement does not qualify. Explicit generation-bound
+callers retain strict steering by omitting `allowNextTurn`.
+
+An explicit Retry of a confirmed rejected browser submission uses a new command
+identity and the conversation's current generation. Unknown delivery retains the
+original identity and arguments for reconciliation, never an automatic resend.
+The UI calls the submitted content a message without classifying its intent.

@@ -190,3 +190,46 @@ async def test_manager_preserves_quote_attachments_and_target():
     assert envelope['arguments']['attachments'] == [{'id': 'image'}]
     assert envelope['arguments']['reply_context'] == {'id': 'quoted'}
     assert envelope['arguments']['targetGenerationId'] == 'generation'
+
+
+async def test_ordinary_message_crosses_observed_completion_once(active):
+    app, runtime, session = active
+    await app.on_runtime_event('runtime.generation', {'sessionId': session['id'],
+        'event': 'generation.finished', 'generation_id': 'generation',
+        'disposition': 'manager_turn_finished', 'input_ids': ['original'], 'active_job_ids': []})
+    # The terminal proof can arrive before the separate idle-status update.
+    assert session['collaborationGeneration']['completed']
+    result = await correction(app, expectedGenerationId='generation', allowNextTurn=True)
+    assert result['delivery'] == 'accepted' and not result.get('steering')
+    assert len(runtime.sent) == 1 and runtime.sent[0][2] == 'correction'
+    runtime.steer.assert_not_awaited()
+    assert session['execution']['currentTurnId'] == 'correction'
+    duplicate = await correction(app, expectedGenerationId='generation', allowNextTurn=True)
+    assert duplicate['duplicate'] and len(runtime.sent) == 1
+
+
+@pytest.mark.parametrize('state', ['other_live', 'other_completed', 'restart', 'failed', 'detached', 'children'])
+async def test_ordinary_handoff_needs_same_normally_completed_generation(active, state):
+    app, runtime, session = active
+    if state in {'failed', 'detached', 'children'}:
+        await app.on_runtime_event('runtime.generation', {'sessionId': session['id'],
+            'event': 'generation.finished' if state == 'children' else 'generation.' + state,
+            'generation_id': 'generation', 'disposition': 'manager_turn_finished',
+            'active_job_ids': ['child'] if state == 'children' else []})
+    else:
+        session['collaborationGeneration'] = {
+            'id': 'generation' if state == 'restart' else 'another',
+            'terminal': state != 'other_live', 'completed': state == 'other_completed'}
+    with pytest.raises(AppError, match='Your message was not sent'):
+        await correction(app, expectedGenerationId='generation', allowNextTurn=True)
+    assert not runtime.sent and not session['messages']
+    runtime.steer.assert_not_awaited()
+
+
+async def test_ordinary_message_still_steers_its_live_generation(active):
+    app, runtime, session = active
+    result = await correction(app, expectedGenerationId='generation', allowNextTurn=True)
+    assert result['steering']['generationId'] == 'generation'
+    assert result['steering']['disposition'] == 'queued'
+    assert not runtime.sent
+    runtime.steer.assert_awaited_once()
