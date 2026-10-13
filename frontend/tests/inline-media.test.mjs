@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {GifPlayer} from '../src/gif-player.js';
 import {MediaReporter} from '../src/media-reporter.js';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
 
 test('finite loops end without allocating another frame and never autoplay',async()=>{
  let callback,closed=0,calls=0;
@@ -230,4 +232,152 @@ test('Canvas local report cadence is independent of the inline media generation'
  canvas.dispose();clock.advance(5000);await settle();
  assert.equal(inlinePosts.length,2);
  inline.dispose();
+});
+
+// Evaluate the actual hook/adapter closures, not lookalike array callbacks.
+// JSX and media decoding are deliberately outside this transport discriminator.
+function hookSlots(){
+ let cursor=0;
+ const slots=[],writes=[],cleanups=[];
+ return {writes,cleanups,begin(){cursor=0},
+  useRef(value){const index=cursor++;return slots[index] ||= {current:value}},
+  useMemo(factory,deps){
+   const index=cursor++,old=slots[index];
+   if(!old||deps.some((value,n)=>!Object.is(value,old.deps[n])))slots[index]={deps,value:factory()};
+   return slots[index].value;
+  },
+  useState(value){const index=cursor++;slots[index] ??= value;return [slots[index],next=>{slots[index]=next;writes.push({index,value:next})}]},
+  useEffect(effect,deps){
+   const index=cursor++,old=slots[index];
+   if(!old||deps.some((value,n)=>!Object.is(value,old.deps[n]))){
+    slots[index]={deps};const cleanup=effect();if(cleanup)cleanups.push(cleanup);
+   }
+  }};
+}
+function canvasReportAdapters(){
+ const viewer=readFileSync(new URL('../src/canvas-viewer.jsx',import.meta.url),'utf8');
+ const workspace=readFileSync(new URL('../src/canvas-workspace.jsx',import.meta.url),'utf8');
+ const media=readFileSync(new URL('../src/inline-media.jsx',import.meta.url),'utf8');
+ const rendererHooks=hookSlots(),gifHooks=hookSlots();
+ const begin=workspace.indexOf(' const report=useMemo('),end=workspace.indexOf(' const builtin=',begin);
+ assert.ok(begin>=0&&end>begin);
+ const render=runInNewContext(`(view,dispatch,target,recovery=false)=>{${workspace.slice(begin,end)}
+  return {act,reportStatus:reportMounted};}`,{...rendererHooks,Promise});
+ const hookStart=viewer.indexOf('function useReport('),gifEnd=viewer.indexOf(' return reference.error?',hookStart);
+ assert.ok(hookStart>=0&&gifEnd>hookStart);
+ const validate=media.slice(media.indexOf('export function validateMediaMetadata('),media.indexOf('function mediaUrl(')).replace('export ','');
+ const renderGif=runInNewContext(`${validate}
+  ${viewer.slice(hookStart,gifEnd).replace('export function GifCanvasViewer','function GifCanvasViewer')}
+  return reportMedia;}\nGifCanvasViewer`,{...gifHooks,Promise});
+ return {render(view,dispatch,target){rendererHooks.begin();return render(view,dispatch,target)},
+  gif(canvas,adapters){gifHooks.begin();return renderGif({canvas,...adapters})}};
+}
+
+test('actual Canvas report adapters preserve both promises, latest-only backpressure and disposal',async()=>{
+ const adapters=canvasReportAdapters(),clock=reportClock(),posts=[],releases=[];
+ const target={viewId:'primary',resourceId:'retained-gif',resourceRevision:1,generation:7};
+ const canvas={id:target.resourceId,sessionId:'gif-session',mediaReference:{messageId:'gif-message',
+  item:{id:'gif-output',sessionId:'gif-session',version:1,sha256:'a'.repeat(64),
+   title:'Synthetic retained GIF',filename:'clip.gif',media:{mimeType:'image/gif',loopCount:0}}}};
+ const view={renderer:'builtin.canvas.gif',available:true};
+ const dispatch=(action,args)=>{
+  const promise=new Promise((resolve,reject)=>releases.push({resolve,reject}));
+  posts.push({action,args,promise});return promise;
+ };
+ const renderer=adapters.render(view,dispatch,target);
+ const status=renderer.reportStatus('ready','Promise identity');
+ assert.equal(status,posts.at(-1).promise,'reportMounted returns the upstream promise');
+ releases.shift().resolve();await status;
+ const preview=renderer.act('canvas.report',{status:'ready'});
+ assert.equal(preview,posts.at(-1).promise,'Renderer act returns the report transport, not a swallowed result');
+ releases.shift().resolve();await preview;posts.length=0;
+ const send=adapters.gif(canvas,renderer);
+ const reporter=new MediaReporter({...clock,generation:8,send});
+ reporter.report(snapshot(0,'paused','loading'));
+ for(let frame=1;frame<=100;frame++){clock.advance(frame*10);reporter.report(snapshot(frame));await settle()}
+ reporter.report(snapshot(100,'paused'));
+ assert.equal(posts.length,2,'One outstanding batch consists of the two Canvas-local reports');
+ assert.deepEqual(posts.map(row=>row.action),['canvas.views.command','canvas.views.status']);
+ assert.equal(posts[0].args.action,'canvas.report');
+ assert.equal(clock.timers.size,0);
+ releases.shift().reject(Error('Synthetic report failure'));await settle();
+ assert.equal(posts.length,2,'Failure of one transport must not release the batch while the other is pending');
+ assert.equal(reporter.busy,true);
+ // A new report/view callback must not change MediaFigure's decoder effect dependency.
+ let refreshedCalls=0;
+ const newDispatch=(...args)=>{refreshedCalls++;return dispatch(...args)};
+ const refreshed=adapters.render({...view,renderReports:{preview:{status:'pending'}}},newDispatch,target);
+ assert.equal(adapters.gif({...canvas,renderReports:{preview:{status:'pending'}}},refreshed),send);
+ releases.shift().resolve();await settle();
+ assert.equal(posts.length,4);assert.ok(posts[2].args.args.message.endsWith('100 frames'));
+ assert.ok(posts[3].args.message.endsWith('100 frames'));
+ assert.equal(posts[3].args.status,'ready');
+ assert.equal(refreshedCalls,2,'The stable media callback uses both current upstream adapters');
+ for(let frame=101;frame<=300;frame++)reporter.report(snapshot(frame));
+ reporter.dispose();
+ for(const release of releases.splice(0))release.resolve();
+ await settle();clock.advance(5000);await settle();
+ assert.equal(posts.length,4,'Disposed pending snapshots never flush');
+ assert.equal(clock.timers.size,0);
+ assert.ok(posts.every(row=>row.action!=='outputs.mediaReport'));
+});
+
+function openGifClosure(dispatch){
+ const source=readFileSync(new URL('../src/inline-media.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('export function MediaFigure('),end=source.indexOf(' useEffect(()=>{\n  let disposed=',start);
+ assert.ok(start>=0&&end>start);
+ const hooks=hookSlots();let identities=0;
+ const render=runInNewContext(`${source.slice(start,end).replace('export ','')}
+  return {openGif,request:openRequest};}\nMediaFigure`,
+  {...hooks,crypto:{randomUUID:()=>`gif-request-${++identities}`}});
+ const props={item:{id:'saved-gif',sessionId:'saved-session',version:1,sha256:'b'.repeat(64)},messageId:'saved-assistant',dispatch};
+ return {hooks,render(patch={}){hooks.begin();return render({...props,...patch})}};
+}
+
+test('actual GIF open retains the exact envelope after unknown delivery, including local cancellation',async()=>{
+ const calls=[];
+ let outcome=()=>Promise.reject(Object.assign(Error('Unconfirmed'),{unconfirmed:true}));
+ const component=openGifClosure((action,args,meta)=>{calls.push({action,args:{...args},meta:{...meta}});return outcome()});
+ const first=component.render();
+ await first.openGif();
+ assert.equal(calls.length,1,'No automatic replay after unknown settlement');
+ assert.equal(calls[0].action,'canvas.openGif');assert.equal(calls[0].meta.id,'gif-request-1');
+ assert.deepEqual(calls[0].args,{sessionId:'saved-session',messageId:'saved-assistant',
+  id:'saved-gif',version:1,sha256:'b'.repeat(64)});
+ outcome=()=>Promise.resolve({accepted:false,error:'Settings changes were kept.'});
+ await component.render().openGif();
+ assert.deepEqual(calls[1],calls[0]);assert.equal(first.request.current.id,calls[0].meta.id);
+ assert.ok(component.hooks.writes.some(row=>row.value==='Settings changes were kept.'));
+ outcome=()=>Promise.resolve({accepted:true});
+ await component.render().openGif();
+ assert.deepEqual(calls[2],calls[0]);assert.equal(first.request.current,null);
+ await component.render().openGif();
+ assert.equal(calls[3].meta.id,'gif-request-2','Only a confirmed result releases the request identity');
+});
+
+test('actual GIF open is single-flight and late settlement does not update a disposed component',async()=>{
+ let release,calls=0;
+ const component=openGifClosure(()=>{calls++;return new Promise(done=>{release=done})});
+ const mounted=component.render(),pending=mounted.openGif();
+ await mounted.openGif();assert.equal(calls,1);
+ component.hooks.cleanups.forEach(cleanup=>cleanup());
+ const writes=component.hooks.writes.length;
+ release({accepted:false,error:'Late cancellation'});await pending;
+ assert.equal(component.hooks.writes.length,writes);
+ await mounted.openGif();assert.equal(calls,1);
+});
+
+test('actual App Settings-leaving guard cancels GIF admission visibly without a host request',async()=>{
+ const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+ const start=source.indexOf(' const dispatch=useCallback('),end=source.indexOf(' },[acceptState,handleEffects,awaitState]);',start);
+ assert.ok(start>=0&&end>start);let confirmations=0,requests=0;
+ const dispatch=runInNewContext(`${source.slice(start,end)} },[acceptState,handleEffects,awaitState]);\ndispatch`,{
+  useCallback:fn=>fn,acceptState(){},handleEffects(){},awaitState(){},
+  settingsNavigation:{current:{hasUnsaved:()=>true,confirmClose:async()=>{confirmations++;return false}}},
+  request:()=>{requests++;assert.fail('Cancelled Settings navigation issued a host command')}
+ });
+ const component=openGifClosure(dispatch);
+ await component.render().openGif();
+ assert.equal(confirmations,1);assert.equal(requests,0);
+ assert.ok(component.hooks.writes.some(row=>row.value==='Settings changes were kept.'));
 });

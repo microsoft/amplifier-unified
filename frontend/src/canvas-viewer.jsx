@@ -14,7 +14,7 @@ const PdfPreview=lazy(()=>import('./pdf-preview'));
 const viewAction=(canvas,act,patch)=>act('canvas.view',{id:canvas.id,patch});
 function useReport(canvas,act,part='preview'){
  const ref=useRef(act);ref.current=act;
- return useMemo(()=> (status,message='')=>{if(canvas.id)ref.current('canvas.report',{id:canvas.id,part,status,message:String(message).slice(0,2000)})},[canvas.id,part]);
+ return useMemo(()=> (status,message='')=>{if(canvas.id)return ref.current('canvas.report',{id:canvas.id,part,status,message:String(message).slice(0,2000)})},[canvas.id,part]);
 }
 
 export function GifCanvasViewer({canvas,act,reportStatus}){
@@ -29,12 +29,15 @@ export function GifCanvasViewer({canvas,act,reportStatus}){
    return value;
   }catch(error){return {error:error.message}}
  },[canvas.mediaReference,canvas.sessionId]);
+ const statusRef=useRef(reportStatus);statusRef.current=reportStatus;
  const reportMedia=useMemo(()=>payload=>{
   const status=payload.renderState==='loading'?'pending':payload.renderState;
   const message=payload.detail||`${payload.renderState} · ${payload.playback} · ${payload.presentedFrames} frames`;
-  report(status,message);
-  reportStatus?.(status==='pending'?'loading':status,message);
- },[report,reportStatus]);
+  // Both client-local reports belong to one notification. Even a rejection
+  // must wait for the other transport before MediaReporter can flush again.
+  return Promise.allSettled([report(status,message),statusRef.current?.(status==='pending'?'loading':status,message)])
+   .then(results=>{const failed=results.find(row=>row.status==='rejected');if(failed)throw failed.reason;return results.map(row=>row.value)});
+ },[report]);
  useEffect(()=>{
   if(reference.error){report('error',reference.error);reportStatus?.('error',reference.error)}
  },[reference.error,report,reportStatus]);

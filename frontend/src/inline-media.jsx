@@ -34,23 +34,29 @@ function mediaUrl(item,messageId,download=false){
  return api.clientUrl(`/api/outputs/${encodeURIComponent(item.id)}/media?${query}`);
 }
 
-export function MediaFigure({item,messageId,reportMedia,openInCanvas=false}){
+export function MediaFigure({item,messageId,reportMedia,dispatch,openInCanvas=false}){
  const figure=useRef(null),canvas=useRef(null),video=useRef(null),player=useRef(null),reporter=useRef(()=>{});
  const [status,setStatus]=useState({render:'loading',playback:'paused',detail:''});
- const opening=useRef(false),openRequest=useRef(null),[openPending,setOpenPending]=useState(false),[openError,setOpenError]=useState('');
+ const opening=useRef(false),openRequest=useRef(null),mounted=useRef(false),[openPending,setOpenPending]=useState(false),[openError,setOpenError]=useState('');
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  async function openGif(){
-  if(opening.current)return;
+  if(opening.current||!mounted.current)return;
   opening.current=true;setOpenPending(true);setOpenError('');
-  openRequest.current ||= crypto.randomUUID();
+  openRequest.current ||= {id:crypto.randomUUID(),
+   args:{sessionId:item.sessionId,messageId,id:item.id,version:item.version,sha256:item.sha256}};
   try{
-   await api.request('/api/actions',{method:'POST',body:{id:openRequest.current,action:'canvas.openGif',
-    args:{sessionId:item.sessionId,messageId,id:item.id,version:item.version,sha256:item.sha256}}});
+   const result=await dispatch('canvas.openGif',openRequest.current.args,{id:openRequest.current.id});
+   if(result?.accepted===false){
+    // A local Settings cancellation is not a receipt for an earlier unknown delivery.
+    if(mounted.current)setOpenError(result.error||'The retained GIF could not be opened in Canvas.');
+    return;
+   }
    openRequest.current=null;
   }catch(error){
    // An uncertain transport outcome must retry the identical command.
    if(!error.unconfirmed)openRequest.current=null;
-   setOpenError(error.message||'The retained GIF could not be opened in Canvas.');
-  }finally{opening.current=false;setOpenPending(false)}
+   if(mounted.current)setOpenError(error.message||'The retained GIF could not be opened in Canvas.');
+  }finally{opening.current=false;if(mounted.current)setOpenPending(false)}
  }
  useEffect(()=>{
   let disposed=false,presentedFrames=0,mediaTime=0,videoCallback,ownedPlayer;
@@ -141,7 +147,7 @@ export function MediaFigure({item,messageId,reportMedia,openInCanvas=false}){
  </figure>;
 }
 
-export function InlineMedia({sessionId,messageId,mediaRevision=0}){
+export function InlineMedia({sessionId,messageId,mediaRevision=0,dispatch}){
  const anchor=useRef(null),[visible,setVisible]=useState(false),[result,setResult]=useState(null),[error,setError]=useState(''),[retry,setRetry]=useState(0);
  useEffect(()=>{
   if(!globalThis.IntersectionObserver){setVisible(true);return}
@@ -158,7 +164,7 @@ export function InlineMedia({sessionId,messageId,mediaRevision=0}){
   return ()=>{disposed=true;abort.abort()};
  },[sessionId,messageId,mediaRevision,visible,retry]);
  return <div ref={anchor} className="a-inline-media">
-  {result?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId} openInCanvas/>)}
+  {result?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId} dispatch={dispatch} openInCanvas/>)}
   {error&&<p role="alert">{error} <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry media metadata</button></p>}
   {result?.overflow&&<p>Only the first 20 media attachments are displayed.</p>}
  </div>;

@@ -1927,6 +1927,10 @@ class AppService:
                 target = self.projections.sessions(self.state).by_id.get(args['id'])
                 if target is not None and accepts(self, target):
                     return select(self, target, command_id, fingerprint, include_state=include_state)
+            if action in {'canvas.copy', 'canvas.download'}:
+                canvas = self.state['canvas']
+                if args['id'] == canvas.get('id') and canvas.get('kind') == 'gif':
+                    raise AppError('Use Download original on the retained GIF.', 409)
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')

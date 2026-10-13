@@ -46,10 +46,17 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
    return dispatch('canvas.views.command',{...target,action:mapped,args});
   },setDirty:dirty=>dispatch('canvas.views.dirty',{...target,dirty:!!dirty})
  }),[target,dispatch]);
- const report=useMemo(()=> (status,message)=>{dispatch('canvas.views.status',{...target,status,message:String(message).slice(0,2000)}).catch(()=>{})},[target,dispatch]);
+ const report=useMemo(()=> (status,message)=>{
+  const result=dispatch('canvas.views.status',{...target,status,message:String(message).slice(0,2000)});
+  result.catch(()=>{});return result; // Observe ignored mount reports; preserve settlement for media.
+ },[target,dispatch]);
  const bypassed=recovery&&!view.renderer.startsWith('builtin.');
  const reportMounted=useMemo(()=>(status,message)=>report(bypassed||!view.available?'error':status,bypassed?'Recovery mode is displaying the standard viewer.':!view.available?'The saved renderer is unavailable; displaying the standard viewer.':message),[report,bypassed,view.available]);
- const act=useMemo(()=> (action,args)=>{const result=dispatch('canvas.views.command',{...target,action,args});return action==='canvas.reference'?result:result.catch(()=>{})},[target,dispatch]);
+ const act=useMemo(()=> (action,args)=>{
+  const result=dispatch('canvas.views.command',{...target,action,args});
+  if(action==='canvas.report'){result.catch(()=>{});return result}
+  return action==='canvas.reference'?result:result.catch(()=>{});
+ },[target,dispatch]);
  const builtin='builtin.canvas.'+canvas.kind,Default=builtins[builtin];
  const choice=view.choices.find(choice=>choice.id===view.renderer);
  const selected=recovery||!choice?builtin:view.renderer;

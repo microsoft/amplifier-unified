@@ -2986,7 +2986,7 @@ async def test_gif_canvas_compact_reference_large_retention_replay_reload_and_pe
         assert (await app.dispatch('canvas.openGif', values))['result']['id'] == identity
         await app.dispatch('canvas.select', {'id': identity, 'version': 1})
         assert app.state['canvas']['mediaReference'] == body['mediaReference']
-        await app.dispatch('canvas.close', {'id': identity})
+        await app.dispatch('canvas.close', {})
         await app.dispatch('canvas.reopen')
         assert app.state['canvas']['id'] == identity and app.state['canvas']['open']
         assert len(app.state['canvasArtifacts']) == before_count + 1
@@ -3180,6 +3180,41 @@ async def test_gif_canvas_canonical_origin_without_rewriting_or_hydrating(media_
     assert (directory / 'transcript.jsonl').read_bytes() == native
     if shape == 'cold-retained-alias':
         assert dict.get(session, '_coldFields')['messages'] == reference and not dict.__contains__(session, 'messages')
+
+
+@pytest.mark.parametrize('action', ['canvas.copy', 'canvas.download'])
+async def test_gif_canvas_direct_copy_download_refused_before_remember_save_or_effect(media_app, monkeypatch, action):
+    import copy
+    from amplifier_web import canvas_library, canvas_downloads
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('gif-direct-refusal')
+    with app.clients.bind('gif-direct-refusal'):
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep this unsent GIF draft'}})
+        identity = (await app.dispatch('canvas.openGif', gif_open_args(args, record)))['result']['id']
+        task = getattr(app, '_storage_maintenance_task', None)
+        if task:
+            await task
+        before = gif_canvas_state(app)
+        effects = copy.deepcopy(app.state.get('deviceCommands', []))
+
+        def forbidden(*args, **kwargs):
+            pytest.fail('Direct GIF copy/download reached remember, save or effect construction')
+
+        with monkeypatch.context() as patch:
+            patch.setattr(canvas_library, 'remember', forbidden)
+            patch.setattr(app.clients, 'remember_canvas', forbidden)
+            patch.setattr(app, '_save', forbidden)
+            patch.setattr(canvas_downloads, 'filename', forbidden)
+            with pytest.raises(AppError) as refused:
+                await app.dispatch(action, {'id': identity}, command_id='gif-direct-refused', include_state=False)
+        assert refused.value.status == 409
+        assert str(refused.value) == 'Use Download original on the retained GIF.'
+        assert gif_canvas_state(app) == before
+        assert app.state.get('deviceCommands', []) == effects
+        assert app.state['view']['draft'] == 'Keep this unsent GIF draft'
 
 
 async def test_gif_canvas_stale_alias_and_generic_forgery_refused(media_app):

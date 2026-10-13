@@ -81,10 +81,11 @@ const canvasPixels=figure=>figure.locator('canvas').evaluate(node=>{
 // Observe REAL native decoder work and application draws. Do not substitute
 // decoded frames or clocks. Test-only gates delay delivery for late cleanup.
 function installProbe({unsupported=false,corrupt=false,hold=false}={}){
- const fetch=window.fetch,posts=window.__mediaReportPosts=[];
+ const fetch=window.fetch,posts=window.__mediaReportPosts=[],actions=window.__actionPosts=[];
  window.fetch=function(input,options){
   if(options?.method==='POST'&&new URL(typeof input==='string'?input:input.url,location.href).pathname==='/api/actions'){
    const body=typeof options.body==='string'?JSON.parse(options.body):null;
+   if(body)actions.push({action:body.action,id:body.id});
    if(body?.action==='outputs.mediaReport')posts.push({at:performance.now(),...body.args});
   }
   return fetch.call(this,input,options);
@@ -994,6 +995,8 @@ try{
     identity=result.result.id;
     await expect.poll(async()=>(await state(page)).canvas.id).toBe(identity);
     const current=await state(page);
+    assert.equal(current.client.id,await page.evaluate(()=>window.amplifier.shellClientId));
+    assert.notEqual(current.client.id,peerBefore.client.id,'The visible clicker and preserved peer are distinct clients');
     assert.equal(current.canvas.kind,'gif');reference=current.canvas.mediaReference;
     assert.deepEqual(Object.fromEntries(['id','sessionId','version','sha256'].map(key=>[key,reference.item[key]])),
      Object.fromEntries(['id','sessionId','version','sha256'].map(key=>[key,large[key]])));
@@ -1042,7 +1045,7 @@ try{
     const original=await page.request.get(link);assert.equal(original.status(),200);
     assert.equal(createHash('sha256').update(await original.body()).digest('hex'),large.sha256);
     // Close must dispose the actual Canvas decoder; inline players remain.
-    await action(page,'canvas.close',{id:identity});
+    await action(page,'canvas.close',{});
     await expect(canvasFigure(page,large.id)).toHaveCount(0);
     await expect.poll(async()=>page.evaluate(id=>window.__mediaProbe.perDecoder[id].live,canvasDecoder)).toBe(0);
     await expect.poll(async()=>page.evaluate(id=>window.__mediaProbe.perDecoder[id].closed,canvasDecoder)).toBe(true);
@@ -1069,13 +1072,22 @@ try{
     assert.equal((await state(page)).canvas.id,identity);
     assert.deepEqual((await state(page)).canvas.mediaReference,reference);
     await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('GIF clicker unsent draft');
-    await page.emulateMedia({reducedMotion:'reduce'});
     const restored=canvasFigure(page,large.id);
-    await expect(restored).toHaveAttribute('data-playback','paused');
-    const restoredPixels=await canvasPixels(restored);
-    await clockWait(page,350);assert.deepEqual(await canvasPixels(restored),restoredPixels);
+    await restored.scrollIntoViewIfNeeded();
+    const beforeMotionPixels=await canvasPixels(restored),beforeMotionDraws=(await canvasDraws(page,large.id)).length;
     await restored.getByRole('button',{name:'Play GIF',exact:true}).click();
+    await expect(restored).toHaveAttribute('data-playback','playing');
+    await expect.poll(()=>canvasPixels(restored)).not.toEqual(beforeMotionPixels);
+    await expect.poll(async()=>(await canvasDraws(page,large.id)).length).toBeGreaterThan(beforeMotionDraws+1);
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await expect(restored).toHaveAttribute('data-playback','paused');
+    const restoredPixels=await canvasPixels(restored),motionDraws=(await canvasDraws(page,large.id)).length;
+    await clockWait(page,350);assert.deepEqual(await canvasPixels(restored),restoredPixels);
+    assert.equal((await canvasDraws(page,large.id)).length,motionDraws,'Motion reduction stops actual Canvas draws');
+    await restored.getByRole('button',{name:'Play GIF',exact:true}).click();
+    await expect(restored).toHaveAttribute('data-playback','playing');
     await expect.poll(()=>canvasPixels(restored)).not.toEqual(restoredPixels);
+    await expect.poll(async()=>(await canvasDraws(page,large.id)).length).toBeGreaterThan(motionDraws);
     await restored.getByRole('button',{name:'Pause GIF',exact:true}).click();
     await page.emulateMedia({reducedMotion:'no-preference'});
     const after=await state(page),other=await state(peer.page);
@@ -1086,10 +1098,16 @@ try{
     const evidence=await (await page.request.get(boot.url+'/api/fixture/evidence',{headers:privateHeaders})).json();
     assert.deepEqual(evidence.errors,[]);
     assert.ok(!Object.keys(evidence.counters).some(key=>key.startsWith('unexpected:')));
+    const automaticRuntimeCalls=Object.entries(evidence.counters)
+     .filter(([name])=>/^unexpected:runtime-(start|send|control)$/.test(name))
+     .reduce((total,[,count])=>total+count,0);
+    assert.equal(automaticRuntimeCalls,0,'Observed NoModel entry counters, not a literal qualification label');
     return {artifactId:identity,tuple:reference,bytes:large.bytes,originalSha256:large.sha256,
      userClick:true,physicalPixels:true,pausedFreeze:true,defaultPaused:true,reducedMotion:true,
+     clientId:current.client.id,presentation:{initial,paused,defaultDraws,pauseDraws,
+      beforeMotionDraws,motionDraws,pausedMotionPixels:restoredPixels},
      inlineGeneration,inlineReadback: inlineAfter.result.browserObservation,sourceRemoved:true,
-     reload:true,appCloseReopen:true,peerPreserved:true,versions:1,automaticRuntimeCalls:0};
+     reload:true,appCloseReopen:true,peerPreserved:true,versions:1,automaticRuntimeCalls,counters:evidence.counters};
    }finally{
     releaseOpen();
     if(!page.isClosed())await page.unroute('**/api/actions',holdOpen);
@@ -1106,6 +1124,28 @@ try{
    const client=await newClient(),{page}=client;
    const inline=page.locator(`[data-message-id="${boot.messageId}"] [data-media-id="${saved.id}"]`);
    const canvasRoot=page.locator('[data-canvas-view="primary"]');
+   let releaseEarlier,dirtyHostAdmitted=false,dirtyReceipt,dirtyTarget;
+   const earlierGate=new Promise(done=>{releaseEarlier=done});
+   const commandOrder=[],blockerId='gif-canvas-earlier-command';
+   const holdEarlier=async route=>{
+    const body=route.request().postDataJSON();
+    if(body?.id===blockerId){
+     commandOrder.push('earlier-issued');await earlierGate;return route.continue();
+    }
+    if(body?.action==='canvas.views.dirty'&&body.args.dirty){
+     commandOrder.push('dirty-issued');
+     const response=await route.fetch(),receipt=await response.json();
+     dirtyReceipt={status:response.status(),accepted:receipt.accepted};
+     dirtyHostAdmitted=dirtyReceipt.status===200&&dirtyReceipt.accepted===true;
+     commandOrder.push(dirtyHostAdmitted?'dirty-admitted':'dirty-refused');
+     return route.fulfill({response});
+    }
+    if(body?.action==='canvas.openGif'){
+     commandOrder.push(dirtyHostAdmitted?'open-after-dirty':'open-before-dirty');
+     await earlierGate;
+    }
+    return route.continue();
+   };
    try{
     await inline.scrollIntoViewIfNeeded();
     await expect(inline).toHaveAttribute('data-media-state','ready');
@@ -1116,14 +1156,48 @@ try{
     const current=await page.evaluate(()=>window.amplifier.getState());
     const view=current.canvasWorkspace.views.find(view=>view.viewId==='primary');
     const target=Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
-    await action(page,'canvas.views.dirty',{...target,dirty:true});
+    dirtyTarget=target;
+    await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Queued GIF unsent draft');
+    await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Queued GIF unsent draft');
     const before=await page.evaluate(()=>window.amplifier.getState());
     await inline.scrollIntoViewIfNeeded();
+    await page.route('**/api/actions',holdEarlier);
+    // Hold an ACTUAL earlier command in App's commandQueue. Do not await dirty
+    // before the click: its declaration must remain queued behind that command.
+    await page.evaluate(blockerId=>{
+     window.__gifEarlier=window.amplifier.dispatch('canvas.views.inspect',{}, {id:blockerId});
+     window.__gifEarlier.catch(()=>{});
+    },blockerId);
+    await expect.poll(()=>commandOrder[0]).toBe('earlier-issued');
+    const postStart=await page.evaluate(()=>window.__actionPosts.length);
+    await page.evaluate(target=>{
+     window.__gifDirty=window.amplifier.dispatch('canvas.views.dirty',{...target,dirty:true});
+     window.__gifDirty.catch(()=>{});
+    },target);
+    const refused=page.waitForResponse(response=>response.request().method()==='POST'&&
+     new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='canvas.openGif');
     await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
+    await expect(inline.getByRole('button',{name:'Opening in Canvas…',exact:true})).toBeDisabled();
+    // fetch is observed synchronously at issuance. No sleep or absence timeout
+    // is used as FIFO proof, and no fixture assigns a Canvas or relaxes its guard.
+    assert.deepEqual(await page.evaluate(start=>window.__actionPosts.slice(start)
+     .filter(row=>['canvas.views.dirty','canvas.openGif'].includes(row.action)),postStart),[]);
+    assert.deepEqual(commandOrder,['earlier-issued']);
+    assert.equal((await page.evaluate(()=>window.amplifier.getState())).canvas.id,before.canvas.id);
+    releaseEarlier();
+    await page.evaluate(()=>Promise.all([window.__gifEarlier,window.__gifDirty]));
+    const rejected=await refused;
+    assert.equal(rejected.status(),409);assert.equal((await rejected.json()).accepted,false);
+    assert.deepEqual(dirtyReceipt,{status:200,accepted:true});
+    assert.deepEqual(commandOrder,['earlier-issued','dirty-issued','dirty-admitted','open-after-dirty']);
+    await page.unroute('**/api/actions',holdEarlier);
     await expect(inline.getByRole('alert')).toContainText('Finish or cancel');
     const after=await page.evaluate(()=>window.amplifier.getState());
     assert.equal(after.canvas.id,before.canvas.id);assert.deepEqual(after.canvasArtifacts,before.canvasArtifacts);
+    assert.equal(after.canvas.content,before.canvas.content);assert.equal(after.canvas.open,before.canvas.open);
+    assert.deepEqual(after.view.canvasDraft,before.view.canvasDraft,'No Library or draft-view selection was changed');
     assert.equal(after.canvasWorkspace.views.find(view=>view.viewId==='primary').dirty,true);
+    await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Queued GIF unsent draft');
     await action(page,'canvas.views.dirty',{...target,dirty:false});
     // Hold the REAL native first decode. Mounted is not ready; closing owns
     // pending-frame cleanup and may not leak a late frame into a replacement.
@@ -1156,10 +1230,18 @@ try{
      .find(view=>view.viewId==='primary').activation?.status)).toBe('error');
     await expect(figure.getByRole('link',{name:'Download original'})).toHaveCount(1);
     await page.unroute('**/api/outputs/*/media?*');
-    return {dirtyRejectedBeforeMutation:true,visibleError:true,actualDecodeReadiness:true,
+    return {commandOrder,queuedDirtyAdmission:true,dirtyRejectedBeforeMutation:true,visibleError:true,actualDecodeReadiness:true,
      replacementCleanup:true,lateFramesOwned:true,decoderError:'error',mountedReady:false};
    }finally{
+    releaseEarlier();
     if(!page.isClosed()){
+     await page.unroute('**/api/actions',holdEarlier);
+     await page.evaluate(()=>Promise.allSettled([window.__gifEarlier,window.__gifDirty]));
+     await page.evaluate(async target=>{
+      const view=window.amplifier.getState().canvasWorkspace.views.find(view=>view.viewId==='primary');
+      if(target&&view?.dirty&&['resourceId','resourceRevision','generation'].every(key=>view[key]===target[key]))
+       await window.amplifier.dispatch('canvas.views.dirty',{...target,dirty:false});
+     },dirtyTarget);
      await page.evaluate(()=>{window.__mediaProbe.hold=false;window.__mediaProbe.held.splice(0).forEach(done=>done())});
      await unmountAndClose(client);
     }

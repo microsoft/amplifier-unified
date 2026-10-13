@@ -172,7 +172,7 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
-  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment'].includes(action);
+  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action);
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,error:'Settings changes were kept.'});
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
   const referenceAction=action==='message.reply'||action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
