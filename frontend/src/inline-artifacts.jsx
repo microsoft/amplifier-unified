@@ -1,4 +1,4 @@
-import React,{useEffect,useRef,useState} from 'react';
+import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {FileText,Globe,Code,Film,ChevronDown,ChevronUp,Maximize2,Image as ImageIcon,X} from 'lucide-react';
 import {request} from './api';
 import {chatArtifacts} from './canvas-library';
@@ -89,8 +89,9 @@ function Thumbnail({item,index,messageId,dispatch}){
 }
 
 function ImageGallery({entries,...props}){
- const [selected,setSelected]=useState(null);
+ const [selected,setSelected]=useState(()=>entries[0]?.id);
  const entry=entries.find(entry=>entry.id===selected)||entries[0];
+ useEffect(()=>{if(entry&&entry.id!==selected)setSelected(entry.id)},[entry?.id,selected]);
  const title=entry=>entry.item?titleOf(entry.item):imageJobLabel(entry.job);
  return <div className="a-inline-gallery a-image-gallery-stable" aria-label={`Image gallery, ${entries.length} ${entries.length===1?'image':'images'}`}>
   {entry.item?<Preview key={entry.id+':'+entry.item.row.id+':'+entry.item.version} item={entry.item} {...props} imageFrame/>:<section className="a-inline-artifact" data-image-frame>
@@ -112,7 +113,8 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  const [notice,setNotice]=useState(''),[refusal,setRefusal]=useState(''),[busy,setBusy]=useState(false),[attempt,setAttempt]=useState(0);
  const root=useRef(null),owned=useRef(null),run=useRef(dispatch),changing=useRef(false),opening=useRef(null),mounted=useRef(false);
  run.current=dispatch;
- const authorized=loaded&&(state.canvasWorkspace?.views||[]).find(value=>value.viewId===loaded.view.viewId&&value.resourceId===loaded.view.resourceId&&value.resourceRevision===loaded.view.resourceRevision&&value.generation===loaded.view.generation);
+ const authorized=loaded&&loaded.hostInstanceId===state.client?.hostInstanceId&&loaded.clientId===(state.client?.id??state.client?.clientId)&&
+  (state.canvasWorkspace?.views||[]).find(value=>value.viewId===loaded.view.viewId&&value.resourceId===loaded.view.resourceId&&value.resourceRevision===loaded.view.resourceRevision&&value.generation===loaded.view.generation);
  const view=authorized||loaded?.view;
  const revoked=!!loaded&&!authorized;
  if(owned.current&&view)owned.current.view=view;
@@ -149,7 +151,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    const canvas=await request(`/api/canvas/views/${record.view.viewId}/resource?`+new URLSearchParams(targetOf(record.view)),{signal:controller.signal});
    if(active){
     record.unregister=inlineOwnership.register(state,record.view,{sessionId:row.sessionId,messageId,version});
-    setLoaded({view:record.view,canvas});
+    setLoaded({view:record.view,canvas,hostInstanceId:state.client?.hostInstanceId,clientId:state.client?.id??state.client?.clientId});
    }
   }).catch(error=>{
    if(active&&error.name!=='AbortError'){
@@ -222,14 +224,26 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
 }
 
 export function ArtifactLinks({state,message,act,dispatch}){
+ const committed=useRef([]);
  const rows=artifactPublications(chatArtifacts(state),message.id);
- const entries=imageGalleryEntries(state,message.id,rows);
+ let entries=imageGalleryEntries(state,message.id,rows);
  const generated=new Set(entries.filter(entry=>entry.item).map(entry=>entry.item));
- if(!rows.length&&!entries.length)return null;
+ const same=(a,b)=>a.row.id===b.row.id&&a.version===b.version;
+ // Unlink or reclassification can remove a publication without revoking the
+ // exact live view. Keep only its mounted dirty owner, not the whole list.
+ // Host reconciliation removes protection before forbidden content can render.
+ const protectedItems=committed.current.filter(item=>inlineOwnership.protectsPublication({
+  sessionId:item.row.sessionId,messageId:message.id,resourceId:item.row.id,version:item.version
+ }));
+ const general=rows.filter(item=>!generated.has(item)||protectedItems.some(previous=>same(previous,item)));
+ for(const item of protectedItems)if(!general.some(current=>same(current,item)))general.push(item);
+ entries=entries.filter(entry=>!entry.item||!protectedItems.some(item=>same(item,entry.item)));
+ useLayoutEffect(()=>{committed.current=general},[general]);
+ if(!general.length&&!entries.length)return null;
  const fullView=async({row,version})=>{const result=await act('canvas.select',{id:row.id,version});if(result?.accepted)await act('view.update',{patch:{canvasFocused:false}})};
  const props={state,messageId:message.id,dispatch,fullView};
  return <div className="a-chat-artifacts" aria-label="Saved artifacts for this turn">
   {entries.length>0&&<ImageGallery entries={entries} {...props}/>}
-  {rows.filter(item=>!generated.has(item)).map(item=><GeneralArtifact key={artifactOverrideKey(state,item,message.id)} item={item} {...props}/>)}
+  {general.map(item=><GeneralArtifact key={artifactOverrideKey(state,item,message.id)} item={item} {...props}/>)}
  </div>;
 }

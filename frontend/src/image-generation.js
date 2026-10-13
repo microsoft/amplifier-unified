@@ -23,6 +23,7 @@ function generationBinding(item,messageId,sessionId,jobs){
  // explicit binding with weaker evidence.
  if(item.publication?.imageGeneration!==undefined||item.version!==1||
   item.row.kind!=='image'||item.row.sessionId!==sessionId||
+  item.publication?.version!==undefined&&item.publication.version!==item.version||
   item.publication?.messageId&&item.publication.messageId!==messageId)return null;
  return jobs.find(job=>job.messageId===messageId&&job.requestId&&job.requestId===item.row.imageRequestId)||null;
 }
@@ -39,7 +40,7 @@ export function imageGalleryEntries(state,messageId,images){
  for(const job of jobs){
   if(verified.some(item=>bindings.get(item).requestId===job.requestId)&&
    !visible.some(item=>bindings.get(item).requestId===job.requestId))continue;
-  const key=job.requestId?JSON.stringify([job.operation,job.requestId]):job.id;
+  const key=job.requestId||job.id;
   const existing=requests.get(key);
   if(existing){existing.job=job;continue}
   const entry={id:'request:'+(job.requestId||job.id),job};requests.set(key,entry);entries.push(entry);

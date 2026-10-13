@@ -5,6 +5,7 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {useConversationDetail}=await server.ssrLoadModule('/src/conversation-detail.jsx');
+const {inlineOwnership}=await server.ssrLoadModule('/src/conversation-navigation.js');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>server.close());
 const source=id=>({id,messages:[{id:id+'-last',text:'Current'}],messageWindow:{offset:1,before:id+'-last'},execution:{nodes:[],turns:[],segments:[]},executionWindow:{offset:1,before:'g-last',part:'groups'}});
 const response=value=>new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});
@@ -94,4 +95,62 @@ test('reading-window restoration does not issue a jump or override newer navigat
   assert.equal(detail.focused,false);assert.equal(detail.busy,'');assert.equal(detail.jumpRequest,null);
   assert.deepEqual(detail.session.messages.map(row=>row.id),['one-last']);
  }finally{await act(async()=>root?.unmount());globalThis.fetch=original}
+});
+
+test('typing during an around fetch and automatic tail eviction keep the same private editor',async()=>{
+ let detail,root,value=source('one'),pending=[],instance,unmounts=0;
+ const original=globalThis.fetch,view={viewId:'inline-edit',resourceId:'doc',resourceRevision:'r1',generation:1};
+ const scope={client:{id:'tab',hostInstanceId:'host'},canvasWorkspace:{views:[view]}};
+ globalThis.fetch=()=>new Promise(resolve=>pending.push(resolve));
+ function Editor(){
+  const identity=React.useRef({}),[text,setText]=React.useState('');
+  React.useEffect(()=>{const unregister=inlineOwnership.register(scope,view,{sessionId:'one',messageId:'one-last',version:2});return()=>{unregister();unmounts++}},[]);
+  instance={identity:identity.current,text,type:value=>{setText(value);inlineOwnership.intent(view,true)}};
+  return React.createElement('input',{value:text,onChange:event=>instance.type(event.target.value)});
+ }
+ function Probe(){detail=useConversationDetail(value);return React.createElement('section',null,detail.controls,...detail.session.messages.map(row=>row.id==='one-last'?React.createElement(Editor,{key:row.id}):React.createElement('p',{key:row.id},row.id)))}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});
+  const identity=instance.identity;let loading;
+  await act(async()=>{loading=detail.around('earlier')});
+  await act(async()=>instance.type('PRIVATE TEXT'));
+  inlineOwnership.settle(inlineOwnership.intent(view,true),{accepted:false});
+  await act(async()=>{pending.shift()(response({messages:[{id:'earlier'}],execution:{nodes:[],turns:[]}}));assert.equal(await loading,false)});
+  assert.equal(instance.identity,identity);assert.equal(instance.text,'PRIVATE TEXT');assert.equal(unmounts,0);
+  value={...value,messages:[{id:'new-tail'}],messageWindow:{offset:10,total:20}};
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(instance.identity,identity);assert.equal(instance.text,'PRIVATE TEXT');assert.equal(unmounts,0);
+  assert.deepEqual(detail.session.messages.map(row=>row.id),['one-last']);
+  // Exact host revocation is not a local navigation refusal.
+  inlineOwnership.reconcile({...scope,canvasWorkspace:{views:[]}});
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(unmounts,1);assert.deepEqual(detail.session.messages.map(row=>row.id),['new-tail']);
+ }finally{await act(async()=>root?.unmount());globalThis.fetch=original}
+});
+
+test('focused latest(false), around earlier/later, and additive paging respect the mounted anchor',async()=>{
+ let detail,root,value=source('one'),pending=[],unregister;
+ const original=globalThis.fetch,view={viewId:'inline-history',resourceId:'doc',resourceRevision:'r2',generation:2};
+ globalThis.fetch=()=>new Promise(resolve=>pending.push(resolve));
+ function Probe(){detail=useConversationDetail(value);return detail.controls}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});
+  let loading;await act(async()=>{loading=detail.around('older')});
+  await act(async()=>{pending.shift()(response({messages:[{id:'older'}],before:'before',after:'after',execution:{nodes:[],turns:[]}}));await loading});
+  unregister=inlineOwnership.register({},view,{sessionId:'one',messageId:'older',version:2});
+  inlineOwnership.intent(view,true);
+  for(const destination of ['before','after','search-anchor']){
+   await act(async()=>{loading=detail.around(destination)});
+   await act(async()=>{pending.shift()(response({messages:[{id:destination}],execution:{nodes:[],turns:[]}}));assert.equal(await loading,false)});
+   assert.deepEqual(detail.session.messages.map(row=>row.id),['older']);
+  }
+  await act(async()=>assert.equal(detail.latest(false),false));
+  assert.equal(detail.focused,true);
+  await act(async()=>inlineOwnership.settle(inlineOwnership.intent(view,false),{accepted:true}));
+  await act(async()=>assert.equal(detail.latest(false),true));assert.equal(detail.focused,false);
+  unregister();unregister=inlineOwnership.register({},view,{sessionId:'one',messageId:'one-last',version:1});inlineOwnership.intent(view,true);
+  await act(async()=>{loading=detail.earlier()});
+  await act(async()=>{pending.shift()(response({items:[{id:'first'}],offset:0}));pending.shift()(response({items:[],turns:[],offset:0}));await loading});
+  assert.deepEqual(detail.session.messages.map(row=>row.id),['first','one-last']);
+ }finally{unregister?.();await act(async()=>root?.unmount());globalThis.fetch=original}
 });

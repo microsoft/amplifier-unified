@@ -26,6 +26,8 @@ export function DetailText({text,reference,markdown=false,automatic=false,writin
 }
 const unique=rows=>[...new Map(rows.map(row=>[row.id,row])).values()];
 export function useConversationDetail(source,beforeApply,dispatch){
+ const [,refreshOwnership]=useState(0);
+ useEffect(()=>inlineOwnership.subscribe(()=>refreshOwnership(value=>value+1)),[]);
  const [saved,setSaved]=useState(null),[busy,setBusy]=useState(''),[error,setError]=useState(''),[focused,setFocused]=useState(null),[jumpTarget,setJumpTarget]=useState(null);
  const current=useRef(null);
  const sourceKey=source?.id;

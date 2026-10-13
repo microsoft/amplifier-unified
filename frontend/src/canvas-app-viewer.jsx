@@ -33,12 +33,17 @@ export function CanvasAppViewer({canvas,dispatch}){
  };
  const declare=(value,version=editVersion.current)=>{
   if(version!==editVersion.current)return Promise.resolve();
-  dirtyRef.current=value;setDirty(value);
+  dirtyRef.current=true;setDirty(true);
   const target=targetOf(shown.current),epoch=channel.current;
   const tickets=inlineOwnership.intent(target,value);
   const write=dirtyWrites.current.catch(()=>{}).then(()=>dispatch('canvas.views.dirty',{...target,dirty:value,editVersion:version},{inlineDirtyTickets:tickets}));
   dirtyWrites.current=write;
-  return write.then(receipt=>{inlineOwnership.settle(tickets,receipt);return receipt}).catch(e=>{if(epoch===channel.current){dirtyRef.current=true;setDirty(true);setError(e.message)}throw e});
+  return write.then(receipt=>{
+   if(receipt?.accepted===false)throw Error(receipt.error||'The edit declaration was not accepted.');
+   inlineOwnership.settle(tickets,receipt);
+   if(receipt?.accepted===true&&epoch===channel.current&&version===editVersion.current&&!value){dirtyRef.current=false;setDirty(false)}
+   return receipt;
+  }).catch(e=>{if(epoch===channel.current){dirtyRef.current=true;setDirty(true);setError(e.message)}throw e});
  };
  useEffect(()=>{
   if(canvas.app.revision!==mounted.app.revision&&!dirtyRef.current&&!busy.current){mount(canvas)}

@@ -30,8 +30,10 @@ const scopeOf=state=>JSON.stringify([state?.client?.hostInstanceId??null,state?.
 // Only live mounts and edit intent, never private text or a second artifact store.
 // The publication anchor belongs to the mount, not to the resource's first row.
 export function createInlineOwnership(){
- const mounts=new Set();
+ const mounts=new Set(),listeners=new Set();
+ const notify=()=>listeners.forEach(listener=>listener());
  return {
+  subscribe(listener){listeners.add(listener);return ()=>listeners.delete(listener)},
   register(state,target,owner){
    const record={scope:scopeOf(state),target:{...target},...owner,dirty:!!target.dirty,sequence:0};
    mounts.add(record);return ()=>mounts.delete(record);
@@ -49,9 +51,17 @@ export function createInlineOwnership(){
   },
   settle(tickets,receipt){
    if(receipt?.accepted!==true)return;
-   for(const {record,sequence,dirty} of tickets)if(mounts.has(record)&&record.sequence===sequence)record.dirty=!!dirty;
+   let changed=false;
+   for(const {record,sequence,dirty} of tickets)if(mounts.has(record)&&record.sequence===sequence){
+    changed ||= record.dirty!==!!dirty;record.dirty=!!dirty;
+   }
+   if(changed)notify();
   },
   blocksTarget:target=>[...mounts].some(record=>record.dirty&&sameTarget(record.target,target)),
+  protectsPublication(owner){
+   return [...mounts].some(record=>record.dirty&&record.sessionId===owner.sessionId&&record.messageId===owner.messageId&&
+    record.version===owner.version&&record.target.resourceId===owner.resourceId);
+  },
   blocksWindow(sessionId,messages){
    const ids=new Set((messages||[]).map(row=>row.id));
    return [...mounts].some(record=>record.dirty&&(record.sessionId!==sessionId||!ids.has(record.messageId)));

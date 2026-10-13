@@ -13,12 +13,13 @@ globalThis.MutationObserver=class {observe(){} disconnect(){}};
 globalThis.requestAnimationFrame=()=>1;globalThis.cancelAnimationFrame=()=>{};
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {CanvasAppViewer}=await server.ssrLoadModule('/src/canvas-app-viewer.jsx');
+const {inlineOwnership}=await server.ssrLoadModule('/src/conversation-navigation.js');
 test.after(()=>server.close());
 async function fixture(dispatcher){
  const callbacks=new Map(),out=[],calls=[],contentWindow={postMessage:data=>out.push(data)};
  globalThis.window={addEventListener:(name,fn)=>callbacks.set(name,fn),removeEventListener:name=>callbacks.delete(name)};
  let canvas={id:'fixture',sessionId:'session',title:'Test',viewId:'primary',resourceId:'fixture',resourceRevision:'r1',generation:0,app:{revision:1,stateRevision:0,state:{tab:'draw'},manifest:{},versions:[],requests:[]}},component;
- const dispatch=async(name,args)=>{calls.push({name,args});if(dispatcher)await dispatcher(name,args);return {result:{app:{...canvas.app,stateRevision:canvas.app.stateRevision+1}}}};
+ const dispatch=async(name,args)=>{calls.push({name,args});const receipt=dispatcher&&await dispatcher(name,args);return receipt??{accepted:true,result:{app:{...canvas.app,stateRevision:canvas.app.stateRevision+1}}}};
  await act(async()=>{component=create(React.createElement(CanvasAppViewer,{canvas,dispatch}),{createNodeMock:node=>node.type==='iframe'?{contentWindow}:null})});
  const channel=out.at(-1).channel;
  const send=async data=>act(async()=>callbacks.get('message')({source:contentWindow,data:{type:'canvas-app',id:'fixture',channel,revision:1,stateRevision:0,editVersion:1,...data}}));
@@ -50,4 +51,34 @@ test('duplicate snapshots and render statuses are not republished',async()=>{
   await f.send({op:'status',status:'error',message:'Broken'});await f.send({op:'status',status:'error',message:'Broken'});
   assert.equal(f.calls.filter(c=>c.name==='canvas.views.status').length,1);
  }finally{await f.close()}
+});
+
+test('CanvasApp editing intent protects ownership before its serialized host declaration settles',async()=>{
+ let resolveDirty;
+ const view={viewId:'primary',resourceId:'fixture',resourceRevision:'r1',generation:0};
+ const unregister=inlineOwnership.register({},view,{sessionId:'session',messageId:'publication',version:1});
+ const f=await fixture(async(name,args)=>{if(name==='canvas.views.dirty'&&args.dirty)await new Promise(resolve=>{resolveDirty=resolve})});
+ try{
+  await f.send({op:'editing',editVersion:1});
+  assert.equal(inlineOwnership.blocksWindow('session',[]),true);
+  assert.equal(inlineOwnership.blocksWindow('session',[{id:'publication'}]),false);
+  // Rejected/pending declarations never grant leave permission.
+  assert.equal(f.dirty(),true);resolveDirty();await act(async()=>{await Promise.resolve()});
+  await f.send({op:'dirty',requestId:'clean',args:{dirty:false},editVersion:1});
+  assert.equal(inlineOwnership.dirty(),false);
+ }finally{resolveDirty?.();unregister();await f.close()}
+});
+
+test('a refused CanvasApp clean declaration cannot admit a newer design over private input',async()=>{
+ const view={viewId:'primary',resourceId:'fixture',resourceRevision:'r1',generation:0};
+ const unregister=inlineOwnership.register({},view,{sessionId:'session',messageId:'publication',version:1});
+ const f=await fixture(async(name,args)=>name==='canvas.views.dirty'&&!args.dirty?{accepted:false,error:'Clean declaration rejected'}:undefined);
+ try{
+  await f.send({op:'editing',editVersion:1});
+  await f.send({op:'dirty',requestId:'clean',args:{dirty:false},editVersion:1});
+  assert.equal(f.dirty(),true);assert.equal(inlineOwnership.dirty(),true);
+  await f.update({app:{revision:2,stateRevision:0,state:{},manifest:{},versions:[],requests:[]}});
+  assert.ok(JSON.stringify(f.component.toJSON()).includes('A new design is ready.'));
+  assert.ok(JSON.stringify(f.component.toJSON()).includes('Clean declaration rejected'));
+ }finally{unregister();await f.close()}
 });

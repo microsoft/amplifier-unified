@@ -213,6 +213,7 @@ function App(){
    // Chat navigation has its own queue; it must not overtake a declared edit.
    if(navigation&&dirtyBarrier)await dirtyBarrier;
    if(navigation&&inlineOwnership.dirty())throw Error(inlineEditNotice);
+   if(command.action==='canvas.views.release'&&inlineOwnership.blocksTarget(command.args))throw Error(inlineEditNotice);
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(result.state)acceptState(result.state);
    else await awaitState(result);
