@@ -1,0 +1,101 @@
+name: Post-release verification
+on:
+  workflow_run:
+    workflows: [Publish application release]
+    types: [completed]
+permissions:
+  contents: read
+concurrency:
+  group: post-release-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+jobs:
+  resolve:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      revision: ${{ steps.release.outputs.revision }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Resolve the release actually published by this run
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          gh run download "$RELEASE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name host-source-resolution --dir "$RUNNER_TEMP/published-candidate"
+          python scripts/post_release_checks.py resolve --candidate "$RUNNER_TEMP/published-candidate/candidate.json" --output "$GITHUB_OUTPUT"
+  installed-package:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - name: Verify and install the published assets outside the checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          python scripts/post_release_checks.py download --version "$RELEASE_VERSION" --destination "$RUNNER_TEMP/published-assets"
+          uv venv "$RUNNER_TEMP/published-install"
+          uv pip install --python "$RUNNER_TEMP/published-install/bin/python" "$RUNNER_TEMP"/published-assets/*.whl
+          cd "$RUNNER_TEMP"
+          env -u PYTHONPATH "$RUNNER_TEMP/published-install/bin/python" -I -c 'from amplifier_web.app_updates import PROBE; exec(PROBE)'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: published-asset-verification
+          path: ${{ runner.temp }}/published-assets/verification.json
+          if-no-files-found: ignore
+  readiness:
+    needs: resolve
+    uses: ./.github/workflows/public-readiness.yml
+    with:
+      revision: ${{ needs.resolve.outputs.revision }}
+  python:
+    needs: resolve
+    uses: ./.github/workflows/python-checks.yml
+    with:
+      revision: ${{ needs.resolve.outputs.revision }}
+  browser:
+    needs: resolve
+    uses: ./.github/workflows/browser-checks.yml
+    with:
+      revision: ${{ needs.resolve.outputs.revision }}
+  report:
+    if: >-
+      always() && github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    needs: [resolve, installed-package, readiness, python, browser]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: post-release-report-${{ needs.resolve.outputs.tag || github.event.workflow_run.id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Report results and track failures without changing the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RESULTS: ${{ toJSON(needs) }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python scripts/post_release_checks.py report

@@ -23,42 +23,70 @@ The installed-wheel probe also loads worker-owned app packages in a fresh
 qualification: sibling app packages must be exposed by the explicit bootstrap
 without adding host site-packages or distribution metadata to the runtime.
 
-## Temporary rapid-development policy (September 23, 2026)
+## Local-first, fast publication policy (October 13, 2026)
 
-Browser scenarios and the complete Python suite are opt-in for the current
-development period. Neither release publication nor PR integration runs the
-complete Python suite or browser scenarios. Run the full suite locally before
-release preparation with `uv sync --locked --group dev --group artifacts` and
-`uv run --no-sync pytest -q --tb=short`, retaining the tested commit and result
-in the release handoff. This local result is not an automatic publication gate.
-Worker-specific tests require the separate standalone runtime and report explicit
-skips in a host-only environment. The release runtime lane and Core-wheel checks
-run child image-policy tests with that runtime installed.
+The development loop depends on published releases reaching local development
+installations quickly. Target roughly two minutes for a warm publication run;
+this is an operating target, not a guarantee about GitHub queues, downloads or
+cold dependency builds. Exhaustive testing must not silently become a publication
+or merge prerequisite again.
 
-Focused contract workflows, frontend unit tests/builds, committed-assets
-comparison, package installation probes, and the short real-runtime suite remain
-automatic. Release receipts explicitly name `package`, `frontend`, and `runtime`;
-none of these claims that the full Python or browser suite ran.
+Before requesting merge, run the affected backend and frontend tests locally,
+and exercise changed user flows in an owned DTU with synthetic state. Reuse owned
+dependencies where appropriate. Substantial integrations also warrant the full
+Python suite and relevant real-runtime/browser scenarios locally. Fix meaningful
+failures before publishing; record the exact source, commands, results, skips and
+limits in the PR. A green GitHub check is not a substitute for this work. Follow
+workspace DTU rules; never use a shared application installation as a test target.
 
-**Python checks (on demand)** also runs the complete suite on a selected branch
-or tag. It is a read-only manual workflow without a publish step or a release
-dependency. No tests were deleted, and restoring automatic coverage is an
-explicit workflow change.
+Typical local commands, inside the owned test environment:
 
-Run **Browser checks (on demand)** from GitHub Actions, selecting the branch or
-tag to test. It retains every former release browser command, plus the capacity,
-coordination and connector browser checks from the PR workflows, in one isolated
-runner. It has read-only permissions and cannot publish or block a release.
-Tests remain available locally through the existing frontend scripts. There is
-no scheduled browser/Python run or automatic expiration of this temporary policy.
+```sh
+uv sync --locked --group dev --group artifacts
+uv run --no-sync pytest -q --tb=short tests/test_affected_feature.py
+npm ci --prefix frontend
+npm test --prefix frontend
+npm run build --prefix frontend
+git diff --exit-code -- amplifier_web/static
+# For substantial integrations, after the affected checks:
+uv run --no-sync pytest -q --tb=short
+# Select relevant browser scripts from frontend/package.json.
+```
 
-For v0.20.13, merge-to-publication took 10m02s; its Python lane took 8m31s,
-frontend 1m13s, and runtime 43s with a cache hit. Those lanes overlap, so removing
-the full Python suite will expose another longest lane rather than subtracting
-8m31s from every release. The next release must measure the resulting critical
-path. Actual duration still depends on queues, dependency resolution and builds. Ordinary
-feature merges still need a versioned release before published-release clients
-can update.
+Replace the illustrative test filename with the actual affected suite. Real
+runtime checks require their declared runtime dependencies; report host-only
+skips accurately. Keep source, state, services and ports isolated and clean up
+owned temporary resources after evidence is retained.
+
+GitHub's required **Fast release checks** runs on every PR. It checks release
+identity/reporting contracts, frontend unit tests, the build and committed assets.
+Path-scoped contract workflows remain available for affected components. The
+publication graph retains only prepare, package, frontend, native runtime and
+publish. Matching candidate/dependency receipts, fresh installed-wheel probing,
+immutable tags, checksums and the short real-runtime regression suite still gate
+publication. The exhaustive readiness suite no longer runs on PRs or main pushes.
+
+**Post-release verification** starts from successful completion of the publisher,
+including publishers using `GITHUB_TOKEN`. It reads that run's retained candidate,
+checks the actual published stable tag resolves to the candidate commit, and uses
+that immutable revision for all broad tests. It does not substitute the current
+main head or whichever release happens to be latest. The installed-package lane
+downloads both published distributions, verifies their checksums, and installs
+and probes the wheel outside the source checkout. The full Python, broad readiness
+and extended browser suites run in independent jobs after publication.
+
+The reporting job writes a run summary and opens or updates one tracked issue per
+release when any expected lane fails, is cancelled, is skipped or is missing.
+A successful rerun closes its existing failure issue; green releases create no
+issue. Test jobs have read-only repository access; only the isolated reporting
+job can write issues. A failure does not withdraw the release, change its bytes,
+replay work or modify installed hosts. Investigate it and ship a corrective release
+when needed. Published and exhaustively verified remain distinct states.
+
+The broad suites also remain manually runnable. Changing this policy requires an
+explicit decision and an update to this document, tests and repository rules.
+The repository's dedicated required-check ruleset names **Fast release checks**;
+other review, deletion and history protections remain separate and unchanged.
 
 ## Execution and identity
 
@@ -95,10 +123,10 @@ the dedicated-key checkout does not grant other cache readers its package build.
 
 | Previous serial stage | Job |
 |---|---|
-| Full pytest suite | Local or manual Python workflow; outside publication |
+| Full pytest suite | Local, manual and automatic post-release workflows |
 | Distribution verification, isolated wheel install and import/assets/login probe | Package |
 | npm tests, frontend build and committed-assets comparison | Frontend |
-| Browser scenarios and their conditional file guards | Manual browser workflow; outside publication |
+| Browser scenarios and their conditional file guards | Local, manual and automatic post-release workflows |
 | Real Core/loop-live surface, child, component and cache tests | Runtime |
 | Immutable tag/asset checks and publication | Release, after all jobs |
 
@@ -136,8 +164,8 @@ at planning; this guard prevents accidental publication but does not exercise
 the downstream jobs. A new release still requires its own version and all required
 qualification lanes.
 
-An exact-candidate promotion system that reuses matching PR/merge qualification,
-shared prebuilt wheels, and merge-policy changes remain separate proposals.
+An exact-candidate promotion system that reuses matching PR/merge qualification
+and shared prebuilt wheels remains a separate proposal.
 
 ## Published Core binaries
 
