@@ -286,7 +286,7 @@ class Worker:
                     providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
             return
         coordinator.register_capability("web.activity", True)
-        if coordinator is self.session.coordinator:
+        if self.session is not None and coordinator is self.session.coordinator:
             async def response_block(event, data):
                 from amplifier_web.execution_events import CALL_PURPOSE
                 if not CALL_PURPOSE.get() and data.get("session_id", coordinator.session_id) == coordinator.session_id:
