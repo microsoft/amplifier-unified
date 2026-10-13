@@ -18,7 +18,7 @@ from .attention import session_item_at, session_item_count
 from .auth import data_identity
 from .service import AppError
 from .session_activity import activity_flags
-from .session_navigation import is_top_level
+from .session_navigation import is_top_level, is_agent_created
 
 SCAN_BUDGET = 1024
 MAX_PAGE = 200
@@ -59,6 +59,7 @@ def public_notice(row, item, slot):
     return {'id': item['id'], 'fingerprint': item['fingerprint'], 'kind': kind,
             'target': target, 'requiresAction': requires_action, 'read': item['read'],
             'summary': summary, 'title': row.get('title', 'Chat')[:200],
+            'agentCreated': is_agent_created(row),
             'timestamp': timestamp if type(timestamp) in {int, float} else None}
 
 
@@ -95,7 +96,7 @@ class Observations:
         role = 'internal' if row.get('sessionKind') == 'internal' else 'root' if is_top_level(row) else 'delegate'
         session = {'id': row['id'], 'title': row.get('title', 'Chat')[:200],
                    'status': row.get('status', 'idle'), 'activity': activity_flags(row),
-                   'pinned': row['id'] in pins, 'role': role}
+                   'pinned': row['id'] in pins, 'role': role, 'agentCreated': is_agent_created(row)}
         notices = tuple(public_notice(row, item, slot)
                         for slot in range(session_item_count(row))
                         if (item := session_item_at(row, read, slot)) is not None) if role != 'internal' else ()

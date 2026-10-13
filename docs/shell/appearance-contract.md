@@ -27,6 +27,27 @@ The theme definition, shell presentation preferences and operating-system
 preferences are separate inputs. Do not silently write accessibility or detail
 preferences when applying a theme.
 
+## Interaction economy
+
+Follow [CX8](../../contracts/client-experience.v1.md): UX is like golf—minimize
+strokes to reach the intended result without overwhelming the interface. Prefer
+visible selectors for small, commonly used option sets (for example, color
+swatches); use disclosure when exposing everything would make choosing harder.
+Reversible visual preferences apply immediately, with an unambiguous selected
+state. Preserve deliberate submission for drafts, credentials, destructive
+operations and external effects; fewer actions must not weaken authority.
+
+Compare complete before/after journeys, including opening menus, applying choices
+and repeated setup. Check keyboard access, focus, accessible labels and clarity,
+not only pointer click counts. A compact layout must not hide required actions or
+make the user memorize what unlabeled colors mean. Native clients use the current
+platform controls and accessibility behavior; platform presentation remains the
+client's responsibility rather than a browser imitation of a native widget.
+
+Platform-specific implementation guidance belongs to its client owner. For an
+example, see Tempo's [native Apple interaction contract](https://github.com/bkrabach/amplifier-temp/blob/feat/tempo-desktop-controls/docs/ux-contract.md).
+It does not prescribe materials or controls for other clients.
+
 ## Waiting and saving
 
 | Situation | Feedback | Interaction |
