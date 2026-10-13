@@ -5,7 +5,7 @@ import {MediaReporter} from './media-reporter';
 import './inline-media.css';
 
 let observationGeneration=0;
-function validateMediaMetadata(value,sessionId){
+export function validateMediaMetadata(value,sessionId){
  const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
  const text=(value,limit)=>typeof value==='string'&&value.length>0&&value.length<=limit;
  const malformed=detail=>{throw new Error(`Malformed media metadata: ${detail}. Retry media metadata.`)};
@@ -34,9 +34,24 @@ function mediaUrl(item,messageId,download=false){
  return api.clientUrl(`/api/outputs/${encodeURIComponent(item.id)}/media?${query}`);
 }
 
-function MediaFigure({item,messageId}){
+export function MediaFigure({item,messageId,reportMedia,openInCanvas=false}){
  const figure=useRef(null),canvas=useRef(null),video=useRef(null),player=useRef(null),reporter=useRef(()=>{});
  const [status,setStatus]=useState({render:'loading',playback:'paused',detail:''});
+ const opening=useRef(false),openRequest=useRef(null),[openPending,setOpenPending]=useState(false),[openError,setOpenError]=useState('');
+ async function openGif(){
+  if(opening.current)return;
+  opening.current=true;setOpenPending(true);setOpenError('');
+  openRequest.current ||= crypto.randomUUID();
+  try{
+   await api.request('/api/actions',{method:'POST',body:{id:openRequest.current,action:'canvas.openGif',
+    args:{sessionId:item.sessionId,messageId,id:item.id,version:item.version,sha256:item.sha256}}});
+   openRequest.current=null;
+  }catch(error){
+   // An uncertain transport outcome must retry the identical command.
+   if(!error.unconfirmed)openRequest.current=null;
+   setOpenError(error.message||'The retained GIF could not be opened in Canvas.');
+  }finally{opening.current=false;setOpenPending(false)}
+ }
  useEffect(()=>{
   let disposed=false,presentedFrames=0,mediaTime=0,videoCallback,ownedPlayer;
   // React clears DOM refs before passive cleanup. Own the actual mounted
@@ -46,7 +61,8 @@ function MediaFigure({item,messageId}){
   const abort=new AbortController(),url=mediaUrl(item,messageId);
   const notifications=new MediaReporter({generation,
    onState:({renderState:render,playback,detail})=>setStatus({render,playback,detail}),
-   send:payload=>api.request('/api/actions',{method:'POST',signal:abort.signal,body:{
+   // Canvas owns its view evidence, never the inline generation.
+   send:payload=>reportMedia?reportMedia(payload):api.request('/api/actions',{method:'POST',signal:abort.signal,body:{
     action:'outputs.mediaReport',args:{
      sessionId:item.sessionId,messageId,id:item.id,version:item.version,sha256:item.sha256,...payload
     }}})
@@ -102,7 +118,7 @@ function MediaFigure({item,messageId}){
    document.removeEventListener('visibilitychange',onVisibility);motion.removeEventListener('change',onMotion);
    visibility?.disconnect();
   };
- },[item.id,item.version,item.sha256,messageId]);
+ },[item.id,item.version,item.sha256,messageId,reportMedia]);
  return <figure ref={figure} data-media-id={item.id} data-media-state={status.render} data-playback={status.playback}>
   {item.media.mimeType==='image/gif'?<canvas ref={canvas} aria-label={item.title}/>:<video
    ref={video} src={mediaUrl(item,messageId)} controls playsInline muted preload="metadata" aria-label={item.title}
@@ -116,7 +132,11 @@ function MediaFigure({item,messageId}){
     onClick={()=>status.playback==='playing'?player.current?.pause():player.current?.play()}>
     {status.playback==='ended'?'GIF ended':status.playback==='playing'?'Pause GIF':'Play GIF'}</button>}
    <a href={mediaUrl(item,messageId,true)} download={item.filename}>Download original</a>
+   {openInCanvas&&item.media.mimeType==='image/gif'&&<button type="button" className="a-soft"
+    data-action="canvas.openGif" disabled={openPending} aria-busy={openPending||undefined} onClick={openGif}>
+    {openPending?'Opening in Canvas…':'Open in Canvas'}</button>}
    <span role="status">{status.detail||`${status.render} · ${status.playback}`}</span>
+   {openError&&<span role="alert">{openError}</span>}
   </div>
  </figure>;
 }
@@ -138,7 +158,7 @@ export function InlineMedia({sessionId,messageId,mediaRevision=0}){
   return ()=>{disposed=true;abort.abort()};
  },[sessionId,messageId,mediaRevision,visible,retry]);
  return <div ref={anchor} className="a-inline-media">
-  {result?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId}/>)}
+  {result?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId} openInCanvas/>)}
   {error&&<p role="alert">{error} <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry media metadata</button></p>}
   {result?.overflow&&<p>Only the first 20 media attachments are displayed.</p>}
  </div>;
