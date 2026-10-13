@@ -60,7 +60,7 @@ def remember(state, db, *, message=_CURRENT_MESSAGE):
         canvas['messageId'] = next((m['id'] for m in reversed(session.get('messages', [])) if m.get('role')=='user' and m.get('id')), None)
     canvas.setdefault('createdAt', time.time())
     previous = next((r for r in rows if r['id'] == canvas['id']), None)
-    if previous and previous.get('outputBinding') and not canvas.get('_versionWrite'):
+    if previous and (previous.get('outputBinding') or previous.get('kind') in {'gif', 'mp4'}) and not canvas.get('_versionWrite'):
         # A materialized view is not a new body owner. Passive latest viewing
         # must never replace a typed reference with a duplicate content body.
         return

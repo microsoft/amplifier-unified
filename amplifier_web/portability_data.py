@@ -266,6 +266,9 @@ def _validate_media_bindings(value):
             kind = entry.get('kind', row.get('kind'))
             binding = entry.get('outputBinding')
             if binding is not None:
+                version = entry.get('revision') if entry is row else entry.get('version')
+                if type(version) is not int or version < 1:
+                    raise ValueError('Invalid exact output adapter Canvas version.')
                 record = outputs.get(binding.get('outputId')) if isinstance(binding, dict) else None
                 if record is None:
                     raise ValueError('Canvas binding has no transferred owning output.')
@@ -273,6 +276,8 @@ def _validate_media_bindings(value):
                 body = resources[entry['body']['$resource']]
                 source = resources[record['canvasSource']['$resource']] if record.get('canvasSource') else None
                 validate_definition(entry, row, record, body, source)
+                if entry.get('contentResource') and resources[entry['contentResource']['$resource']] != body:
+                    raise ValueError('Output adapter has competing saved body references.')
                 retained = True
             refs = []
             if 'mediaReference' in entry:
@@ -304,6 +309,11 @@ def _validate_media_bindings(value):
             if not isinstance(link, dict):
                 raise ValueError('Invalid retained publication.')
             if not link.get('outputId'):
+                selected = by_version.get(link.get('version'))
+                if isinstance(selected, dict) and selected.get('outputBinding'):
+                    raise ValueError('Exact output publication is missing its owning output identity.')
+                if link.get('imageGeneration') is not None:
+                    raise ValueError('Generation publication is missing its owning output identity.')
                 continue
             if type(link.get('version')) is not int or link['version'] not in by_version:
                 raise ValueError('Publication has no exact saved Canvas version.')
@@ -313,7 +323,9 @@ def _validate_media_bindings(value):
             binding = by_version[link['version']].get('outputBinding')
             check_output(binding, record, sid)
             if link.get('imageGeneration') is not None:
-                if (link.get('messageId') != record.get('origin', {}).get('messageId')
+                marker = link['imageGeneration']
+                if (not isinstance(marker, dict) or marker.get('verified') is not True
+                        or link.get('messageId') != record.get('origin', {}).get('messageId')
                         or link['imageGeneration'] != generation_binding(record, row, link['version'])):
                     raise ValueError('Invalid durable generation publication binding.')
     canvases = {row['id']: row for row in value['canvas']}

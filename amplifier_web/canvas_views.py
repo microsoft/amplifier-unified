@@ -440,8 +440,9 @@ class CanvasViews:
             from .canvas_paths import copy_path
             return copy_path({**self.service.state, 'canvas': canvas}, args)
         if action in {'canvas.copy', 'canvas.download'}:
-            if canvas['kind'] == 'gif':
-                fail('Use Download original on the retained GIF.', 409)
+            if canvas['kind'] in {'gif', 'mp4'}:
+                fail('Use Download original on the retained GIF.' if canvas['kind'] == 'gif'
+                     else 'Use Download original on the retained video.', 409)
             from .canvas_downloads import filename
             if action == 'canvas.copy' and canvas['kind'] == 'pdf':
                 fail('Select text in the PDF to copy it, or download the original file.')

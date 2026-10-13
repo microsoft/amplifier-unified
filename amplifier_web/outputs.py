@@ -160,6 +160,8 @@ class Outputs:
                     if not isinstance(body, dict) or set(body) != {'mediaReference'}:
                         raise ValueError('Retained media adapter has an invalid saved body.')
                     reference = body['mediaReference']
+                    if not isinstance(reference, dict) or not isinstance(reference.get('item'), dict):
+                        raise ValueError('Retained media adapter has a malformed reference.')
                     record = self.record(sid, reference.get('item', {}).get('id'))
                     validate_media_reference(reference, record, sid, kind=kind)
                     values.append(body)

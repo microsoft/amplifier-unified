@@ -241,6 +241,9 @@ def publish(service, row, version, args, record=None):
     from .canvas_views import capabilities
     selected = definition(row, version, service.db)
     mode = args['presentation']['chat']
+    if record and not record.get('linked') and mode != 'none':
+        from .service import AppError
+        raise AppError('Relink this output before creating an active chat publication.', 409)
     if mode == 'inline' and not capabilities(selected['kind'])['inline']:
         from .service import AppError
         raise AppError(capabilities(selected['kind'])['reason'], 409)
@@ -317,7 +320,12 @@ def open_canvas(service, row, version, args, *, detached_input=False):
                 raise AppError('Finish or cancel the Settings edit before replacing Canvas.', 409)
         except AppError as exc:
             return {'status': 'dirty-blocked', 'clientId': identity, 'reason': str(exc)}
+        previous = {key: copy.deepcopy(client.get(key, {})) for key in ('canvas', 'canvasTabs', 'view')}
         load(service.state, service.db, row['id'], version=version)
+        if client['canvas'].get('renderReports', {}).get('stored-source', {}).get('status') == 'error':
+            client.update(previous)
+            return {'status': 'unavailable', 'clientId': identity,
+                    'reason': 'The exact saved artifact source is unavailable; publication was retained.'}
         client['view']['settingsCanvas'] = False
         client['view']['canvasFocused'] = False
         client['view'].setdefault('canvasDraft', {}).update(library=False, open=False, browser=False, overview=False)
@@ -384,6 +392,10 @@ async def dispatch(service, action, args, origin, command_id, expected_revision,
                 scoped['canvas']['messageId'] = args.get('messageId')
                 remember(scoped, service.db, message=None)
                 row = next(r for r in service._state['canvasArtifacts'] if r['id'] == scoped['canvas']['id'])
+                if previous is None:
+                    # Legacy remember opens tabs by default. General placement
+                    # is library-first; only open_canvas may open a local tab.
+                    row['tabOpen'] = False
                 version = latest(row)
                 args = {**args, 'presentation': args.get('presentation', {'chat': 'compact', 'canvas': 'unchanged'})}
             elif 'outputId' in args:

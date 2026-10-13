@@ -154,7 +154,7 @@ def command(service, action, args, origin):
         return result
     if owner.get('historyReadOnlyReason') or owner.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
         raise AppError('This conversation is read-only here.', 409)
-    if row.get('kind') == 'gif':
+    if row.get('kind') in {'gif', 'mp4'}:
         raise AppError('Retained GIF references are immutable. Open the original GIF instead.', 409)
     if row.get('app') or row.get('kind') in {'mcp-app', 'browser'}:
         raise AppError('Use the surface or tool presentation contract to revise this artifact.', 409)
@@ -177,9 +177,25 @@ def command(service, action, args, origin):
                 canvas[key] = row[key]
     for key in ('selectedVersion', 'latestVersion', 'readOnlyVersion', 'contentResource', 'body', 'versions', 'publications'):
         canvas.pop(key, None)
+    if action == 'canvas.versions.restore' and selected.get('outputBinding'):
+        # A typed wrapper is not a new content body. Keep the existing exact
+        # resource instead of reconstructing it from absent inline content.
+        canvas['contentResource'] = copy.deepcopy(selected['body'])
     canvas.update(id=row['id'], sessionId=sid, workspaceId=row.get('workspaceId'), createdAt=row.get('createdAt'), _versionWrite=True, _forceVersion=True)
     scoped = {**state, 'canvas': canvas}
     remember(scoped, service.db)
+    if canvas.get('outputBinding'):
+        from .artifact_presentation import check_output, generation_binding
+        binding = canvas['outputBinding']
+        output = service.outputs.record(sid, binding['outputId'])
+        check_output(binding, output, sid)
+        for link in row.get('publications', []):
+            if link.get('version') != row['revision']:
+                continue
+            link['outputId'] = output['id']
+            marker = generation_binding(output, row, link['version'])
+            if marker and link.get('messageId') == output.get('origin', {}).get('messageId'):
+                link['imageGeneration'] = marker
     if state.get('canvas', {}).get('id') == row['id'] and (state.get('canvas', {}).get('selectedVersion') is None or action == 'canvas.versions.restore'):
         load(state, service.db, row['id'], open_panel=state['canvas'].get('open', False))
     return {'id': row['id'], 'revision': row['revision'], 'version': row['revision'], 'reference': reference(row)}

@@ -1945,8 +1945,9 @@ class AppService:
                     return select(self, target, command_id, fingerprint, include_state=include_state)
             if action in {'canvas.copy', 'canvas.download'}:
                 canvas = self.state['canvas']
-                if args['id'] == canvas.get('id') and canvas.get('kind') == 'gif':
-                    raise AppError('Use Download original on the retained GIF.', 409)
+                if args['id'] == canvas.get('id') and canvas.get('kind') in {'gif', 'mp4'}:
+                    raise AppError('Use Download original on the retained GIF.' if canvas['kind'] == 'gif'
+                                   else 'Use Download original on the retained video.', 409)
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
@@ -3994,7 +3995,7 @@ class AppService:
                 action_args.setdefault('id', session_id)
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
-                action_args.setdefault('nativeProject', native_project(self._session(session_id)))
+                action_args.setdefault('nativeProject', native_project(self._session(session_id, hydrate=False)))
             if args['action'] == 'canvas.views.command' and action_args.get('action') == 'canvas.reference':
                 if action_args.get('args', {}).get('sessionId') != session_id:
                     raise AppError('References must target the calling conversation.', 409)
