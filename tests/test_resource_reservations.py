@@ -154,6 +154,7 @@ async def test_shared_dispatch_binds_child_authority_and_preserves_private_state
     args = {'workspaceId': workspace, 'resourceKey': 'preview:example'}
     before = copy.deepcopy(app.state['view'])
     result = await agent_action(app, source, 'workspace.resources.reserve', args, 'reserve')
+    assert set(result['state']) == {'revision', 'sessionId', '_stateAccess'}
     row = result['result']['reservation']
     assert row['owner'] == owner(source['id'], source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id'])
     update = {'workspaceId': workspace, 'id': row['id'], 'expectedRevision': 1, 'evidence': 'Done'}
