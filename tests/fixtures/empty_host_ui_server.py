@@ -3,10 +3,16 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import signal
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+ROOT = Path(__file__).resolve().parents[2]
+MODE = os.environ.get('AMPLIFIER_BROWSER_TEST_MODE', 'source')
+if MODE not in {'source', 'installed'}:
+    raise ValueError('AMPLIFIER_BROWSER_TEST_MODE must be source or installed')
+if MODE == 'source':
+    sys.path.insert(0, str(ROOT))
 
 
 class Runtime:
@@ -61,7 +67,10 @@ async def main(home):
     from configured_browser import seed_connection
     seed_connection(home / 'shared-settings')
     from aiohttp import web
+    import amplifier_web
     from amplifier_web.server import create_app
+    if MODE == 'installed' and Path(amplifier_web.__file__).resolve().is_relative_to(ROOT / 'amplifier_web'):
+        raise AssertionError('Installed browser fixture resolved source amplifier_web')
 
     workspace = home / "workspace"
     workspace.mkdir()
@@ -99,6 +108,7 @@ async def main(home):
 
     async def inspect(request):
         return web.json_response({"foundationCachePresent": (home / "app/foundation").exists(),
+            "applicationMode": MODE, "applicationVersion": amplifier_web.__version__,
             "storedCopyPath": str(stored_copy_path) if stored_copy_path else None,
             "registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
             "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),
@@ -159,10 +169,21 @@ async def main(home):
     url = f"http://127.0.0.1:{port}"
     app["allowed_origins"] = app["allowed_origins"] | {url}
     print(json.dumps({"url": url}), flush=True)
+    stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    registered_signals = []
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(signum, stopped.set)
+            registered_signals.append(signum)
+        except (NotImplementedError, RuntimeError):
+            pass  # Platforms without loop signal handlers retain normal teardown.
     try:
-        await asyncio.Event().wait()
+        await stopped.wait()
     finally:
         await runner.cleanup()
+        for signum in registered_signals:
+            loop.remove_signal_handler(signum)
 
 
 if __name__ == "__main__":
