@@ -114,6 +114,9 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     """Only publish useful runtime events; keep analysis/provider payloads private."""
     kind = event.get("type", "")
     base = {"sessionId": session_id}
+    if kind == 'runtime.bridge':
+        from .support_diagnostics import event_detail
+        return kind, {**base, **event_detail(event)}
     if kind == 'image.generated':
         return kind, {**base, 'nodeId': event.get('nodeId'), 'receipt': event.get('receipt')}
     if kind == 'runtime.ownership':
@@ -862,6 +865,7 @@ class RuntimeManager:
         args = {'operation': 'conversation.steer', 'arguments': {
             'text': text, 'inputId': input_id,
             'targetGenerationId': message['steering']['generationId'],
+            'allowNextTurn': message['steering'].get('allowNextTurn') is True,
             'reply_context': message.get('replyTo'), 'attachments': message.get('attachments', []),
             'context_binding': session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []})}}
         async with self._admission(sid):

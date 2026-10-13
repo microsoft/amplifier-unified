@@ -3,6 +3,7 @@ import {X,Copy,RefreshCw} from 'lucide-react';
 import './conversation-controls.css';
 import {readItems} from './attention';
 import {isTopLevelChat} from './chat-navigation';
+import {recentRequestTimings,recentActionTimings} from './api.js';
 import {sessionIdentity} from './navigation-presentation';
 import {ConversationUsage} from './conversation-usage.jsx';
 
@@ -70,18 +71,18 @@ export function ConversationDetails({session,act,focused=false,open}){
   if(inFlight.current)return;inFlight.current=true;setBusy('recover');setError('');
   try{const result=await act('session.recover',{id:session.id});if(!result||result.accepted===false)throw Error('Could not create the recovery copy.')}catch(error){setError(error.message)}finally{inFlight.current=false;setBusy('')}
  }
- async function copy(value,label){try{await navigator.clipboard.writeText(value);setCopied(label)}catch{setError('Clipboard unavailable. Select and copy the session ID.')}}
+ async function copy(value,label){try{await navigator.clipboard.writeText(value);setCopied(label)}catch{setError('Clipboard unavailable. You can select the diagnostic text below.')}}
  async function copyDiagnostics(){
   if(inFlight.current)return;
   setCopied('');
-  const pending=inspect();
+  const pending=inspect().then(current=>current?{...current,client:{userAgent:(navigator.userAgent||'').slice(0,512),language:navigator.language,online:navigator.onLine,visibility:globalThis.document?.visibilityState,recentRequests:recentRequestTimings(),recentActions:recentActionTimings()}}:current);
   if(navigator.clipboard?.write&&typeof ClipboardItem!=='undefined'){
    // Start the clipboard operation in the click gesture, including on Safari;
    // its promised content waits for the fresh diagnostic snapshot.
    const content=pending.then(current=>{if(!current)throw Error('Diagnostics unavailable');return new Blob([JSON.stringify(current,null,2)],{type:'text/plain'})});
    content.catch(()=>{});
    try{await navigator.clipboard.write([new ClipboardItem({'text/plain':content})]);setCopied('Diagnostics copied')}
-   catch{setError(current=>current||'Clipboard unavailable. Select and copy the session ID.')}
+   catch{setError(current=>current||'Clipboard unavailable. You can select the diagnostic text below.')}
   }else{const current=await pending;if(current)await copy(JSON.stringify(current,null,2),'Diagnostics copied')}
  }
  const currentReport=report?.status&&report.status!==session.status?undefined:report;
@@ -106,6 +107,7 @@ export function ConversationDetails({session,act,focused=false,open}){
   </div>
   {working&&(!focused||recoverable)&&<p>Wait for the current work to stop before creating a copy.</p>}
   {copied&&<p role="status">{copied}</p>}{error&&<p role="alert" className="a-danger">{error}</p>}
+  {error&&report&&<details><summary>Copy diagnostic text manually</summary><textarea aria-label="Diagnostic report" readOnly rows={12} value={JSON.stringify(report,null,2)} onFocus={event=>event.target.select()}/></details>}
   {!focused&&<ConversationUsage key={session.id} sessionId={session.id} act={act}/>}
  </div>;
 

@@ -118,7 +118,10 @@ def failure_details(error, error_type=None):
     kind = error_type or (type(error).__name__ if isinstance(error, BaseException) else 'Error')
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
     category, summary, guidance = 'unknown', 'Something interrupted this chat.', 'Your conversation is saved, but Amplifier could not identify the cause. If this happens again, copy the diagnostics and share them with support.'
-    if kind == 'WorkerExitedError':
+    if 'app bridge response timed out' in text:
+        category, summary = 'app_bridge_timeout', 'Amplifier timed out waiting for an internal operation.'
+        guidance = 'The operation may still have completed. Inspect its recorded outcome before retrying; this error does not establish a model provider timeout.'
+    elif kind == 'WorkerExitedError':
         category, summary, guidance = 'worker_exit', 'The chat process stopped unexpectedly.', 'Your conversation is saved. You can send a new message to continue. If this happens again, copy the diagnostics and share them with support.'
     elif kind == 'WorkerCommunicationError':
         category, summary, guidance = 'worker_communication', 'Amplifier lost contact with the chat process.', 'Your conversation is saved. Check the recorded details before continuing; work already in progress may have completed.'
@@ -152,15 +155,17 @@ def failure_details(error, error_type=None):
 
 
 def exception_details(error):
+    from .support_diagnostics import exception_chain
+    chain = exception_chain(error)
     current, seen = error, set()
     while id(current) not in seen:
         seen.add(id(current))
         detail = failure_details(current)
         if detail['category'] != 'unknown':
-            return detail
+            return {**detail, 'exceptionChain': chain}
         next_error = current.__cause__ or current.__context__
         if next_error is None:
-            return detail
+            return {**detail, 'exceptionChain': chain}
         current = next_error
     return failure_details(error)
 
@@ -169,7 +174,7 @@ def inspection_stamp(session):
     """Match the diagnostic snapshot without comparing conversation content."""
     return (tuple(session.get(key) for key in (
         'id', 'runtimeSessionId', 'nativeIdentity', 'title', 'workspace', 'bundle',
-        'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy', 'diagnosticReceipt')),
+        'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy', 'diagnosticReceipt', 'runtimeEvents')),
         tuple(worker.get('status') for worker in session.get('workers', [])))
 
 
@@ -205,8 +210,13 @@ def _belongs_to_failure(event, data, session):
 
 def inspect_session(home, session):
     from .host.storage import SessionStore
+    from .support_diagnostics import environment, event_detail, execution_detail
     identity = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
-    report = {'sessionId': session['id'], 'runtimeSessionId': identity,
+    report = {'diagnosticsSchema': 2, 'environment': environment(),
+              'capture': {'scope': 'bounded metadata; no prompts, tool arguments or provider payloads',
+                          'limitations': ['Historical events may be unavailable or outside the bounded tail.'],
+                          'sources': []},
+              'sessionId': session['id'], 'runtimeSessionId': identity,
               'title': session.get('title', ''), 'workspace': session.get('workspace', ''),
               'bundle': session.get('bundle', ''), 'status': session.get('status', ''),
               'selection': session.get('selection', {}), 'workReplayed': False,
@@ -225,6 +235,14 @@ def inspect_session(home, session):
     report['moduleFailures'] = read_failures(current if (current / 'module-load-failures.json').exists() else directory)
     if session.get('failure') or session.get('error'):
         report['failure'] = session.get('failure') or failure_details(session['error'], 'RuntimeError')
+    runtime_support = (session.get('runtimeReport') or {}).get('support')
+    if isinstance(runtime_support, dict):
+        report['runtime'] = runtime_support
+    else:
+        report['capture']['limitations'].append('Worker dependency versions were not recorded by this runtime.')
+    report['recentExecution'] = [execution_detail(row) for row in (session.get('execution') or {}).get('nodes', [])[-40:] if isinstance(row, dict)]
+    report['timeline'] = [event_detail(row) for row in session.get('generations', [])[-30:] if isinstance(row, dict)]
+    report['timeline'].extend(event_detail(row) for row in session.get('runtimeEvents', [])[-40:] if isinstance(row, dict))
     if session.get('error') and report['failure']['category'] == 'unknown':
         # Older versions discarded the cause at the manager boundary. Read a
         # bounded tail of this session's own native event log, only on request.
@@ -238,7 +256,9 @@ def inspect_session(home, session):
                     stream.seek(max(0, size - 2_000_000))
                     if size > 2_000_000:
                         stream.readline()
-                    lines = stream.read().splitlines()
+                    lines = stream.read(2_000_000).splitlines()
+                report['capture']['sources'].append({'name': name, 'bytesAvailable': size,
+                    'tailTruncated': size > 2_000_000, 'status': 'read'})
                 for line in reversed(lines):
                     try:
                         event = json.loads(line)
@@ -254,12 +274,21 @@ def inspect_session(home, session):
                     error = data.get('error', data.get('message', ''))
                     kind = error.get('type', 'ProviderError') if isinstance(error, dict) else data.get('error_type', 'ProviderError')
                     detail = failure_details(error, kind)
-                    candidates.append({**detail, 'source': 'saved_provider_event', 'recordedAt': event.get('timestamp', event.get('ts'))})
+                    evidence = event_detail({**data, **{k: event[k] for k in ('event', 'timestamp', 'ts') if k in event}})
+                    evidence['classification'] = detail
+                    candidates.append({'detail': detail, 'evidence': evidence,
+                        'recordedAt': event.get('timestamp', event.get('ts'))})
                     break
-            except (OSError, ValueError):
-                continue
-        if report['failure']['category'] == 'unknown' and candidates:
-            report['failure'] = sorted(candidates, key=lambda row: str(row.get('recordedAt') or ''))[-1]
+            except (OSError, ValueError) as exc:
+                report['capture']['sources'].append({'name': name, 'status': 'unavailable', 'errorType': type(exc).__name__})
+        if candidates:
+            candidate = sorted(candidates, key=lambda row: str(row.get('recordedAt') or ''))[-1]
+            report['failureEvidence'] = [row['evidence'] for row in candidates]
+            if candidate['detail']['category'] != 'unknown':
+                report['reportedFailure'] = report['failure']
+                report['failure'] = {**report['failure'], **candidate['detail'],
+                    'source': 'saved_provider_event', 'evidenceRecordedAt': candidate['recordedAt']}
+                report['failure'].setdefault('recordedAt', candidate['recordedAt'])
     report['canRecover'] = session.get('status') not in {'starting', 'working', 'running', 'stopping'} and not session.get('configurationBusy') and not any(worker.get('status') in {'queued', 'starting', 'running', 'working', 'stopping'} for worker in session.get('workers', []))
     return report
 

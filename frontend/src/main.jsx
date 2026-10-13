@@ -1,3 +1,4 @@
+import {recordActionTiming} from './api.js';
 import {useConnectionSetup} from './setup-journey';
 import {chatDeepLink} from './chat-deep-link';
 import {DictationButton} from './dictation-controls';
@@ -215,7 +216,9 @@ function App(){
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
   const catalogRead=isProviderCatalogRead(action,meta);
   const queue=action.startsWith('coordination.')||meta.presentation?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
-  const promise=enqueueSettings.current(queue,execute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
+  const queuedAt=performance.now();
+  const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
+  const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
    // Each caller owns an optimistic token even when several waiting editor
    // snapshots share the final request. Settle all callers after its receipt.
    if(pending)pendingView.current.settle(pending);
@@ -424,7 +427,7 @@ function App(){
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
   try{
    if(!entry.sessionId){const current=await ensureSession(entry.creation);entry=outbox.update(entry.id,{sessionId:current.id});}
-   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
+   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
    const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&row.delivery?.status==='accepted');
@@ -444,7 +447,8 @@ function App(){
   const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.status==='sending')return;
   if(previous.status==='unknown'&&text!==undefined)return;
   const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}:previous.creation;
-  const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),...(text!==undefined?{text}:{})}:{}),status:'sending',error:''});
+  const currentGeneration=latest.current?.sessions?.find(row=>row.id===previous.sessionId)?.collaborationGeneration;
+  const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),allowNextTurn:true,expectedGenerationId:currentGeneration&&!currentGeneration.terminal?currentGeneration.id:null,...(text!==undefined?{text}:{})}:{}),status:'sending',error:''});
   if(text!==undefined)act('view.update',{patch:{messageEdit:null}});
   await deliver(next);
  }
@@ -459,7 +463,7 @@ function App(){
   if(detail.focused)detail.latest(false);
   chatScroll.current?.submitted(id);setError('');editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
-  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
+  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
    const clearingDraft=saveDraft(stagedDraftPayload.current,blankToken);
    // The outbox already owns this exact submitted text. A slow/ lost draft

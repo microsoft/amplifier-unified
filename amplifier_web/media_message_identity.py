@@ -4,6 +4,10 @@ import copy
 from .media_saved_aliases import valid_id
 
 
+class StaleMediaIdentityError(ValueError):
+    """Read-only qualification raced a changing transcript; restart all checks."""
+
+
 ERROR = 'Choose an existing saved assistant message in this conversation.'
 FIELDS = ('id', 'nativeProject', 'nativeIdentity', 'runtimeSessionId',
           'historyManaged', 'nativeRevision', 'executionRevision', 'workspace',
@@ -186,14 +190,14 @@ def complete(proof, message_id, rows):
     # This must follow resolve(): canonical writers can change the transcript
     # immediately after the initial projection, including at final attachment.
     if revision(proof['snapshot']) != proof['revision']:
-        raise ValueError('The saved assistant identity changed during media access.')
+        raise StaleMediaIdentityError('The saved assistant identity changed during media access.')
     return {**proof, 'residentClaimants': rows}
 
 
 def validate(session, message_id, proof, saved=None):
     """Owner-locked comparisons only; never seed or qualify canonical proof."""
     if proof['snapshot'] != snapshot(session, message_id):
-        raise ValueError('The saved assistant identity changed during media access.')
+        raise StaleMediaIdentityError('The saved assistant identity changed during media access.')
     if proof.get('detached') != saved:
         raise ValueError('The saved assistant resource index changed during media access.')
     if proof.get('revision') is not None:
@@ -201,7 +205,7 @@ def validate(session, message_id, proof, saved=None):
             raise ValueError('The saved assistant identity requires worker qualification.')
         rows = resident_claimants(session, message_id, proof['fact'])
         if proof['residentClaimants'] != rows:
-            raise ValueError('The saved assistant identity changed during media access.')
+            raise StaleMediaIdentityError('The saved assistant identity changed during media access.')
         # The worker qualified these IDs. Count across ALL resident rows: an
         # alias duplicate at another index lies outside the bounded capture.
         alias_ids = {row['id'] for row in proof['residentClaimants']

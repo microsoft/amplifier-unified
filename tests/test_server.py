@@ -278,3 +278,18 @@ async def test_work_sync_is_read_only_and_origin_protected(authenticated_client,
     unchanged=await (await client.post('/api/conversation/work-sync',json=payload)).json()
     assert unchanged['items']==[] and unchanged['order']==['tool']
     assert service.state['revision']==revision
+
+
+async def test_support_request_timings_are_correlated_bounded_and_payload_free(authenticated_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=Runtime(), voice=False, background_updates=False)
+    client = await authenticated_client(app)
+    response = await client.get('/api/health?private=do-not-export')
+    assert response.headers['Server-Timing'].startswith('app;dur=')
+    identity = response.headers['X-Amplifier-Request-Id']
+    row = next(row for row in app['service'].request_timings if row['id'] == identity)
+    assert row['route'] == '/api/health' and row['status'] == 200
+    assert 'do-not-export' not in str(row)
+    for _ in range(65):
+        await client.get('/api/health')
+    assert len(app['service'].request_timings) == 60

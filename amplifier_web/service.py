@@ -122,7 +122,7 @@ ACTION_DEFINITIONS = {
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
-    "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a correction to the run the client observed; stale steering never starts another run.", schema({"sessionId":string(200),"text": string(100000), "expectedGenerationId":{**string(128),"minLength":1}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
+    "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a message to the observed run. Explicit steering stays bound; allowNextTurn lets an ordinary message start the next turn only after that exact run completes normally.", schema({"sessionId":string(200),"text": string(100000), "expectedGenerationId":{**string(128),"minLength":1}, "allowNextTurn":{"type":"boolean"}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(MAX_ENCODED_BYTES),"source":{"type":"string","enum":["clipboard-text"]}},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
@@ -1753,6 +1753,9 @@ class AppService:
                 captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
             prepared_health['capturedAt'] = captured_at
+            prepared_health['host'] = {**getattr(self.update_manager, 'running_identity', {}), 'hostInstanceId': self.instance_id}
+            prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
+            prepared_health['capture']['limitations'].append('Request timings cover handler execution, not time before the server accepts a connection.')
         if action == 'session.plans':
             from .chat_plan import overview
             if args.get('includeItems') and len(args['ids']) != 1:
@@ -2462,7 +2465,7 @@ class AppService:
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
                 from .conversation_steering import target as steering_target
-                target_generation = steering_target(session, args.get('expectedGenerationId'))
+                target_generation = steering_target(session, args.get('expectedGenerationId'), args.get('allowNextTurn', False))
                 text = args["text"].strip()
                 from .message_interactions import resolve_quote
                 quote = resolve_quote(session, args.get("replyId"))
@@ -2483,7 +2486,7 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending', 'allowNextTurn': args.get('allowNextTurn') is True}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 if post_previous is not None:
                     promote_human_post(session, message, post_previous)
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
@@ -2510,7 +2513,7 @@ class AppService:
                 if message is None:
                     raise AppError('This message is not saved in this conversation.', 404)
                 if message.get('steering'):
-                    raise AppError('A correction belongs to its original run and cannot be resent as a new turn. Check delivery, or write a new message explicitly.', 409)
+                    raise AppError('A steering message belongs to its original run and cannot be resent as a new turn. Check delivery, or write a new message explicitly.', 409)
                 if message.get('delivery', {}).get('status') == 'accepted':
                     diagnostic_result = {'delivery': 'accepted', 'resent': False}
                 else:
@@ -3682,7 +3685,7 @@ class AppService:
                     session.get('status') in {'idle', 'stopped', 'interrupted'}):
                 from .chat_navigation import settle_activity
                 settle_activity(session)
-            progress = kind in {'assistant.delta', 'runtime.tool'} or (
+            progress = kind in {'assistant.delta', 'runtime.tool', 'runtime.bridge'} or (
                 kind == 'worker.updated' and payload.get('activityOnly')) or (
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (

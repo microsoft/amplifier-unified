@@ -351,3 +351,50 @@ def test_worker_exit_has_specific_guidance_without_guessing_its_cause():
     assert detail['category'] == 'worker_exit'
     assert 'process stopped' in detail['summary']
     assert 'private' not in json.dumps(detail)
+
+
+async def test_bridge_failure_keeps_generation_and_remote_diagnostic_evidence(tmp_path):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        source = app._session()
+        source.update(status='error', error='Manager failed', errorAt=110,
+            failure={**failure_details('Manager failed'), 'generationId': 'g',
+                     'inputIds': ['i'], 'stage': 'manager_turn', 'recordedAt': 110},
+            generations=[{'event': 'generation.started', 'generation_id': 'g', 'at': 100}])
+        folder = SessionStore.for_app(tmp_path, tmp_path).directory(source['id']) / 'context-intelligence'
+        folder.mkdir(parents=True, exist_ok=True)
+        message = 'App bridge response timed out after 60 seconds (transport timeout, not normal coordination.wait expiry).'
+        event = {'event': 'provider:error', 'timestamp': 105, 'data': {
+            'session_id': source['id'], 'provider': 'openai',
+            'error': {'type': 'TimeoutError', 'msg': message}, 'request': 'private prompt'}}
+        (folder / 'events.jsonl').write_text(json.dumps(event))
+        report = inspect_session(tmp_path, source)
+        assert report['failure']['category'] == 'app_bridge_timeout'
+        assert report['failure']['generationId'] == 'g'
+        assert report['failure']['inputIds'] == ['i']
+        assert report['failure']['recordedAt'] == 110
+        assert report['failure']['evidenceRecordedAt'] == 105
+        assert report['reportedFailure'] == source['failure']
+        assert report['failureEvidence'][0]['message'] == message
+        assert report['environment']['applicationVersion']
+        assert report['diagnosticsSchema'] == 2
+        assert 'private prompt' not in json.dumps(report)
+        event['data']['error']['msg'] = 'private arbitrary SDK message'
+        (folder / 'events.jsonl').write_text(json.dumps(event))
+        report = inspect_session(tmp_path, source)
+        assert report['failure'] == source['failure']
+        assert report['failureEvidence'][0]['errorType'] == 'TimeoutError'
+        assert 'private arbitrary' not in json.dumps(report)
+    finally:
+        await app.close()
+
+
+def test_support_timeline_excludes_payloads_and_bounds_fields():
+    from amplifier_web.support_diagnostics import event_detail
+    event = event_detail({'type': 'runtime.bridge', 'bridgeId': 'bridge-1',
+        'operation': 'dispatch', 'action': 'coordination.wait', 'phase': 'timeout',
+        'generation_id': 'g', 'elapsedSeconds': 60.1, 'args': {'secret': 'password'},
+        'response': 'private answer', 'error': 'private exception'})
+    assert event['bridgeId'] == 'bridge-1' and event['phase'] == 'timeout'
+    assert not {'args', 'response', 'error'} & event.keys()

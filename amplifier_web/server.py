@@ -17,6 +17,7 @@ from .runtime import RuntimeOperationPending
 from .live_clients import client_context
 from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
+from .request_timing import request_timing
 
 
 def _set_response_headers(response: web.StreamResponse, path: str) -> web.StreamResponse:
@@ -67,7 +68,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                      preload_providers=True, server_config=None):
     data_dir = Path(data_dir).expanduser().resolve()
     config = validate_server(server_config) if server_config is not None else load_server_config(data_dir)
-    app = web.Application(middlewares=[boundaries, auth_required, client_context], client_max_size=MAX_REQUEST_BYTES)
+    app = web.Application(middlewares=[request_timing, boundaries, auth_required, client_context], client_max_size=MAX_REQUEST_BYTES)
     app["server_config"] = config
     app["permitted_hosts"] = frozenset({"localhost", "127.0.0.1", "::1"} |
                                        {canonical_host(urlsplit(origin).hostname) for origin in config["public_origins"]})
