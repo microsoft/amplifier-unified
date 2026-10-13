@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {imageJobs,imageJobLabel,imageGalleryEntries} from '../src/image-generation.js';
+import {imageJobs,imageJobLabel,imageGalleryEntries,imageGallerySelection} from '../src/image-generation.js';
 
 test('saved results replace only matching image work in the same chat and turn',()=>{
  const jobs=[{id:'a',messageId:'origin',requestId:'a',phase:'running',operation:'generate'},
@@ -29,7 +29,9 @@ test('gallery retains request order and selection identity through out-of-order 
  const second=image('b'),first=image('a');
  const pending=imageGalleryEntries(state,'origin',[]);
  const mixed=imageGalleryEntries(state,'origin',[second]);
- assert.deepEqual(mixed.map(entry=>entry.id),pending.map(entry=>entry.id));
+ assert.equal(mixed[0].id,pending[0].id);
+ assert.equal(imageGallerySelection(mixed,pending[1].id).item,second,'The pending selection reconciles explicitly to its resolved output');
+ assert.equal(mixed[1].id,'artifact:image-b:1');
  assert.equal(mixed[0].item,undefined);assert.equal(mixed[1].item,second);
  const finished=imageGalleryEntries(state,'origin',[second,first]);
  assert.equal(finished[0].item,first);assert.equal(finished[1].item,second);
@@ -48,7 +50,8 @@ test('correcting a rejected image request keeps one slot and the completed resul
  const before=imageGalleryEntries(state([rejected]),'origin',[]);
  const after=imageGalleryEntries(state([rejected,completed]),'origin',[item]);
  assert.equal(after.length,1);
- assert.equal(after[0].id,before[0].id);
+ assert.equal(imageGallerySelection(after,before[0].id).id,after[0].id);
+ assert.equal(after[0].id,'artifact:saved:1');
  assert.equal(after[0].job.phase,'completed');
  assert.equal(after[0].item,item);
  assert.equal(imageGalleryEntries(state([rejected,{...completed,requestId:'another'}]),'origin',[]).length,2);
@@ -76,7 +79,8 @@ test('completed edit and variation receipts retain stable slots and all exact ve
  assert.equal(imageJobLabel(before[1].job),'Editing image…');
  const completed={...state,sessions:[{id:'s',execution:{imageGeneration:[jobs[0],{...jobs[1],phase:'completed'}]}}]};
  const after=imageGalleryEntries(completed,'origin',[edited,original,retained('variant','edited',2,'edit')]);
- assert.deepEqual(after.slice(0,2).map(row=>row.id),before.map(row=>row.id));
+ assert.equal(after[0].id,before[0].id);
+ assert.equal(imageGallerySelection(after,before[1].id).item,edited);
  assert.equal(after[1].item,edited);assert.equal(after[2].item.version,2);
  for(const chat of ['none','compact']){
   const hidden={...edited,publication:{chat}};
@@ -119,6 +123,31 @@ test('one request with multiple outputs and an edit has distinct stable slots th
   const hidden=items.map(item=>({...item,publication:{...item.publication,chat}}));
   assert.deepEqual(imageGalleryEntries(state,'origin',hidden),[]);
  }
+});
+
+test('selected B is never reassigned when sibling A alone becomes compact or hidden with unrelated C first',()=>{
+ const c=retained('c','unrelated'),a=retained('a','shared'),b=retained('b','shared');
+ const state={selectedSessionId:'s',sessions:[{id:'s',execution:{imageGeneration:[
+  {id:'job-c',requestId:'unrelated',messageId:'origin',phase:'completed'},
+  {id:'job-ab',requestId:'shared',messageId:'origin',phase:'completed'}
+ ]}}]};
+ const before=imageGalleryEntries(state,'origin',[c,a,b]),selected=before.find(entry=>entry.item===b).id;
+ assert.equal(selected,'artifact:b:1');
+ for(const chat of ['compact','none']){
+  const items=[c,{...a,publication:{...a.publication,chat}},b];
+  for(const next of [state,{...state,sessions:[{id:'s'}]},JSON.parse(JSON.stringify({...state,sessions:[{id:'s'}]}))]){
+   const entries=imageGalleryEntries(next,'origin',items);
+   assert.equal(entries[0].item,c,'The unrelated first entry makes accidental fallback observable');
+   assert.equal(imageGallerySelection(entries,selected).item,b);
+   assert.equal(entries.find(entry=>entry.item===b).id,selected);
+  }
+ }
+ const revised=retained('b','shared',2);
+ const versions=imageGalleryEntries(state,'origin',[c,a,b,revised]);
+ assert.equal(imageGallerySelection(versions,selected).item,b);
+ assert.notEqual(versions.find(entry=>entry.item===revised).id,selected);
+ const pending=imageGalleryEntries(state,'origin',[]);
+ assert.equal(imageGallerySelection(before,pending[1].id).item,a,'Only a progress placeholder aliases the first resolved output');
 });
 
 test('bare forgery, mismatched owner/output/publication version and ordinary new revision cannot classify generation',()=>{

@@ -28,8 +28,8 @@ function generationBinding(item,messageId,sessionId,jobs){
  return jobs.find(job=>job.messageId===messageId&&job.requestId&&job.requestId===item.row.imageRequestId)||null;
 }
 
-// Stable request slots survive receipt arrival, job pruning and cold reload.
-// Each additional output/version keeps its own exact artifact slot.
+// Pending work has a request slot; every resolved output has its own immutable
+// artifact/version identity, independent of which siblings are currently visible.
 export function imageGalleryEntries(state,messageId,images){
  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
  const jobs=(session?.execution?.imageGeneration||[]).filter(job=>job.messageId===messageId);
@@ -49,14 +49,22 @@ export function imageGalleryEntries(state,messageId,images){
   const {job}=entry;
   const matches=visible.filter(item=>remaining.has(item)&&job.requestId&&bindings.get(item).requestId===job.requestId);
   entry.item=matches[0];
+  if(entry.item){entry.requestSlot=entry.id;entry.id='artifact:'+entry.item.row.id+':'+entry.item.version}
   if(matches[0])remaining.delete(matches[0]);
  }
  for(const item of remaining){
   const binding=bindings.get(item),key=binding.requestId;
   const existing=requests.get(key);
   if(!existing){
-   const entry={id:'request:'+key,item};requests.set(key,entry);entries.push(entry);
+   const entry={id:'artifact:'+item.row.id+':'+item.version,requestSlot:'request:'+key,item};requests.set(key,entry);entries.push(entry);
   }else entries.push({id:'artifact:'+item.row.id+':'+item.version,item});
  }
  return entries;
+}
+
+// Reconcile a selected progress placeholder once. Resolved output IDs never
+// become request aliases, so removing A cannot reassign selected B's identity.
+export function imageGallerySelection(entries,selected){
+ return entries.find(entry=>entry.id===selected)||
+  entries.find(entry=>entry.requestSlot===selected)||entries[0];
 }

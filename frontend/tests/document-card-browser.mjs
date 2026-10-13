@@ -18,18 +18,25 @@ try{
  const identity=await page.evaluate(()=>window.amplifier.getState().canvasArtifacts.find(row=>row.title==='Website refresh brief').id);
  await action('canvas.versions.revise',{id:identity,expectedRevision:1,content:'# Revised second version'});
  await action('canvas.visibility',{open:false});
- const card=version=>page.locator('.a-document-output-open').filter({hasText:'Document · Version '+version});
+ const discovered=await page.evaluate(()=>window.amplifier.getActions().some(row=>(row.name||row.action)==='canvas.present'));
+ assert.equal(discovered,true,'This journey needs the host canvas.present producer; do not fall back after sending');
+ const card=version=>page.locator(`.a-general-artifact[data-artifact-id="${identity}"][data-artifact-version="${version}"]`)
+  .getByRole('button',{name:'Open Website refresh brief in Canvas',exact:true});
  const selectCalls=[];let release;
  const gate=new Promise(resolve=>{release=resolve});
  await page.route('**/api/actions',async route=>{
   const body=route.request().postDataJSON();
-  if(body.action==='canvas.select'){selectCalls.push(body.args);await gate}
+  const command=body.action==='shell.command'?body.args:body;
+  if(command.action==='canvas.present'){selectCalls.push(command.args);await gate}
   await route.continue();
  });
  await card(1).click();
  await expect(card(1)).toHaveAttribute('aria-busy','true');
  await card(1).dispatchEvent('click');
  assert.equal(selectCalls.length,1,'repeat activation during loading does not enqueue a second open');
+ assert.equal(selectCalls[0].id,identity);assert.equal(selectCalls[0].version,1);
+ assert.equal(selectCalls[0].presentation.canvas,'open');
+ assert.equal(selectCalls[0].presentation.chat,'compact');
  release();
  await expect(panel).toBeVisible();
  await expect(panel.getByRole('heading',{name:'A clearer first impression',exact:true})).toBeVisible();

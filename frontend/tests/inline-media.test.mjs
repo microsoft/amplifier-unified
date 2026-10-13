@@ -4,6 +4,9 @@ import {GifPlayer} from '../src/gif-player.js';
 import {MediaReporter} from '../src/media-reporter.js';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import {webcrypto} from 'node:crypto';
+import {normalizedAction,leavesSettings,createInlineOwnership,inlineEditNotice} from '../src/conversation-navigation.js';
+import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead} from '../src/settings-action-queue.js';
 
 test('finite loops end without allocating another frame and never autoplay',async()=>{
  let callback,closed=0,calls=0;
@@ -395,6 +398,7 @@ test('actual App Settings-leaving guard cancels GIF admission visibly without a 
  assert.ok(start>=0&&end>start);let confirmations=0,requests=0;
  const dispatch=runInNewContext(`${source.slice(start,end)} },[acceptState,handleEffects,awaitState]);\ndispatch`,{
   useCallback:fn=>fn,acceptState(){},handleEffects(){},awaitState(){},
+  normalizedAction,leavesSettings,crypto:webcrypto,
   settingsNavigation:{current:{hasUnsaved:()=>true,confirmClose:async()=>{confirmations++;return false}}},
   request:()=>{requests++;assert.fail('Cancelled Settings navigation issued a host command')}
  });
@@ -402,4 +406,44 @@ test('actual App Settings-leaving guard cancels GIF admission visibly without a 
  await component.render().openGif();
  assert.equal(confirmations,1);assert.equal(requests,0);
  assert.ok(component.hooks.writes.some(row=>row.value==='Settings changes were kept.'));
+});
+
+test('actual App direct and wrapped canvas.present guard only Canvas opening and preserve normal queue order',async()=>{
+ const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+ const start=source.indexOf(' const dispatch=useCallback('),end=source.indexOf(' },[acceptState,handleEffects,awaitState]);',start);
+ assert.ok(start>=0&&end>start);
+ const queue=()=>({current:Promise.resolve()}),calls=[];
+ let confirmations=0,allow=false;
+ const dispatch=runInNewContext(`${source.slice(start,end)} },[acceptState,handleEffects,awaitState]);\ndispatch`,{
+  useCallback:fn=>fn,acceptState(){},handleEffects(){},awaitState(){},
+  normalizedAction,leavesSettings,crypto:webcrypto,inlineOwnership:createInlineOwnership(),inlineEditNotice,
+  settingsNavigation:{current:{hasUnsaved:()=>true,confirmClose:async()=>{confirmations++;return allow}}},
+  latest:{current:{selectedSessionId:'fixture-chat'}},pendingView:{current:{add:()=>null}},
+  canvasDirtyBarrier:{current:null},commandQueue:queue(),navigationQueue:queue(),reviewQueue:queue(),sendQueue:queue(),
+  providerReadQueue:queue(),canvasVisibilityQueue:queue(),enqueueSettings:{current:createSettingsActionQueue()},
+  settingsDraftKey,isProviderCatalogRead,performance,recordActionTiming(){},trackAction:()=>()=>{},
+  actionFeedback:{current:{begin:()=>()=>{}}},handledActionResults:{current:new WeakSet()},
+  request:async(path,options)=>{calls.push(options.body);return {accepted:true}}
+ });
+ for(const wrapped of [false,true]){
+  const command=(canvas,meta={})=>{
+   const args={sessionId:'fixture-chat',id:'saved',version:2,presentation:{chat:'none',canvas}};
+   return dispatch(wrapped?'shell.command':'canvas.present',wrapped?{action:'canvas.present',args}:args,meta);
+  };
+  const before=calls.length;
+  assert.equal((await command('open')).error,'Settings changes were kept.');
+  assert.equal(calls.length,before,'Cancellation never sends a host request');
+  let unblock;const barrier=new Promise(resolve=>{unblock=resolve});
+  const first=command('unchanged',{before:barrier,id:'first-'+wrapped});
+  const second=command('unchanged',{id:'second-'+wrapped});
+  await Promise.resolve();await Promise.resolve();
+  assert.equal(calls.length,before,'Publication-only work remains behind the normal command queue');
+  unblock();await Promise.all([first,second]);
+  assert.deepEqual(calls.slice(before).map(row=>row.id),['first-'+wrapped,'second-'+wrapped]);
+  allow=true;await command('open',{id:'allowed-'+wrapped});allow=false;
+  const sent=calls.at(-1),inner=normalizedAction(sent.action,sent.args);
+  assert.equal(inner.action,'canvas.present');assert.equal(inner.args.version,2);
+  assert.equal(inner.args.presentation.canvas,'open');
+ }
+ assert.equal(confirmations,4,'Only the two cancelled and two accepted Canvas opens request confirmation');
 });

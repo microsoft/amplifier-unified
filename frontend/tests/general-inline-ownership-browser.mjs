@@ -171,8 +171,39 @@ try{
 
  // Automatic same-session source-window replacement also vetoes before unmount.
  setMessages(full.slice(200));await emit();await card.scrollIntoViewIfNeeded();await expect(input).toBeVisible();
+ await page.locator('.ProseMirror').fill('');
  await input.fill('PRIVATE AUTOMATIC EDIT');saved=await remember();
- setMessages(full.slice(220));await emit();await same(saved);
+ const restoreSession=state.sessions.find(row=>row.id==='chat');
+ setMessages(full.slice(220));
+ state={...state,sessions:state.sessions.map(row=>row.id==='chat'?{...row,status:'working',
+  collaborationGeneration:{id:'live-generation',terminal:false},approvals:[{id:'live-approval',prompt:'Current host approval',status:'pending'}]}:row)};
+ await emit();await same(saved);
+ await expect(page.locator('[data-part="composer-primary-action"]')).toHaveAttribute('data-action','conversation.stop');
+ await expect(page.locator('.a-approvals')).toContainText('Current host approval');
+ state={...state,sessions:state.sessions.map(row=>row.id==='chat'?{...row,draftAttachments:[{id:'live-attachment',name:'current-host.txt',size:12}]}:row)};
+ await emit();await same(saved);
+ await expect(page.getByText('current-host.txt',{exact:true})).toBeVisible();
+ // Current ownership/read-only metadata gates the composer, not the private
+ // renderer. A pinned display window must never pin the former owner state.
+ state={...state,sessions:state.sessions.map(row=>row.id==='chat'?{...row,
+  ownership:{status:'blocked',source:'fixture-peer'},historyReadOnlyReason:'Current host read-only reason'}:row)};
+ await emit();await same(saved);
+ await expect(page.getByRole('region',{name:'Conversation access'})).toContainText('Current host read-only reason');
+ await expect(page.locator('.a-composer-fields')).toBeDisabled();
+ // Restore write eligibility but keep the newer generation while the anchor is
+ // still outside the tail. The actual App send must bind that generation.
+ state={...state,sessions:state.sessions.map(row=>row.id==='chat'?{...row,status:'idle',ownership:undefined,historyReadOnlyReason:undefined}:row)};
+ await emit();await same(saved);
+ const sendsBefore=calls.filter(row=>row.action==='conversation.send').length;
+ await page.locator('.ProseMirror').fill('Current generation discriminator');
+ await page.locator('.ProseMirror').press('Enter');
+ await expect.poll(()=>calls.filter(row=>row.action==='conversation.send').length).toBe(sendsBefore+1);
+ const sent=calls.filter(row=>row.action==='conversation.send').at(-1);
+ assert.equal(sent.args.expectedGenerationId,'live-generation');
+ assert.deepEqual(sent.args.attachmentIds,['live-attachment']);
+ await same(saved);
+ state={...state,sessions:state.sessions.map(row=>row.id==='chat'?{...restoreSession,messages:row.messages,messageWindow:row.messageWindow}:row)};
+ await emit();
  await acknowledgeClean();await expect(input).toHaveCount(0);
 
  // Unlink/library-only publication is not authority revocation. The exact dirty
@@ -216,17 +247,43 @@ try{
  setMessages(full.slice(200));state={...state,view:{...state.view,panel:null},canvas:{open:false},canvasWorkspace:{views:[]}};
  const generated=(id,requestId)=>({id,workspaceId:'project',sessionId:'chat',kind:'image',title:'Generated '+id,revision:1,
   publications:[{messageId:'m210',version:1,chat:'inline',outputId:'out-'+id,imageGeneration:{verified:true,requestId,operation:'generate',parentId:null}}]});
- state={...state,canvasArtifacts:[generated('a','request-a'),generated('b','request-b')],sessions:state.sessions.map(row=>row.id==='chat'?{...row,execution:{...row.execution,imageGeneration:[
-  {id:'job-a',requestId:'request-a',messageId:'m210',operation:'generate',phase:'completed'},
-  {id:'job-b',requestId:'request-b',messageId:'m210',operation:'generate',phase:'completed'}
+ state={...state,canvasArtifacts:[generated('c','unrelated'),generated('a','shared'),generated('b','shared')],sessions:state.sessions.map(row=>row.id==='chat'?{...row,execution:{...row.execution,imageGeneration:[
+  {id:'job-c',requestId:'unrelated',messageId:'m210',operation:'generate',phase:'completed'},
+  {id:'job-ab',requestId:'shared',messageId:'m210',operation:'generate',phase:'completed'}
  ]}}:row)};await emit();
  const gallery=page.locator('.a-inline-gallery');await gallery.scrollIntoViewIfNeeded();
- await gallery.getByRole('button',{name:'Image 2: Generated b',exact:true}).click();
- await expect(gallery.getByRole('button',{name:'Image 2: Generated b',exact:true})).toHaveAttribute('aria-pressed','true');
+ await gallery.getByRole('button',{name:'Image 3: Generated b',exact:true}).click();
+ await expect(gallery.getByRole('button',{name:'Image 3: Generated b',exact:true})).toHaveAttribute('aria-pressed','true');
  await expect(gallery.locator('.a-inline-artifact-heading strong')).toHaveText('Generated b');
+ for(const chat of ['compact','none']){
+  state={...state,canvasArtifacts:state.canvasArtifacts.map(row=>row.id==='a'?{...row,publications:row.publications.map(link=>({...link,chat}))}:row)};
+  await emit();
+  await expect(gallery.locator('.a-inline-artifact-heading strong')).toHaveText('Generated b');
+  await expect(gallery.getByRole('button',{name:'Image 2: Generated b',exact:true})).toHaveAttribute('aria-pressed','true');
+ }
  state={...state,sessions:state.sessions.map(row=>row.id==='chat'?{...row,execution:{...row.execution,imageGeneration:[]}}:row)};await emit();
  await expect(gallery.locator('.a-inline-artifact-heading strong')).toHaveText('Generated b');
  await expect(gallery.getByRole('button',{name:'Image 2: Generated b',exact:true})).toHaveAttribute('aria-pressed','true');
  assert.equal(await page.locator('.a-general-artifact').count(),0,'No duplicate ordinary/generated appearance');
+ await gallery.getByRole('button',{name:'Close preview of Generated b',exact:true}).click();
+ await expect(gallery.getByRole('button',{name:'Show preview',exact:true})).toBeVisible();
+ await expect(gallery.getByText('Preview access was removed by the host.',{exact:true})).toHaveCount(0);
+ await gallery.getByRole('button',{name:'Show preview',exact:true}).click();
+ // Both the main body/actions and the visible thumbnail bytes must disappear
+ // when their host admissions disappear. Restoring the old target is not a new
+ // admission and may not revive the old pixels.
+ await expect(gallery.locator('.a-inline-image img')).toBeVisible();
+ await expect(gallery.locator('.a-gallery-thumbnail img')).toHaveCount(2);
+ const oldViews=state.canvasWorkspace.views;
+ state={...state,canvasWorkspace:{views:[]}};await emit();
+ await expect(gallery.locator('.a-inline-image img')).toHaveCount(0);
+ await expect(gallery.locator('.a-gallery-thumbnail img')).toHaveCount(0);
+ await expect(gallery.getByRole('button',{name:'Use in a follow-up',exact:true})).toHaveCount(0);
+ await expect(gallery.getByRole('button',{name:'Download image',exact:true})).toHaveCount(0);
+ await expect(gallery.getByRole('status')).toContainText('access was removed');
+ const admissions=calls.filter(row=>row.action==='canvas.views.inline').length;
+ state={...state,canvasWorkspace:{views:oldViews}};await emit();
+ await expect(gallery.locator('img')).toHaveCount(0);
+ assert.equal(calls.filter(row=>row.action==='canvas.views.inline').length,admissions);
  assert.deepEqual(errors,[]);
 }finally{await browser?.close();await vite?.close()}
