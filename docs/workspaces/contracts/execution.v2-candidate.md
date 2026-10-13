@@ -68,6 +68,28 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Explicit repository selection — 2026-10-13
+
+A task may inspect, create or attach a working copy for an explicitly selected
+repository inside its canonical workspace, current execution folder or an
+already associated ready checkout. The surrounding workspace need not be a Git
+repository. Relative repository paths resolve against the reported execution
+folder; successful inspections return the absolute repository root to carry
+into later actions. A different repository's checkout cannot be attached under
+the selected source identity. Existing exact source revision and dirty-copy
+rules continue to apply independently to each repository.
+
+Creation and attachment command identities are serialized across repositories
+sharing managed storage. Concurrent reuse with different contents must preserve
+the first retained record and reject the competing request.
+
+Selection and creation do not move the conversation or remap shell imports,
+dependencies or file tools. Checkouts retain their repository identity, source
+and location in the existing worktree owner. Choosing a default execution
+folder remains an explicit handoff. Multi-repository execution mapping and
+combined runtime provenance remain a separate, unqualified step. Root worktree
+mutations require root authority; a child cannot relocate its enclosing task.
+
 ### Cooperative resource reservations — 2026-10-13
 
 Explicit reservations extend the existing resource lifecycle owner. Inventory

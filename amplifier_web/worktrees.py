@@ -7,7 +7,7 @@ import time
 import uuid
 
 from amplifier_worktrees import GitWorktrees
-from amplifier_worktrees.git import atomic, digest
+from amplifier_worktrees.git import atomic, common, digest
 from .host_identity import local_host_identity, require_local_host
 
 
@@ -15,12 +15,13 @@ def definitions(schema, string):
     sid = {'sessionId': string(200)}
     identity = {**sid, 'id': string(200)}
     revision = {'expectedRevision': {'type': 'integer', 'minimum': 0}}
+    repository = {'repositoryPath': {**string(4000), 'minLength': 1}}
     return {
-        'worktree.inspect': ('Inspect this task’s canonical repository, execution folder, current Git revision and changes without starting work.', schema(sid)),
+        'worktree.inspect': ('Inspect the current execution repository or an explicit repositoryPath inside this task\'s workspace/execution folders. Non-Git workspaces can select a child repository. Relative paths use the execution folder. Keep the returned absolute repository root for later creation/attachment.', schema({**sid, **repository}, ['sessionId'])),
         'worktree.list': ('List checkouts associated with this task and durable handoff receipts.', schema(sid)),
         'worktree.status': ('Inspect a checkout, its original source manifest, conflicts and Git ownership.', schema(identity)),
-        'worktree.create': ('Create a managed checkout from an exact inspected source revision. Default clean committed HEAD; carry_dirty must be explicitly requested, copies staged/unstaged/untracked evidence without changing the source. No execution starts.', schema({**sid, 'sourceRevision': string(100), 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500), 'branch': string(500)}, ['sessionId', 'sourceRevision'])),
-        'worktree.attach': ('Associate an existing Git worktree from the same repository; does not copy history or start work. Attached folders cannot be deleted through managed cleanup.', schema({**sid, 'path': string(4000)})),
+        'worktree.create': ('Create a managed checkout from an exact inspected source revision. repositoryPath selects the source; carry the inspected absolute root for multi-repository work. Default clean committed HEAD; carry_dirty explicitly copies staged/unstaged/untracked evidence. Does not move execution or configure dependencies.', schema({**sid, **repository, 'sourceRevision': string(100), 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500), 'branch': string(500)}, ['sessionId', 'sourceRevision'])),
+        'worktree.attach': ('Associate an existing Git worktree from the selected repositoryPath (canonical home by default); does not copy history or start work. Attached folders cannot be deleted through managed cleanup.', schema({**sid, **repository, 'path': string(4000)}, ['sessionId', 'path'])),
         'worktree.remove': ('Remove an app-created checkout only when it has no changed/untracked/ignored files and no task is executing there. Preserves branch, source, history and manifests.', schema({**identity, **revision})),
         'worktree.handoff': ('Move this task’s execution folder to an associated checkout or back to its canonical home (id null). Return a durable pending receipt, then cooperatively save and release the old runtime. No input or uncertain effect is replayed. History home, saved settings, task, drafts, voice and artifact identities remain unchanged.', schema({**sid, 'id': {'type': ['string', 'null']}, 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}}, ['sessionId', 'id', 'expectedExecutionRevision'])),
         'worktree.reconcile': ('After inspecting an unknown handoff, deliberately choose its source or target. Requires current receipt revision and user evidence, confirms writer release again, and never replays model input. Agents must cite the actual user finding.', schema({**identity, **revision, 'destination': {'enum': ['source', 'target']}, 'evidence': {**string(4000), 'minLength': 1}, 'sourceMessageId': string(200)}, ['sessionId', 'id', 'expectedRevision', 'destination', 'evidence'])),
@@ -100,6 +101,21 @@ class Worktrees:
         if record.get('sessionId') != sid: raise ValueError('This checkout belongs to another task')
         return record
 
+    def repository_path(self, session, value=None, *, attaching=False):
+        execution = Path(session.get('workingDirectory') or session['workspace']).resolve()
+        if value is None:
+            return str(Path(session['workspace']).resolve() if attaching else execution)
+        candidate = (execution / value).resolve()
+        allowed = [execution, Path(session['workspace']).resolve(), *[
+            Path(row['path']).resolve() for row in self.git.records()
+            if row.get('sessionId') == session['id'] and row.get('status') == 'ready']]
+        if not any(candidate.is_relative_to(root) for root in allowed):
+            raise ValueError('Choose a repository inside this task\'s workspace, execution folder or associated checkout.')
+        root, _ = common(candidate)
+        if not any(root.is_relative_to(boundary) for boundary in allowed):
+            raise ValueError('The Git root lies outside the selected task folders.')
+        return str(root)
+
     @staticmethod
     def check_host(record):
         host = record.get('executionHost')
@@ -160,7 +176,10 @@ class Worktrees:
         sid = args['sessionId']; session = self.app._session(sid)
         if action in {'worktree.inspect', 'worktree.list'}:
             result = {'currentHost': local_host_identity(), 'executionHost': session.get('executionHost') or local_host_identity(), 'historyHome': session['workspace'], 'executionDirectory': session.get('workingDirectory') or session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'settingsScope': session['workspace'], 'items': [r for r in self.git.records() if r.get('sessionId') == sid], 'handoffs': self.receipts(sid)}
-            if action == 'worktree.inspect': result['repository'] = await asyncio.to_thread(self.git.inspect, result['executionDirectory'])
+            if action == 'worktree.inspect':
+                source = await asyncio.to_thread(self.repository_path, session, args.get('repositoryPath'))
+                result['repository'] = await asyncio.to_thread(self.git.inspect, source)
+                result['repositorySelection'] = args.get('repositoryPath', '')
             async with self.app.lock:
                 session['worktreeInspection'] = result
                 self.changed({sid})
@@ -176,9 +195,11 @@ class Worktrees:
         if action in {'worktree.handoff', 'worktree.reconcile'}:
             return await self.handoff(action, args, origin, identity)
         if action == 'worktree.create':
-            result = await asyncio.to_thread(self.git.create, session.get('workingDirectory') or session['workspace'], command_id=identity, expected_revision=args['sourceRevision'], mode=args.get('mode', 'clean'), ref=args.get('ref', 'HEAD'), branch=args.get('branch'), session_id=sid)
+            source = await asyncio.to_thread(self.repository_path, session, args.get('repositoryPath'))
+            result = await asyncio.to_thread(self.git.create, source, command_id=identity, expected_revision=args['sourceRevision'], mode=args.get('mode', 'clean'), ref=args.get('ref', 'HEAD'), branch=args.get('branch'), session_id=sid)
         elif action == 'worktree.attach':
-            result = await asyncio.to_thread(self.git.attach, args['path'], source=session['workspace'], command_id=identity, session_id=sid)
+            source = await asyncio.to_thread(self.repository_path, session, args.get('repositoryPath'), attaching=True)
+            result = await asyncio.to_thread(self.git.attach, args['path'], source=source, command_id=identity, session_id=sid)
         elif action == 'worktree.remove':
             record = self.record(sid, args['id'])
             self.check_host(record)
