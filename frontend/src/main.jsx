@@ -314,9 +314,9 @@ function App(){
  const canvasSettingsVisible=settingsRoute==='settings-canvas',panel=canvasSettingsVisible?null:settingsRoute;
  useEffect(()=>{const title=session?.title?.trim();document.title=title?title+' - Amplifier':'Amplifier'},[session?.id,session?.title]);
  useReadCompletion(state,act,messagesPane,shell.ready);
- const execution=useMemo(()=>splitWork(messages,executionData(session)),[messages,session?.id,session?.execution,session?.workers,session?.runtimeEvents,session?.status]);
- const catalogWorkspace=useRef(null);
- useEffect(()=>{const workspace=session?.workspace||state?.settings?.workspace;if(!workspace||catalogWorkspace.current===workspace)return;catalogWorkspace.current=workspace;if(state.setup?.providersWorkspace!==workspace||!state.setup?.providersLoadedAt)act('providers.list',session?{sessionId:session.id}:{})},[session?.workspace,session?.historyManaged,state?.settings?.workspace]);
+ const execution=useMemo(()=>splitWork(messages,executionData(session)),[messages,session?.id,session?.execution,session?.workers,session?.workerSummary?.bounded,session?.runtimeEvents,session?.status]);
+ // Draft/setup/settings surfaces own provider discovery. Reading an existing
+ // conversation must not refresh a workspace's complete provider inventory.
  useConnectionSetup(state,session,act);
  const availableAttachments=(session?.draftAttachments||state?.draftAttachments||[]).filter(file=>!outbox.entries.some(row=>row.sessionId===session?.id&&row.attachmentIds.includes(file.id)));
  useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(saved?.delivery?.status==='accepted')outbox.update(entry.id,null)}},[state]);

@@ -4,10 +4,16 @@ import copy
 
 
 def publish_catalogs(management, entries):
+    from .model_catalogs import retain
     target = management.service.state.setdefault('modelCatalogs', {})
+    keep = retain(management.service, entries)
+    changed = any(target.get(key) != value for key, value in entries.items())
     target.update(entries)
-    while len(target) > 128:
-        target.pop(next(iter(target)))
+    for key in list(target):
+        if key not in keep:
+            target.pop(key)
+            changed = True
+    return changed
 
 
 async def browse(management, session, *, refresh=False):
@@ -21,15 +27,18 @@ async def browse(management, session, *, refresh=False):
     # Fresh workers publish connection identities with their effective selection.
     # Reuse those identities directly; browsing needs no separate per-chat probe.
     report=session.get('runtimeReport',{})
-    choices=report.get('provider_choices',[])
-    cached={row.get('sharedCatalogKey'):management.provider_catalog.peek(model_key(row.get('sharedCatalogKey')))
-            for row in choices if row.get('sharedCatalogKey')}
     previous=service.state.get('runtimeControl',{}).get(sid,{}).get('configuration.catalog',{})
     same_revision=previous.get('configurationRevision',0)==revision
+    current_catalog=same_revision and previous.get('phase')=='ready'
+    # A prior result at the current revision owns its identities. Never stamp an
+    # old runtime report with the revision of a newer configuration discovery.
+    choices=previous.get('providers',[]) if current_catalog else report.get('provider_choices',[]) if revision==0 and not previous else []
+    cached={row.get('sharedCatalogKey'):management.provider_catalog.peek(model_key(row.get('sharedCatalogKey')))
+            for row in choices if row.get('sharedCatalogKey')}
     if same_revision and not refresh and not session.get('configurationPending') and choices and all((cached.get(row.get('sharedCatalogKey')) or {}).get('providerMetadata') for row in choices):
-        result={'providers':[{'id':row['id'],'sharedCatalogKey':row['sharedCatalogKey'],
+        result={'providers':copy.deepcopy(choices) if current_catalog else [{'id':row['id'],'sharedCatalogKey':row['sharedCatalogKey'],
                    'info':{'display_name':row.get('display_name'),'defaults':{'model':row.get('model'),'reasoning_effort':row.get('effort')}}}
-                  for row in choices], 'effective':report.get('effective_selection',{}),
+                  for row in choices], 'effective':previous.get('effective',{}) if current_catalog else report.get('effective_selection',{}),
                 'catalogs':{key:{'phase':'ready','models':value.get('models',[]),'metadata':value['providerMetadata']}
                             for key,value in cached.items()}}
     else:
@@ -37,21 +46,25 @@ async def browse(management, session, *, refresh=False):
         service.state['settings'].get('appBundle'), session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
             catalog=True, refresh=refresh, global_only=session.get('location',{}).get('kind')=='managed')
     entries = result.pop('catalogs', {})
-    for identity, entry in entries.items():
-        if entry.get('phase') == 'ready':
-            value = {'models': entry['models'], 'providerMetadata': entry['metadata'],
-                     'modelsSupported': entry.get('supported', True)}
-            if refresh or management.provider_catalog.peek(model_key(identity)) != value:
-                management.provider_catalog.put(model_key(identity), value)
     async with service.lock:
         if revision != service.state.get('configurationRevision', 0):
             return
+        for identity, entry in entries.items():
+            if entry.get('phase') == 'ready':
+                value = {'models': entry['models'], 'providerMetadata': entry['metadata'],
+                         'modelsSupported': entry.get('supported', True)}
+                if refresh or management.provider_catalog.peek(model_key(identity)) != value:
+                    management.provider_catalog.put(model_key(identity), value)
         current = service._session(sid)
         selection = current.get('selection') or result.get('selection')
         result.update(effective=selection or result.get('effective', {}), pinned=bool(selection), phase='ready', configurationRevision=revision)
-        service.state.setdefault('runtimeControl', {}).setdefault(sid, {})['configuration.catalog'] = result
-        publish_catalogs(management, entries)
-        service._publish_changes(sessions={sid}, globals={'modelCatalogs'})
+        control = service.state.setdefault('runtimeControl', {}).setdefault(sid, {})
+        changed = control.get('configuration.catalog') != result
+        control['configuration.catalog'] = result
+        catalog_changed = publish_catalogs(management, entries)
+        if changed or catalog_changed:
+            service._publish_changes(sessions={sid} if changed else set(),
+                                     globals={'modelCatalogs'} if catalog_changed else set())
 
 
 async def select(management, session, requested):
@@ -80,18 +93,37 @@ async def request_browse(management, session, *, refresh=False):
     if pending is None:
         pending=management.conversation_catalog_requests={}
     sid=session['id']
-    if sid in pending:return
     service=management.service
+    requested=getattr(management,'conversation_catalog_demand',None)
+    if requested is None:
+        requested=management.conversation_catalog_demand={}
+    demand=(service.state.get('configurationRevision',0),refresh)
+    if sid in pending:
+        if requested.get(sid)!=(demand[0],False) or refresh:
+            requested[sid]=(demand[0],refresh or requested.get(sid,(None,False))[1])
+        return
+    requested[sid]=demand
     async def run():
         try:
-            await browse(management,session,refresh=refresh)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            async with service.lock:
-                control=service.state.setdefault('runtimeControl',{}).setdefault(sid,{})
-                control.setdefault('configuration.catalog',{}).update(phase='error',error='Could not load model settings. Your selection is preserved. Refresh models to retry.')
-                service._publish_changes(sessions={sid})
-        finally:pending.pop(sid,None)
+            while True:
+                observed=requested[sid]
+                try:
+                    await browse(management,service._session(sid),refresh=observed[1])
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A failing obsolete read cannot poison a newer request.
+                    if requested[sid]!=observed:
+                        continue
+                    async with service.lock:
+                        if observed[0]==service.state.get('configurationRevision',0):
+                            control=service.state.setdefault('runtimeControl',{}).setdefault(sid,{})
+                            control.setdefault('configuration.catalog',{}).update(phase='error',error='Could not load model settings. Your selection is preserved. Refresh models to retry.')
+                            service._publish_changes(sessions={sid})
+                if requested[sid]==observed:
+                    break
+        finally:
+            pending.pop(sid,None)
+            requested.pop(sid,None)
     task=asyncio.create_task(run());pending[sid]=task
     service.tasks.add(task);task.add_done_callback(service.tasks.discard)

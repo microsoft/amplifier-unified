@@ -63,7 +63,7 @@ test('late catalogs preserve selector choices and shared provider actions',async
  state={...state,runtimeControl:{chat:{...state.runtimeControl.chat,'configuration.providers':{...state.runtimeControl.chat['configuration.providers'],pinned:true,effective:{instance:'openai',model:'agent-choice'}}}}};
  await renderAct(async()=>root.update(render()));
  assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/openai · agent-choice/);
- assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('Loading model settings…')));
+ assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('openai · agent-choice')));
  await renderAct(async()=>root.unmount());
 });
 
@@ -175,6 +175,27 @@ test('runtime report supplies readable provider before opening the selector',asy
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state:{view:{}},session,act:async()=>({accepted:true}),working:false}))});
  assert.deepEqual(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children,['GitHub Copilot SDK · same-model (high)']);
  await renderAct(async()=>root.unmount());
+});
+test('closed conversation and optimistic navigation never browse catalogs',async()=>{
+ const calls=[],session={id:'chat',selection:{instance:'private',model:'saved-model'}},act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ let root,state={view:{},navigationPending:true};
+ await renderAct(async()=>root=create(React.createElement(ModelControl,{state,session,act})));
+ assert.equal(calls.length,0);
+ assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.join(''),/saved-model/);
+ state={view:{},configurationRevision:2};await renderAct(async()=>root.update(React.createElement(ModelControl,{state,session,act})));
+ assert.equal(calls.length,0);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.onClick());
+ assert.equal(calls.filter(c=>c.args?.operation==='configuration.catalog').length,1);
+ await renderAct(async()=>root.unmount());
+});
+for(const shared of [{},{open:false}])test('embedded picker retains server demand after initialization: '+JSON.stringify(shared),async()=>{
+ const calls=[],state={view:{composerModel:shared},runtimeControl:{chat:{'configuration.catalog':{configurationRevision:0,providers:[],effective:{}}}}};
+ let root;
+ await renderAct(async()=>root=create(React.createElement(ModelControl,{state,session:{id:'chat'},embedded:true,act:async(name,args)=>calls.push({name,args})})));
+ const updates=calls.filter(c=>c.name==='view.update');
+ assert.ok(updates.length);assert.ok(updates.every(c=>c.args.patch.composerModel.open&&c.args.patch.composerModel.sessionId==='chat'));
+ await renderAct(async()=>root.unmount());
+ assert.equal(calls.at(-1).args.patch.composerModel.open,false);
 });
 test('an empty resolved provider catalog offers setup instead of loading forever',async()=>{
  const calls=[],state={view:{newSessionDraft:{workspace:'/trial'},composerModel:{open:true,sessionId:null}},draftDefaults:{'["/trial",""]':{phase:'ready',providers:[],effective:{}}}};
