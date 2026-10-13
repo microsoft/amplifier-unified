@@ -1,7 +1,7 @@
 // Only complete, replaceable editor snapshots may collapse while waiting.
 // Saves, chat drafts, navigation and caller-assigned command identities are
 // barriers: their ordering and individual receipts must remain unchanged.
-const editors=new Set(['aiConnectionEditor','providerEditor','composerModel','composerBundle','bundleDefaultsDraft']);
+const editors=new Set(['aiConnectionEditor','imageSettingsEditor','providerEditor','composerModel','composerBundle','bundleDefaultsDraft']);
 export const isProviderCatalogRead=(action,meta={})=>meta.expectedRevision===undefined&&['providers.list','providers.models','providers.schema'].includes(action);
 export function settingsDraftKey(action,args,meta={}){
  if(action!=='view.update'||meta.id||meta.expectedRevision!==undefined||meta.signal||meta.pendingViewToken)return null;

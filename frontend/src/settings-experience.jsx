@@ -58,7 +58,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  const active=family(page);if(!index)editors.current.set(active,page);
  function renderPage(page){
  let content;
- if(['overview','ai-connections','providers','routing','registries'].includes(page))content=<ConfigurationBoundary state={state} act={dispatch||act}>{config=>['overview','ai-connections'].includes(page)?<AIConnections {...config} navigate={navigate} onReturnToChat={navigation.dismiss}/>:page==='providers'?<ProviderSettings {...config} navigate={navigate}/>:page==='routing'?<RoutingSettings {...config}/>:<RegistrySettings {...config}/>}</ConfigurationBoundary>;
+ if(['overview','ai-connections','image-generation','providers','routing','registries'].includes(page))content=<ConfigurationBoundary state={state} act={dispatch||act}>{config=>['overview','ai-connections','image-generation'].includes(page)?<AIConnections imagesOnly={page==='image-generation'} {...config} navigate={navigate} onReturnToChat={navigation.dismiss}/>:page==='providers'?<ProviderSettings {...config} navigate={navigate}/>:page==='routing'?<RoutingSettings {...config}/>:<RegistrySettings {...config}/>}</ConfigurationBoundary>;
  else if(page==='storage')content=active==='storage'?<StorageSettings state={state} act={dispatch||act} onPrivacy={()=>navigate('privacy')}/>:null;
  else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;

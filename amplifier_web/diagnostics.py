@@ -508,7 +508,22 @@ class Diagnostics:
         return {'items':items,'nextBefore':items[-1]['seq'] if items and len(rows)>len(items) else None,'format':'context-intelligence','schemaVersion':'1.0.0'}
 
     async def command(self,action,args):
-        if action=='diagnostics.configure': result=await self.configure(args['config'])
+        if action=='diagnostics.configure':
+            if ('config' in args) == ('patch' in args):
+                raise ValueError('Provide either config or a capture settings patch.')
+            if 'patch' in args:
+                patch = args['patch']
+                if not isinstance(patch, dict) or set(patch) - {'enabled', 'providerRequests', 'streams', 'retentionDays', 'maxRecords'}:
+                    raise ValueError('Only capture preferences can be patched; destinations must be saved together.')
+                cfg = {**self.config, **patch}
+                if 'streams' in patch:
+                    if not isinstance(patch['streams'], list):
+                        raise ValueError('Choose known data streams.')
+                    cfg['destinations'] = [{**d, 'streams': [s for s in d['streams'] if s in patch['streams']]}
+                                           for d in self.config['destinations']]
+                result = await self.configure(cfg)
+            else:
+                result = await self.configure(args['config'])
         elif action=='diagnostics.test':result=await self.test(args['id'])
         elif action=='diagnostics.records':
             await self.flush();result=await asyncio.to_thread(self.read,**args)

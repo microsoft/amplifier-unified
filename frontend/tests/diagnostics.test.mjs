@@ -42,17 +42,33 @@ test('a rejected save or removal retains the shared configuration draft',async()
 });
 
 
-test('persisted recording drafts clearly differ from saved state and save only recording',async()=>{
+test('recording changes save immediately without committing unfinished destination or numeric drafts',async()=>{
  const draft={config:{...config,providerRequests:true,retentionDays:21,destinations:[{id:'unsaved',name:'Unsaved',enabled:true,streams:[]}]}};
  const value=state({diagnosticsDraft:draft});value.diagnostics.config={...config,providerRequests:false};
  const html=renderToStaticMarkup(React.createElement(DiagnosticsSettings,{state:value,act:()=>{}}));
- assert.match(html,/Saved recording setting:.*Off/s);assert.match(html,/Unsaved change/);
+ assert.match(html,/Saved recording setting:.*Off/s);assert.doesNotMatch(html,/Unsaved change/);
  const calls=[];let root;
  await renderAct(async()=>{root=create(React.createElement(DiagnosticsSettings,{state:value,act:async(name,args)=>{calls.push([name,args]);return {accepted:true}}}))});
- const save=root.root.findAll(n=>n.type==='button').find(n=>n.props.onClick&&JSON.stringify(n.children.map(c=>typeof c==='string'?c:c.props?.children)).includes('Save recording setting'));
- await renderAct(async()=>save.props.onClick());
- assert.deepEqual(calls[0],['diagnostics.configure',{config:{...config,providerRequests:true}}]);
+ const toggle=root.root.findAllByType('input').find(n=>n.props.type==='checkbox'&&n.parent.children.some(c=>typeof c==='string'&&c.includes('Record provider')));
+ await renderAct(async()=>toggle.props.onChange({target:{checked:true}}));
+ assert.deepEqual(calls[0],['diagnostics.configure',{patch:{providerRequests:true}}]);
  assert.equal(calls[1][1].patch.diagnosticsDraft.config.retentionDays,21);
  assert.equal(calls[1][1].patch.diagnosticsDraft.config.destinations[0].id,'unsaved');
  await renderAct(async()=>root.unmount());
+});
+
+test('a capture switch queues behind a numeric save without dropping either change',async()=>{
+ const calls=[];let root,release;
+ const send=(name,args)=>{calls.push([name,args]);if(name==='diagnostics.configure'&&calls.filter(c=>c[0]===name).length===1)return new Promise(resolve=>release=resolve);return Promise.resolve({accepted:true})};
+ await renderAct(()=>{root=create(React.createElement(DiagnosticsSettings,{state:state(),act:send}))});
+ try{
+  const days=root.root.findAllByType('input').find(n=>n.parent.children.includes('Index days'));
+  await renderAct(()=>days.props.onBlur({target:{value:'21',checkValidity:()=>true}}));
+  const record=root.root.findAllByType('input').find(n=>n.parent.children.some(c=>typeof c==='string'&&c.includes('Record provider')));
+  await renderAct(()=>{record.props.onChange({target:{checked:true}})});
+  assert.equal(record.props.checked,true);
+  assert.equal(calls.filter(c=>c[0]==='diagnostics.configure').length,1);
+  await renderAct(async()=>{release({accepted:true})});
+  assert.deepEqual(calls.filter(c=>c[0]==='diagnostics.configure').map(c=>c[1]),[{patch:{retentionDays:21}},{patch:{providerRequests:true}}]);
+ }finally{await renderAct(()=>root.unmount())}
 });
