@@ -23,5 +23,8 @@ try{
  await dialog.getByRole('button',{name:'Copy diagnostics',exact:true}).click();
  await dialog.getByText('Copy diagnostic text manually',{exact:true}).click();
  await expect(dialog.getByRole('textbox',{name:'Diagnostic report'})).toHaveValue(/"diagnosticsSchema": 2/);
+ const manual=JSON.parse(await dialog.getByRole('textbox',{name:'Diagnostic report'}).inputValue());
+ assert.equal(manual.failure.generationId,'bridge-generation');
+ assert.ok(manual.client.recentRequests.some(row=>row.requestId&&Number.isFinite(row.serverMs)));
  console.log('Support diagnostics: correlated bridge evidence, browser/server timings, manual fallback passed');
 }finally{await browser?.close();fixture.kill('SIGTERM')}
