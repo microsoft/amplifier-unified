@@ -36,6 +36,10 @@ on:
       - 'tests/test_peer_creation_operation.py'
       - 'amplifier_web/canvas_files.py'
       - 'amplifier_web/worktrees.py'
+      - 'amplifier_web/workspace_resources.py'
+      - 'frontend/src/workspace-resource-*.jsx'
+      - 'tests/test_resource_reservations.py'
+      - 'frontend/tests/resource-reservations-browser.mjs'
       - 'skills/coordinate-work/**'
       - 'tests/fixtures/coordination_ui_server.py'
       - 'frontend/tests/coordination-browser.mjs'
@@ -67,6 +71,7 @@ jobs:
           tests/test_state_write_scopes.py tests/test_host_storage.py
           tests/test_workspace_repair_outcomes.py tests/test_worktrees.py
           tests/test_peer_creation_operation.py
+          tests/test_resource_reservations.py
           tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
       - name: Verify mounted child identity and file boundaries
@@ -82,3 +87,6 @@ jobs:
       - name: Exercise related work through the browser
         working-directory: frontend
         run: node tests/coordination-browser.mjs
+      - name: Exercise resource reservations through the browser
+        working-directory: frontend
+        run: node tests/resource-reservations-browser.mjs

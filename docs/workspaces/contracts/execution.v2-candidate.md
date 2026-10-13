@@ -68,6 +68,31 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Cooperative resource reservations — 2026-10-13
+
+Explicit reservations extend the existing resource lifecycle owner. Inventory
+observations remain observations; they never acquire or release a reservation.
+An exact resource key has either one exclusive holder or explicitly shared
+holders. Admission is atomic across workspace registrations in the same app
+data home. Separate app installations and resources reached under different
+keys are outside that guarantee. A reservation neither provisions infrastructure
+nor fences arbitrary shell programs, external services or filesystem writers.
+
+The host binds an agent reservation to its actual root/child principal. An agent
+may release or mark uncertain only its own reservation; a user may explicitly
+reconcile any retained reservation. Peer messaging grants no resource control.
+Stop, disconnect, expiry and workspace removal never imply teardown or silently
+release a held resource. Uncertain reservations continue to block new holders,
+including shared holders, until explicitly reconciled. Release relinquishes a
+claim with evidence and does not claim physical teardown.
+
+Stable command IDs retain their exact results across restart, including release
+and later reacquisition. Retries cannot resurrect an old reservation. Updates
+require the observed revision. Admission is bounded at 64 held reservations per
+root (including its children) and 1024 per app data home; existing holders remain
+readable and releasable at the limit. Reads are paginated, passive and do not
+load or resume conversations. Shared actions serve both clients and agents.
+
 ### Coherent commissioned-task operation — 2026-10-13
 
 A new commissioned conversation has one durable creation handle. The host

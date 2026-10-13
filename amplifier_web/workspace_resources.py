@@ -3,8 +3,151 @@ from __future__ import annotations
 import json
 import time
 import uuid
+import hashlib
+import asyncio
+import sqlite3
+from contextlib import closing
 from filelock import FileLock
 from amplifier_worktrees.git import atomic
+
+
+MAX_ROOT_RESERVATIONS = 64
+MAX_RESERVATIONS = 1024
+HOLDING = {'held', 'uncertain'}
+
+
+def definitions(schema, string):
+    scope = {'workspaceId': string(100)}
+    change = {**scope, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1},
+              'evidence': {**string(4000), 'minLength': 1}}
+    return {
+        'workspace.resources.reservations': ('List cooperative resource reservations without loading chats. Matching keys share one admission domain across this app data home; separate installations and aliases are not covered.', schema({**scope,
+            'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+            'includeReleased': {'type': 'boolean'}}, ['workspaceId'])),
+        'workspace.resources.reserve': ('Reserve an exact resource key for this task before using it. Exclusive by default; shared requires every holder to choose shared. Does not provision or fence infrastructure. Agents cannot choose a different owner.', schema({**scope,
+            'sessionId': string(200), 'resourceKey': {**string(500), 'minLength': 1},
+            'mode': {'enum': ['exclusive', 'shared']}, 'note': string(1000)}, ['workspaceId', 'resourceKey'])),
+        'workspace.resources.release': ('Relinquish an observed reservation with evidence; never performs teardown. Agents can release only their own principal\'s claim. Users may reconcile retained claims after checking the resource.', schema(change)),
+        'workspace.resources.uncertain': ('Keep a reservation held while its physical outcome is uncertain. No expiry or automatic reassignment. Requires its exact revision and evidence.', schema(change)),
+    }
+
+
+def reservation_command(home, workspace_id, action, args, actor, command_id=None):
+    """One admission lock across workspaces, separate from advisory inventories.
+
+    Receipts are never evicted: replaying an old acquire after release must not
+    acquire anything. This owner retains claims only, never external effects.
+    """
+    directory = home / 'workspace-resources'
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / 'reservations.sqlite3'
+    # Index current claims independently of durable command receipts. A long
+    # history of released resources must not inflate each admission/read.
+    with closing(sqlite3.connect(target, timeout=5)) as db, db:
+        target.chmod(0o600)
+        db.executescript('''
+            CREATE TABLE IF NOT EXISTS claims(id TEXT PRIMARY KEY, workspace TEXT NOT NULL,
+                resource_key TEXT NOT NULL, root TEXT NOT NULL, status TEXT NOT NULL, body TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS claims_key ON claims(resource_key, status);
+            CREATE INDEX IF NOT EXISTS claims_workspace ON claims(workspace, status);
+            CREATE INDEX IF NOT EXISTS claims_holding ON claims(status, root);
+            CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS metadata(id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL);
+            INSERT OR IGNORE INTO metadata VALUES(1, 0);
+        ''')
+        db.execute('BEGIN' if action == 'workspace.resources.reservations' else 'BEGIN IMMEDIATE')
+        if action == 'workspace.resources.reservations':
+            offset, limit = args.get('offset', 0), args.get('limit', 100)
+            condition = '' if args.get('includeReleased') else " AND status IN ('held','uncertain')"
+            rows = [json.loads(row[0]) for row in db.execute(
+                'SELECT body FROM claims WHERE workspace=?' + condition + ' ORDER BY rowid LIMIT ? OFFSET ?',
+                (workspace_id, limit + 1, offset))]
+            return {'revision': db.execute('SELECT revision FROM metadata').fetchone()[0], 'items': rows[:limit],
+                    'nextOffset': offset + limit if len(rows) > limit else None,
+                    'enforcement': 'cooperative-matching-keys', 'scope': 'app-data-home'}
+        if not command_id:
+            raise ValueError('A resource reservation needs a stable command ID.')
+        signature = hashlib.sha256(json.dumps([workspace_id, action, args, actor], sort_keys=True).encode()).hexdigest()
+        prior = db.execute('SELECT fingerprint,result FROM commands WHERE id=?', (command_id,)).fetchone()
+        if prior:
+            if prior[0] != signature:
+                raise ValueError('This resource request already belongs to a different update or actor.')
+            return json.loads(prior[1])
+        if action == 'workspace.resources.reserve':
+            key = args['resourceKey'].strip()
+            if not key or len(key) > 500 or any(ord(c) < 32 or ord(c) == 127 for c in key):
+                raise ValueError('Use a nonempty resource key without control characters.')
+            mode = args.get('mode', 'exclusive')
+            if mode not in {'exclusive', 'shared'} or not actor.get('sessionId') or not actor.get('principal'):
+                raise ValueError('Choose a valid resource owner and sharing mode.')
+            same = [json.loads(row[0]) for row in db.execute(
+                "SELECT body FROM claims WHERE resource_key=? AND status IN ('held','uncertain')", (key,))]
+            total, owned = db.execute("SELECT count(*),coalesce(sum(root=?),0) FROM claims WHERE status IN ('held','uncertain')", (actor['sessionId'],)).fetchone()
+            if any(row['status'] == 'uncertain' or row['mode'] != 'shared' or mode != 'shared' for row in same):
+                # Do not disclose another workspace's notes or conversation.
+                result = {'outcome': 'conflict', 'resourceKey': key,
+                          'detail': 'This resource key is already held. Coordinate with its owner or use a different resource.'}
+            elif any(row['owner'] == actor for row in same):
+                result = {'outcome': 'conflict', 'resourceKey': key,
+                          'detail': 'This principal already holds this shared resource. Inspect its existing reservation.'}
+            elif total >= MAX_RESERVATIONS or owned >= MAX_ROOT_RESERVATIONS:
+                result = {'outcome': 'limit', 'detail': 'Resource reservation capacity is full. Inspect and release unused reservations before acquiring more.'}
+            else:
+                row = {'id': str(uuid.uuid4()), 'workspaceId': workspace_id, 'resourceKey': key,
+                       'owner': dict(actor), 'mode': mode, 'status': 'held', 'revision': 1,
+                       'note': args.get('note', '').strip(), 'createdAt': time.time()}
+                db.execute('INSERT INTO claims VALUES(?,?,?,?,?,?)',
+                    (row['id'], workspace_id, key, actor['sessionId'], row['status'], json.dumps(row)))
+                result = {'outcome': 'reserved', 'reservation': row}
+        elif action in {'workspace.resources.release', 'workspace.resources.uncertain'}:
+            found = db.execute('SELECT body FROM claims WHERE id=? AND workspace=?', (args['id'], workspace_id)).fetchone()
+            if not found:
+                raise ValueError('This reservation was not found in this workspace.')
+            row = json.loads(found[0])
+            if actor.get('kind') != 'user' and actor != row['owner']:
+                raise ValueError('Only this reservation\'s actual owner or a user can change it.')
+            if row['revision'] != args['expectedRevision'] or row['status'] not in HOLDING:
+                result = {'outcome': 'stale', 'detail': 'The reservation changed. Inspect its current revision before updating.'}
+            else:
+                evidence = args.get('evidence', '').strip()
+                if not evidence:
+                    raise ValueError('Describe the observation before changing a reservation.')
+                row.update(status='released' if action.endswith('.release') else 'uncertain',
+                           evidence=evidence, updatedBy=dict(actor), updatedAt=time.time(), revision=row['revision'] + 1)
+                db.execute('UPDATE claims SET status=?,body=? WHERE id=?', (row['status'], json.dumps(row), row['id']))
+                result = {'outcome': row['status'], 'reservation': row}
+        else:
+            raise ValueError('Unknown resource reservation action.')
+        db.execute('UPDATE metadata SET revision=revision+1 WHERE id=1')
+        db.execute('INSERT INTO commands VALUES(?,?,?)', (command_id, signature, json.dumps(result)))
+        return result
+
+
+async def dispatch_reservation(app, action, args, origin, command_id, caller):
+    """Bind authority before entering the shared resource owner."""
+    from .collaboration import PRINCIPAL
+    from .service import AppError
+    workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
+    # Retained claims can be reconciled even after a registration is removed.
+    # Only acquiring new claims requires a currently registered workspace.
+    user = origin in {'ui', 'user'}
+    actor = {'kind': 'user'}
+    if not user or action == 'workspace.resources.reserve':
+        sid = args.get('sessionId') if user else caller
+        if not sid or not user and args.get('sessionId', sid) != sid:
+            raise AppError('Choose the calling conversation as resource owner.', 403)
+        session = app._session(sid)
+        if session.get('sessionKind', 'root') != 'root':
+            raise AppError('Resource owners require their host-bound root conversation.', 403)
+        if action not in {'workspace.resources.release', 'workspace.resources.uncertain'} and (workspace is None or session.get('workspace') != workspace['path']):
+            raise AppError('Resource reservations belong to the calling conversation\'s workspace.', 403)
+        native = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        actor = {'kind': 'agent', 'sessionId': sid, 'principal': native if user else PRINCIPAL.get() or native}
+    try:
+        result = await asyncio.to_thread(reservation_command, app.data_dir, args['workspaceId'], action, args, actor, command_id)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        raise AppError(str(exc), 409) from None
+    return {'accepted': True, 'result': result}
 
 
 def command(home, workspace_id, action, args, command_id=None):
