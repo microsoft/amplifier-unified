@@ -8,6 +8,27 @@ const {useConversationDetail}=await server.ssrLoadModule('/src/conversation-deta
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>server.close());
 const source=id=>({id,messages:[{id:id+'-last',text:'Current'}],messageWindow:{offset:1,before:id+'-last'},execution:{nodes:[],turns:[],segments:[]},executionWindow:{offset:1,before:'g-last',part:'groups'}});
 const response=value=>new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});
+test('unchanged message branches survive parent renders and unrelated session updates',async()=>{
+ let detail,root,value=source('one');
+ function Probe(){detail=useConversationDetail(value);return detail.controls}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});
+  const original=detail.session,rows=original.messages;
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(detail.session,original);
+  value={...value,status:'working'};await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(detail.session.messages,rows);assert.equal(detail.session.status,'working');
+  value={...value,messageAnnotations:{'one-last':{reactions:['like']}}};
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.deepEqual(detail.session.messages[0].reactions,['like']);
+  value={...value,messages:[{...value.messages[0],text:'Edited!'}]};
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(detail.session.messages[0].text,'Edited!');
+  assert.equal(rows[0].text,'Current');
+  value={...value,messageAnnotations:{}};await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(detail.session.messages[0].reactions,undefined);
+ }finally{await act(async()=>root?.unmount())}
+});
 test('paired history failure preserves both windows and a retry commits them together',async()=>{
  let detail,root,pending=[],value=source('one');const original=globalThis.fetch;
  globalThis.fetch=()=>new Promise(resolve=>pending.push(resolve));

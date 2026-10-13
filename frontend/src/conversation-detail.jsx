@@ -1,4 +1,4 @@
-import React,{useEffect,useRef,useState} from 'react';
+import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {request} from './api';
 import {Markdown} from './markdown';
 import {readDetail} from './detail-read';
@@ -44,14 +44,18 @@ export function useConversationDetail(source,beforeApply,dispatch){
  useEffect(()=>{setFocused(null);setJumpTarget(null)},[originalSource?.id]);
  useEffect(()=>{if(source?.messageWindow?.total<previous.current)setSaved(null);previous.current=source?.messageWindow?.total},[source?.messageWindow?.total]);
  const extra=saved?.id===source?.id?saved:null;
- const projected=source?{...source,messages:source.messages.map(row=>({...row,...source.messageAnnotations?.[row.id]}))}:source;
- const regular=source&&extra?{...source,messages:unique([...extra.messages,...source.messages]).map(row=>({...row,...source.messageAnnotations?.[row.id]})),sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
+ // Browser deltas preserve unchanged branches. Keep that identity through the
+ // annotation/page overlay rather than rebuilding the transcript on draft ticks.
+ const messages=useMemo(()=>source?.messages.map(row=>source.messageAnnotations?.[row.id]?{...row,...source.messageAnnotations[row.id]}:row),[source?.messages,source?.messageAnnotations]);
+ const projected=useMemo(()=>source?{...source,messages}:source,[source,messages]);
+ const expandedMessages=useMemo(()=>extra?unique([...extra.messages,...(source?.messages||[])]).map(row=>source?.messageAnnotations?.[row.id]?{...row,...source.messageAnnotations[row.id]}:row):messages,[extra?.messages,source?.messages,source?.messageAnnotations,messages]);
+ const regular=useMemo(()=>source&&extra?{...source,messages:expandedMessages,sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
   messageWindow:{...source.messageWindow,...(extra.messages.length?{offset:extra.sourceOffset!=null?Math.max(0,extra.sourceOffset-(source.historyManaged?source.sharedHistoryOffset||0:0)):extra.messageOffset,sourceOffset:extra.sourceOffset,before:extra.messages[0].id}:{} )},
   execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])]),segments:unique([...(extra.segments||[]),...(source.execution?.segments||[])])},
-  executionWindow:{...source.executionWindow,...extra.groupWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected;
+  executionWindow:{...source.executionWindow,...extra.groupWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected,[source,extra,projected,expandedMessages]);
  const focusedHere=focused?.sessionId===source?.id?focused:null;
- const session=focusedHere?{...projected,messages:focusedHere.messages,streaming:'',execution:focusedHere.execution,
-  sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular;
+ const session=useMemo(()=>focusedHere?{...projected,messages:focusedHere.messages,streaming:'',execution:focusedHere.execution,
+  sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular,[focusedHere,projected,regular]);
  async function around(messageId,{jump=true,isCurrent=()=>true}={}){
   if(paging.current||!originalSource)return false;
   const id=originalSource.id,token={id};paging.current=token;setBusy('conversation');setError('');
