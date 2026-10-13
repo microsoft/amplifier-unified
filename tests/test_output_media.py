@@ -3102,11 +3102,12 @@ async def test_gif_canvas_dirty_primary_rejected_before_remember(media_app, monk
         before = gif_canvas_state(app)
         def forbidden(*args, **kwargs):
             pytest.fail('Dirty GIF opening reached remember/save/select')
-        monkeypatch.setattr(canvas_library, 'remember', forbidden)
-        with pytest.raises(AppError) as refused:
-            await app.dispatch('canvas.openGif', gif_open_args(args, record), command_id='dirty-click')
-        assert refused.value.status == 409 and refused.value.code == 'canvas_view_dirty'
-        assert gif_canvas_state(app) == before
+        with monkeypatch.context() as action_patch:
+            action_patch.setattr(canvas_library, 'remember', forbidden)
+            with pytest.raises(AppError) as refused:
+                await app.dispatch('canvas.openGif', gif_open_args(args, record), command_id='dirty-click')
+            assert refused.value.status == 409 and refused.value.code == 'canvas_view_dirty'
+            assert gif_canvas_state(app) == before
 
 
 @pytest.mark.parametrize('change', ['role', 'chat', 'unlink', 'canonical-revision'])
