@@ -12,7 +12,7 @@ import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../nav
 import {ReorderList} from '../reorder-list';
 import '../sidebar-navigation.css';
 import {WorkspaceForm} from '../workspace-setup';
-import {WorkspaceExplorer} from '../workspace-explorer';
+import {WorkspaceExplorer,WorkspaceRow} from '../workspace-explorer';
 import {LibraryFilters} from '../conversation-library';
 import {ChatDelete} from '../chat-delete';
 import {PathField} from '../settings-ui';
@@ -113,11 +113,11 @@ function PairedWorkspaceBrowser({host,onOpen}){
 export function ChatDetails({chat,model,now,close}){
  const {state,act,draft,setDraft,choose,prefix}=model,activity=activityFor(chat,state);
  const title=chat.title||'Untitled conversation',managed=chat.location?.kind==='managed';
- const pins=state.pinnedSessionIds||[],pinIndex=pins.indexOf(chat.id);
+ const mixed=state.pinnedItemIds,pins=mixed||state.pinnedSessionIds||[],pinKey=mixed?'session:'+chat.id:chat.id,pinIndex=pins.indexOf(pinKey),orderAction=mixed?'navigation.pinOrder':'session.pinOrder';
  const [pinError,setPinError]=useState(''),[reviewError,setReviewError]=useState(''),[reviewing,setReviewing]=useState(false);
  const errorItem=state.attention?.items?.find(item=>item.id==='session:'+chat.id&&item.sessionId===chat.id&&!item.read);
  const review=async()=>{if(reviewing||!errorItem)return;setReviewing(true);setReviewError('');try{await readItems(act,[errorItem])}catch(error){setReviewError(error.message||'Could not mark this error reviewed.')}finally{setReviewing(false)}};
- const move=async direction=>{try{setPinError('');await act('session.pinOrder',{ids:movePin(pins,chat.id,pins[pinIndex+direction])})}catch(error){setPinError(error.message)}};
+ const move=async direction=>{try{setPinError('');const response=await act(orderAction,{ids:movePin(pins,pinKey,pins[pinIndex+direction])});const receipt=response?.result?.accepted!==undefined?response.result:response;if(receipt?.accepted===false)throw Error(receipt.error||'Could not reorder pins.')}catch(error){setPinError(error.message)}};
  return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
   {chat.titlePreviewSource==='first-message'&&<p className="a-caption">Preview from the first message. Rename this chat to give it a permanent name.</p>}
   <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
@@ -130,7 +130,7 @@ export function ChatDetails({chat,model,now,close}){
    {errorItem&&<button type="button" className="a-link" data-action="attention.read" disabled={reviewing} onClick={review}>{reviewing?'Marking reviewed…':'Mark error reviewed'}</button>}
    {reviewError&&<span role="alert">{reviewError}</span>}
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
-   {chat.pinned&&<><button type="button" aria-label={'Move '+title+' up'} data-action="session.pinOrder" disabled={pinIndex<1} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" aria-label={'Move '+title+' down'} data-action="session.pinOrder" disabled={pinIndex<0||pinIndex===pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{pinError&&<span role="alert">{pinError}</span>}</>}
+   {chat.pinned&&<><button type="button" aria-label={'Move '+title+' up'} data-action={orderAction} disabled={pinIndex<1} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" aria-label={'Move '+title+' down'} data-action={orderAction} disabled={pinIndex<0||pinIndex===pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{pinError&&<span role="alert">{pinError}</span>}</>}
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
    <button type="button" data-action="session.markUnread" onClick={()=>{act('session.markUnread',{id:chat.id});close()}}>Mark unread</button>
    <button type="button" aria-label={(chat.archived?'Restore ':'Archive ')+title} data-action={chat.archived?'session.restore':'session.archive'} onClick={()=>act(chat.archived?'session.restore':'session.archive',{id:chat.id})}>{chat.archived?'Restore':'Archive'}</button>
@@ -140,7 +140,7 @@ export function ChatDetails({chat,model,now,close}){
 }
 function SidebarSection({id,title,count,model,actions,children}){
  const contentId=React.useId(),collapsed=model.view.navSectionsCollapsed||[],closed=collapsed.includes(id);
- return <section className="a-sidebar-section" aria-label={title==='Pinned'?'Pinned chats':title==='Recent'?'Recent chats':title} data-sidebar-section={id}>
+ return <section className="a-sidebar-section" aria-label={title==='Pinned'?'Pinned items':title==='Recent'?'Recent chats':title} data-sidebar-section={id}>
   <div className="a-sidebar-section-heading"><button type="button" aria-expanded={!closed} aria-controls={contentId} data-action="view.update" onClick={()=>patch(model.act,{navSectionsCollapsed:closed?collapsed.filter(key=>key!==id):[...collapsed,id]})}><span>{title}</span><ChevronRight className={closed?'':'is-open'}/>{count!=null&&<small>{count}</small>}</button>{actions}</div>
   <div id={contentId} hidden={closed}>{children}</div>
  </section>;
@@ -316,6 +316,29 @@ export function PinnedChats({page,model,now}){
   <ChatPagination page={page} label="pinned chats" onChange={index=>patch(model.act,{navPinnedPage:index})}/>
  </>;
 }
+export function PinnedItems({page,model,workspaceModel=model,now,navigation,canEdit=true}){
+ const [error,setError]=useState('');
+ const items=page.items.map(item=>({...item,label:item.kind==='workspace'?(item.row.customName||item.row.name):(item.row.title||'Untitled conversation')})),visible=items.map(item=>item.id);
+ const reorder=async(next,{id,to})=>{
+  setError('');
+  try{
+   const response=await model.act('navigation.pinOrder',{ids:movePin(model.state.pinnedItemIds||[],id,visible[to])});
+   const receipt=response?.result?.accepted!==undefined?response.result:response;
+   if(receipt?.accepted===false)throw Error(receipt.error||'Could not reorder pins.');
+  }catch(err){setError(err.message||'Could not reorder pins. Please try again.');throw err}
+ };
+ const browse=async path=>{
+  navigation?.browse('workspaces');
+  await patch(workspaceModel.act,{navWorkspacePath:path,navWorkspaceMode:'folders',navWorkspaceFilter:'',navWorkspacePage:1});
+  if(!navigation)return patch(model.act,{navWorkspaceList:true});
+ };
+ const open=row=>navigation?navigation.browse('workspace',row.workspaceId):workspaceModel.act('workspace.select',{id:row.workspaceId});
+ const newChat=row=>workspaceModel.act('session.draft',{workspace:row.path,workspaceId:row.workspaceId,location:{kind:'workspace'}});
+ return <><ReorderList items={items} ids={visible} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
+  {error&&<p role="alert" className="a-danger">{error}</p>}
+  <ChatPagination page={page} label="pinned items" onChange={index=>patch(model.act,{navPinnedPage:index})}/>
+ </>;
+}
 export function ChatSearch({page,model,view,viewAct,now}){
  const root=useRef(null),input=useRef(null),nav=useContext(WorkNavigationContext);
  const counts=page.activityCounts||{};
@@ -371,13 +394,13 @@ export function ChatList({page,model,view,viewAct,now,showLocation,planAct}){
 const HOME_FILTERS={navArchive:'active',navCollection:null,navFilter:'',navStatusFilter:'all',navLocationFilter:'all',navSort:'activity'};
 function LegacyConversationList({host,workspaceHost}){
  const model=useNavigationController(host,'chats'),{state,act,view,workspace,history,refreshing}=model;
- const workspaceState=useNavigation(React,workspaceHost||host),now=useActivityClock(),workspaceAct=workspaceHost?.dispatch||act;
+ const workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),workspaceState=workspaceModel.state,now=useActivityClock(),workspaceAct=workspaceHost?.dispatch||act;
  const [creating,setCreating]=useState(false),createButton=useRef(null);
  const closeCreate=()=>{setCreating(false);requestAnimationFrame(()=>createButton.current?.focus())};
  const sidebar=state.sidebarNavigation;
  const homeView={...HOME_FILTERS,navChatScope:sidebar?.pinned?.scope.mode||'all',navPinnedPage:view.navPinnedPage};
  const recentView={...HOME_FILTERS,...sidebar?.recentView,...view.navRecentView,navShowAgentCreated:view.navShowAgentCreated===true};
- const pins=chatPage({...state,view:homeView},workspace,{section:'pinned'});
+ const pins=state.pinnedNavigation||chatPage({...state,view:homeView},workspace,{section:'pinned'});
  const recent=chatPage({...state,view:{...recentView,navChatScope:homeView.navChatScope}},workspace,{section:'recent'});
  const workspaceChats=chatPage({...state,view:{...view,navChatScope:'workspace'}},workspace,{section:'workspace'});
  const recentAct=(name,args)=>{
@@ -392,7 +415,8 @@ function LegacyConversationList({host,workspaceHost}){
  const selectedWorkspace=workspaceState.workspaceExplorer?.selected;
  return <div className="a-sidebar-navigation">
   <NavigationEditor model={model}/>
-  <SidebarSection id="pinned" title="Pinned" count={pins.total} model={model}><PinnedChats page={pins} model={model} now={now}/></SidebarSection>
+  {!workspaceHost&&<NavigationEditor model={workspaceModel}/>}
+  {!!pins.total&&<SidebarSection id="pinned" title="Pinned" count={pins.total} model={model}>{state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
   <SidebarSection id="workspaces" title="Workspaces" count={workspaceState.workspaceExplorer?.totalWorkspaces} model={model} actions={<button ref={createButton} type="button" className="a-icon" aria-label="New workspace" data-action="view.update" onClick={()=>{setCreating(true);patch(act,{navSectionsCollapsed:(view.navSectionsCollapsed||[]).filter(key=>key!=='workspaces')})}}><Plus/></button>}>
    {creating&&<WorkspaceForm state={workspaceState} act={workspaceAct} onDone={closeCreate} onCancel={closeCreate}/>}
    {browsing?(workspaceHost?<PairedWorkspaceBrowser host={workspaceHost} onOpen={openWorkspace}/>:<WorkspaceExplorer state={state} act={act} onOpen={openWorkspace} onEdit={model.setDraft} heading={false} previewLimit={8}/>):<div className="a-workspace-chat-view" aria-label={'Chats in '+workspace.name}>
@@ -411,12 +435,13 @@ function LegacyConversationList({host,workspaceHost}){
 
 function QuietSidebar({host,workspaceHost,navigation}){
  const model=useNavigationController(host,'chats'),now=useActivityClock();
- const workspaceState=useNavigation(React,workspaceHost||host);
- const pins=model.state.sidebarNavigation?.pinned||{items:[],total:0,pages:1};
+ const workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),workspaceState=workspaceModel.state;
+ const pins=model.state.pinnedNavigation||model.state.sidebarNavigation?.pinned||{items:[],total:0,pages:1};
  return <div className="a-sidebar-navigation a-quiet-sidebar">
   <NavigationEditor model={model}/>
+  {!workspaceHost&&<NavigationEditor model={workspaceModel}/>}
   <button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>
-  <SidebarSection id="pinned" title="Pinned" model={model}><PinnedChats page={pins} model={model} now={now}/></SidebarSection>
+  {!!pins.total&&<SidebarSection id="pinned" title="Pinned" model={model}>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
   <SidebarSection id="workspaces" title="Workspaces" model={model} actions={<button type="button" className="a-icon" aria-label="New workspace" onClick={()=>navigation.create()}><Plus/></button>}>
    <WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>

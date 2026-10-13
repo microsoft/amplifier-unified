@@ -591,6 +591,10 @@ class AutomaticHistory:
                                         seen.add(value)
                                 if remapped != pins:
                                     state['pinnedWorkspaceIds'] = remapped
+                                    if isinstance(state.get('pinnedItemIds'), list):
+                                        state['pinnedItemIds'] = list(dict.fromkeys(
+                                            'workspace:' + row['id'] if key == 'workspace:' + old['id'] else key
+                                            for key in state['pinnedItemIds']))
                                     workspace_pins_changed = True
                             for scoped in [*state['sessions'], *state.get('canvasArtifacts', []), state.get('canvas', {})]:
                                 if scoped.get('workspaceId') == old['id']:
@@ -756,7 +760,7 @@ class AutomaticHistory:
                         if delta_mode and not full_merge:
                             globals_changed = {'sharedHistory', 'workspaces'}
                             if workspace_pins_changed:
-                                globals_changed.add('pinnedWorkspaceIds')
+                                globals_changed.update({'pinnedWorkspaceIds', 'pinnedItemIds'})
                             self.service._publish_changes(sessions=touched, globals=globals_changed, detail_only=worker_detail_only)
                         else:
                             self.service._publish_full(reason='Native catalog membership and ownership reconciliation')

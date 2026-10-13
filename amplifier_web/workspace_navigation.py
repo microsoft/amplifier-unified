@@ -55,23 +55,41 @@ def update_pins(service, action, args, command_id, fingerprint, origin, *, inclu
     import time
     from .service import AppError
     from .state_records import save
+    from .pinned_navigation import ordered_ids, keep_order, reorder_kind, reorder
 
     try:
-        pins = pin_order(service._state, action, args)
+        candidate = dict(service._state)
+        if action == 'navigation.pinOrder':
+            result = reorder(candidate, args['ids'])
+        else:
+            pins = pin_order(candidate, action, args)
+            result = {'pinnedWorkspaceIds': pins}
     except ValueError as exc:
         raise AppError(str(exc), 409) from None
-    keys = ('pinnedWorkspaceIds', 'events', 'revision')
+    order = ordered_ids(service._state)
+    preference_keys = {'pinnedWorkspaceIds', 'pinnedItemIds'}
+    if action == 'navigation.pinOrder':
+        preference_keys.update({'pinnedSessionIds', 'pinOrderCustomized'})
+    keys = (*preference_keys, 'events', 'revision')
     previous = {key: service._state[key] for key in keys if key in service._state}
     receipt = {'accepted': True, 'revision': service._state['revision'] + 1, 'effects': [],
-               'result': {'pinnedWorkspaceIds': pins}}
+               'result': result}
     try:
-        service._state.update(pinnedWorkspaceIds=pins, revision=receipt['revision'],
+        if action == 'navigation.pinOrder':
+            service._state.update({key: candidate[key] for key in preference_keys})
+        else:
+            if action == 'workspace.pinOrder':
+                reorder_kind(service._state, 'workspace', pins)
+            service._state['pinnedWorkspaceIds'] = pins
+        service._state.update(revision=receipt['revision'],
                               events=[*service._state.get('events', []),
                                       {'id': command_id, 'action': action, 'origin': origin, 'at': time.time()}][-200:])
+        if action == 'workspace.pin':
+            keep_order(service._state, order)
         if command_id:
             service.db.execute('INSERT INTO commands VALUES (?,?,?)',
                                (command_id, fingerprint, json.dumps(receipt)))
-        save(service.db, service._state, {}, set(), {'pinnedWorkspaceIds', 'events'})
+        save(service.db, service._state, {}, set(), preference_keys | {'events'})
         service.db.commit()
     except BaseException:
         service.db.rollback()
@@ -83,6 +101,8 @@ def update_pins(service, action, args, command_id, fingerprint, origin, *, inclu
         raise
     # Pending runtime publication keeps its ordinary durability boundary.
     service.projections.workspace_pins_changed()
+    if action == 'navigation.pinOrder':
+        service.projections.pins_changed(service.state)
     service._browser_snapshot = None
     service._client_snapshots.clear()
     service._client_snapshot_preferences.clear()
@@ -286,12 +306,12 @@ def _matches(row, query):
     return any(query in term.casefold() for term in terms)
 
 
-def snapshot(state, *, index=None):
+def snapshot(state, *, index=None, pinned_only=False, exclude_pinned=False):
     """Return the same bounded explorer shown to users and agents."""
     root, nodes, total = _index(state) if index is None else index
     location, query, requested_page = _location(state, root, nodes)
     mode = state.get('view', {}).get('navWorkspaceMode', 'folders')
-    paths = [path for path, node in nodes.items() if node.get('workspace')] if query or mode == 'recent' else nodes[location]['children']
+    paths = [path for path, node in nodes.items() if node.get('workspace')] if pinned_only or query or mode == 'recent' else nodes[location]['children']
     selected = state.get('selectedWorkspaceId')
     pins = {identity: position for position, identity in enumerate(workspace_pins(state))}
     rows = []
@@ -302,6 +322,10 @@ def snapshot(state, *, index=None):
         # silently moving a pin when another registration is selected.
         pinned = min((identity for identity in node.get('workspaceSelections', {}) if identity in pins),
                      key=pins.get, default=None)
+        if pinned_only and pinned is None:
+            continue
+        if exclude_pinned and pinned is not None:
+            continue
         row = _row(path, node, pinned or selected)
         if pinned is not None:
             row['pinned'] = True
@@ -323,7 +347,7 @@ def snapshot(state, *, index=None):
     parent = None if location == root else _text(location.parent if location.parent != location else None)
     return {'path': _text(location), 'parentPath': parent, 'rootPath': _text(root),
             'breadcrumbs': breadcrumbs, 'filter': query, 'mode': mode, 'archive': state.get('view', {}).get('navWorkspaceArchive', 'active'),
-            'rows': rows[(page - 1) * PAGE_SIZE:page * PAGE_SIZE],
+            'rows': rows if pinned_only else rows[(page - 1) * PAGE_SIZE:page * PAGE_SIZE],
             'selected': next((_row(path, node, selected) for path, node in nodes.items() if selected in node.get('workspaceSelections', {})), None),
             'totalWorkspaces': total, 'totalRows': len(rows), 'page': page, 'pages': pages}
 

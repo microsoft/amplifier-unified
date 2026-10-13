@@ -23,6 +23,7 @@ test('workspace drill-in filters independently of Recent',async()=>{
 
 test('three sections collapse independently without changing drafts, selection or folder browsing',async()=>{
  const state=initial(),calls=[];state.view.navWorkspacePath='/saved/folder';state.view.draft='Unsent message';
+ state.pinnedSessionIds=['a'];
  const act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state.view={...state.view,...args.patch};return {accepted:true}};
  let root;const render=()=>React.createElement(WorkspaceRail,{state,act});
  await renderAct(async()=>{root=create(render())});
@@ -53,7 +54,7 @@ test('pin and unpin use shared actions without selecting chats or rewriting acti
  await renderAct(async()=>{root=create(render())});
  const rows=()=>root.root.findAll(node=>node.type==='div'&&node.props['data-session-id']).map(node=>node.props['data-session-id']);
  assert.deepEqual(rows(),['b','a','c']);
- assert.equal(root.root.findByProps({'aria-label':'Pinned chats'}).findAll(node=>node.type==='div'&&node.props['data-session-id']).length,1);
+ assert.equal(root.root.findByProps({'aria-label':'Pinned items'}).findAll(node=>node.type==='div'&&node.props['data-session-id']).length,1);
  let detail;const renderDetail=chat=>React.createElement(ChatDetails,{chat,model:{state,act,draft:{},choose:()=>{},setDraft:()=>{}},now:100,close:()=>{}});
  await renderAct(async()=>{detail=create(renderDetail({...state.sessions[1],pinned:true}))});
  const unpin=detail.root.findByProps({'aria-label':'Unpin Another plan'});
