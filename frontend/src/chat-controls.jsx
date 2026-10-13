@@ -32,10 +32,10 @@ export function ModelControl({state,session,act,working,embedded=false}){
  if(isDraft&&defaults.phase==='ready')previousDefaults.current={context:defaultsContext,value:defaults};
  const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.context===defaultsContext?previousDefaults.current.value:defaults;
  const checkingDefaults=isDraft&&defaults.phase!=='ready'&&defaults.phase!=='error';
- const unavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||session?.historyLoaded===false;
+ const unavailable=!!state.navigationPending||session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||session?.historyLoaded===false;
  const shared=state.view?.composerModel||EMPTY,[draft,setDraft]=useState(shared),[error,setError]=useState('');
  useEffect(()=>setDraft(shared),[shared]);
- const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerModel:next}})};
+ const edit=patch=>{const next={...draft,...patch,...(embedded?{open:true,sessionId}:{})};setDraft(next);act('view.update',{patch:{composerModel:next}})};
  const managed=setup.location?.kind==='managed';
  const location=managed?{location:{kind:'managed'}}:{};
  const draftCatalog=state.setup?.providersRequestedWorkspace===setup.workspace&&(state.setup?.providersLocation?.kind==='managed')===managed?state.setup:EMPTY;
@@ -59,15 +59,23 @@ export function ModelControl({state,session,act,working,embedded=false}){
  const providerLabel=options.find(row=>row.id===provider)?.label||providerMetadata?.display_name||providerMetadata?.id||(initial?.instance===provider?initial.providerLabel:'')||provider;
  const modelAndEffort=effectiveEffort?`${model} (${effectiveEffort})`:model;
  const usingChatGPTPlan=effectiveProvider?.info?.defaults?.auth_mode==='chatgpt_plan'||(isDraft&&effectiveProvider?.config?.auth_mode==='chatgpt_plan');
- const loadingCapabilities=!isDraft&&!noProviders&&!effectiveEffort&&!effectiveMetadata&&!effectiveProvider?.configSchema&&!effectiveProvider?.info?.config_fields;
  const modelLabel=providerLabel?`${providerLabel} · ${modelAndEffort}`:modelAndEffort;
  const open=embedded||(draft.open&&(draft.sessionId??null)===sessionId),popover=useRef(null),{style:position,panelRef,renderPopover}=useComposerPopover(open&&!embedded,popover);
+ // The narrow-screen menu is locally mounted, but catalog demand is shared
+ // with the server just like the desktop popover.
+ useEffect(()=>{
+  if(!embedded)return;
+  act('view.update',{patch:{composerModel:{...shared,open:true,sessionId}}});
+  return()=>{act('view.update',{patch:{composerModel:{open:false,sessionId}}})};
+ },[embedded,sessionId]);
  useOutsideDismiss(open&&!embedded,popover,()=>edit({open:false}),panelRef);
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:state.modelCatalogs?.[selected?.sharedCatalogKey]||controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
- const lastModels=useRef(new Map());let models=modelOptions(entry?.models||[]);
- if(models.length)lastModels.current.set((isDraft?draftDefaultsKey(setup):sessionId)+'|'+draft.instance,models);
- else models=lastModels.current.get((isDraft?draftDefaultsKey(setup):sessionId)+'|'+draft.instance)||[];
+ const lastModels=useRef(new Map()),modelCacheKey=JSON.stringify([isDraft?draftDefaultsKey(setup):sessionId,configurationRevision,draft.instance,selected?.sharedCatalogKey||entry?.sharedCatalogKey||null]);let models=modelOptions(entry?.models||[]);
+ // An explicit successful empty list replaces old choices. Deferred/loading
+ // views can reuse them; the saved/default selection is retained separately.
+ if(models.length||(entry?.phase==='ready'&&!entry.modelsDeferred&&Array.isArray(entry.models))){lastModels.current.delete(modelCacheKey);lastModels.current.set(modelCacheKey,models);while(lastModels.current.size>16)lastModels.current.delete(lastModels.current.keys().next().value)}
+ else models=lastModels.current.get(modelCacheKey)||[];
  // Model catalogs belong to a connection, even when several use the same type.
  const available=new Map(models.map(row=>[row.id,row]));
  const defaultModel=selected?.info?.defaults?.model;
@@ -92,7 +100,6 @@ export function ModelControl({state,session,act,working,embedded=false}){
  },[open,sessionId,providers.map(row=>row.id).join('|'),effective.instance,effective.id,effective.model,effectiveEffort]);
  function show(){touched.current=false;setError('');if(open){edit({open:false});return}
   edit({open:true,sessionId,instance:provider,model:effective.model||'',effort:effectiveEffort||''});
-  if(session&&!controls['configuration.catalog'])act('runtime.control',{sessionId,operation:'configuration.catalog',args:{}});
  }
  async function apply(patch){
   touched.current=true;const next={...draft,...patch};edit(patch);setError('');
@@ -112,17 +119,18 @@ export function ModelControl({state,session,act,working,embedded=false}){
  function previewEffort(event){touched.current=true;effortPending.current=true;setDraft({...draft,effort:choices[Number(event.currentTarget.value)]});}
  function commitEffort(event){if(!effortPending.current)return;effortPending.current=false;const value=choices[Number(event.currentTarget.value)];if(value)apply({effort:value});}
  const catalogRequest=useRef('');
+ const missingCatalogs=providers.filter(row=>row.sharedCatalogKey&&!state.modelCatalogs?.[row.sharedCatalogKey]).map(row=>row.sharedCatalogKey).join('|');
  useEffect(()=>{
-  if(!session||unavailable)return;
-  const key=sessionId+'|'+configurationRevision;
-  if(catalogRequest.current===key||controls['configuration.catalog']?.configurationRevision===configurationRevision)return;
+  if(!open||!session||unavailable)return;
+  const key=sessionId+'|'+configurationRevision+'|'+missingCatalogs;
+  if(catalogRequest.current===key||controls['configuration.catalog']?.configurationRevision===configurationRevision&&!missingCatalogs)return;
   catalogRequest.current=key;act('runtime.control',{sessionId,operation:'configuration.catalog',args:{}});
- },[sessionId,configurationRevision,unavailable]);
+ },[open,sessionId,configurationRevision,unavailable,missingCatalogs]);
  const op=state.actionStatus?.[isDraft?'configuration.defaults':'runtime.control'];
  const failure=error||catalog?.error||(op?.phase==='error'?op.error:'')||defaults.error;
  const renderPanel=embedded?content=>content:renderPopover,Advanced=embedded?'details':React.Fragment;
  return <div className="a-model-control" ref={popover}>
-  {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{loadingCapabilities?'Loading model settings…':modelLabel}</span><ChevronDown/></button>}
+  {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{modelLabel}</span><ChevronDown/></button>}
   {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":"a-model-popover a-compact-popover"} style={embedded?undefined:position} aria-label="Conversation model">
    {!embedded&&<div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>}
    {usingChatGPTPlan&&<p className="a-caption">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a></p>}

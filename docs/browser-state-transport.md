@@ -62,6 +62,44 @@ is weakened by these CPU-path changes.
 
 ## Acceptance
 
+### Demand-scoped model and worker data
+
+Catalogs are rebuildable caches, not historical evidence. The public catalog
+collection retains exact keys needed by connected selections/session streams,
+running chats, the current setup inventory and the incoming catalog result.
+Pruning occurs only when catalogs are published, not on ordinary progress ticks.
+Dormant references may miss: closed controls retain the chat's own selection;
+opening the picker resolves current configuration rather than reviving an old
+account's catalog. Full-state readers also observe this derived-cache eviction.
+The private discovery cache retains at most 128 identities and 3.9 MB of encoded
+entries, including failed probes, with a 24-hour maximum age checked on access
+and publication. Its age limit is retention, separate from freshness/refresh.
+Oversized results reach their requesting caller but are not cached. These bounds
+cover derived data, not Python heap overhead or in-flight caller-owned results;
+eviction never changes accepted model selections or native history.
+
+Browser model options are requested by an open picker/settings surface, not by
+an optimistic navigation placeholder. Closed controls receive only the selected
+connection's display metadata. Exact connection keys and configuration revisions
+remain separate from model-list content equality.
+Explicit refresh bypasses the private cache's 60-second failure backoff.
+Fresh options replace the browser fallback even at the same configuration
+revision, including a successful empty list; saved/default selections remain
+visible independently of available options.
+
+Worker observations remain in the existing durable store. Browser summaries keep
+raw nonterminal rows and their terminal job overrides, recent finished rows and
+the identities used by visible recovery notices. Legacy timeline fallback keeps
+its full compact rows. Older message pages carry recovery identity independently
+of the current worker window; full worker text/rows are explicit detail reads.
+Counts describe observations, not an invented count of unique agents.
+
+Qualification measures navigation requests/publications separately from full
+snapshot/reconnect bytes. A small SSE delta does not prove cheap construction.
+It must also exercise model-picker/account changes, two private clients, older
+recovery pages and unchanged-message rendering. No synthetic timing is a claim
+that the production host's entire navigation delay has been explained.
+
 `npm run test:state-transport-browser` starts a disposable real HTTP/WebSocket server
 and serves the production build. Its synthetic catalog and initial state exceed
 3 MB. It measures actual action and stream bytes, checks immediate painting with

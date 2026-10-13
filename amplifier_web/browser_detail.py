@@ -148,8 +148,8 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         turns.extend({'id': identity} for identity in dict.fromkeys(row['turnId'] for row in items) if identity not in known)
         return deepcopy({'items': items, 'turns': turns, 'offset': start,
                          'total': len(segments), 'before': items[0]['id'] if start and items else None})
-    if part not in {'messages','nodes'}:raise ValueError('Choose messages, nodes or groups.')
-    rows=session.get('messages',[]) if part=='messages' else owned_nodes(session)
+    if part not in {'messages','nodes','workers'}:raise ValueError('Choose messages, nodes, workers or groups.')
+    rows=owned_nodes(session) if part=='nodes' else session.get(part,[])
     group_revision = None
     if group is not None:
         if part != 'nodes':raise ValueError('Work details require nodes.')
@@ -180,25 +180,13 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         if part == 'messages' and row.get('attribution'):
             item['attribution'] = row['attribution']
         items.append(item)
-    if part == 'messages' and any(row.get('observation', {}).get('source') == 'local-job-recovery' for row in items):
-        by_call = {node.get('toolCallId'): node for node in session.get('execution', {}).get('nodes', []) if node.get('kind') == 'tool'}
-        for row in items:
-            observation = row.get('observation', {})
-            if observation.get('source') != 'local-job-recovery':
-                continue
-            call = observation.get('recovery', {}).get('call_id') or observation.get('call_id')
-            node = by_call.get(call) if call else None
-            if node:
-                reference = node.get('outputDetail')
-                if reference is None and isinstance(node.get('output'), str):
-                    reference = {'sessionId': session['id'], 'part': 'nodes', 'id': node['id'],
-                        'field': 'output', 'digest': digest(node['output']), 'length': len(node['output'])}
-                row['recoveryResult'] = {'id': node['id'], 'label': node.get('label'), 'outputDetail': reference}
+    if part == 'messages':
+        enrich_recovery(session, items)
     result={'items':items,'offset':start,'total':len(rows),'before':items[0]['id'] if start and items else None}
     if part=='messages':
         result['userOffset']=session.get('sharedHistoryUserTurnOffset',0)+sum(row.get('role')=='user' for row in rows[:start])
         result['sourceOffset']=(session.get('sharedHistoryOffset',0) if session.get('nativeProject') and session.get('historyManaged') else 0)+start
-    else:
+    elif part == 'nodes':
         anchors,segments=work_segments(session)
         for item in items:item['anchorMessageId']=anchors.get(item['id'])
         turn_ids={row.get('turnId') for row in items}
@@ -217,6 +205,26 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         for item in items:item['detailVersion'] = versions[item['id']]
         result.update(group=group, revision=group_revision)
     return deepcopy(result)
+
+
+def enrich_recovery(session, messages):
+    from .browser_workers import recovery_workers
+    recovery_workers(session, messages)
+    if not any(row.get('observation', {}).get('source') == 'local-job-recovery' for row in messages):
+        return
+    by_call = {node.get('toolCallId'): node for node in session.get('execution', {}).get('nodes', []) if node.get('kind') == 'tool'}
+    for row in messages:
+        observation = row.get('observation', {})
+        if observation.get('source') != 'local-job-recovery':
+            continue
+        call = observation.get('recovery', {}).get('call_id') or observation.get('call_id')
+        node = by_call.get(call) if call else None
+        if node:
+            reference = node.get('outputDetail')
+            if reference is None and isinstance(node.get('output'), str):
+                reference = {'sessionId': session['id'], 'part': 'nodes', 'id': node['id'],
+                    'field': 'output', 'digest': digest(node['output']), 'length': len(node['output'])}
+            row['recoveryResult'] = {'id': node['id'], 'label': node.get('label'), 'outputDetail': reference}
 
 
 def sync_work(session, group, known):
@@ -259,7 +267,11 @@ def project(session, *, resolver=None):
         result['execution']['imageGeneration'] = image_work(session, session['execution'])
         result['executionWindow']={**groups,'part':'groups'}
     # Reports and completed generation bodies are not activity badges.
-    result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in session.get('workers',[])]
+    from .browser_workers import project as worker_view
+    workers, summary = worker_view(session.get('workers', []), result.get('execution', {}))
+    result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in workers]
+    if summary is not None:
+        result['workerSummary'] = summary
     result['generations']=[{k:v for k,v in row.items() if k!='text'} for row in session.get('generations',[])[-20:]]
     result.pop('messageQuotes', None)
     if 'historyActivity' in result:
