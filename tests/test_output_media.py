@@ -2958,6 +2958,9 @@ async def test_gif_canvas_compact_reference_large_retention_replay_reload_and_pe
         await app.dispatch('canvas.show', {'kind': 'text', 'content': 'Peer artifact', 'title': 'Peer'})
         await app.dispatch('view.update', {'patch': {'draft': 'Peer unsent draft'}})
     peer = copy.deepcopy(app.clients.records['gif-peer'])
+    peer_artifact = next(r for r in app.state['canvasArtifacts'] if r['id'] == peer['canvas']['id'])
+    peer_body = copy.deepcopy(peer_artifact['body'])
+    assert resource(app.db, peer_body['$resource']) == {'content': peer['canvas']['content']}
     original_outputs = app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall()
     with app.clients.bind('gif-clicker'):
         await app.dispatch('view.update', {'patch': {'draft': 'Clicker unsent draft'}})
@@ -3017,6 +3020,11 @@ async def test_gif_canvas_compact_reference_large_retention_replay_reload_and_pe
             rows = [r for r in reopened.state['canvasArtifacts'] if r['kind'] == 'gif']
             assert len(rows) == 1 and rows[0]['revision'] == 1 and len(rows[0]['versions']) == 1
             assert rows[0]['publications'] == []
+        # Persisted, unattached clients retain a compact body. Compare its
+        # exact reference/content before normal attach restores that body.
+        assert reopened.clients.records['gif-peer']['canvas']['contentResource'] == peer_body
+        assert resource(reopened.db, peer_body['$resource']) == {'content': peer['canvas']['content']}
+        reopened.clients.attach('gif-peer')
         assert reopened.clients.records['gif-peer']['canvas'] == peer['canvas']
         assert reopened.clients.records['gif-peer']['drafts'] == peer['drafts']
     finally:
