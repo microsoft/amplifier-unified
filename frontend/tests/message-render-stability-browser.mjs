@@ -57,7 +57,12 @@ try{
  // be mistaken for a render caused by the timer. flushSync also makes a real
  // parent-render regression observable on every tick, without timing sleeps.
  await action('view.update',{patch:{draft:'Ready'}});
- evidence.clock=await page.evaluate(text=>{
+ await expect(composer).toHaveText('Ready');
+ evidence.clock=await page.evaluate(async text=>{
+  // The API receipt precedes React's DOM commit. Observe that commit above,
+  // then drain its layout/passive work across painted frames before measuring
+  // synchronously; a no-op flush alone does not drain every pending lane.
+  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   flushRenderProbe(()=>{});
   const count=()=>renderProbe.parses.filter(value=>value===text).length;
   const apps=renderProbe.apps,parses=count(),timer=document.querySelector('[role="timer"]');
