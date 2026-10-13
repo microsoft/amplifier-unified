@@ -1,4 +1,5 @@
 import copy
+import hashlib
 
 import pytest
 
@@ -113,6 +114,45 @@ async def test_legacy_file_open_does_not_change_browser_presentation(app, tmp_pa
     assert result['result']['status'] == 'opened'
     with app.clients.bind('one'):
         assert app.state['view']['workSurface'] == 'workspace'
+
+
+async def test_exact_file_preview_refuses_changed_bytes_without_replacing_view(app, tmp_path):
+    path = tmp_path / 'candidate.md'
+    path.write_text('original')
+    request = {**args(app, path), 'expectedSha256': hashlib.sha256(b'original').hexdigest()}
+    assert (await command(app, 'canvas.openFile', request))['result']['status'] == 'opened'
+    original_view = view(app)['resourceId']
+    path.write_text('different version')
+    response = (await command(app, 'canvas.openFile', request))['result']
+    assert response['status'] == 'changed'
+    assert 'reported artifact version' in response['message']
+    assert view(app)['resourceId'] == original_view
+    with app.clients.bind('one'):
+        assert app.state['canvas']['content'] == 'original'
+        assert 'path' not in app.state['canvas']
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+async def test_exact_peer_artifact_uses_retained_execution_folder(app, tmp_path, legacy):
+    source = tmp_path / 'other-checkout'
+    source.mkdir()
+    (source / 'candidate.md').write_text('peer version')
+    (tmp_path / 'candidate.md').write_text('main version')
+    digest = hashlib.sha256(b'peer version').hexdigest()
+    request = {**args(app, 'candidate.md'), 'expectedSha256': digest, 'referenceRequestId': 'exact-peer'}
+    response = {'status': 'sealed', 'references': ['candidate.md@sha256:' + digest]}
+    if not legacy:
+        response['executionDirectory'] = str(source)
+    app.collaboration.insert('exact-peer', 'fixture', {'requestId': 'exact-peer',
+        'workspace': str(tmp_path), 'response': response})
+    result = (await command(app, 'canvas.openFile', request))['result']
+    assert result['status'] == ('unavailable' if legacy else 'opened')
+    if not legacy:
+        with app.clients.bind('one'):
+            assert app.state['canvas']['content'] == 'peer version'
+            assert 'path' not in app.state['canvas']
+        with pytest.raises(AppError, match='exact artifact reference'):
+            await command(app, 'canvas.openFile', {**request, 'path': 'unreported.md'})
 
 
 async def test_missing_escape_and_symlink_do_not_replace_canvas(app, tmp_path):

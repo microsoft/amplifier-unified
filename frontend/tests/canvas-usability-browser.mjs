@@ -42,7 +42,7 @@ try{
  const attachment=await page.evaluate(()=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).draftAttachments[0]);
  await action('conversation.send',{sessionId:state.selectedSessionId,text:'Review my notes',attachmentIds:[attachment.id]});
  const sentNote=page.locator('[data-message-id]').filter({hasText:'Review my notes'});
- await sentNote.getByRole('button',{name:'Review notes.md 1 KB',exact:true}).click();
+ await sentNote.locator('[data-action="canvas.openAttachment"]').filter({hasText:'Review notes.md'}).click();
  await expect(panel.getByRole('heading',{name:'Attached review'})).toBeVisible();
  await expect(sentNote.getByRole('link',{name:'Download Review notes.md',exact:true})).toHaveAttribute('href',attachment.url);
  await page.reload();await expect(panel.getByRole('heading',{name:'Attached review'})).toBeVisible();

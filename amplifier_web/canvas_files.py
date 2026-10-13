@@ -1,5 +1,6 @@
 """Explicit file navigation from a chat; no message submission or tool replay."""
-from .workspace_canvas import canvas_command
+import uuid
+from .workspace_canvas import canvas_command, ReferencedFileChanged
 from .canvas_library import remember
 
 
@@ -22,10 +23,32 @@ def open_file(service, args, origin):
             or current_view.get('workWorkspaceTab') != 'files'):
         return {'status': 'unavailable', 'message': 'The file browser changed. Open the file from its workspace Files page.'}
     scoped = {**service.state, 'selectedSessionId': sid, 'selectedWorkspaceId': workspace_id}
+    file_root = None
+    if args.get('referenceRequestId'):
+        receipt = service.collaboration.receipt(args['referenceRequestId'])
+        response = receipt.get('response') or {}
+        reference = args['path'] + '@sha256:' + args.get('expectedSha256', '')
+        if (receipt.get('workspace') != session['workspace'] or response.get('status') != 'sealed'
+                or reference not in response.get('references', [])):
+            raise AppError('Choose an exact artifact reference from this workspace request.', 403)
+        file_root = response.get('executionDirectory')
+        if not file_root:
+            return {'status': 'unavailable', 'message': 'This older result has no recorded execution folder. Its exact source cannot be established.'}
     try:
-        canvas_command(scoped, 'canvas.show', {'kind': 'auto', 'path': args['path']}, origin)
+        canvas_command(scoped, 'canvas.show', {'kind': 'auto', 'path': args['path'],
+            'expectedSha256': args.get('expectedSha256')}, origin, file_root=file_root)
+    except ReferencedFileChanged as exc:
+        return {'status': 'changed', 'message': str(exc)}
     except (AppError, OSError, ValueError):
         return {'status': 'unavailable', 'message': 'This file is unavailable or cannot be previewed in this workspace.'}
+    if args.get('expectedSha256'):
+        # Retain the checked bytes as a snapshot. A peer artifact preview must
+        # not become a file editor pointed at a different task's working copy.
+        scoped['canvas']['artifactReference'] = {'sha256': args['expectedSha256'],
+            'requestId': args.get('referenceRequestId'), 'path': args['path']}
+        scoped['canvas'].pop('path', None)
+        scoped['canvas'].pop('workspacePath', None)
+        scoped['canvas']['id'] = uuid.uuid4().hex
     from .canvas_versions import assert_clean
     assert_clean(service, scoped['canvas']['id'])
     remember(scoped, service.db)

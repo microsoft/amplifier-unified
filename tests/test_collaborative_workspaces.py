@@ -809,7 +809,7 @@ async def test_two_artifact_rounds_keep_original_bytes_and_exact_result_links(ap
     assert app.state["selectedSessionId"] == source["id"] and app.state["view"]["draft"] == "Private unsent draft"
 
 
-@pytest.mark.parametrize("negative", ["ack", "defer", "decline", "failed", "jobs", "unrelated", "accepted-only", "refs", "child"])
+@pytest.mark.parametrize("negative", ["ack", "defer", "decline", "jobs", "unrelated", "accepted-only", "refs", "child"])
 async def test_nonresult_or_unproven_terminal_does_not_wake(app, negative):
     source, target = app.state["sessions"]
     kind = negative if negative in {"ack", "defer", "decline"} else "result"

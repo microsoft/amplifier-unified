@@ -29,6 +29,32 @@ def test_global_extra_directories_do_not_replace_workspace_access(tmp_path):
         assert tool['config']['denied_write_paths'] == [str(denied)]
 
 
+@pytest.mark.parametrize('allowed', [[], ['src']])
+def test_declared_filesystem_boundary_is_not_widened_by_workspace_default(tmp_path, allowed):
+    bundle = SimpleNamespace(tools=[{'module': 'tool-filesystem', 'config': {'allowed_write_paths': allowed}}], agents={})
+    _apply_host_policy(bundle, SimpleNamespace(workspace=tmp_path, settings={}))
+    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path / p) for p in allowed]
+
+
+def test_handoff_rebinds_repository_paths_but_preserves_explicit_external_paths(tmp_path):
+    old, new, external = tmp_path / 'original', tmp_path / 'checkout', tmp_path / 'external'
+    bundle = SimpleNamespace(tools=[{'module': 'tool-filesystem', 'config': {
+        'allowed_write_paths': [str(old / 'src'), str(external)],
+        'denied_write_paths': [str(old / 'src/private')]}}], agents={})
+    _apply_host_policy(bundle, SimpleNamespace(workspace=old, settings={}), execution_workspace=new)
+    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(new / 'src'), str(external)]
+    assert bundle.tools[0]['config']['denied_write_paths'] == [str(new / 'src/private')]
+
+
+@pytest.mark.parametrize('module', ['tool-apply-patch', 'tool-image'])
+def test_other_writer_cannot_escape_explicit_read_only_filesystem(tmp_path, module):
+    bundle = SimpleNamespace(tools=[{'module': 'tool-filesystem', 'config': {'allowed_write_paths': []}},
+                                    {'module': module}], agents={'child': {'tools': [{'module': module}]}})
+    _apply_host_policy(bundle, SimpleNamespace(workspace=tmp_path, settings={}))
+    assert bundle.tools[1]['config']['allowed_write_paths'] == []
+    assert bundle.agents['child']['tools'][0]['config']['allowed_write_paths'] == []
+
+
 def test_shared_allow_and_deny_cover_root_and_child_patch_tools(tmp_path):
     policy = {'allowed_write_paths': [str(tmp_path / 'allowed')],
               'denied_write_paths': [str(tmp_path / 'allowed/private')]}

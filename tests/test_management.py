@@ -6,6 +6,7 @@ from amplifier_web.management import Management
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.notifications import Notifications
 from amplifier_web.preferences import SettingsStore
+from amplifier_web.service import AppError
 
 class Runtime:
     async def stop(self,*args):pass
@@ -24,6 +25,28 @@ async def test_scoped_file_permissions_persist_without_changing_root_bundle(app,
     saved=SettingsStore(app.data_dir).read(tmp_path,'project')
     assert saved['overrides']['tool-filesystem']['config']['denied_write_paths']==[str(tmp_path/'private')]
     assert app.state['sessions'][0]['bundle']=='anchors-amp-dev'
+
+
+@pytest.mark.parametrize('route', ['dispatch', 'bridge'])
+async def test_agent_permission_write_requires_explicit_scope(app, route):
+    source = app.state['sessions'][0]
+    args = {'allowed': [], 'denied': []}
+    before = SettingsStore(app.data_dir).read(source['workspace'], 'global')
+    with pytest.raises(AppError, match='explicit file-access scope'):
+        if route == 'dispatch':
+            await app.dispatch('permissions.save', args, origin='agent', caller_session_id=source['id'])
+        else:
+            await app.app_bridge('dispatch', {'action': 'permissions.save', 'args': args,
+                '_runtimeSessionId': source['id']}, source['id'])
+    assert SettingsStore(app.data_dir).read(source['workspace'], 'global') == before
+
+
+async def test_child_cannot_change_root_permissions_through_shared_transport(app):
+    source = app.state['sessions'][0]
+    with pytest.raises(AppError, match='child cannot borrow'):
+        await app.app_bridge('dispatch', {'action': 'permissions.save',
+            'args': {'scope': 'global', 'allowed': [], 'denied': []},
+            '_runtimeSessionId': 'actual-child'}, source['id'])
 
 async def test_history_import_uses_real_checkpoint_and_does_not_execute(app):
     store=SessionStore(app.data_dir/'sessions')

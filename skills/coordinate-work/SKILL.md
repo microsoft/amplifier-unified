@@ -50,6 +50,9 @@ compare those exact links, not equal message text.
    reads the receipt; it never creates another root or replays a brief. There is
    a bound of eight outstanding tasks per source, not eight historical chats.
    First-child runtime qualification may take longer than worker startup.
+   The peer keeps the source's actual execution folder while retaining the
+   canonical workspace for history. This shares that checkout; it does not
+   allocate a second worktree or isolate ports, services, or browser state.
    Identical sibling plans can reuse that qualified profile; preparation is not
    execution or completion. Read elapsed progress and honor Stop rather than
    replaying a slow request. Failed/cancelled preparation retains diagnostics.
@@ -60,6 +63,18 @@ compare those exact links, not equal message text.
    revised or budget-exhausted tasks stay stopped. Unknown is not replayed.
    Passive cursors only acknowledge observations; they do not authorize a wake.
    Independently check the actual artifact before using a declared result.
+   Sealed failure, deferral and decline also notify once, as does a runtime
+   failure tied to a delivered request even without a model reply. These
+   outcomes do not satisfy the dependency or authorize repeating tool effects.
+   A conversation admits at most 64 queued inputs plus reserved replies.
+   Messages between a pair of conversations are limited to 32 per minute,
+   including notify. On backpressure, wait or combine updates; do not change
+   identities to evade a limit. Identical retries still return their receipts.
+   To open a reported file version, use `canvas.openFile` with the calling
+   session/workspace, the reference path and `expectedSha256`, and the original
+   `referenceRequestId`. The host checks bytes in the recorded execution folder.
+   Changed, missing and legacy unbound references remain explicit; never strip
+   the digest and present current bytes as the reported version.
 
 ## Receiver workflow
 

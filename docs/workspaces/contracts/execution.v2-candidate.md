@@ -68,6 +68,20 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Approved initial repair implementation — 2026-10-13
+
+The initial program separates defect repairs from larger design experiments.
+The shared-folder default and independent-chat model remain unchanged. A peer
+created from a moved task inherits its actual execution directory without
+claiming a new isolated copy. Typed failure/deferral/decline and authenticated
+runtime-failure observations may wake a saved waiter; waking is distinct from
+successful dependency acceptance. Inbox capacity may reject new input with
+explicit backpressure before any message is added, while reserved result slots
+preserve accepted waits. Result navigation must verify the exact referenced
+bytes and retain the producer's execution binding; absence or mismatch is an
+explicit limitation. These additions are tracked in the implementation evidence,
+not a claim that every v2 proposal or original v1 isolation promise is delivered.
+
 No current universal checkout fence is known in this source baseline; this is not proof that all integrations are independent of the earlier promise. Existing explicit worktree handoffs, permission checks and preservation checks stay in place. Consumers must distinguish cooperative from genuinely protected bindings and report unsupported enforcement. The first collaboration increment should retain existing folder behavior, add honest context/coordination, and not claim newly enforced write isolation.
 
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.
