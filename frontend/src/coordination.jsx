@@ -86,9 +86,9 @@ export function RelatedWork({dispatch,sessionId}){
  useEffect(()=>{setInspected({});setOriginal(null);refresh().catch(error=>setError(error.message))},[sessionId]);
  const inspectResult=async requestId=>{try{const value=await dispatch('coordination.result',{requestId},{feedback:false});setInspected(previous=>({...previous,[requestId]:value.result}))}catch(error){setError(error.message)}};
  const reveal=async(sid,messageId)=>{try{const response=await dispatch('coordination.read',{sessionId:sid,messageId,textLimit:4000},{feedback:false});setOriginal(response.result.message)}catch(error){setError(error.message)}};
- const openArtifact=async(sid,reference)=>{
-  const path=reference.replace(/@sha256:[a-f0-9]{64}$/,'');
-  try{await dispatch('canvas.openFile',{sessionId,workspace:context.workspace,path})}catch(error){setError(error.message)}
+ const openArtifact=async(requestId,reference)=>{
+  const [path,expectedSha256]=reference.split(/@sha256:/);
+  try{const value=await dispatch('canvas.openFile',{sessionId,workspace:context.workspace,path,expectedSha256,referenceRequestId:requestId});if(value.result?.status!=='opened')setError(value.result?.message||'The referenced artifact is unavailable.')}catch(error){setError(error.message)}
  };
  return <section className="a-coordination-related" aria-label="Related work">
   <h3>Related work</h3>
@@ -96,14 +96,14 @@ export function RelatedWork({dispatch,sessionId}){
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh related work</button>
   {original&&<article aria-label="Original message"><strong>{original.role} · {original.sessionId}</strong><p style={{whiteSpace:'pre-wrap'}}>{original.text}</p>{original.truncated&&<small>Bounded excerpt; original retained.</small>}<button className="a-link" onClick={()=>setOriginal(null)}>Close original message</button></article>}
-  {items.filter(row=>row.collaboration).map(row=><div key={row.target.sessionId}>{row.title} · {labels[row.status]||row.status} · created by {row.collaboration.creatorTitle||'Source conversation'}<details><summary>Task identity</summary><code>{row.target.sessionId} · creator {row.collaboration.creatorSessionId}</code></details></div>)}
-  {context.requests.map(row=>{const result=inspected[row.requestId],response=result?.receipt?.response||row.response;return <article key={row.requestId} data-request-id={row.requestId}>
+  {items.map(row=><div key={row.target.sessionId}>{row.title} · {labels[row.status]||row.status}{row.collaboration&&<> · created by {row.collaboration.creatorTitle||'Source conversation'}</>}<details><summary>Task identity</summary><code>{row.target.sessionId}{row.collaboration&&<> · creator {row.collaboration.creatorSessionId}</>}</code></details></div>)}
+  {context.requests.map(row=>{const result=inspected[row.requestId],response=result?.receipt?.terminalOutcome||row.terminalOutcome||result?.receipt?.response||row.response;return <article key={row.requestId} data-request-id={row.requestId}>
    <small>{row.senderSessionId===sessionId?'Sent':'Received'} · {row.delivery} · {row.requestId}</small>
    <button className="a-link" onClick={()=>inspectResult(row.requestId)}>Inspect exact result</button>
    <button className="a-link" onClick={()=>reveal(row.target.sessionId,row.messageId)}>Open submitted message</button>
    {response&&<div data-part="exact-result"><p>Result: {response.status} · {response.outcome} · {response.qualified?'Qualified terminal evidence':'Not qualified'}</p><p>{response.text}</p>{response.detail&&<p role="alert">{response.detail}</p>}
     {response.terminalMessageId&&response.status==='sealed'&&<button className="a-link" data-message-id={response.terminalMessageId} onClick={()=>reveal(row.target.sessionId,response.terminalMessageId)}>Open exact terminal message</button>}
-    {(response.references||[]).map(reference=><p key={reference}><code>{reference}</code>{/^[^@\n]+@sha256:[a-f0-9]{64}$/.test(reference)&&!reference.includes('://')&&<button className="a-link" onClick={()=>openArtifact(row.target.sessionId,reference)}>Open referenced artifact</button>}</p>)}
+    {(response.references||[]).map(reference=><p key={reference}><code>{reference}</code>{/^[^@\n]+@sha256:[a-f0-9]{64}$/.test(reference)&&!reference.includes('://')&&<button className="a-link" onClick={()=>openArtifact(row.requestId,reference)}>Open referenced artifact</button>}</p>)}
     {(response.messageIds||[]).map(messageId=><button key={messageId} className="a-link" onClick={()=>reveal(row.target.sessionId,messageId)}>Open evidence message {messageId}</button>)}
    </div>}{result&&<p className="a-caption">{result.detail}</p>}
   </article>})}

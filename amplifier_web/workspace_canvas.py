@@ -18,6 +18,11 @@ MAX_IMAGE = 5_000_000
 MAX_PDF = 20_000_000
 MAX_HTML = 20_000_000
 MAX_SURFACE = 100_000
+
+
+class ReferencedFileChanged(ValueError):
+    """The bytes read for a preview are not the exact referenced version."""
+
 KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'pdf', 'a2ui', 'browser', 'babylon', 'settings']
 EXTENSIONS = {'.pdf':'pdf', '.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'html',
     '.mmd':'mermaid', '.mermaid':'mermaid', '.dot':'dot', '.gv':'dot', '.json':'json',
@@ -253,7 +258,7 @@ def validate_surface(surface):
     return copy.deepcopy(surface)
 
 
-def canvas_command(state, action, args, origin):
+def canvas_command(state, action, args, origin, *, file_root=None):
     initialize(state)
     if action == "canvas.close":
         state["canvas"]["open"] = False
@@ -333,7 +338,7 @@ def canvas_command(state, action, args, origin):
     elif args.get("path"):
         owner = next((s for s in state['sessions'] if s['id'] == state.get('selectedSessionId')), {})
         from .managed_chats import is_managed
-        root = owner.get('workspace') if is_managed(owner) else next((w["path"] for w in state["workspaces"] if w["id"] == state["selectedWorkspaceId"]), None)
+        root = file_root or (owner.get('workspace') if is_managed(owner) else next((w["path"] for w in state["workspaces"] if w["id"] == state["selectedWorkspaceId"]), None))
         if not root:
             _error("Choose a workspace first.")
         root = Path(root).resolve()
@@ -346,6 +351,10 @@ def canvas_command(state, action, args, origin):
         limit = MAX_PDF if kind == "pdf" else MAX_IMAGE if kind == "image" else MAX_HTML if kind in {"html","babylon"} else MAX_TEXT
         with path.open("rb") as file:
             data = file.read(limit + 1)
+        if args.get('expectedSha256'):
+            import hashlib
+            if hashlib.sha256(data).hexdigest() != args['expectedSha256']:
+                raise ReferencedFileChanged('The referenced file changed. This is not the reported artifact version.')
         if len(data) > limit:
             if kind == 'image' and path.suffix.lower() == '.gif':
                 _error("For GIFs above the 5 MB image snapshot limit, use outputs.attachMedia "

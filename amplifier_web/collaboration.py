@@ -19,6 +19,24 @@ BINDING = ContextVar("collaboration_binding", default=None)
 CREATION = ContextVar("collaboration_creation", default=None)
 BUSY = {"working", "starting", "running", "busy", "stopping", "ready"}
 PROTOCOL = 2
+MAX_PENDING_INPUTS = 64
+MAX_PAIR_MESSAGES_PER_MINUTE = 32
+
+
+def response_ready(response):
+    """A verified negative report can wake a waiter without satisfying its work."""
+    return (response.get("status") == "sealed" and response.get("kind") != "ack"
+            and (response.get("qualified") is True
+                 or response.get("outcome") in {"failed", "deferred", "declined"}))
+
+
+def continuation_outcome(request):
+    response = request.get('response') or {}
+    if response_ready(response):
+        return response
+    terminal = request.get('terminalOutcome') or {}
+    if terminal.get('status') == 'observed' and terminal.get('outcome') == 'failed':
+        return terminal
 
 
 def definitions(schema, string):
@@ -62,7 +80,7 @@ def definitions(schema, string):
             "text": {**string(4000), "minLength": 1}, "references": references,
             "messageIds": {"type": "array", "maxItems": 16, "items": string(200)},
         }, ["requestId", "kind", "outcome", "text"])),
-        "coordination.subscribe": ("Save one request-specific wait and stable continuation. Successful sealed results may wake once through guarded input; cursor reads confer no authority.", schema({
+        "coordination.subscribe": ("Save one request-specific wait and stable continuation. Sealed success, failure, deferral or decline may wake once through guarded input; only qualified success satisfies a dependency. Cursor reads confer no authority.", schema({
             **sid, "requestId": string(200), "grantId": string(200),
         }, ["sessionId", "requestId"])),
     }
@@ -84,6 +102,9 @@ class Collaboration:
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.target.sessionId'))""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_sender ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.senderSessionId'))""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_pair_window ON commands(
+            json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.senderSessionId'),
+            json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.acceptedAt'))""")
         for identity, encoded in service.db.execute("""SELECT id,receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.create'
                 AND json_extract(receipt,'$.delivery') IN ('creation_pending','created_initial_pending')""").fetchall():
@@ -190,9 +211,40 @@ class Collaboration:
             return {**json.loads(row[1]), "duplicate": True}
 
     def insert(self, identity, digest, receipt):
+        receipt.setdefault('acceptedAt', time.time())
         self.service.db.execute("INSERT INTO commands(id,fingerprint,receipt) VALUES(?,?,?)",
                                 (identity, digest, json.dumps(receipt)))
         self.refresh_reference(receipt)
+
+    def require_inbox_slot(self, sid):
+        # A saved wait reserves one slot for its eventual outcome. Converting
+        # that wait into a queued continuation does not increase this total.
+        pending = self.service.db.execute("""SELECT count(*) FROM commands
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.target.sessionId')=?
+            AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""", (sid,)).fetchone()[0]
+        session = self.service._session(sid)
+        task = session.get('task') or self.service.coordination.task(sid)
+        waiting = self.service.db.execute("""SELECT count(*) FROM commands
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.senderSessionId')=?
+            AND json_extract(receipt,'$.subscription.status')='waiting'
+            AND json_extract(receipt,'$.subscription.interruptionRevision')=?
+            AND json_extract(receipt,'$.subscription.taskId') IS ?
+            AND json_extract(receipt,'$.subscription.taskRevision') IS ?""",
+            (sid, session.get('interruptionRevision', 0), task.get('id'), task.get('revision'))).fetchone()[0]
+        if pending + waiting >= MAX_PENDING_INPUTS:
+            self.error('This conversation inbox is full, including reserved replies. Wait for pending work to settle; no input was added.', 429)
+
+    def require_message_rate(self, source, target):
+        count = self.service.db.execute("""SELECT count(*) FROM commands
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.senderSessionId')=?
+            AND json_extract(receipt,'$.target.sessionId')=?
+            AND json_extract(receipt,'$.acceptedAt')>?""",
+            (source, target, time.time() - 60)).fetchone()[0]
+        if count >= MAX_PAIR_MESSAGES_PER_MINUTE:
+            self.error('Too many messages between these conversations in one minute. Pause and combine updates; no input was added.', 429)
 
     def refresh_reference(self, receipt):
         """Only affected roots retain a tiny reference projection, not bodies."""
@@ -331,7 +383,7 @@ class Collaboration:
             return str(exc)
 
     def pending_continuation(self, sid):
-        """Read a qualified, unsubmitted exact wait; never claim or publish."""
+        """Read an outcome-backed, unsubmitted exact wait; never claim or publish."""
         for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'
                 AND json_extract(receipt,'$.target.sessionId')=?
@@ -349,7 +401,7 @@ class Collaboration:
             if (request.get("protocol") == PROTOCOL and request.get("senderSessionId") == sid
                     and request.get("target", {}).get("sessionId") == receipt.get("senderSessionId")
                     and wait.get("status") == "claimed" and wait.get("continuationId") == receipt.get("inputId") == receipt.get("requestId")
-                    and response.get("status") == "sealed" and response.get("qualified") is True
+                    and continuation_outcome(request) is not None
                     and any(m.get("id") == receipt.get("messageId") and m.get("inputId") == receipt["inputId"]
                             and m.get("inputOrigin") == "peer"
                             for m in self.service._session(sid).get("messages", []))):
@@ -570,8 +622,29 @@ class Collaboration:
                 response.update(status="rejected", qualified=False, detail="Terminal evidence or exact linkage failed.")
             self.save(identity, receipt)
             changed.update({receipt["senderSessionId"], session["id"]})
-            if response.get("qualified") and receipt.get("subscription"):
+            if response_ready(response) and receipt.get("subscription"):
                 self.enqueue_continuation(receipt)
+        if payload.get('event') == 'generation.failed':
+            # A host-observed failure is useful even if the model never managed
+            # to declare a reply. It supplies no successful artifact evidence.
+            delivered = set(payload.get('input_ids', [])) & set(active.get('inputIds', []))
+            for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
+                    WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                    AND json_extract(receipt,'$.target.sessionId')=?
+                    AND json_extract(receipt,'$.protocol')=?""", (session['id'], PROTOCOL)).fetchall():
+                if identity not in delivered:
+                    continue
+                receipt = json.loads(encoded)
+                if receipt.get('delivery') not in {'accepted', 'applied', 'submitting'}:
+                    continue
+                receipt['terminalOutcome'] = {'status': 'observed', 'kind': 'result', 'outcome': 'failed',
+                    'qualified': False, 'requestId': identity, 'generationId': active['id'],
+                    'recipientSessionId': session['id'], 'observedAt': time.time(),
+                    'text': 'The recipient runtime reported a failed generation for this delivered request. Inspect its retained history before deciding whether to retry.'}
+                self.save(identity, receipt)
+                changed.update({receipt['senderSessionId'], session['id']})
+                if receipt.get('subscription'):
+                    self.enqueue_continuation(receipt)
         return changed
 
     def enqueue_continuation(self, request):
@@ -584,12 +657,19 @@ class Collaboration:
             return
         sender = self.service._session(request["senderSessionId"])
         sender["historyManaged"] = False
-        response = request["response"]
+        response = continuation_outcome(request)
+        if response is None:
+            return
         envelope = {"senderSessionId": request["target"]["sessionId"], "recipientSessionId": sender["id"],
                     "requestId": identity, "inputId": identity, "replyToRequestId": request["requestId"],
                     "mode": "queue", "purpose": "Resume the saved request-specific wait",
-                    "references": [response["terminalMessageId"], *response.get("references", [])][:16]}
-        text = "A recipient declared a successful result and its root generation terminated. Independently check the referenced artifact before using it.\n" + response["text"]
+                    "references": ([response['terminalMessageId']] if response.get('terminalMessageId') else []) + response.get('references', [])[:15]}
+        if response.get("qualified"):
+            text = "A recipient declared a successful result and its root generation terminated. Independently check the referenced artifact before using it.\n"
+        else:
+            text = (f"A recipient reported {response['outcome']} for the saved request. "
+                    "This does not satisfy the dependency or authorize a retry. Review the report and decide how to proceed within the original task.\n")
+        text += response["text"]
         message = self.service._message(sender, "user", text, "peer", inputId=identity, inputOrigin="peer",
                                         peerEnvelope=envelope)
         receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity, "inputId": identity,
@@ -597,6 +677,7 @@ class Collaboration:
                    "target": {"sessionId": sender["id"]}, "protocol": PROTOCOL, "workspace": request["workspace"],
                    "mode": "queue", "delivery": "queued", "interruptionRevision": wait["interruptionRevision"],
                    "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"],
+                   "dependencySatisfied": response.get("qualified") is True, "continuationReason": response["outcome"],
                    "origin": "system", "displayBinding": fingerprint([envelope, text])}
         wait["status"] = "claimed"
         self.insert(identity, fingerprint(["continuation", request["requestId"], wait]), receipt)
@@ -645,12 +726,17 @@ class Collaboration:
         if access == "caller_controlled":
             if not caller:
                 self.error("A user must explicitly authorize a calling conversation.")
+            # A child's transport still belongs to the root worker process;
+            # that does not make root controls or configuration its authority.
+            self.source({}, origin, caller)
             target = target or caller
             if target_key:
                 args[target_key] = target
             elif not action.startswith("session.") and action != "configuration.apply":
                 args["sessionId"] = target
             if target == caller:
+                if action == "permissions.save" and "scope" not in args:
+                    self.error("Choose an explicit file-access scope: local, project, or global. No settings were changed.", 400)
                 return None
             if action == "conversation.send":
                 self.error("A user must explicitly authorize a current collaboration grant.")
@@ -745,6 +831,7 @@ class Collaboration:
                     self.error("A wait must bind this sender's exact current request.")
                 if request.get("subscription"):
                     return {"accepted": True, "result": request["subscription"], "duplicate": True}
+                self.require_inbox_slot(source['id'])
                 task = source.get("task") or self.service.coordination.task(source["id"])
                 wait = {"requestId": args["requestId"],
                         "taskId": task.get("id"), "taskRevision": task.get("revision"),
@@ -754,7 +841,7 @@ class Collaboration:
                 request["subscription"] = wait
                 self.save(args["requestId"], request)
                 receipt = {"accepted": wait["supported"], "commandAction": action, "result": wait}
-                if (request.get("response") or {}).get("qualified"):
+                if continuation_outcome(request) is not None:
                     self.enqueue_continuation(request)
             elif action == "coordination.reply":
                 if origin != "agent":
@@ -771,6 +858,7 @@ class Collaboration:
                 if request.get("response"):
                     self.error("This request already has a response declaration; retain its exact evidence.", 409)
                 response = {**copy.deepcopy(args), "generationId": active["id"], "recipientSessionId": source["id"],
+                            "executionDirectory": source.get("workingDirectory") or source["workspace"],
                             "status": "staged", "qualified": False, "declaredAt": time.time()}
                 request["response"] = response
                 self.save(args["requestId"], request)
@@ -792,6 +880,9 @@ class Collaboration:
                         "reason": "This runtime lacks guarded idle peer admission."}}
                 if not args["text"].strip():
                     self.error("Enter a peer message.", 400)
+                self.require_message_rate(source['id'], target['id'])
+                if mode != 'notify':
+                    self.require_inbox_slot(target['id'])
                 if args.get("replyToRequestId"):
                     previous = self.receipt(args["replyToRequestId"])
                     if (previous.get("commandAction") != "coordination.send" or previous["target"]["sessionId"] != source["id"]
@@ -855,6 +946,7 @@ class Collaboration:
         new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "collaborative-task:" + source["id"] + ":" + identity))
         metadata = {"creatorSessionId": source["id"], "creatorTitle": source["title"], "requestId": identity,
             "configurationHash": summary["configurationHash"], **lineage,
+            "workingDirectory": source.get("workingDirectory") or source["workspace"],
             "outputNamespace": "working-files/tasks/" + new_id, "brief": args["text"], "references": args.get("references", [])}
         async with self.service.lock:
             duplicate = self.duplicate(identity, digest)
@@ -921,6 +1013,9 @@ class Collaboration:
             CREATION.reset(token)
         async with self.service.lock:
             target = self.service._session(new_id)
+            # Grouping/history remain canonical; actual execution follows the
+            # parent's resolved checkout. Never silently fall back to main.
+            target["workingDirectory"] = metadata["workingDirectory"]
             receipt = {"accepted": True, "commandAction": "coordination.create",
                        "requestId": identity, "senderSessionId": source["id"], "workspace": source["workspace"], "protocol": PROTOCOL,
                        "sessionId": new_id, "result": target["collaboration"],

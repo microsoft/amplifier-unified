@@ -26,10 +26,10 @@ def _module_id(row):
     return row.get("module") or row.get("id")
 
 
-def _restrict_child_images(rows, policies, working_dir):
-    """Image permission lists are boundaries, not additive configuration lists."""
-    images = [row for row in rows if row.get("module") == "tool-image"]
-    if not images:
+def _restrict_child_tools(rows, policies, working_dir, modules):
+    """Permission lists are boundaries, not additive configuration lists."""
+    writers = [row for row in rows if row.get("module") in modules]
+    if not writers:
         return
     from .config import expand_environment
     root = Path(working_dir or Path.cwd()).expanduser().resolve()
@@ -37,7 +37,7 @@ def _restrict_child_images(rows, policies, working_dir):
     def paths(values):
         values = expand_environment(values)
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
-            raise ValueError("Image file-access paths must be lists of strings.")
+            raise ValueError("File-access paths must be lists of strings.")
         return [((path if path.is_absolute() else root / path).resolve())
                 for value in values for path in (Path(value).expanduser(),)]
 
@@ -57,9 +57,8 @@ def _restrict_child_images(rows, policies, working_dir):
                 for path in paths(policy.get(denied, []))))
     if any(policy.get("allow_paid") is False for policy in policies):
         restrictions["allow_paid"] = False
-    # The mounted image API has one fixed tool name. Changing a declaration's
-    # instance ID must not bypass its parent's file or paid-call restrictions.
-    for row in images:
+    # Changing a declaration's instance ID must not bypass the parent boundary.
+    for row in writers:
         row.setdefault("config", {}).update(copy.deepcopy(restrictions))
 
 
@@ -79,23 +78,30 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
     agents = parent.get("agents", {})
     spawn = parent.get("spawn") or {}
     image_policies = []
+    file_policies = []
+    patch_policies = []
     if retained_image_tools is not None and not isinstance(retained_image_tools, list):
         raise ValueError("Saved child tools must be a list of module declarations.")
     for index, rows in enumerate((parent.get("tools", []), spawn.get("tools", []), overlay.get("tools", []),
                                   retained_image_tools or [])):
         for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, dict) or row.get("module") not in {"tool-image", "tool-filesystem"}:
+            if not isinstance(row, dict) or row.get("module") not in {"tool-image", "tool-filesystem", "tool-apply-patch"}:
                 continue
             config = row.get("config", {})
             if not isinstance(config, dict):
-                raise ValueError("Image and filesystem configuration must be dictionaries.")
+                raise ValueError("File tool configuration must be dictionaries.")
             policy = {key: copy.deepcopy(value) for key, value in config.items()
                       if key in {"allowed_read_paths", "allowed_write_paths", "denied_read_paths", "denied_write_paths"}}
             if row["module"] == "tool-image" and (index != 2 or "allow_paid" in config):
                 # Mounted/replacement declarations are disabled unless literally
                 # True. Only an overlay omission means inherit the parent grant.
                 policy["allow_paid"] = config.get("allow_paid") is True
-            image_policies.append(policy)
+            if row["module"] == "tool-apply-patch":
+                patch_policies.append(policy)
+            else:
+                image_policies.append(policy)
+                if row["module"] == "tool-filesystem":
+                    file_policies.append(policy)
     if isinstance(spawn.get("tools"), list):
         parent["tools"] = copy.deepcopy(spawn["tools"])
     if spawn.get("exclude_tools"):
@@ -129,7 +135,9 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
     if retained_image_tools is not None and not any(
             isinstance(row, dict) and row.get("module") == "tool-image" for row in retained_image_tools):
         result["tools"] = [row for row in result.get("tools", []) if row.get("module") != "tool-image"]
-    _restrict_child_images(result.get("tools", []), image_policies, working_dir)
+    _restrict_child_tools(result.get("tools", []), file_policies, working_dir, {"tool-filesystem"})
+    _restrict_child_tools(result.get("tools", []), [*file_policies, *patch_policies], working_dir, {"tool-apply-patch"})
+    _restrict_child_tools(result.get("tools", []), image_policies, working_dir, {"tool-image"})
     if agent_filter == "none":
         result["agents"] = {}
     elif isinstance(agent_filter, list):
@@ -326,11 +334,12 @@ class Children:
         overlay_bundle = Bundle.from_dict({key: value for key, value in overlay.items() if key != "agents"}, base_path=prepared.bundle.base_path)
         overlay_bundle.instruction = overlay.get("instruction") or (overlay.get("system") or {}).get("instruction")
         effective = compose_bundles(prepared.bundle, overlay_bundle)
-        # Preserve the qualified image boundary in the prepared bundle as well
+        # Preserve the qualified file boundaries in the prepared bundle as well
         # as its mount plan, including child tool-inheritance exclusions.
-        effective.tools = [row for row in effective.tools if row.get("module") != "tool-image"]
+        file_modules = {"tool-image", "tool-filesystem", "tool-apply-patch"}
+        effective.tools = [row for row in effective.tools if row.get("module") not in file_modules]
         effective.tools.extend(copy.deepcopy(row) for row in plan.get("tools", [])
-                               if row.get("module") == "tool-image")
+                               if row.get("module") in file_modules)
         effective.agents = copy.deepcopy(plan.get("agents", {}))
         if components is not None:
             components.apply(effective)
@@ -418,11 +427,13 @@ class Children:
             if parent_messages is not None:
                 await coordinator.get("context").set_messages(copy.deepcopy(parent_messages))
             await self.install(child, child_prepared)
-            # Use the same app-control capability on behalf of this child. The
-            # app bridge remains the authority and gates user-only approvals.
-            app_control = (parent.coordinator.get("tools") or {}).get("app_control")
-            if app_control:
-                await coordinator.mount("tools", app_control, name="app_control")
+            # Authority-bearing closures belong to the invoking coordinator.
+            # Install before execution, including finite/custom orchestrators
+            # that never call loop-live's prepare_execution hook. The installer
+            # also propagates itself for nested and resumed children.
+            install_access = parent.coordinator.get_capability("web.app_access.install")
+            if install_access:
+                await install_access(coordinator)
             unregister = coordinator.hooks.register("orchestrator:complete", completed, name="unified-child-completion", priority=999)
             if ledger and parent_messages is not None:
                 # Recover evidence only after original history and admission

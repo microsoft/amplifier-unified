@@ -1,5 +1,58 @@
 # Implementation and evidence
 
+## Initial repair tranche — 2026-10-13
+
+The implementation program starts with reproduced defects and established
+coordination mechanisms. It does not make the broader assignment/resource
+architecture a release prerequisite. The baseline is `be1f1d3`; nine isolated
+review probes reproduced the reported defects without touching live services.
+
+| Owner | Implemented behavior | Evidence boundary |
+| --- | --- | --- |
+| Worker and native children | Each mounted child receives its own app adapter and transport principal, including finite/custom loops, persistent children, resumes and nested delegation. Nested children retain the assigning input context. Root-only controls reject a child principal. | Real Core/Foundation mounting with a deterministic orchestrator; no provider call |
+| Host file policy | Filesystem/patch child allow lists intersect across parent, spawn, overlay and retained plans; denies accumulate. Explicit read-only declarations stay read-only. Repository paths follow the execution folder; unrelated external paths remain. Image boundaries remain covered. | Composition and host-policy regressions; no claim of shell or OS sandbox enforcement |
+| Shared dispatch | Agent permission writes require an explicit existing scope. Root agents can still perform scoped configuration actions; settings are not made categorically human-only. | Direct-dispatch and app-bridge rejection tests; this is not a general capability-grant system |
+| Collaboration | Sealed negative reports and host-observed failed generations notify the exact waiter once without satisfying dependencies. Queue admission reserves space for saved replies. A destination has 64 pending/reserved slots; each ordered sender/recipient pair admits 32 messages per minute. Retries retain their identities. | Deterministic admission, failure, duplicate, reservation and Stop tests |
+| Creation and worktrees | A commissioned peer uses the creator's actual execution folder and keeps canonical history grouping. A failed read-only handoff preflight is rejected without fencing the source; uncertainty after release still fences it. | Temporary Git repositories and restart/failure injection; no shared host changes |
+| Canvas and related work | Referenced bytes are hashed before presentation in the recorded producer execution folder. A changed or unavailable source is explicit. A verified preview retains its bytes independently of the source. User-created peers are visible alongside commissioned peers. | Actual service/Chromium journey with scripted runtime; no real-provider evidence |
+
+The changed writer class was inspected across filesystem, patch and image
+configuration, prepared plans, retained child plans and mounted app controls.
+Arbitrary shell programs, third-party tools, and other agent engines remain
+outside these configuration guarantees. Older artifact references without a
+recorded execution folder remain inspectable as receipts but cannot silently
+open guessed source bytes. Files are not automatically archived at reply time;
+if they change before first opening, the exact-result view reports a mismatch.
+
+The separate bridge cleanup change is tracked by PR #616; this tranche does not
+duplicate that implementation. Source integration must verify its final status.
+All generated web assets must be rebuilt from the combined candidate.
+
+Local candidate validation: 797 Python tests and two subtests passed across the
+affected coordination, runtime, storage, settings, worktree and Canvas families;
+638 frontend tests passed. The production-service Chromium journey passed two
+rounds with two commissioned peers, reconnect and exact artifact inspection,
+including rejection after changing a reported source file while retaining the
+existing view and draft. The native child tests used real Core/Foundation with
+scripted orchestration. None of these checks claims provider efficacy, publication,
+installed-worker adoption, or live-host acceptance.
+
+A subsequent native-loop re-preparation probe reproduced reassignment of a
+nested child's context to an unrelated later root input. Keeping the
+coordinator's existing bridge and child installer fixes that path; 104 focused
+identity, worker, surface-context and file-policy checks pass. The broad browser
+gate also needed two fixture corrections: an attachment selector matched both
+Open and Remove, and a timer measurement could count a delayed host render.
+The corrected timer probe passes repeated runs and detects a deliberately
+introduced parent render on every tick. Production rendering behavior is unchanged.
+
+Follow-up scope remains explicit: one creation operation with automatic result
+subscription; resumable multi-step creation; multi-repository resource bindings;
+assignment budgets and scoped Stop across independent roots; full capability
+grants; expiry/fair scheduling beyond the initial inbox bounds; live-provider,
+installed-package and multi-client qualification. These are not marked complete
+by the source regressions or the scripted browser journey.
+
 ## Collaborative-workspaces candidate
 
 The approved same-host cooperation loop is **qualified for PR review**,
