@@ -145,8 +145,10 @@ async def test_native_child_cannot_mutate_enclosing_root_worktrees(multi, action
 
 async def test_agent_root_and_associated_checkout_selection(multi):
     app, sid, workspace, repos = multi
-    source = (await app.app_bridge('dispatch', {'action': 'worktree.inspect',
-        'args': {'repositoryPath': 'client/repo'}}, sid))['result']['repository']
+    response = await app.app_bridge('dispatch', {'action': 'worktree.inspect',
+        'args': {'repositoryPath': 'client/repo'}}, sid)
+    assert set(response['state']) == {'revision', 'sessionId', '_stateAccess'}
+    source = response['result']['repository']
     made = (await app.app_bridge('dispatch', {'action': 'worktree.create', 'id': 'agent-copy',
         'args': {'repositoryPath': source['root'], 'sourceRevision': source['sourceRevision']}}, sid))['result']
     inspected = await inspect(app, sid, made['path'])
