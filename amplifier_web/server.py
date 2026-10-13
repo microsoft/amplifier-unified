@@ -162,6 +162,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             return web.json_response(await asyncio.to_thread(read_text, session, dict(request.query)))
         return web.json_response(page(session, request.query.get('part'), request.query.get('before'),
                                       group=request.query.get('group'), revision=request.query.get('revision'),
+                                      window_message_id=request.query.get('windowMessageId'),
                                       resolver=service.peer_attribution.resolve))
 
     async def provider_recording(request):
@@ -237,7 +238,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def conversation_work_sync(request):
         from .browser_detail import sync_work
         args = await request.json()
-        return web.json_response(sync_work(service._session(args.get('sessionId')), args.get('group'), args.get('known')))
+        return web.json_response(sync_work(service._session(args.get('sessionId')), args.get('group'), args.get('known'),
+                                           window_message_id=args.get('windowMessageId')))
 
     async def conversation_export(request):
         snapshot = service.state.get('conversationExports', {}).get(request.match_info['identity'])

@@ -170,10 +170,10 @@ def work_segments(session, nodes=None):
         result.append(group)
     return anchors,result
 
-def page(session, part, before=None, group=None, revision=None, *, resolver=None):
+def page(session, part, before=None, group=None, revision=None, *, resolver=None, window_message_id=None):
     if part == 'nodes' and group is not None:
         from .conversation_navigation import group_source
-        session = group_source(session, group)
+        session = group_source(session, window_message_id)
     if part == 'groups':
         _, segments = work_segments(session)
         end = len(segments)
@@ -271,12 +271,12 @@ def enrich_recovery(session, messages):
             row['recoveryResult'] = {'id': node['id'], 'label': node.get('label'), 'outputDetail': reference}
 
 
-def sync_work(session, group, known):
+def sync_work(session, group, known, *, window_message_id=None):
     """Refresh an open window with changed rows only; retain no client cache."""
     if not isinstance(known, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in known.items()):
         raise ValueError('Work versions must map step IDs to version strings.')
     from .conversation_navigation import group_source
-    session = group_source(session, group)
+    session = group_source(session, window_message_id)
     source_nodes = owned_nodes(session)
     anchors, segments = work_segments(session, source_nodes)
     segment = next((row for row in segments if row['id'] == group), None)

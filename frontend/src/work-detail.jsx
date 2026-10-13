@@ -13,7 +13,7 @@ function read(path,signal,options={}){return new Promise((resolve,reject)=>{wait
 
 export function useWorkDetail(data,turn,open,automatic=false){
  const element=useRef(null),run=useRef(null),[visible,setVisible]=useState(false),[saved,setSaved]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const key=JSON.stringify([data.sessionId,turn.id]),current=useRef(key);current.current=key;
+ const key=JSON.stringify([data.sessionId,turn.id,turn.windowMessageId]),current=useRef(key);current.current=key;
  const enabled=!!data.detailsDeferred&&open&&(visible||!automatic)&&turn.detailRevision!=null;
  const page=saved?.key===key?saved:null;
  const latest=useRef(turn.detailRevision);latest.current=turn.detailRevision;
@@ -34,9 +34,10 @@ export function useWorkDetail(data,turn,open,automatic=false){
    state.busy=true;setBusy(true);setError('');const target=state.wanted;
    try{
     const previous=state.page;
-    const args={sessionId:data.sessionId,part:'nodes',group:turn.id};if(before)args.before=before;
+    const windowArgs=turn.windowMessageId?{windowMessageId:turn.windowMessageId}:{};
+    const args={sessionId:data.sessionId,part:'nodes',group:turn.id,...windowArgs};if(before)args.before=before;
     const sync=previous&&!before;
-    const result=sync?await read('/api/conversation/work-sync',state.abort.signal,{method:'POST',body:{sessionId:data.sessionId,group:turn.id,known:Object.fromEntries(previous.items.map(row=>[row.id,row.detailVersion]))}}):await read('/api/conversation/detail?'+new URLSearchParams(args),state.abort.signal);
+    const result=sync?await read('/api/conversation/work-sync',state.abort.signal,{method:'POST',body:{sessionId:data.sessionId,group:turn.id,...windowArgs,known:Object.fromEntries(previous.items.map(row=>[row.id,row.detailVersion]))}}):await read('/api/conversation/detail?'+new URLSearchParams(args),state.abort.signal);
     if(!live())return;
     const byId=new Map((previous?.items||[]).map(row=>[row.id,row]));for(const row of result.items)byId.set(row.id,row);
     const items=sync?result.order.map(id=>byId.get(id)):before?[...result.items,...previous.items.filter(row=>!result.items.some(older=>older.id===row.id))]:result.items;

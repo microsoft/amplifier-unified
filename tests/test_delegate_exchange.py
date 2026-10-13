@@ -217,7 +217,7 @@ def test_focused_old_return_and_lazy_group_reads_agree_without_expanding_retaine
     monkeypatch.setattr(navigation, 'source', source)
     focused = navigation.query(session, message_id='request', window=True)
     segment = next(row for row in focused['execution']['segments'] if row['id'] == 'turn@delivery')
-    detail = page(session, 'nodes', group=segment['id'], revision=segment['detailRevision'])
+    detail = page(session, 'nodes', group=segment['id'], revision=segment['detailRevision'], window_message_id=segment['windowMessageId'])
     report = next(row for row in detail['items'] if row['kind'] == 'exchange')
     ref = report['exchange']['delegateResponseDetail']
     full = ''; offset = 0
@@ -227,7 +227,8 @@ def test_focused_old_return_and_lazy_group_reads_agree_without_expanding_retaine
     assert full == exact
     assert report['delegate']['exchange']['delivery'] == 'separate'
     assert 'delegateResponse' not in report['delegate']['exchange']
-    sync = sync_work(session, segment['id'], {row['id']: row['detailVersion'] for row in detail['items']})
+    sync = sync_work(session, segment['id'], {row['id']: row['detailVersion'] for row in detail['items']},
+                     window_message_id=segment['windowMessageId'])
     assert sync['items'] == []
     assert all(len(indices) <= MESSAGE_LIMIT for indices in reads)
     assert project(session)['workers'] == []

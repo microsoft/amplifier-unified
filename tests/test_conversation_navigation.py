@@ -80,11 +80,13 @@ def test_archived_delegate_delivery_is_visible_through_native_navigation_and_laz
          'turnId': 'turn', 'anchorMessageId': request, 'input': '{"instruction":"Review source"}',
          'output': '{"output":{"response":"Earlier tool content"}}'},
         {'id': 'worker', 'kind': 'worker', 'sessionId': 'child', 'parentId': 'tool', 'turnId': 'turn',
-         'anchorMessageId': request}]}
+         'anchorMessageId': request},
+        {'id': 'continued-call', 'kind': 'tool', 'sessionId': 'child', 'parentId': 'worker', 'turnId': 'turn',
+         'anchorMessageId': facts[25][0]}]}
     before = copy.deepcopy(session)
     focused = query(session, message_id=request, window=True)
     segment = next(row for row in focused['execution']['segments'] if row['id'] == 'turn@' + report)
-    detail = page(session, 'nodes', group=segment['id'], revision=segment['detailRevision'])
+    detail = page(session, 'nodes', group=segment['id'], revision=segment['detailRevision'], window_message_id=segment['windowMessageId'])
     exchange = next(row['exchange'] for row in detail['items'] if row['kind'] == 'exchange')
     ref = exchange['delegateResponseDetail']
     full = ''; offset = 0
@@ -92,5 +94,13 @@ def test_archived_delegate_delivery_is_visible_through_native_navigation_and_laz
         chunk = read_text(session, {**ref, 'offset': offset})
         full += chunk['value']; offset = chunk['nextOffset']
     assert full == text
-    assert sync_work(session, segment['id'], {row['id']: row['detailVersion'] for row in detail['items']})['items'] == []
+    assert sync_work(session, segment['id'], {row['id']: row['detailVersion'] for row in detail['items']},
+                     window_message_id=segment['windowMessageId'])['items'] == []
+    continued = next(row for row in focused['execution']['segments'] if row['id'] == 'turn@' + facts[25][0])
+    detail = page(session, 'nodes', group=continued['id'], revision=continued['detailRevision'],
+                  window_message_id=continued['windowMessageId'])
+    owner = detail['items'][0]['delegate']['exchange']
+    assert owner['delivery'] == 'separate' and 'delegateResponse' not in owner
+    assert sync_work(session, continued['id'], {row['id']: row['detailVersion'] for row in detail['items']},
+                     window_message_id=continued['windowMessageId'])['items'] == []
     assert session == before
