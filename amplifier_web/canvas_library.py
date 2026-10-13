@@ -27,7 +27,7 @@ def restore_body(canvas, db, *, inline_documents=False):
         canvas.setdefault('renderReports', {})['stored-source'] = {
             'status': 'error', 'message': 'The saved artifact source is unavailable.'}
         return
-    for key in ('content', 'surface'):
+    for key in ('content', 'surface', 'mediaReference'):
         if key in body:
             canvas[key] = copy.deepcopy(body[key])
     canvas.pop('contentResource', None)
@@ -48,7 +48,7 @@ def remember(state, db):
     canvas = state.get('canvas', {})
     if not canvas.get('kind') or canvas.get('placeholder') or canvas.get('app'):
         return
-    if canvas.get('renderReports', {}).get('stored-source', {}).get('status') == 'error' and not any(key in canvas for key in ('content', 'surface')):
+    if canvas.get('renderReports', {}).get('stored-source', {}).get('status') == 'error' and not any(key in canvas for key in ('content', 'surface', 'mediaReference')):
         return
     if 'sessionId' not in canvas:  # Migrate the one legacy preview.
         canvas['sessionId'] = state.get('selectedSessionId')
@@ -60,7 +60,7 @@ def remember(state, db):
     if not reference:
         # Connection/context/operation IDs change on every poll; they must never
         # become part of the static HTML content identity.
-        body = {key:canvas[key] for key in ('content','surface') if key in canvas}
+        body = {key:canvas[key] for key in ('content','surface','mediaReference') if key in canvas}
         from .resource_files import put
         reference=put(db,body)
         if canvas.get('kind') == 'pdf' or (canvas.get('kind') in {'html','babylon'} and len(canvas.get('content','').encode())>1_000_000):
@@ -86,7 +86,8 @@ def remember(state, db):
     from .canvas_versions import save
     if not previous or canvas.get('_versionWrite'):
         record['_presentationWrite'] = canvas.pop('_presentationWrite', False)
-        save(record, previous, state, force=canvas.pop('_forceVersion', False))
+        save(record, previous, state, force=canvas.pop('_forceVersion', False),
+             **({'message': None} if canvas.get('kind') == 'gif' else {}))
         record.pop('_presentationWrite', None)
     else:
         record.update({key: copy.deepcopy(previous[key]) for key in ('revision', 'versions', 'publications') if key in previous})
@@ -150,6 +151,38 @@ def load(state, db, identity, *, open_panel=True, version=None):
 def empty(state, *, open_panel=False):
     state['canvas'] = {'id':uuid.uuid4().hex,'open':open_panel,'placeholder':True,'events':[],
                        'sessionId':state.get('selectedSessionId'),'workspaceId':state.get('selectedWorkspaceId')}
+
+
+def open_gif(service, args, proof):
+    """Under the action lock, bind one immutable reference to this client only."""
+    from .service import AppError
+    # Fresh guard immediately before mutation: an earlier guarded record is
+    # not authority. Canonical proof is obtained off-lock by the dispatcher.
+    record = service.outputs.media.guard(args, proof=proof)
+    if record.get('media', {}).get('mimeType') != 'image/gif':
+        raise AppError('Open in Canvas is available only for retained GIFs.', 409)
+    item = {key: copy.deepcopy(record[key]) for key in
+            ('id', 'sessionId', 'title', 'filename', 'version', 'sha256', 'bytes', 'media')}
+    reference = {'item': item, 'messageId': args['messageId']}
+    if len(json.dumps(reference, ensure_ascii=False).encode()) >= 8000:
+        raise AppError('The retained GIF reference metadata is unavailable.', 409)
+    from .resource_files import put
+    body = put(service.db, {'mediaReference': reference})
+    state = service.state
+    row = next((r for r in state.get('canvasArtifacts', [])
+                if r.get('kind') == 'gif' and scope(state, r) and r.get('body') == body), None)
+    if row is None:
+        from .canvas_versions import save
+        row = {'id': uuid.uuid4().hex, 'kind': 'gif', 'title': record['title'],
+               'sessionId': args['sessionId'], 'workspaceId': state.get('selectedWorkspaceId'),
+               # Do not infer a user publication or duplicate the inline GIF.
+               'messageId': None, 'createdAt': time.time(), 'body': body, 'tabOpen': False, 'view': {}}
+        save(row, None, state, message=None)
+        state.setdefault('canvasArtifacts', []).append(row)
+    load(state, service.db, row['id'])
+    state['view']['settingsCanvas'] = False
+    state['view'].setdefault('canvasDraft', {}).update(library=False, open=False, browser=False, overview=False)
+    return {'status': 'opened', 'id': row['id'], 'version': row['revision']}
 
 
 def command(state, db, action, args):

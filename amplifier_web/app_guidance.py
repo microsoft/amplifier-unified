@@ -160,10 +160,20 @@ async def install_app_access(coordinator, bridge):
                     result = delivery.remember_pair(result, input)
                 return ToolResult(success=True, output=result)
             except Exception as exc:
+                message = str(exc)
+                if isinstance(exc, (TimeoutError, ConnectionError)):
+                    message = message or (
+                        'App bridge response timed out.' if isinstance(exc, TimeoutError)
+                        else 'App bridge connection was lost before a response was received.')
+                    message += (' The operation outcome is unknown. Check saved state before retrying; '
+                                'do not automatically replay mutations.')
+                elif not message.strip():
+                    message = (f'{type(exc).__name__}: app request failed without a diagnostic. '
+                               'Check saved state before retrying; do not automatically replay mutations.')
                 if input['operation'] == 'dispatch' and input.get('args', {}).get('action') == 'outputs.images':
-                    return ToolResult(success=False, error={'message': str(exc)+' The current image selection is unchanged.',
+                    return ToolResult(success=False, error={'message': message+' The current image selection is unchanged.',
                         'imageSelectionUnchanged': True, 'activeImages': delivery.output_selection()})
-                return ToolResult(success=False, error={'message':str(exc)})
+                return ToolResult(success=False, error={'message':message})
 
     async def guidance(event, data):
         try:

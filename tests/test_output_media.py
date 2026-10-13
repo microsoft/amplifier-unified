@@ -671,6 +671,357 @@ def canonical_corpus(app):
     return session, corpus, store, directory(session), old
 
 
+def invalidate_media_indexes(monkeypatch, change, *, fail_at=(1,), boundary='before-projection'):
+    """Invalidate real Foundation indexes; never manufacture the retry error."""
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_foundation.session.jsonl import TranscriptIndex
+    acquired, conflicts = [], []
+    real_index, real_project, real_check = (
+        SessionHistoryStore.indexed_messages, TranscriptIndex.project, TranscriptIndex.check)
+
+    def indexed(reader):
+        rows = real_index(reader)
+        assert isinstance(rows, TranscriptIndex)
+        acquired.append(rows)
+        if len(acquired) in fail_at and boundary != 'during-projection':
+            change(len(acquired))
+            if boundary == 'acquisition':
+                rows.check()
+        return rows
+
+    def project(rows, key, projector):
+        changed = False
+
+        def racing(value, position):
+            nonlocal changed
+            fact = projector(value, position)
+            if not changed:
+                changed = True
+                change(len(acquired))
+            return fact
+
+        return real_project(rows, key, racing if (
+            boundary == 'during-projection' and len(acquired) in fail_at) else projector)
+
+    def check(rows):
+        try:
+            return real_check(rows)
+        except ValueError as exc:
+            conflicts.append(exc)
+            raise
+
+    monkeypatch.setattr(SessionHistoryStore, 'indexed_messages', indexed)
+    monkeypatch.setattr(TranscriptIndex, 'project', project)
+    monkeypatch.setattr(TranscriptIndex, 'check', check)
+    return acquired, conflicts
+
+
+def append_media_unrelated(directory, attempt):
+    import json
+    with (directory / 'transcript.jsonl').open('ab') as stream:
+        stream.write(json.dumps({'role': 'user', 'content': f'Unrelated append {attempt}.'}).encode() + b'\n')
+
+
+@pytest.mark.parametrize('boundary', ['acquisition', 'before-projection', 'during-projection'])
+@pytest.mark.parametrize('shape', ['canonical', 'cold-alias'])
+async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
+        media_app, monkeypatch, boundary, shape):
+    import asyncio
+    import copy
+    import threading
+    from amplifier_foundation.session import history as foundation_history
+    from amplifier_foundation.session.jsonl import TranscriptIndex
+    from amplifier_web import automatic_history, media_message_identity, media_saved_aliases
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    if shape == 'cold-alias':
+        session, corpus, _, directory, old = cold_alias_corpus(app)
+        session, _ = await freeze_alias_display(app, session)
+        requested = 'saved-web-assistant'
+    else:
+        session, corpus, _, directory, old = canonical_corpus(app)
+        requested = old
+    resident = copy.deepcopy(dict.get(session, 'messages'))
+    initial = automatic_history.revision(session)
+    owner = threading.get_ident()
+    revisions, hashes, proofs = [], [], []
+    real_revision, real_hash, real_resolve = (
+        automatic_history.revision, automatic_history.display_identity, media_message_identity.resolve)
+
+    def revision(value):
+        assert threading.get_ident() != owner
+        result = real_revision(value)
+        revisions.append(result)
+        return result
+
+    def display_identity(*args):
+        assert threading.get_ident() != owner
+        hashes.append(threading.get_ident())
+        return real_hash(*args)
+
+    def resolve(*args):
+        proof = real_resolve(*args)
+        proofs.append(proof)
+        return proof
+
+    def no_bodies(*args, **kwargs):
+        pytest.fail('Media read/hydrated whole transcript or display bodies')
+
+    acquired, conflicts = invalidate_media_indexes(
+        monkeypatch, lambda attempt: append_media_unrelated(directory, attempt), boundary=boundary)
+    monkeypatch.setattr(automatic_history, 'revision', revision)
+    monkeypatch.setattr(automatic_history, 'display_identity', display_identity)
+    monkeypatch.setattr(media_message_identity, 'resolve', resolve)
+    monkeypatch.setattr(automatic_history, 'read_transcript', no_bodies)
+    monkeypatch.setattr(TranscriptIndex, 'read_positions', no_bodies)
+    monkeypatch.setattr(app.cold_display, 'hydrate', no_bodies)
+    app.clients.attach('index-recovery-browser')
+    with app.clients.bind('index-recovery-browser'):
+        assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
+        assert len(acquired) == 2 and acquired[0] is not acquired[1]
+        assert len(conflicts) == 1
+        assert type(conflicts[0]) is ValueError
+        assert conflicts[0].args == ('Session history changed during indexed read',)
+        fresh = await asyncio.to_thread(real_revision, session)
+        appended_id = await asyncio.to_thread(real_hash, session, 240, 'user', 'Unrelated append 1.')
+        assert revisions[:2] == [initial, fresh] and initial != fresh
+        proof = proofs[0]
+        assert proof['revision'] == fresh
+        assert proof['fact'] == (old, 'assistant', True, 1, None)
+        assert len(proof['canonicalIds']) == 241 and appended_id in proof['canonicalIds']
+        assert proof['snapshot']['nativeRevision'] == initial
+        # Canonical and detached display caches remain lazy on the next lookup.
+        with monkeypatch.context() as warm:
+            warm.setattr(foundation_history, '_decode', no_bodies)
+            warm.setattr(media_saved_aliases.DisplayJSON, 'string', no_bodies)
+            assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
+        assert len(acquired) == 3 and acquired[2] is acquired[1] and len(conflicts) == 1
+        assert proofs[1] == proof
+    assert hashes and owner not in hashes
+    assert dict.get(session, 'messages') == resident
+    assert corpus[1]['role'] == 'assistant'
+
+
+@pytest.mark.parametrize('boundary', ['descriptor', 'attach', 'final-attach', 'final-comparison'])
+async def test_media_index_conflict_budget_and_attachment_publication_fail_closed(
+        media_app, monkeypatch, boundary):
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    session, _, _, directory, old = canonical_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': old}
+    tables = ('output_records', 'output_receipts', 'state_resources')
+    before = [app.db.execute(f'SELECT * FROM {table} ORDER BY id').fetchall() for table in tables]
+    initial_revision = session.get('mediaRevision', 0)
+    publications, writes = [], []
+    real_publish = app._publish_changes
+
+    def publish(*args, **kwargs):
+        publications.append((args, kwargs))
+        return real_publish(*args, **kwargs)
+
+    fail_at = (3,) if boundary == 'final-comparison' else (
+        (3, 4) if boundary == 'final-attach' else (1, 2))
+    acquired, conflicts = invalidate_media_indexes(
+        monkeypatch, lambda attempt: append_media_unrelated(directory, attempt), fail_at=fail_at)
+    monkeypatch.setattr(app, '_publish_changes', publish)
+    if boundary.startswith('final-'):
+        from amplifier_web import resource_files
+        real_put = resource_files.put_prepared_async
+
+        async def put(db, prepared):
+            assert app.lock.locked() and db.in_transaction
+            result = await real_put(db, prepared)
+            writes.append(result)
+            return result
+
+        monkeypatch.setattr(resource_files, 'put_prepared_async', put)
+    app.clients.attach('index-refusal-browser')
+    with app.clients.bind('index-refusal-browser'):
+        with pytest.raises(ValueError) as error:
+            if boundary == 'descriptor':
+                await app.outputs.media.describe(session['id'], old)
+            else:
+                await app.outputs.media.attach(args, 'ui', 'index-refusal-attach')
+    assert len(acquired) == (4 if boundary.startswith('final-') else 2)
+    assert len(conflicts) == len(fail_at)
+    assert acquired[-1] is not acquired[-2]
+    assert all(type(exc) is ValueError and exc.args == (
+        'Session history changed during indexed read',) for exc in conflicts)
+    if boundary == 'final-comparison':
+        assert 'identity changed before media commit' in str(error.value)
+    else:
+        assert error.value is conflicts[-1]
+    assert bool(writes) == boundary.startswith('final-')
+    assert publications == [] and not app.db.in_transaction
+    assert session.get('mediaRevision', 0) == initial_revision
+    assert [app.db.execute(f'SELECT * FROM {table} ORDER BY id').fetchall() for table in tables] == before
+
+
+@pytest.mark.parametrize('defect', [
+    'remove', 'replace', 'role', 'observation', 'duplicate-claimant', 'namespace-collision', 'corrupt-resource',
+])
+@pytest.mark.parametrize('boundary', ['descriptor', 'attach'])
+async def test_media_index_retry_never_rescues_unsafe_second_snapshot(
+        media_app, monkeypatch, defect, boundary):
+    from amplifier_web.automatic_history import display_message
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    session, corpus, store, directory, old = canonical_corpus(app)
+    claimant = {**display_message(corpus[1], 1, session),
+                'id': 'retained-index-assistant', 'source': 'amplifier', 'nativeMessageId': old}
+    if defect == 'corrupt-resource':
+        from amplifier_web.resource_files import root
+        session.update(historyManaged=False, messages=[claimant, *session['messages']])
+        session, reference = await freeze_alias_display(app, session)
+        path = root(app.db) / (reference['$resource'] + '.json')
+    args = {**media_args_without_hydration(session), 'messageId': old}
+    records = app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall()
+    receipts = app.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall()
+    publications = []
+    real_publish = app._publish_changes
+
+    def publish(*args, **kwargs):
+        publications.append((args, kwargs))
+        return real_publish(*args, **kwargs)
+
+    def change(attempt):
+        if defect in ('remove', 'replace', 'role', 'observation'):
+            if defect == 'remove':
+                del corpus[1]
+            elif defect == 'replace':
+                corpus[1]['content'] = 'A different saved assistant.'
+            elif defect == 'role':
+                corpus[1]['role'] = 'user'
+            else:
+                corpus[1]['metadata'] = {'amplifier_input': {
+                    'version': 1, 'kind': 'service', 'id': 'synthetic-observation', 'source': 'local'}}
+            store.save(session['id'], corpus, {}, preserve_system=True)
+        else:
+            append_media_unrelated(directory, attempt)
+            if defect == 'duplicate-claimant':
+                session['messages'].extend([claimant, {**claimant, 'id': 'competing-index-assistant'}])
+            elif defect == 'namespace-collision':
+                session['messages'].append({**claimant, 'id': display_message(corpus[0], 0, session)['id']})
+            else:
+                path.write_bytes(b'[]')  # Valid JSON, wrong exact resource identity.
+
+    acquired, conflicts = invalidate_media_indexes(monkeypatch, change)
+    monkeypatch.setattr(app, '_publish_changes', publish)
+    app.clients.attach('unsafe-index-browser')
+    with app.clients.bind('unsafe-index-browser'):
+        with pytest.raises(ValueError):
+            if boundary == 'descriptor':
+                await app.outputs.media.describe(session['id'], old)
+            else:
+                await app.outputs.media.attach(args, 'ui', 'unsafe-index-attach')
+    assert len(acquired) == 2 and acquired[0] is not acquired[1] and len(conflicts) == 1
+    assert type(conflicts[0]) is ValueError
+    assert conflicts[0].args == ('Session history changed during indexed read',)
+    assert publications == [] and not app.db.in_transaction
+    assert session.get('mediaRevision', 0) == 0
+    assert app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall() == records
+    assert app.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall() == receipts
+
+
+@pytest.mark.parametrize('kind', ['other-value', 'substring', 'extra-arg', 'subclass', 'os-error'])
+async def test_media_index_retry_requires_exact_plain_source_error(media_app, monkeypatch, kind):
+    from amplifier_web import conversation_navigation
+    session, _, _, _, old = canonical_corpus(media_app)
+
+    class DerivedValueError(ValueError):
+        pass
+
+    message = 'Session history changed during indexed read'
+    failure = {'other-value': ValueError('Different failure'),
+               'substring': ValueError(message + ' later'),
+               'extra-arg': ValueError(message, 'extra'),
+               'subclass': DerivedValueError(message),
+               'os-error': OSError(message)}[kind]
+    calls = []
+
+    def source(value):
+        calls.append(value)
+        raise failure
+
+    monkeypatch.setattr(conversation_navigation, 'source', source)
+    with pytest.raises(type(failure)) as error:
+        await media_app.outputs.media.identity(session['id'], old)
+    assert error.value is failure and len(calls) == 1
+
+
+@pytest.mark.parametrize('boundary', ['revision', 'claimants', 'aliases', 'complete', 'validate'])
+async def test_media_index_retry_does_not_catch_later_or_revision_errors(
+        media_app, monkeypatch, boundary):
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_web import automatic_history, media_message_identity
+    app = media_app
+    session, _, _, _, old = cold_alias_corpus(app) if boundary == 'aliases' else canonical_corpus(app)
+    if boundary == 'aliases':
+        session, _ = await freeze_alias_display(app, session)
+    failure = ValueError('Session history changed during indexed read')
+    acquired = []
+    real_index = SessionHistoryStore.indexed_messages
+
+    def indexed(reader):
+        rows = real_index(reader)
+        acquired.append(rows)
+        return rows
+
+    def rejected(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(SessionHistoryStore, 'indexed_messages', indexed)
+    if boundary == 'revision':
+        monkeypatch.setattr(automatic_history, 'revision', rejected)
+    elif boundary == 'aliases':
+        monkeypatch.setattr(app.outputs.media.saved_aliases, 'resolve', rejected)
+    else:
+        monkeypatch.setattr(media_message_identity,
+                            'check_claimants' if boundary == 'claimants' else boundary, rejected)
+    with pytest.raises(ValueError) as error:
+        await app.outputs.media.identity(session['id'], old)
+    assert error.value is failure and len(acquired) == (0 if boundary == 'revision' else 1)
+
+
+async def test_media_index_retry_does_not_retry_changes_after_projection(media_app, monkeypatch):
+    from amplifier_web import conversation_navigation
+    app = media_app
+    session, _, _, directory, old = canonical_corpus(app)
+    calls = []
+    real_source = conversation_navigation.source
+
+    def source(value):
+        result = real_source(value)
+        calls.append(result)
+        append_media_unrelated(directory, 1)
+        return result
+
+    monkeypatch.setattr(conversation_navigation, 'source', source)
+    with pytest.raises(ValueError, match='assistant'):
+        await app.outputs.media.identity(session['id'], old)
+    assert len(calls) == 1
+
+
+def test_media_index_retry_leaves_ui_only_identity_source_free(monkeypatch):
+    from amplifier_web import automatic_history, conversation_navigation, media_message_identity
+
+    def forbidden(*args):
+        pytest.fail('UI-only identity attempted canonical filesystem work')
+
+    monkeypatch.setattr(automatic_history, 'revision', forbidden)
+    monkeypatch.setattr(conversation_navigation, 'source', forbidden)
+    session = {'id': 'synthetic-ui', 'messages': [{'id': 'saved-ui', 'role': 'assistant', 'text': 'Saved'}]}
+    value = media_message_identity.snapshot(session, 'saved-ui')
+    assert media_message_identity.resolve(value, 'saved-ui') == {
+        'snapshot': value, 'fact': ('saved-ui', 'assistant'), 'revision': None}
+
+
 async def test_canonical_240_tail_100_old_window_empty_attach_http_and_body_bounds(
         authenticated_client, tmp_path, monkeypatch):
     import copy
@@ -2912,3 +3263,348 @@ async def test_discovered_worker_descriptor_http_empty_without_byte_report_or_mu
     client.session.headers['Authorization'] = ''
     client.session.cookie_jar.clear()
     assert (await client.get('/api/outputs/media', params=query, allow_redirects=False)).status in {401, 403}
+
+
+def gif_canvas_state(app):
+    """Only mutation owners, not caches or intentionally changed test authority."""
+    import copy
+    return copy.deepcopy({
+        'artifacts': app._state.get('canvasArtifacts', []),
+        'globalCanvas': app._state.get('canvas'),
+        'clients': {identity: {key: client.get(key) for key in
+                    ('canvas', 'canvasTabs', 'canvasViews', 'drafts', 'attachments', 'view')}
+                    for identity, client in app.clients.records.items()},
+        'outputs': app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall(),
+        'outputReceipts': app.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall(),
+        'commands': app.db.execute('SELECT * FROM commands ORDER BY id').fetchall(),
+        'resources': app.db.execute('SELECT * FROM state_resources ORDER BY id').fetchall(),
+    })
+
+
+def gif_open_args(args, record):
+    return {key: (args if key == 'messageId' else record)[key]
+            for key in ('sessionId', 'messageId', 'id', 'version', 'sha256')}
+
+
+async def test_gif_canvas_compact_reference_large_retention_replay_reload_and_peer(media_app):
+    import copy
+    import json
+    from pathlib import Path
+    from amplifier_web.service import AppService
+    from amplifier_web.state_storage import resource
+    from test_service import Runtime
+    app = media_app
+    args = media_args(app)
+    # A valid >5 MB GIF body in the existing 32 MiB output path. This is
+    # retention/admission evidence only; native pixels are the browser's job.
+    data = gif()[:-1] + b'\x21\xfe' + (b'\xff' + b'x' * 255) * 25_000 + b'\x00\x3b'
+    assert 5 * 1024 * 1024 < len(data) < MAX_BYTES
+    Path(app._session()['workspace'], args['path']).write_bytes(data)
+    args['expectedSha256'] = hashlib.sha256(data).hexdigest()
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    values = gif_open_args(args, record)
+    app.clients.attach('gif-clicker')
+    app.clients.attach('gif-peer')
+    with app.clients.bind('gif-peer'):
+        await app.dispatch('canvas.show', {'kind': 'text', 'content': 'Peer artifact', 'title': 'Peer'})
+        await app.dispatch('view.update', {'patch': {'draft': 'Peer unsent draft'}})
+    peer = copy.deepcopy(app.clients.records['gif-peer'])
+    peer_artifact = next(r for r in app.state['canvasArtifacts'] if r['id'] == peer['canvas']['id'])
+    peer_body = copy.deepcopy(peer_artifact['body'])
+    assert resource(app.db, peer_body['$resource']) == {'content': peer['canvas']['content']}
+    original_outputs = app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall()
+    with app.clients.bind('gif-clicker'):
+        await app.dispatch('view.update', {'patch': {'draft': 'Clicker unsent draft'}})
+        before_count = len(app.state['canvasArtifacts'])
+        app._last_storage_sweep = 0
+        opened = await app.dispatch('canvas.openGif', values, command_id='gif-user-click')
+        identity = opened['result']['id']
+        canvas = app.state['canvas']
+        row = next(row for row in app.state['canvasArtifacts'] if row['id'] == identity)
+        body = resource(app.db, row['body']['$resource'])
+        assert canvas['kind'] == row['kind'] == 'gif'
+        assert canvas['id'] == identity and canvas['open']
+        assert body == {'mediaReference': canvas['mediaReference']}
+        assert len(json.dumps(body).encode()) < 8000 and row['body']['bytes'] < 8000
+        assert 'base64' not in json.dumps(body) and app._session()['workspace'] not in json.dumps(body)
+        assert 'path' not in body['mediaReference']['item'] and 'body' not in body['mediaReference']['item']
+        assert 'content' not in body and 'surface' not in body
+        assert {key: body['mediaReference']['item'][key] for key in
+                ('sessionId', 'id', 'version', 'sha256')} == {
+                    key: values[key] for key in ('sessionId', 'id', 'version', 'sha256')}
+        assert body['mediaReference']['messageId'] == values['messageId']
+        assert row['messageId'] is None and row['publications'] == []
+        assert len(row['versions']) == row['revision'] == 1
+        duplicate = await app.dispatch('canvas.openGif', values, command_id='gif-user-click')
+        assert duplicate['duplicate'] and duplicate['result'] == opened['result']
+        assert (await app.dispatch('canvas.openGif', values))['result']['id'] == identity
+        await app.dispatch('canvas.select', {'id': identity, 'version': 1})
+        assert app.state['canvas']['mediaReference'] == body['mediaReference']
+        await app.dispatch('canvas.close', {})
+        await app.dispatch('canvas.reopen')
+        assert app.state['canvas']['id'] == identity and app.state['canvas']['open']
+        assert len(app.state['canvasArtifacts']) == before_count + 1
+        assert row['revision'] == 1 and len(row['versions']) == 1 and row['publications'] == []
+        assert app.state['view']['draft'] == 'Clicker unsent draft'
+        assert app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall() == original_outputs
+    assert app.clients.records['gif-peer']['canvas'] == peer['canvas']
+    assert app.clients.records['gif-peer']['drafts'] == peer['drafts']
+    assert app.clients.records['gif-peer']['canvasTabs'] == peer['canvasTabs']
+    assert app._storage_maintenance_task is not None
+    await app._storage_maintenance_task
+    retained_body = copy.deepcopy(app.outputs.record(values['sessionId'], record['id'])['body'])
+    for reference in (row['body'], retained_body):
+        assert app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (reference['$resource'],)).fetchone()
+    Path(app._session(values['sessionId'])['workspace'], args['path']).unlink()
+    directory, workspace = app.data_dir, app._session(values['sessionId'])['workspace']
+    await app.close()
+    reopened = AppService(directory, workspace=workspace, runtime=Runtime())
+    try:
+        reopened.clients.attach('gif-reloaded', resume='gif-clicker')
+        with reopened.clients.bind('gif-reloaded'):
+            assert reopened.state['canvas']['id'] == identity
+            assert reopened.state['canvas']['mediaReference'] == body['mediaReference']
+            assert reopened.state['view']['draft'] == 'Clicker unsent draft'
+            assert (await reopened.dispatch('canvas.openGif', values))['result']['id'] == identity
+            assert await reopened.outputs.media.bytes(values) == data
+            assert reopened.outputs.record(values['sessionId'], record['id'])['body'] == retained_body
+            rows = [r for r in reopened.state['canvasArtifacts'] if r['kind'] == 'gif']
+            assert len(rows) == 1 and rows[0]['revision'] == 1 and len(rows[0]['versions']) == 1
+            assert rows[0]['publications'] == []
+        # Persisted, unattached clients retain a compact body. Compare its
+        # exact reference/content before normal attach restores that body.
+        assert reopened.clients.records['gif-peer']['canvas']['contentResource'] == peer_body
+        assert resource(reopened.db, peer_body['$resource']) == {'content': peer['canvas']['content']}
+        reopened.clients.attach('gif-peer')
+        assert reopened.clients.records['gif-peer']['canvas'] == peer['canvas']
+        assert reopened.clients.records['gif-peer']['drafts'] == peer['drafts']
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize('case', [
+    'agent', 'no-client', 'different-client', 'non-web-client', 'foreign-session',
+    'wrong-message', 'wrong-output', 'wrong-version', 'wrong-hash', 'unlinked',
+    'mp4', 'corrupt', 'changed-chat', 'user-role', 'worker',
+])
+async def test_gif_canvas_fail_closed_without_any_mutation(media_app, case):
+    from pathlib import Path
+    from amplifier_web.resource_files import root
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    if case == 'mp4':
+        Path(app._session()['workspace'], args['path']).write_bytes(mp4())
+        args['expectedSha256'] = hashlib.sha256(mp4()).hexdigest()
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    values = gif_open_args(args, record)
+    app.clients.attach('gif-refusal', kind='api' if case == 'non-web-client' else 'web')
+    session = app._session(args['sessionId'])
+    if case == 'different-client':
+        values['clientId'] = 'another-client'
+    elif case in {'foreign-session', 'wrong-message', 'wrong-output'}:
+        await app.dispatch('session.create', {'title': 'Actual foreign GIF conversation'})
+        foreign = app._session()
+        await app.on_runtime_event('assistant.message', {'sessionId': foreign['id'], 'text': 'Foreign retained assistant GIF'})
+        foreign_args = media_args(app)
+        foreign_record = (await app.dispatch('outputs.attachMedia', foreign_args))['result']
+        key, value = {'foreign-session': ('sessionId', foreign['id']),
+                      'wrong-message': ('messageId', foreign_args['messageId']),
+                      'wrong-output': ('id', foreign_record['id'])}[case]
+        values[key] = value
+    elif case in {'wrong-version', 'wrong-hash'}:
+        key, value = {'wrong-version': ('version', 99), 'wrong-hash': ('sha256', '0' * 64)}[case]
+        values[key] = value
+    elif case == 'unlinked':
+        await app.dispatch('outputs.unlink', {'sessionId': args['sessionId'], 'id': record['id'], 'expectedRevision': 1})
+    elif case == 'corrupt':
+        internal = app.outputs.record(args['sessionId'], record['id'])
+        (root(app.db) / (internal['body']['$resource'] + '.json')).write_text('{"encoding":"base64","data":"corrupt"}')
+    elif case == 'user-role':
+        session['messages'][-1]['role'] = 'user'
+    elif case == 'worker':
+        session['sessionKind'] = 'worker'
+    elif case == 'changed-chat':
+        with app.clients.bind('gif-refusal'):
+            await app.dispatch('session.create', {'title': 'Different selected chat'})
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    with app.clients.bind(None if case == 'no-client' else 'gif-refusal'):
+        before = gif_canvas_state(app)
+        with pytest.raises(AppError):
+            await app.dispatch('canvas.openGif', values, origin='agent' if case == 'agent' else 'ui',
+                               command_id='refused-gif-open', include_state=False)
+        assert gif_canvas_state(app) == before
+
+
+async def test_gif_canvas_dirty_primary_rejected_before_remember(media_app, monkeypatch):
+    from amplifier_web import canvas_library
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('dirty-gif-client')
+    with app.clients.bind('dirty-gif-client'):
+        await app.dispatch('canvas.show', {'kind': 'text', 'content': 'Unsaved local edit', 'title': 'Keep me'})
+        view = app.canvas_views.summary('primary')
+        target = {key: view[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
+        await app.dispatch('canvas.views.dirty', {**target, 'dirty': True})
+        before = gif_canvas_state(app)
+        def forbidden(*args, **kwargs):
+            pytest.fail('Dirty GIF opening reached remember/save/select')
+        with monkeypatch.context() as action_patch:
+            action_patch.setattr(canvas_library, 'remember', forbidden)
+            with pytest.raises(AppError) as refused:
+                await app.dispatch('canvas.openGif', gif_open_args(args, record), command_id='dirty-click')
+            assert refused.value.status == 409 and refused.value.code == 'canvas_view_dirty'
+            assert gif_canvas_state(app) == before
+
+
+@pytest.mark.parametrize('change', ['role', 'chat', 'unlink', 'canonical-revision'])
+async def test_gif_canvas_final_proof_locked_recheck_without_nested_lock(media_app, monkeypatch, change):
+    import asyncio
+    from amplifier_web.service import AppError
+    app = media_app
+    session, corpus, store, _, canonical = cold_alias_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': canonical}
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('gif-proof-client')
+    values = gif_open_args(args, record)
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    real = app.outputs.media.identity
+    calls = 0
+    async def witnessed(*args, **kwargs):
+        nonlocal calls
+        assert not app.lock.locked(), 'Identity called from inside the action lock'
+        proof = await real(*args, **kwargs)
+        calls += 1
+        # Preflight identity, bytes start/end identities, then the final proof.
+        if calls == 4:
+            async with app.lock:
+                if change == 'role':
+                    session['messages'][0]['role'] = 'user'
+                elif change == 'chat':
+                    app.clients.record()['selectedSessionId'] = None
+                elif change == 'unlink':
+                    app.outputs.store.link(record['id'], 1, False)
+                else:
+                    session['nativeRevision'] = ['changed-after-proof']
+            assert not app.lock.locked()
+        return proof
+    monkeypatch.setattr(app.outputs.media, 'identity', witnessed)
+    with app.clients.bind('gif-proof-client'):
+        before = gif_canvas_state(app)
+        with pytest.raises(AppError):
+            await asyncio.wait_for(app.dispatch('canvas.openGif', values, command_id='proof-click', include_state=False), 10)
+        assert calls == 4
+        after = gif_canvas_state(app)
+        if change == 'unlink':
+            # The independent authority mutation is intentional, not an open
+            # side effect. Everything else must remain byte-for-byte unchanged.
+            before['outputs'] = after['outputs']
+        assert after == before
+
+
+@pytest.mark.parametrize('shape', ['canonical-tail-miss', 'cold-retained-alias'])
+async def test_gif_canvas_canonical_origin_without_rewriting_or_hydrating(media_app, monkeypatch, shape):
+    import copy
+    from amplifier_web import cold_display
+    app = media_app
+    session, _, _, directory, canonical = cold_alias_corpus(app)
+    message = canonical if shape == 'canonical-tail-miss' else 'saved-web-assistant'
+    args = {**media_args_without_hydration(session), 'messageId': message}
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    if shape == 'canonical-tail-miss':
+        session['messages'] = session['messages'][1:]
+        assert canonical not in {row['id'] for row in session['messages']}
+    else:
+        session, reference = await freeze_alias_display(app, session, hints=True)
+    app.clients.attach('gif-canonical-client')
+    native = (directory / 'transcript.jsonl').read_bytes()
+    metadata = copy.deepcopy(dict(dict.items(session)))
+    if shape == 'cold-retained-alias':
+        original = cold_display.load
+        def forbidden(db, pointer):
+            if pointer == reference:
+                pytest.fail('GIF opening hydrated the cold display body')
+            return original(db, pointer)
+        monkeypatch.setattr(cold_display, 'load', forbidden)
+    with app.clients.bind('gif-canonical-client'):
+        result = await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False)
+        assert result['result']['status'] == 'opened'
+        assert app.state['canvas']['mediaReference']['messageId'] == message
+    assert dict(dict.items(session)) == metadata
+    assert (directory / 'transcript.jsonl').read_bytes() == native
+    if shape == 'cold-retained-alias':
+        assert dict.get(session, '_coldFields')['messages'] == reference and not dict.__contains__(session, 'messages')
+
+
+@pytest.mark.parametrize('action', ['canvas.copy', 'canvas.download'])
+async def test_gif_canvas_direct_copy_download_refused_before_remember_save_or_effect(media_app, monkeypatch, action):
+    import copy
+    from amplifier_web import canvas_library, canvas_downloads
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('gif-direct-refusal')
+    with app.clients.bind('gif-direct-refusal'):
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep this unsent GIF draft'}})
+        identity = (await app.dispatch('canvas.openGif', gif_open_args(args, record)))['result']['id']
+        task = getattr(app, '_storage_maintenance_task', None)
+        if task:
+            await task
+        before = gif_canvas_state(app)
+        effects = copy.deepcopy(app.state.get('deviceCommands', []))
+
+        def forbidden(*args, **kwargs):
+            pytest.fail('Direct GIF copy/download reached remember, save or effect construction')
+
+        with monkeypatch.context() as patch:
+            patch.setattr(canvas_library, 'remember', forbidden)
+            patch.setattr(app.clients, 'remember_canvas', forbidden)
+            patch.setattr(app, '_save', forbidden)
+            patch.setattr(canvas_downloads, 'filename', forbidden)
+            with pytest.raises(AppError) as refused:
+                await app.dispatch(action, {'id': identity}, command_id='gif-direct-refused', include_state=False)
+        assert refused.value.status == 409
+        assert str(refused.value) == 'Use Download original on the retained GIF.'
+        assert gif_canvas_state(app) == before
+        assert app.state.get('deviceCommands', []) == effects
+        assert app.state['view']['draft'] == 'Keep this unsent GIF draft'
+
+
+async def test_gif_canvas_stale_alias_and_generic_forgery_refused(media_app):
+    from amplifier_web.service import AppError
+    app = media_app
+    session, _, _, directory, _ = cold_alias_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': 'saved-web-assistant'}
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('gif-immutable-client')
+    with app.clients.bind('gif-immutable-client'):
+        identity = (await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False))['result']['id']
+        before = gif_canvas_state(app)
+        for action, extra in [('canvas.versions.revise', {'content': '{"mediaReference":"forged"}'}),
+                              ('canvas.versions.restore', {'version': 1})]:
+            with pytest.raises(AppError, match='immutable'):
+                await app.dispatch(action, {'id': identity, 'sessionId': session['id'], 'expectedRevision': 1, **extra})
+            assert gif_canvas_state(app) == before
+        with pytest.raises(AppError):
+            await app.dispatch('canvas.show', {'kind': 'gif', 'content': 'forged'})
+        assert gif_canvas_state(app) == before
+        with pytest.raises(AppError):
+            await app.dispatch('canvas.views.inline', {'resourceId': identity, 'version': 1,
+                'messageId': args['messageId'], 'previewId': 'forged-inline'})
+        assert gif_canvas_state(app) == before
+        raw = (directory / 'transcript.jsonl').read_bytes()
+        session['messages'][0]['text'] += 'stale alias'
+        before = gif_canvas_state(app)
+        with pytest.raises(AppError):
+            await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False)
+        assert gif_canvas_state(app) == before
+        with pytest.raises(ValueError):
+            await app.outputs.media.bytes(gif_open_args(args, record))
+        assert (directory / 'transcript.jsonl').read_bytes() == raw

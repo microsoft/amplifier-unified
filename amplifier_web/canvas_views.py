@@ -16,7 +16,7 @@ PROFILE = 'trusted-native-renderer-v1'
 KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'pdf', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
-          'image': 'Image', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
+          'image': 'Image', 'gif': 'Retained GIF', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
           'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface', 'settings': 'Settings'}
 BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': label,
     'version': '1.0.0', 'apiVersion': '1.0', 'profile': PROFILE, 'stateSchema': 'canvas-view-v1',
@@ -104,7 +104,7 @@ class CanvasViews:
               or action == 'canvas.select' and (args['id'] != client.get('canvas', {}).get('id') or args.get('version') != client.get('canvas', {}).get('selectedVersion'))
               or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
               or action == 'view.update' and args.get('patch', {}).get('settingsCanvas') is True
-              or action in {'canvas.show', 'canvas.openFile', 'canvas.openAttachment', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
+              or action in {'canvas.show', 'canvas.openFile', 'canvas.openAttachment', 'canvas.openGif', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
             check(client, ('primary',))
 
     def artifact(self, identity):
@@ -389,6 +389,8 @@ class CanvasViews:
             from .canvas_paths import copy_path
             return copy_path({**self.service.state, 'canvas': canvas}, args)
         if action in {'canvas.copy', 'canvas.download'}:
+            if canvas['kind'] == 'gif':
+                fail('Use Download original on the retained GIF.', 409)
             from .canvas_downloads import filename
             if action == 'canvas.copy' and canvas['kind'] == 'pdf':
                 fail('Select text in the PDF to copy it, or download the original file.')

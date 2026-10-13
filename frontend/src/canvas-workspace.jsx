@@ -2,7 +2,7 @@ import {CanvasControl,CanvasViewControls} from './canvas-controls';
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {request} from './api';
 import {CanvasAppViewer} from './canvas-app-viewer';
-import {CanvasViewer} from './canvas-viewer';
+import {CanvasViewer,GifCanvasViewer} from './canvas-viewer';
 import {BrowserPreview} from './canvas-library';
 import {McpAppViewer} from './mcp-app-viewer';
 import {A2UISurface} from './a2ui';
@@ -11,6 +11,8 @@ import './canvas-workspace.css';
 const Surface=({canvas,act})=><A2UISurface surface={canvas.surface} act={act}/>;
 // Every built-in format and every contributed renderer enters the same host.
 const builtins=Object.fromEntries(['markdown','text','code','json','jsonl','image','pdf','html','babylon','mermaid','dot'].map(kind=>['builtin.canvas.'+kind,CanvasViewer]));
+// Native retained references are not new contributed-renderer SDK kinds.
+builtins['builtin.canvas.gif']=GifCanvasViewer;
 Object.assign(builtins,{'builtin.canvas.settings':({canvas,dispatch})=><button type="button" className="a-soft" onClick={()=>dispatch('canvas.select',{id:canvas.id})}>Open Settings in Canvas</button>,'builtin.canvas.browser':BrowserPreview,'builtin.canvas.mcp-app':McpAppViewer,'builtin.canvas.a2ui':Surface});
 const targetOf=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
 const factoryCache=new Map();
@@ -44,10 +46,17 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
    return dispatch('canvas.views.command',{...target,action:mapped,args});
   },setDirty:dirty=>dispatch('canvas.views.dirty',{...target,dirty:!!dirty})
  }),[target,dispatch]);
- const report=useMemo(()=> (status,message)=>{dispatch('canvas.views.status',{...target,status,message:String(message).slice(0,2000)}).catch(()=>{})},[target,dispatch]);
+ const report=useMemo(()=> (status,message)=>{
+  const result=dispatch('canvas.views.status',{...target,status,message:String(message).slice(0,2000)});
+  result.catch(()=>{});return result; // Observe ignored mount reports; preserve settlement for media.
+ },[target,dispatch]);
  const bypassed=recovery&&!view.renderer.startsWith('builtin.');
  const reportMounted=useMemo(()=>(status,message)=>report(bypassed||!view.available?'error':status,bypassed?'Recovery mode is displaying the standard viewer.':!view.available?'The saved renderer is unavailable; displaying the standard viewer.':message),[report,bypassed,view.available]);
- const act=useMemo(()=> (action,args)=>{const result=dispatch('canvas.views.command',{...target,action,args});return action==='canvas.reference'?result:result.catch(()=>{})},[target,dispatch]);
+ const act=useMemo(()=> (action,args)=>{
+  const result=dispatch('canvas.views.command',{...target,action,args});
+  if(action==='canvas.report'){result.catch(()=>{});return result}
+  return action==='canvas.reference'?result:result.catch(()=>{});
+ },[target,dispatch]);
  const builtin='builtin.canvas.'+canvas.kind,Default=builtins[builtin];
  const choice=view.choices.find(choice=>choice.id===view.renderer);
  const selected=recovery||!choice?builtin:view.renderer;
@@ -60,11 +69,11 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
   return()=>{current=false};
  },[selected,choice?.url,report]);
  const fail=message=>{setError(message);report('error',message)};
- const fallback=Default?<Default canvas={canvas} act={act} dispatch={dispatch} connectionKey={connectionKey}/>:<p role="alert">No standard viewer supports this artifact.</p>;
+ const fallback=Default?<Default canvas={canvas} act={act} dispatch={dispatch} reportStatus={reportMounted} connectionKey={connectionKey}/>:<p role="alert">No standard viewer supports this artifact.</p>;
  const Builtin=builtins[selected],Component=external;
  return <>
   {(error||!choice||recovery)&&<div role="status" className="a-renderer-notice">{recovery?'Recovery mode uses standard viewers.':error?`This renderer needs attention: ${error}`:'The saved renderer is unavailable. Showing the standard viewer; your artifact is retained.'}<button type="button" className="a-link" onClick={()=>dispatch('canvas.views.recover',target)}>Use standard viewer</button></div>}
-  {Builtin?<><Builtin canvas={canvas} act={act} dispatch={dispatch} connectionKey={connectionKey}/><Mounted report={reportMounted}/></>:Component?<RendererBoundary onError={fail} fallback={fallback}><Component host={host}/><Mounted report={reportMounted}/></RendererBoundary>:error?fallback:<p role="status">Loading viewer…</p>}
+  {Builtin?<><Builtin canvas={canvas} act={act} dispatch={dispatch} reportStatus={reportMounted} connectionKey={connectionKey}/>{canvas.kind!=='gif'&&<Mounted report={reportMounted}/>}</>:Component?<RendererBoundary onError={fail} fallback={fallback}><Component host={host}/><Mounted report={reportMounted}/></RendererBoundary>:error?fallback:<p role="status">Loading viewer…</p>}
  </>;
 }
 
@@ -79,7 +88,7 @@ function ResourceView({view,state,dispatch,recovery}){
    {!!view.versions?.length&&<><label>Version<select aria-label="Artifact version" value={view.selectedVersion??'latest'} onChange={event=>run('canvas.select',{id:view.resourceId,...(event.target.value==='latest'?{}:{version:Number(event.target.value)})})}>
     <option value="latest">Latest · Version {view.latestVersion}</option>
     {view.versions.slice().reverse().map(version=><option key={version.version} value={version.version}>Version {version.version}{version.createdAt?' · '+new Date(version.createdAt*1000).toLocaleString():''}</option>)}
-   </select></label>{view.selectedVersion!=null&&<><button type="button" className="a-link" onClick={()=>run('canvas.select',{id:view.resourceId})}>Go to Latest</button>{canvas?.app&&<button type="button" className="a-soft" onClick={()=>run('canvas.apps.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion,expectedStateRevision:view.latestStateRevision})}>Restore as new version</button>}{!canvas?.app&&!['mcp-app','browser'].includes(canvas?.kind)&&<button type="button" className="a-soft" onClick={()=>run('canvas.versions.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion})}>Restore as new version</button>}</>}</>}
+   </select></label>{view.selectedVersion!=null&&<><button type="button" className="a-link" onClick={()=>run('canvas.select',{id:view.resourceId})}>Go to Latest</button>{canvas?.app&&<button type="button" className="a-soft" onClick={()=>run('canvas.apps.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion,expectedStateRevision:view.latestStateRevision})}>Restore as new version</button>}{!canvas?.app&&!['mcp-app','browser','gif'].includes(canvas?.kind)&&<button type="button" className="a-soft" onClick={()=>run('canvas.versions.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion})}>Restore as new version</button>}</>}</>}
    <label>Open with<select aria-label="Open with" value={view.renderer} onFocus={()=>dispatch('canvas.views.inspect',{}).catch(()=>{})} onChange={event=>run('canvas.views.renderer',{...targetOf(view),renderer:event.target.value})}>
     {!view.available&&<option value={view.renderer}>Unavailable renderer</option>}
     {view.choices.map(choice=><option key={choice.id} value={choice.id}>{choice.label}</option>)}
@@ -96,7 +105,7 @@ export function CanvasWorkspace({state,dispatch,hidden=false}){
  const retained=useRef(new Map()),allViews=(state.canvasWorkspace?.views||[]).filter(view=>view.viewId==='primary');
  // Do not initialize a newly selected hidden artifact. Retain the mounted
  // viewer while Library is open so local edits survive passive navigation.
- for(const id of retained.current.keys())if(!allViews.some(view=>view.viewId===id))retained.current.delete(id);
+ for(const id of retained.current.keys())if(!allViews.some(view=>view.viewId===id)||(state.canvas?.kind==='gif'&&!state.canvas.open))retained.current.delete(id);
  const views=allViews.filter(view=>{
   if(state.canvas?.open)retained.current.set(view.viewId,view.resourceId);
   return retained.current.get(view.viewId)===view.resourceId;

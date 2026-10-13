@@ -50,6 +50,37 @@ async def test_malformed_envelope_never_reaches_bridge(payload, path, correction
     bridge.assert_not_awaited()
 
 
+@pytest.mark.parametrize("exc", [TimeoutError(), ConnectionError(), RuntimeError(), ValueError("  ")])
+async def test_empty_errors_are_actionable_without_claiming_no_effect(exc):
+    bridge = AsyncMock(side_effect=exc)
+    tool = await mounted_tool(bridge)
+    result = await tool.execute({"operation": "dispatch", "args": {
+        "action": "session.rename", "id": "stable-command", "args": {"title": "Private value"}}})
+    assert not result.success and result.error["message"].strip()
+    assert "Check saved state" in result.error["message"]
+    assert "do not automatically replay" in result.error["message"]
+    assert result.error.get("effect") != "none"
+    assert "Private value" not in str(result.error)
+    bridge.assert_awaited_once()
+
+
+async def test_nonempty_error_text_is_preserved():
+    tool = await mounted_tool(AsyncMock(side_effect=ValueError("Exact original diagnostic")))
+    result = await tool.execute({"operation": "get_state"})
+    assert result.error == {"message": "Exact original diagnostic"}
+
+
+@pytest.mark.parametrize("exc", [TimeoutError(), RuntimeError(), ValueError("Original error")])
+async def test_image_selection_error_fields_survive_diagnostic_fallback(exc):
+    tool = await mounted_tool(AsyncMock(side_effect=exc))
+    result = await tool.execute({"operation": "dispatch", "args": {"action": "outputs.images", "args": {}}})
+    assert not result.success
+    assert result.error["imageSelectionUnchanged"] is True
+    assert "activeImages" in result.error
+    assert result.error["message"].endswith("The current image selection is unchanged.")
+    assert result.error["message"].split(" The current")[0].strip()
+
+
 @pytest.mark.parametrize('value', [None, [], 'text', 1, False])
 @pytest.mark.parametrize('operation', ['dispatch', 'get_state', 'context.read', 'context.focus'])
 async def test_wrong_type_operation_args_never_reaches_bridge(value, operation):
