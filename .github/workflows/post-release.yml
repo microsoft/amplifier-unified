@@ -68,6 +68,8 @@ jobs:
   python:
     needs: resolve
     uses: ./.github/workflows/python-checks.yml
+    secrets:
+      LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
     with:
       revision: ${{ needs.resolve.outputs.revision }}
   browser:

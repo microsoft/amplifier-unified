@@ -83,8 +83,8 @@ jobs:
       - name: Verify mounted child identity and file boundaries
         run: >-
           uv run --locked
-          --with 'amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@08de4d442fde0210c4c89f7628c17846c5dfd67b'
-          --with 'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@db641363013ff906b656f49498a87ab01f5c506f'
+          --with 'amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main'
+          --with 'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main'
           pytest -q tests/test_child_app_authority.py tests/test_child_file_policy.py
           tests/test_child_image_policy.py tests/test_child_resume_admission.py tests/test_runtime_worker.py
       - run: npm ci --prefix frontend

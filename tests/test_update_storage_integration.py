@@ -100,6 +100,9 @@ async def test_imports_preserve_shared_object_and_worker_policy(tmp_path, monkey
         assert not list(obj.rglob('*.pyc'))
     # The fix must not relax detection of either generated or edited code.
     environment.pop('PYTHONDONTWRITEBYTECODE')
+    # Store objects are read-only. Deliberately permit this tampering control
+    # for an ordinary CI user as well as root; import policy alone is tested above.
+    obj.chmod(obj.stat().st_mode | 0o200)
     subprocess.run([sys.executable, '-c', 'import fixture_module'], cwd=obj, env=environment, check=True)
     assert list(obj.rglob('*.pyc'))
     with pytest.raises(ValueError, match='contents changed'):
