@@ -8,12 +8,14 @@ def update(service, args, command_id, fingerprint, origin, *, include_state):
     from .service import AppError
     from .session_navigation import is_top_level
     from .state_records import save
+    from .pinned_navigation import ordered_ids, keep_order
 
     target = service.projections.sessions(service.state).by_id.get(args['id'])
     if args['pinned'] and (target is None or not is_top_level(target)):
         raise AppError('Only existing top-level chats can be pinned.')
-    previous = {key: copy.deepcopy(service._state.get(key))
-                for key in ('pinnedSessionIds', 'events', 'revision')}
+    keys = ('pinnedSessionIds', 'pinnedItemIds', 'events', 'revision')
+    previous = {key: copy.deepcopy(service._state[key]) for key in keys if key in service._state}
+    order = ordered_ids(service._state)
     view = service.state['view']
     old_view = copy.deepcopy(view)
     receipt = {'accepted': True, 'revision': previous['revision'] + 1, 'effects': []}
@@ -27,6 +29,7 @@ def update(service, args, command_id, fingerprint, origin, *, include_state):
             if args['id'] not in pins:
                 pins.append(args['id'])
         service._state['pinnedSessionIds'] = pins
+        keep_order(service._state, order)
         service._state['events'] = [*(previous['events'] or []),
             {'id': command_id, 'action': 'session.pin', 'origin': origin, 'at': time.time()}][-200:]
         service._state['revision'] = receipt['revision']
@@ -38,14 +41,18 @@ def update(service, args, command_id, fingerprint, origin, *, include_state):
             from .session_projection import persist
             persist(service.data_dir, service._state, {}, session_ids=native_ids,
                     by_id={target['id']: target}, references=references, scoped_result=True, db=service.db)
-        save(service.db, service._state, references, native_ids, {'pinnedSessionIds', 'events',
+        save(service.db, service._state, references, native_ids, {'pinnedSessionIds', 'pinnedItemIds', 'events',
              *({'view'} if service.clients.record() is None else set())})
         written = service.clients.save(defer_ack=True)
         service.db.commit()
         service.clients.acknowledge(written)
     except BaseException:
         service.db.rollback()
-        service._state.update(previous)
+        for key in keys:
+            if key in previous:
+                service._state[key] = previous[key]
+            else:
+                service._state.pop(key, None)
         view.clear(); view.update(old_view)
         raise
     for sid in native_ids:

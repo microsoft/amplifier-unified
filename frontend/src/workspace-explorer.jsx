@@ -4,12 +4,42 @@ import React,{useEffect,useRef,useState} from 'react';
 import {ArrowLeft,ChevronRight,Folder,FolderDot,MoreHorizontal,Search,FolderPlus,Pencil,Trash2,MessageCircle,MessageSquarePlus,Pin,PinOff,ArrowUp,ArrowDown} from 'lucide-react';
 import {NavigationRow,NavigationStatus,WorkspaceDetails,useActivityClock} from './navigation-details';
 import {workspaceContext,parentPath} from './navigation-presentation';
+import {movePin} from './chat-navigation';
+
+export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compact=false,pinnedShortcut=false,handle,floating=false}){
+ const workspace=!!row.workspaceId,selected=workspace&&row.workspaceId===(state.view?.workWorkspaceId||state.selectedWorkspaceId);
+ const canDraft=workspace&&row.available!==false&&typeof row.path==='string'&&row.path.length>0&&row.path.length<=4000&&!row.path.includes('\0')&&(/^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(row.path))&&!row.path.split(/[\\/]/).includes('..');
+ const browseLabel='Browse '+row.path,pinKey='workspace:'+row.workspaceId;
+ const mixed=state.pinnedItemIds, pins=mixed||state.pinnedWorkspaceIds||[],key=mixed?pinKey:row.workspaceId,index=pins.indexOf(key),orderAction=mixed?'navigation.pinOrder':'workspace.pinOrder';
+ const [error,setError]=useState('');
+ const move=async offset=>{try{setError('');const result=await act(orderAction,{ids:movePin(pins,key,pins[index+offset])});const receipt=result?.result?.accepted!==undefined?result.result:result;if(receipt?.accepted===false)throw Error(receipt.error||'Could not reorder pins.')}catch(err){setError(err.message||'Could not reorder pins.')}};
+ const counts=row.activityCounts||{},summary=counts.attention?{kind:'attention',attentionType:counts.error?'error':counts.decision?'decision':counts.blocked?'blocked':'error',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:null;
+ const content=<>{handle}
+  <button type="button" className="a-workspace-select" data-tooltip="off" onPointerEnter={revealNavigationTitles} onFocus={revealNavigationTitles} data-navigation-select data-action={workspace?'workspace.select':'view.update'} aria-label={workspace?'Open chats in '+row.path:browseLabel} aria-pressed={workspace?selected:undefined} onClick={()=>workspace?open(row):browse(row.path)}>
+   {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span data-scroll-title><span>{row.customName||row.name}</span></span><small className="a-workspace-result-path" data-scroll-title><span>{state.settings?.workspaces?.showPaths?row.path:'in '+workspaceContext(row)}</span></small></span>{row.pinned&&!pinnedShortcut&&<Pin className="a-workspace-pin-mark" aria-label="Pinned workspace"/>}
+   {!pinnedShortcut&&<span className="a-workspace-count" aria-label={`${workspace?row.chatCount:row.descendantWorkspaceCount} ${workspace?'chats':'workspaces'}`}>{workspace?row.chatCount:row.descendantWorkspaceCount}</span>}{!workspace&&row.canBrowse&&<ChevronRight className="a-workspace-arrow"/>}
+  </button>
+  {!compact&&workspace&&row.canBrowse&&<button type="button" className="a-workspace-drill" data-action="view.update" aria-label={browseLabel} title={`${row.descendantWorkspaceCount} nested workspaces`} onClick={()=>browse(row.path)}><ChevronRight/></button>}
+  {compact&&workspace&&<button type="button" className="a-icon a-workspace-new-chat" data-action="session.draft" aria-label={'New chat in '+row.path} title={canDraft?'New chat in '+row.path:'Workspace folder unavailable'} disabled={!canDraft} onClick={e=>{e.stopPropagation();newChat(row)}}><MessageSquarePlus/></button>}
+ </>;
+ const className=`a-workspace-row ${workspace?'is-workspace':''} ${selected?'is-selected':''}`;
+ if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
+ if(!workspace)return <div className={className} data-workspace-path={row.path}>{content}</div>;
+ return <NavigationRow className={className} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} actions={<>
+  <button type="button" className="a-link" data-action="workspace.select" onClick={()=>{close();open(row)}}><MessageCircle/>Open chats</button>
+  <button type="button" data-action={row.archived?'workspace.restore':'workspace.archive'} onClick={()=>{close();act(row.archived?'workspace.restore':'workspace.archive',{id:row.workspaceId})}}>{row.archived?'Restore workspace':'Archive workspace'}</button>
+  <button type="button" data-action="workspace.pin" aria-label={(row.pinned?'Unpin workspace ':'Pin workspace ')+row.path} onClick={()=>{close();act('workspace.pin',{id:row.workspaceId,pinned:!row.pinned})}}>{row.pinned?<PinOff/>:<Pin/>}{row.pinned?'Unpin workspace':'Pin workspace'}</button>
+  {row.pinned&&<><button type="button" data-action={orderAction} aria-label={'Move workspace up '+row.path} disabled={index<=0} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" data-action={orderAction} aria-label={'Move workspace down '+row.path} disabled={index<0||index>=pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{error&&<span role="alert">{error}</span>}</>}
+  <button type="button" data-action="view.update" onClick={()=>{close();browse(row.parentPath??parentPath(row.path))}}><Folder/>Browse parent</button>
+  {onEdit&&<><button type="button" data-action="view.update" onClick={()=>{close();onEdit({mode:'rename',id:row.workspaceId,name:row.customName||row.name})}}><Pencil/>Rename</button><button type="button" className="a-danger" disabled={state.library?.workspaceCount<2} data-action="view.update" onClick={()=>{close();onEdit({mode:'remove',id:row.workspaceId,name:row.customName||row.name})}}><Trash2/>Remove</button></>}
+ </>}/>} >{content}</NavigationRow>;
+}
 
 // The server supplies the same bounded folder projection to users and agents.
 // Browsing changes only the view; workspace.select changes the active project.
 export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewLimit=Infinity,compact=false,onSelect}){
  const now=useActivityClock();
- const explorer=state.workspaceExplorer||{},rows=compact?(state.workspaceShortcuts||[]):explorer.rows||[],crumbs=explorer.breadcrumbs||[];
+ const explorer=state.workspaceExplorer||{},rows=compact?(state.unpinnedWorkspaceShortcuts||state.workspaceShortcuts||[]):explorer.rows||[],crumbs=explorer.breadcrumbs||[];
  const [showAll,setShowAll]=useState(false);
  const preview=!showAll&&!explorer.filter&&explorer.mode==='recent'&&(explorer.page||1)===1;
  const shownRows=preview?rows.slice(0,previewLimit):rows;
@@ -29,8 +59,6 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
  };
  const open=async row=>{if(onSelect)return onSelect(row);const result=await act('workspace.select',{id:row.workspaceId});if(result&&result.accepted!==false)await onOpen?.()};
  const newChat=async row=>{const result=await act('session.draft',{workspace:row.path,workspaceId:row.workspaceId,location:{kind:'workspace'}});if(result&&result.accepted!==false)await onOpen?.()};
- const pins=state.pinnedWorkspaceIds||[];
- const movePin=(row,offset)=>{const ids=[...pins],index=ids.indexOf(row.workspaceId),next=index+offset;if(index<0||next<0||next>=ids.length)return;[ids[index],ids[next]]=[ids[next],ids[index]];return act('workspace.pinOrder',{ids})};
  const previous=crumbs.length>3?crumbs.slice(0,-2):[],visible=previous.length?crumbs.slice(-2):crumbs;
  const page=explorer.page||1,pages=explorer.pages||1;
  const crumbLabel=crumb=>crumb.name===crumb.path?(crumb.path.replace(/[\\/]+$/,'').split(/[\\/]/).at(-1)||crumb.name):crumb.name;
@@ -46,29 +74,7 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
     {visible.map((crumb,index)=><React.Fragment key={crumb.path}>{(index>0||previous.length>0)&&<ChevronRight aria-hidden="true"/>}<button type="button" data-action="view.update" aria-current={index===visible.length-1?'location':undefined} title={crumb.path||'All workspace folders'} aria-label={'Browse '+(crumb.path||'all workspace folders')} onClick={()=>browse(crumb.path)}>{crumbLabel(crumb)}</button></React.Fragment>)}
    </nav>
   </div>}
-  <div className="a-workspace-folders">{shownRows.map(row=>{
-   const workspace=!!row.workspaceId,selected=workspace&&row.workspaceId===(state.view?.workWorkspaceId||state.selectedWorkspaceId);
-   const canDraft=workspace&&row.available!==false&&typeof row.path==='string'&&row.path.length>0&&row.path.length<=4000&&!row.path.includes('\0')&&(/^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(row.path))&&!row.path.split(/[\\/]/).includes('..');
-   const browseLabel='Browse '+row.path;
-   const counts=row.activityCounts||{},summary=counts.attention?{kind:'attention',attentionType:counts.error?'error':counts.decision?'decision':counts.blocked?'blocked':'error',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:null;
-   const content=<>
-    <button type="button" className="a-workspace-select" data-tooltip="off" onPointerEnter={revealNavigationTitles} onFocus={revealNavigationTitles} data-navigation-select data-action={workspace?'workspace.select':'view.update'} aria-label={workspace?'Open chats in '+row.path:browseLabel} aria-pressed={workspace?selected:undefined} onClick={()=>workspace?open(row):browse(row.path)}>
-     {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span data-scroll-title><span>{row.customName||row.name}</span></span><small className="a-workspace-result-path" data-scroll-title><span>{state.settings?.workspaces?.showPaths?row.path:'in '+workspaceContext(row)}</span></small></span>{row.pinned&&<Pin className="a-workspace-pin-mark" aria-label="Pinned workspace"/>}
-     <span className="a-workspace-count" aria-label={`${workspace?row.chatCount:row.descendantWorkspaceCount} ${workspace?'chats':'workspaces'}`}>{workspace?row.chatCount:row.descendantWorkspaceCount}</span>{!workspace&&row.canBrowse&&<ChevronRight className="a-workspace-arrow"/>}
-    </button>
-    {!compact&&workspace&&row.canBrowse&&<button type="button" className="a-workspace-drill" data-action="view.update" aria-label={browseLabel} title={`${row.descendantWorkspaceCount} nested workspaces`} onClick={()=>browse(row.path)}><ChevronRight/></button>}
-    {compact&&workspace&&<button type="button" className="a-icon a-workspace-new-chat" data-action="session.draft" aria-label={'New chat in '+row.path} title={canDraft?'New chat in '+row.path:'Workspace folder unavailable'} disabled={!canDraft} onClick={e=>{e.stopPropagation();newChat(row)}}><MessageSquarePlus/></button>}
-   </>;
-   return workspace?<NavigationRow className={`a-workspace-row is-workspace ${selected?'is-selected':''}`} key={row.path} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} actions={<>
-    <button type="button" className="a-link" data-action="workspace.select" onClick={()=>{close();open(row)}}><MessageCircle/>Open chats</button>
-    <button type="button" data-action={row.archived?'workspace.restore':'workspace.archive'} onClick={()=>{close();act(row.archived?'workspace.restore':'workspace.archive',{id:row.workspaceId})}}>{row.archived?'Restore workspace':'Archive workspace'}</button>
-    <button type="button" data-action="workspace.pin" aria-label={(row.pinned?'Unpin workspace ':'Pin workspace ')+row.path} onClick={()=>{close();act('workspace.pin',{id:row.workspaceId,pinned:!row.pinned})}}>{row.pinned?<PinOff/>:<Pin/>}{row.pinned?'Unpin workspace':'Pin workspace'}</button>
-    {row.pinned&&<><button type="button" data-action="workspace.pinOrder" aria-label={'Move workspace up '+row.path} disabled={pins.indexOf(row.workspaceId)<=0} onClick={()=>{close();movePin(row,-1)}}><ArrowUp/>Move up</button><button type="button" data-action="workspace.pinOrder" aria-label={'Move workspace down '+row.path} disabled={pins.indexOf(row.workspaceId)<0||pins.indexOf(row.workspaceId)>=pins.length-1} onClick={()=>{close();movePin(row,1)}}><ArrowDown/>Move down</button></>}
-    <button type="button" data-action="view.update" onClick={()=>{close();browse(row.parentPath??parentPath(row.path))}}><Folder/>Browse parent</button>
-    {onEdit&&<><button type="button" data-action="view.update" onClick={()=>{close();onEdit({mode:'rename',id:row.workspaceId,name:row.customName||row.name})}}><Pencil/>Rename</button><button type="button" className="a-danger" disabled={state.library?.workspaceCount<2} data-action="view.update" onClick={()=>{close();onEdit({mode:'remove',id:row.workspaceId,name:row.customName||row.name})}}><Trash2/>Remove</button></>}
-   </>}/>} >{content}</NavigationRow>:<div className="a-workspace-row" key={row.path} data-workspace-path={row.path}>{content}</div>;
-
-  })}</div>
+  <div className="a-workspace-folders">{shownRows.map(row=><WorkspaceRow key={row.path} {...{row,state,act,now,open,newChat,browse,onEdit,compact}}/>)}</div>
   {shownRows.length<rows.length&&<button type="button" className="a-link" onClick={()=>setShowAll(true)}>More workspaces<ChevronRight/></button>}
   {!rows.length&&!state.sharedHistory?.loading&&<p className="a-nav-empty">{explorer.filter?'No matching workspaces.':'Create a workspace to start a chat.'}</p>}
   {!compact&&pages>1&&shownRows.length===rows.length&&<div className="a-nav-pagination a-workspace-pagination"><span>Page {page} of {pages}</span><div><button type="button" className="a-link" aria-label="Show previous workspace folders" data-action="view.update" disabled={page<=1} onClick={()=>patch({navWorkspacePage:page-1})}>Previous</button><button type="button" className="a-link" aria-label="Show more workspace folders" data-action="view.update" disabled={page>=pages} onClick={()=>patch({navWorkspacePage:page+1})}>More<ChevronRight/></button></div></div>}

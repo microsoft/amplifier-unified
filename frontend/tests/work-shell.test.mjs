@@ -7,7 +7,7 @@ import {createServer} from 'vite';
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {WorkNavigationContext,browsePatch}=await vite.ssrLoadModule('/src/work-navigation.js');
 const {WorkSurface,LiveChatActivity}=await vite.ssrLoadModule('/src/work-shell.jsx');
-const {ConversationList,useRecentShortcuts}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
+const {ConversationList,PinnedItems,useRecentShortcuts}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceExplorer}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
 const {AgentCanvas}=await vite.ssrLoadModule('/src/shell-panels.jsx');
 const {newChatSetup}=await vite.ssrLoadModule('/src/new-chat.jsx');
@@ -32,6 +32,82 @@ test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
  assert.match(main,/Research ideas/);assert.match(main,/aria-label="Search chats"/);assert.doesNotMatch(main,/a-browser-pins/);
+});
+test('empty Pinned disappears; workspace-only and mixed pins share one section',async()=>{
+ const calls=[];
+ const folder={...row,pinned:true};
+ const chat={...page.items[0],pinned:true};
+ const workspacePin={id:'workspace:b',kind:'workspace',row:folder},chatPin={id:'session:b-chat',kind:'session',row:chat};
+ let current={...snapshot,view:{navSectionsCollapsed:['pinned']},pinnedItemIds:[],pinnedNavigation:{items:[],total:0,pages:1,index:0}};
+ const pinHost={...host,getSnapshot:()=>current,dispatch:async(...args)=>{calls.push(args);return {accepted:true}}};
+ let root;const element=()=>render(React.createElement(ConversationList,{host:pinHost}));
+ await act(async()=>{root=create(element())});
+ assert.equal(root.root.findAllByProps({'data-sidebar-section':'pinned'}).length,0);
+ for(const items of [[workspacePin],[chatPin],[chatPin,workspacePin]]){
+  current={...current,pinnedItemIds:items.map(item=>item.id),pinnedNavigation:{items,total:items.length,pages:1,index:0},unpinnedWorkspaceShortcuts:[]};
+  await act(async()=>root.update(element()));
+  const section=root.root.findByProps({'data-sidebar-section':'pinned'});
+  assert.equal(section.props['aria-label'],'Pinned items');
+  assert.equal(section.findAllByType('button')[0].props['aria-expanded'],false);
+  assert.equal(section.findAllByProps({className:'a-reorder-list a-pinned-chats'}).length,1);
+ }
+ current={...current,pinnedNavigation:{items:[],total:0,pages:1,index:0}};
+ await act(async()=>root.update(element()));
+ assert.equal(root.root.findAllByProps({'data-sidebar-section':'pinned'}).length,0);
+ assert.deepEqual(current.view.navSectionsCollapsed,['pinned']);assert.deepEqual(calls,[]);
+ await act(async()=>root.unmount());
+});
+test('mixed keyboard ordering preserves hidden pins and typed IDs, and workspace opens the browser',async()=>{
+ const calls=[],selects=[];
+ const items=[{id:'session:b',kind:'session',row:{id:'b',title:'Pinned chat',pinned:true}},
+              {id:'workspace:b',kind:'workspace',row:{...row,pinned:true}}];
+ const current={...snapshot,pinnedItemIds:['session:b','workspace:hidden','workspace:b','session:off-page'],
+                pinnedNavigation:{items,total:2,pages:1,index:0},unpinnedWorkspaceShortcuts:[]};
+ const pinHost={...host,getSnapshot:()=>current,dispatch:async(...args)=>{calls.push(args);return {accepted:true}}};
+ const nav={...navigation,browse:(...args)=>selects.push(args)};
+ let root;await act(async()=>{root=create(React.createElement(WorkNavigationContext.Provider,{value:nav},React.createElement(ConversationList,{host:pinHost})))});
+ const section=root.root.findByProps({'data-sidebar-section':'pinned'});
+ assert.equal(section.findAll(node=>node.type==='div'&&node.props['data-order-id']).length,2);
+ await act(async()=>section.findByProps({'aria-label':'Reorder Research'}).props.onKeyDown({key:'ArrowUp',preventDefault(){}}));
+ assert.deepEqual(calls.at(-1),['navigation.pinOrder',{ids:['workspace:b','session:b','workspace:hidden','session:off-page']}]);
+ await act(async()=>section.findByProps({'aria-label':'Open chats in /research'}).props.onClick());
+ assert.deepEqual(selects,[['workspace','b']]);
+ await act(async()=>section.findByProps({'aria-label':'New chat in /research'}).props.onClick({stopPropagation(){}}));
+ assert.deepEqual(calls.at(-1),['session.draft',{workspace:'/research',workspaceId:'b',location:{kind:'workspace'}}]);
+ await act(async()=>root.unmount());
+});
+test('pending mixed reorder handles concurrent unpin without rendering an identity-less row',async()=>{
+ let settle,root;
+ const pins=[{id:'session:a',kind:'session',row:{id:'a',title:'One',pinned:true}},
+             {id:'workspace:b',kind:'workspace',row:{...row,pinned:true}}];
+ const current={...snapshot,pinnedItemIds:pins.map(item=>item.id)};
+ const model={state:current,act:()=>new Promise(resolve=>{settle=resolve}),view:{},setDraft(){},choose(){}};
+ let pinPage={items:pins,total:2,index:0,pages:1};
+ const element=()=>React.createElement(PinnedItems,{page:pinPage,model,now:0});
+ await act(async()=>{root=create(element())});
+ await act(async()=>root.root.findByProps({'aria-label':'Reorder Research'}).props.onKeyDown({key:'ArrowUp',preventDefault(){}}));
+ current.pinnedItemIds=['session:a'];pinPage={...pinPage,items:[pins[0]],total:1};
+ await act(async()=>root.update(element()));
+ assert.equal(root.root.findAllByProps({'aria-label':'Reorder Research'}).length,0);
+ assert.equal(root.root.findAllByProps({className:'a-nav-chat-select'}).length,1);
+ assert.equal(root.root.findByProps({className:'a-nav-chat-select'}).props['aria-label'],'One');
+ await act(async()=>settle({accepted:false,error:'Pins changed'}));
+ await act(async()=>root.unmount());
+});
+test('standalone chat sidebar exposes a workspace edit without replacing an active chat edit',async()=>{
+ const calls=[];let current={...snapshot,pinnedItemIds:['workspace:b'],
+  pinnedNavigation:{items:[{id:'workspace:b',kind:'workspace',row:{...row,pinned:true}}],total:1,index:0,pages:1},
+  view:{workspaceDraft:{mode:'rename',id:'b',name:'Retained workspace edit'}}};
+ const pinHost={...host,getSnapshot:()=>current,dispatch:async(...args)=>{calls.push(args);return {accepted:true}}};
+ let root;const element=()=>render(React.createElement(ConversationList,{host:pinHost}));
+ await act(async()=>{root=create(element())});
+ assert.equal(root.root.findAll(node=>node.type==='input'&&node.props.value==='Retained workspace edit').length,1);
+ current={...current,view:{workspaceDraft:{mode:'chat-rename',id:'a',name:'Retained chat edit'}}};
+ await act(async()=>root.update(element()));
+ const workspace=root.root.findAll(node=>node.props.row?.workspaceId==='b'&&node.props.compact===true&&node.props.handle);
+ assert.equal(workspace.length,1);assert.equal(workspace[0].props.onEdit,undefined);
+ assert.deepEqual(calls,[]);
+ await act(async()=>root.unmount());
 });
 test('mismatched bounded search scope stays pending instead of using a local fallback',()=>{
  const mismatched={...snapshot,sidebarNavigation:{...snapshot.sidebarNavigation,

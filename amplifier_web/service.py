@@ -1893,7 +1893,7 @@ class AppService:
             if action == 'session.pin':
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
-            if action in {'workspace.pin', 'workspace.pinOrder'}:
+            if action in {'workspace.pin', 'workspace.pinOrder', 'navigation.pinOrder'}:
                 from .workspace_navigation import update_pins
                 return update_pins(self, action, args, command_id, fingerprint, origin, include_state=include_state)
             if action == 'view.update' and origin == 'agent' and caller_session_id and client_id is not None:

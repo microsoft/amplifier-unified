@@ -155,6 +155,8 @@ def workspace_command(state, action, args):
             rows.remove(row)
             state['pinnedWorkspaceIds'] = [identity for identity in state.get('pinnedWorkspaceIds', [])
                                            if identity != row['id']]
+            from .pinned_navigation import ordered_ids
+            state['pinnedItemIds'] = ordered_ids(state)
             if state["selectedWorkspaceId"] == row["id"]:
                 state["selectedWorkspaceId"] = rows[0]["id"]
                 if rows[0].get("path"):
