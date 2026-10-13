@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip('amplifier_module_loop_live')
 
 
-@pytest.mark.parametrize('mode', ['finite', 'resumed', 'persistent', 'nested'])
+@pytest.mark.parametrize('mode', ['finite', 'resumed', 'persistent', 'nested', 'nested-reprepare'])
 async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch, mode):
     from amplifier_foundation.bundle import Bundle, BundleModuleResolver
     from amplifier_module_loop_live.runtime import Runtime
@@ -57,9 +57,13 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
         assert envelope['_runtimeSessionId'] == coordinator.session_id
         assert '_generationId' not in envelope
         assert envelope['_inputBindings'] == [{'inputId': 'original-input', 'clientId': 'original-client'}]
-        if mode == 'nested' and coordinator.session_id == 'child':
+        if mode in {'nested', 'nested-reprepare'} and coordinator.session_id == 'child':
             worker.context_inputs = ['unrelated-later-input']
             worker.context_bindings = {'unrelated-later-input': {'clientId': 'other-client', 'targets': []}}
+            if mode == 'nested-reprepare':
+                # Native loop preparation evaluates bridge construction even
+                # when install_app_access subsequently sees an existing tool.
+                await install_app_access(coordinator, worker.app_access_bridge(coordinator))
             await registry.spawn('worker', 'nested', registry.sessions['child'], sub_session_id='grandchild')
         return 'done'
 
@@ -69,7 +73,7 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
         await registry.spawn('worker', 'inspect', parent, sub_session_id='child')
         if mode == 'resumed':
             await registry.resume('child', 'continue', parent)
-        if mode in {'resumed', 'nested'}:
+        if mode in {'resumed', 'nested', 'nested-reprepare'}:
             assert len(tools_seen) == 2 and tools_seen[0] is not tools_seen[1]
         await parent.coordinator.get('tools')['app_control'].execute({'operation': 'list_actions'})
         assert worker.bridge.call_args.args[1]['_runtimeSessionId'] == 'root'

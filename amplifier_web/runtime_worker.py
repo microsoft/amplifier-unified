@@ -133,6 +133,13 @@ class Worker:
             self.bridges.pop(identity, None)
 
     def app_access_bridge(self, coordinator, *, assignment=None):
+        lookup = getattr(coordinator, 'get_capability', None)
+        existing = lookup('web.app_access.bridge') if callable(lookup) else None
+        if callable(existing):
+            # Loop preparation can evaluate this before the tool installer's
+            # idempotency check. Preserve both the assigned bridge and its
+            # nested-child installer instead of capturing a later root input.
+            return existing
         # Workers inherit the originating inputs at assignment, never
         # another client's later input or another coordinator's receipts.
         assigned = None if coordinator is self.session.coordinator else list(
@@ -167,6 +174,7 @@ class Worker:
             return await self.bridge(operation, args)
         register = getattr(coordinator, "register_capability", None)
         if callable(register):
+            register('web.app_access.bridge', bridge)
             async def install_child_access(child_coordinator):
                 from amplifier_web.app_guidance import install_app_access
                 await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
