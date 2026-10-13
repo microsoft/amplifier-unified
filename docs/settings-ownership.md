@@ -35,3 +35,48 @@ the standalone dialog. Agents inspect `settingsUI` for routes and `visibleUI` fo
 rendered controls; private credential fields are not shared in either. Assisted
 setup is optional once a chat model is configured. The user chooses demonstrations;
 there is no automatic paid image, voice, or external action in the tour.
+
+## Saving preferences
+
+Independent switches, buttons and selections save through their owning typed action
+on interaction. A save receipt and any asynchronous operation completion determine
+success; a local selection is not proof of persistence. Show pending/error state,
+retain recoverable text on failure, and never include unrelated drafts in a write.
+Numeric text fields validate and save on blur or Enter. Secret fields stay local.
+An explicit save is appropriate for text/code editing or values that must be
+validated and committed together; explain that boundary in the UI.
+
+AI connections distinguish loading, failed loading, a confirmed empty catalog, and
+configured connections. Only a confirmed empty catalog may show initial setup.
+The image generation preference belongs in Advanced. Without an explicit override,
+the runtime checks installed capabilities and uses the first eligible provider by
+priority; with no eligible provider it exposes no image generation. Reading these
+preferences must never generate an image.
+
+### Save-control audit (2026-10-13)
+
+| Surface | Decision and reason |
+| --- | --- |
+| AI connections | Existing default-model selection saves immediately. First connection setup keeps a completion step for model, scope and optional initial routing. Credentials and endpoint save together. |
+| Advanced provider configuration | Keep Save provider: identity/module, credentials, endpoint, scope and JSON describe one validated connection. Preference order commits one complete permutation. |
+| Advanced image generation | Provider choice, off/automatic, model and scope save immediately. A rejected save offers Retry; no extra successful-save step. |
+| Model rules | Keep Save profile and candidate editor completion: provider/model candidates, role matrix, profile identity and scope must stay coherent. |
+| Bundles and registries | Enable controls already apply directly. Keep composition-order save (later entries override earlier settings), module/source configuration validation, and named custom bundle creation. |
+| Conversation defaults | Registered bundle selections save immediately. Explicit save remains for manually entered source URLs/paths. Scope selection chooses the editor's target. |
+| Smart Tools | Enable/selection controls already act directly. Keep connection setup for command, arguments, environment, URL and authentication; installation is an explicit operation. |
+| Appearance | Everyday theme, scheme, layout, detail and background choices already save immediately. Keep named library save and preview/apply for custom CSS editing. Import/export are operations, not preference saves. |
+| Workspaces | Path visibility already saves immediately. Keep text/path default save and starter/resource editors: paths, source, setup commands and ownership records need a deliberate completed value. |
+| Voice | Model, voice and dictation choices already save directly. Keep voice connection save for source/key replacement; do not submit a partially entered credential. |
+| Notifications | Badge, desktop, preview and enabling/disabling an existing phone connection save immediately as single-field patches. Keep phone connection save for server/topic/token and first-time enablement. |
+| Diagnostic capture | Capture/recording/stream switches save immediately; numeric limits save on valid blur. Host merges narrow patches so an unfinished destination cannot be activated. |
+| Diagnostic destinations | Keep Save destination: URL, authentication reference, routing streams, workspace filter and enabled state form one outbound policy. Test is a separate explicit network operation. |
+| Ready conversations | Background preparation saves immediately. Count/lifetime save on valid blur or Enter. Each write changes only that field. |
+| File permissions | Keep Save permissions for coordinated allowed/denied paths and scope; deny precedence must be validated on the complete policy. |
+| Updates | Preferences already apply on change; checking, installing and rollback are explicit operations. |
+| Saved work, backup, repair and reset | Import/export/backup saves are operations. Keep reviewed destructive-action confirmation; these are not preference controls. |
+| Adjacent chat controls | Mode selection now applies immediately while idle. Keep explicit edits for conversation name, goal/task text, coordinated budgets/context limits, memory notes, publishing targets, schedule creation, bundle switching and output snapshots. These affect existing work or create records rather than changing a standalone global preference. |
+| Extension settings | Extensions own their UI/actions and must follow the same rule; the host cannot safely auto-submit arbitrary extension forms. |
+
+The audit covers native settings destinations and the adjacent editors linked from
+them. Existing text editors retain explicit saves rather than guessing when an
+unfinished URL, credential, policy or code block is ready to commit.

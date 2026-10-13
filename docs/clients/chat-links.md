@@ -25,14 +25,30 @@ turn or ordinary-browser companion polling. Run application/browser tests only
 in the project's owned DTU.
 
 Installed browsers supporting the Launch Handler API use `focus-existing`.
-The application consumes same-origin, same-path launch URLs, queues them until
-boot/attachment, and selects targets in order in the receiving window without
-reloading its document. Cold URL/launch-queue duplicates are ignored. Warm failed
-launches report the existing navigation error; browsers without this API retain
-ordinary URL navigation. Existing installations may need their browser to refresh
-the installed manifest before the launch mode changes.
+The application consumes same-origin, same-path launch URLs and retains the exact
+chat target in this window's URL using `history.replaceState`, without reloading
+the document. It waits for boot/attachment, then selects the latest target. Cold
+URL/launch-queue duplicates are ignored. A newer launch supersedes an older one.
+
+Failed selection leaves the target in the URL and displays **Retry opening chat**
+and **Dismiss chat link**. Retry attempts that exact navigation once; missing,
+deleted and forbidden targets never enter an automatic retry loop. Reconnect or
+React rebinding alone does not retry. Reload/sign-in can recover through the
+ordinary chat-link URL path. Success, explicit dismissal, or a newer user chat,
+workspace or new-chat navigation clears the old intent. A late result from an
+older attempt cannot clear or report failure for a newer intent. Navigation uses
+the existing per-window dispatch queue; retry cannot submit input or replay an
+execution command. External links keep the current view, draft and canvas mounted
+until selection is accepted; a failed launch must not destroy local iframe input. Drafts and mounted
+canvas state remain owned by that window.
+
+Browsers without this API retain ordinary URL navigation. Existing installations
+may need their browser to refresh the installed manifest before the launch mode
+changes.
 
 Implementation reference: [Chromium Launch Handler API](https://developer.chrome.com/docs/web-platform/launch-handler).
 The DTU browser test covers two warm launches, document preservation, exact target,
-independent windows and no chat submission; pure tests cover pre-boot delivery and
-foreign/path-mismatched targets.
+independent windows, failed warm launches with explicit retry, retained composer
+and iframe input, missing/deleted targets, newer user navigation, and no chat
+submission. Pure tests also cover pre-boot delivery, foreign/path-mismatched
+targets, forbidden targets, rebinding, dismissal and stale in-flight results.

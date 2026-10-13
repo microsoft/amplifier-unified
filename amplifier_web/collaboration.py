@@ -525,6 +525,9 @@ class Collaboration:
         if active.get("id") != payload.get("generation_id") or active.get("terminal"):
             return changed
         active["terminal"] = True
+        active["completed"] = (payload.get("event") == "generation.finished"
+            and payload.get("disposition") == "manager_turn_finished"
+            and not payload.get("active_job_ids"))
         # Only declarations staged in this actual generation can be sealed.
         for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'

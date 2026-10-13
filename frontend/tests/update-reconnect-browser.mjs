@@ -19,7 +19,7 @@ const ready=new Promise((resolve,reject)=>{
 let vite,browser,page;
 try{
  const port=await ready,target=`http://127.0.0.1:${port}`;
- vite=await createServer({configFile:false,root,define:{__AMPLIFIER_BUILD__:JSON.stringify({id:"aaaaaaaaaaaaaaaa",version:"0.20.67"})},server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
+ vite=await createServer({configFile:false,root,define:{__AMPLIFIER_BUILD__:JSON.stringify({id:"aaaaaaaaaaaaaaaa",version:"0.20.67"})},server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
  await vite.listen();
  browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
@@ -34,8 +34,8 @@ try{
  // Drive stream lifecycle and the one-minute clock deterministically.
  // HTTP failure/recovery still uses real application requests and routing.
  await page.addInitScript(()=>{
-  const Native=window.EventSource;
-  window.EventSource=class extends Native{constructor(url,options){super(url,options);if(String(url).includes('/api/events'))window.fixtureEvents=this}};
+  const Native=window.WebSocket;
+  window.WebSocket=class extends Native{constructor(url,options){super(url,options);if(String(url).includes('/api/events'))window.fixtureEvents=this}};
  });
  await page.goto(vite.resolvedUrls.local[0]);
  await page.locator('[data-sidebar-section=recent] .a-nav-chat').first().waitFor();
@@ -44,7 +44,7 @@ try{
  await api('/api/fixture/update-status',{restarting:true});
  await page.waitForFunction(()=>!!window.amplifier.getState().updates.pendingRestart);
  await page.clock.install();
- await page.evaluate(()=>{window.fixtureEvents.close();window.fixtureEvents.onerror()});
+ await page.evaluate(()=>{window.fixtureEvents.close();window.fixtureEvents.onclose()});
  await page.getByText('Updating Amplifier—reconnecting…',{exact:true}).waitFor();
  // Run scheduled callbacks in order; fastForward models a suspended tab and
  // can defer React effects until after the grace-period clock has jumped.

@@ -4,7 +4,7 @@ import asyncio
 import threading
 import sqlite3
 import pytest
-from amplifier_web.service import AppService
+from amplifier_web.service import AppService, AppError
 from amplifier_web.diagnostics import DEFAULT,validate_config
 from context_intelligence.client import CIClientError
 from test_service import Runtime
@@ -554,3 +554,22 @@ async def test_capture_validation_reuses_instance_cache_and_recovers_from_invali
     before = len(opened)
     collector._persist([], collector.config)
     assert len(opened) == before
+
+async def test_capture_patch_preserves_destinations_and_other_preferences(service):
+    await configure(service, destination(enabled=False), retentionDays=21)
+    await service.dispatch('diagnostics.configure', {'patch': {'providerRequests': True}})
+    assert service.diagnostics.config['providerRequests'] is True
+    assert service.diagnostics.config['retentionDays'] == 21
+    assert service.diagnostics.config['destinations'][0]['id'] == 'personal'
+    await service.dispatch('diagnostics.configure', {'patch': {'streams': ['usage']}})
+    assert service.diagnostics.config['destinations'][0]['streams'] == []
+    assert service.diagnostics.config['providerRequests'] is True
+    saved = json.loads(service.diagnostics.config_path.read_text())
+    assert saved == service.diagnostics.config
+
+async def test_capture_patch_rejects_destination_and_ambiguous_writes(service):
+    before = copy.deepcopy(service.diagnostics.config)
+    for args in ({'patch': {'destinations': []}}, {'patch': {}, 'config': before}, {}):
+        with pytest.raises(AppError):
+            await service.dispatch('diagnostics.configure', args)
+        assert service.diagnostics.config == before

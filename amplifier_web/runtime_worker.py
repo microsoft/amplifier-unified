@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import time
@@ -98,14 +99,35 @@ class Worker:
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         self.bridges[identity] = future
+        started = time.monotonic()
+        generation = getattr(getattr(self, 'runtime', None), 'generation', None) or {}
+        facts = {'type': 'runtime.bridge', 'bridgeId': identity, 'operation': operation,
+                 'generation_id': generation.get('id'), 'timeoutSeconds': timeout,
+                 'runtimeSessionId': args.get('_runtimeSessionId')}
+        # Only operation names, never arguments or response bodies.
+        action = args.get('action')
+        if isinstance(action, str) and re.fullmatch(r'[a-z][a-z0-9_.]{0,79}', action):
+            facts['action'] = action
+        publish({**facts, 'phase': 'requested'})
         try:
             publish({"op": "bridge", "id": identity, "operation": operation, "args": args})
-            return await asyncio.wait_for(future, timeout)
+            result = await asyncio.wait_for(future, timeout)
+            publish({**facts, 'phase': 'completed', 'elapsedSeconds': round(time.monotonic() - started, 3)})
+            return result
         except TimeoutError as exc:
+            publish({**facts, 'phase': 'timeout', 'elapsedSeconds': round(time.monotonic() - started, 3),
+                     'errorType': 'TimeoutError'})
             raise TimeoutError(
                 f"App bridge response timed out after {timeout:g} seconds "
                 "(transport timeout, not normal coordination.wait expiry)."
             ) from exc
+        except asyncio.CancelledError:
+            publish({**facts, 'phase': 'cancelled', 'elapsedSeconds': round(time.monotonic() - started, 3)})
+            raise
+        except Exception as exc:
+            publish({**facts, 'phase': 'failed', 'errorType': type(exc).__name__,
+                     'elapsedSeconds': round(time.monotonic() - started, 3)})
+            raise
         finally:
             self.bridges.pop(identity, None)
 
@@ -496,6 +518,8 @@ class Worker:
             if replacement:
                 replacement.commit()
                 replacement = None
+            from amplifier_web.support_diagnostics import runtime_versions
+            public["support"] = runtime_versions()
             publish({"type": "runtime.ready", "report": public})
         except asyncio.CancelledError:
             raise

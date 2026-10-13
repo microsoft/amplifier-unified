@@ -184,3 +184,22 @@ async def test_terminal_execution_event_flushes_pending_global_changes(app_facto
     assert load(app.db)['management'] == {'phase': 'fixture-pending'}
     checkpoint = load_saved_state(app.db)
     assert checkpoint['revision'] == app.state['revision']
+
+
+async def test_bridge_diagnostics_coalesce_without_repeated_durable_writes(app_factory, monkeypatch):
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    sid = app.state['selectedSessionId']
+    saves = []
+    original = app._save
+    def save():
+        saves.append(True)
+        return original()
+    monkeypatch.setattr(app, '_save', save)
+    for number in range(12):
+        await app.on_runtime_event('runtime.bridge', {'sessionId': sid,
+            'bridgeId': str(number), 'operation': 'context.manifest', 'phase': 'completed'})
+    assert saves == []
+    await app._flush_pending_progress()
+    assert saves == [True]
+    assert len([row for row in app._session(sid)['runtimeEvents'] if row['type'] == 'runtime.bridge']) == 12

@@ -82,3 +82,16 @@ test('intentional aborts and server rejections retain their original meaning',as
   await assert.rejects(request('/api/actions',{method:'POST'}),error=>error.status===403&&error.code!=='transport_unavailable');
  }finally{globalThis.fetch=original}
 });
+
+test('support timings retain correlation and exclude query strings and bodies',async()=>{
+ const {recentRequestTimings}=await import('../src/api.js');
+ const original=globalThis.fetch;
+ try{
+  globalThis.fetch=async()=>new Response('{}',{headers:{'Server-Timing':'app;dur=12.3','X-Amplifier-Request-Id':'request-1'}});
+  await request('/api/actions?private=secret',{method:'POST',body:{action:'session.create',args:{text:'private prompt'}}});
+  const row=recentRequestTimings().at(-1);
+  assert.equal(row.serverMs,12.3);assert.equal(row.requestId,'request-1');assert.equal(row.action,'session.create');
+  assert.equal(row.route,'/api/actions');assert.ok(row.elapsedMs>=0);
+  assert.ok(!JSON.stringify(row).includes('private'));
+ }finally{globalThis.fetch=original}
+});

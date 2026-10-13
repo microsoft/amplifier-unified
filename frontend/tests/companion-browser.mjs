@@ -60,6 +60,51 @@ try {
  await expect(ordinary.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Settings test');
  assert.deepEqual(companionRequests, [], 'Browser clients never poll Tempo summaries');
  assert.deepEqual(errors, []);
+ // A failed warm launch retains exact intent and mounted client state until retry.
+ await page.evaluate(async()=>{
+  await window.amplifier.dispatch('canvas.show',{kind:'html',title:'Warm launch canvas',content:'<input aria-label="Local canvas draft">'});
+  await window.amplifier.dispatch('view.update',{patch:{draft:'unsent warm-launch draft'}});
+  window.tempoCanvasMount=document.querySelector('#amp-one');
+ });
+ await page.frameLocator('.a-canvas-html').getByRole('textbox').fill('canvas-local input');
+ await page.evaluate(()=>{window.tempoCanvasFrame=document.querySelector('.a-canvas-html')});
+ let rejectNavigation=true;
+ await page.route('**/api/actions**',async route=>{
+  const body=route.request().postDataJSON();
+  if(rejectNavigation&&body?.action==='session.select'&&body.args.id===ready.original)return route.abort('failed');
+  return route.continue();
+ });
+ await page.evaluate(url=>window.tempoLaunch({targetURL:url}),ready.url+'/?chat='+ready.original);
+ await expect(page.locator('[data-chat-link-failure]')).toBeVisible();
+ await expect(page).toHaveURL(ready.url+'/?chat='+ready.original);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),ready.destination);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'unsent warm-launch draft');
+ assert.equal(await page.evaluate(()=>window.tempoCanvasFrame===document.querySelector('.a-canvas-html')),true,'Failed navigation preserves the mounted canvas');
+ await expect(page.frameLocator('.a-canvas-html').getByRole('textbox')).toHaveValue('canvas-local input');
+ rejectNavigation=false;
+ await page.getByRole('button',{name:'Retry opening chat',exact:true}).click();
+ await expect(page.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Settings test');
+ await expect(page).toHaveURL(ready.url+'/');
+ assert.equal(await page.evaluate(()=>window.tempoDocumentMarker),'same-document');
+ assert.equal(await page.evaluate(()=>window.tempoCanvasMount===document.querySelector('#amp-one')),true);
+ await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),ready.destination);
+ await expect(page.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Companion destination');
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'unsent warm-launch draft');
+ await expect(ordinary.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Settings test');
+ await page.unroute('**/api/actions**');
+ // Deleted/missing warm targets fail once. A newer user selection supersedes them.
+ for(const target of ['unavailable-link-target','00000000-0000-4000-8000-000000000001']){
+  const before=actions.filter(row=>row.action==='session.select'&&row.args.id===target).length;
+  await page.evaluate(url=>window.tempoLaunch({targetURL:url}),ready.url+'/?chat='+target);
+  await expect(page.locator('[data-chat-link-failure]')).toBeVisible();
+  await expect(page).toHaveURL(ready.url+'/?chat='+target);
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),ready.destination);
+  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),ready.original);
+  await expect(page.locator('[data-chat-link-failure]')).toHaveCount(0);
+  await expect(page).toHaveURL(ready.url+'/');
+  assert.equal(actions.filter(row=>row.action==='session.select'&&row.args.id===target).length,before+1);
+  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),ready.destination);
+ }
  // Unavailable links report failure without clearing the target or selecting a substitute.
  for (const target of ['unavailable-link-target', '00000000-0000-4000-8000-000000000001']) {
   await page.goto(ready.url + '/?chat=' + target);
@@ -86,7 +131,7 @@ try {
  await expect(login).toHaveURL(ready.url + '/');
  assert.equal(submissions.filter(row => row.action === 'conversation.send').length, 0);
  assert.equal(actions.filter(row => row.action === 'conversation.send').length, 0);
- console.log('Chat links passed: exact target, URL cleanup, reload, independent windows, unavailable/deleted targets, login round trip, no turn or polling.');
+ console.log('Chat links passed: exact target, warm failure/retry, draft and canvas input preservation, newer-navigation supersession, URL cleanup, reload, independent windows, unavailable/deleted targets, login round trip, no turn or polling.');
 } finally {
  await browser?.close();
  fixture.kill();

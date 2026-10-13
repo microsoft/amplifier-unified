@@ -40,6 +40,12 @@ try{
  await expect(page.getByRole('region',{name:'Settings content',exact:true})).toHaveCount(0);
  await expect(composer).toHaveDraft('Keep this while I connect AI');
  await openSettingsPage(page,'ai-connections');
+ // Existing model selection saves on change without a second completion click.
+ await page.getByRole('button',{name:/Anthropic API.*fixture-alternative/}).click();
+ await page.getByRole('button',{name:'Choose model',exact:true}).click();
+ await page.getByLabel('Model',{exact:true}).selectOption('fixture-model');
+ await expect(page.getByText('Model saved. Existing model rules are unchanged.',{exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Finish setup',exact:true})).toHaveCount(0);
  await page.screenshot({path:'/tmp/settings-everyday-ai-desktop.png'});
  await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Tool catalog',exact:true}).click();
  await page.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();await page.getByRole('checkbox',{name:'Select Tool 02',exact:true}).check();
@@ -54,8 +60,11 @@ try{
  await page.getByRole('button',{name:/tool-0 Installed · finish setup/}).click();
  await expect(page.getByText('Advanced setup required',{exact:true})).toBeVisible();
  await openSettingsPage(page,'notifications');
+ await page.getByRole('checkbox',{name:/On this device/}).uncheck();
+ await page.waitForFunction(()=>window.amplifier.getState().notificationSettings.desktop===false);
  const notification=page.getByText('Set up phone notifications',{exact:true});
  assert.equal(await notification.locator('..').getAttribute('open'),null);await notification.click();
+ await page.getByRole('checkbox',{name:'Include a response preview'}).check();await page.waitForFunction(()=>window.amplifier.getState().notificationSettings.preview===true);
  await page.getByText('Server & account',{exact:true}).click();await page.getByLabel(/^Access token/).fill('notification-private-fixture');await openSettingsPage(page,'privacy');await openSettingsPage(page,'notifications');
  await page.getByText('Set up phone notifications',{exact:true}).click();await page.getByText('Server & account',{exact:true}).click();assert.equal(await page.getByLabel(/^Access token/).inputValue(),'notification-private-fixture');assert.ok(!JSON.stringify(await state()).includes('notification-private-fixture'));
  let layouts=0;

@@ -19,7 +19,7 @@ try{
  if(!installedStatic){
   const {createServer}=await import('vite');
   vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),
-   server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}},
+   server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},
    optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
   await vite.listen();
  }

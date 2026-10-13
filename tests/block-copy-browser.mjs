@@ -29,7 +29,8 @@ try{
   ...exceptionDetails,frame:exceptionContexts.get(exceptionDetails.executionContextId)}));
  await exceptionSession.send('Runtime.enable');
  await page.addInitScript(()=>{
-  const Native=window.EventSource;
+  const Native=window.EventSource,Socket=window.WebSocket;
+  window.WebSocket=class extends Socket{constructor(...args){super(...args);this.addEventListener('message',event=>{if(JSON.parse(event.data).event==='state')window.blockCopyBaselineReceived=true})}};
   window.blockCopyBaselineReceived=false;
   window.EventSource=class extends Native{
    constructor(...args){super(...args);this.addEventListener('state',()=>{window.blockCopyBaselineReceived=true})}
@@ -40,7 +41,7 @@ try{
  const clipboard=()=>bounded(page.evaluate(()=>navigator.clipboard.readText()),'Read clipboard');
  const canvas=page.locator('.a-canvas-viewer');
  async function ready(){
-  // Current startup is SSE-first. Do not send actions against an empty baseline.
+  // Current startup is stream-first. Do not send actions against an empty baseline.
   await page.waitForFunction(()=>window.blockCopyBaselineReceived&&Array.isArray(window.amplifier?.getState()?.sessions));
   await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  }
