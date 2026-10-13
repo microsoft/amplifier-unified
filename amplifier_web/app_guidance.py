@@ -50,7 +50,7 @@ an ID or choose a later turn after a file read. Discover outputs.attachMedia and
 pass sessionId, that explicit messageId, title, workspace path and inspected
 expectedSha256. Any saved assistant message in your own chat is a valid explicit
 target; generation/input provenance is host-owned, not request arguments.
-The 32MiB media-only snapshot survives source deletion and reload; generic files
+The media-only snapshot (GIF up to64MiB, MP4 up to32MiB) survives source deletion and reload; generic files
 remain limited to8MiB. Saving/attachment receipts do not prove browser decoding
 or playback. outputs.read distinguishes saved/attached from exact-client UI
 reports of loading/ready/error and paused/playing/ended. Those authenticated

@@ -347,6 +347,11 @@ def canvas_command(state, action, args, origin):
         with path.open("rb") as file:
             data = file.read(limit + 1)
         if len(data) > limit:
+            if kind == 'image' and path.suffix.lower() == '.gif':
+                _error("For GIFs above the 5 MB image snapshot limit, use outputs.attachMedia "
+                       "with a saved assistant messageId, workspace path and expectedSha256, then "
+                       "canvas.openGif with the returned media identity. This preserves the original "
+                       "GIF up to 64 MiB with playback controls and download.")
             _error(f"This file is too large to preview in the canvas ({limit // 1_000_000} MB limit for {kind}). For larger interactive pages, serve the file from a local web server and use its HTTPS address, or download/open it in your browser.")
         try:
             canvas["content"] = _pdf(data) if kind == "pdf" else _image(data) if kind == "image" else data.decode("utf-8")

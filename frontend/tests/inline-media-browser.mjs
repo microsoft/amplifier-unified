@@ -984,7 +984,10 @@ try{
    try{
     large=await attach(page,'large');
     assert.equal(large.bytes,boot.samples.large.bytes);
-    assert.ok(large.bytes>5*1024*1024&&large.bytes>=19_000_000&&large.bytes<=20_100_000);
+    if(process.env.INLINE_MEDIA_FULL_RESOLUTION==='1'){
+     assert.ok(large.bytes>=60_000_000&&large.bytes<=64*1024*1024);
+     assert.deepEqual([large.media.width,large.media.height,large.media.frameCount],[1920,802,68]);
+    }else assert.ok(large.bytes>5*1024*1024&&large.bytes>=19_000_000&&large.bytes<=20_100_000);
     assert.equal(large.sha256,boot.samples.large.sha256);
     await action(peer.page,'canvas.show',{kind:'text',title:'Peer selected artifact',content:'Keep this peer Canvas'});
     await peer.page.getByRole('textbox',{name:'Message Amplifier'}).fill('GIF peer unsent draft');
@@ -1034,7 +1037,7 @@ try{
     await expect(canvasRoot(page).getByRole('button',{name:'Open in Canvas',exact:true})).toHaveCount(0);
     await expect(canvasRoot(page).getByRole('button',{name:/Copy canvas source|Download canvas source|Restore as new version/})).toHaveCount(0);
     const initial=await canvasPixels(figure),defaultDraws=(await canvasDraws(page,large.id)).length;
-    assert.deepEqual([initial.width,initial.height],[1280,720]);
+    assert.deepEqual([initial.width,initial.height],process.env.INLINE_MEDIA_FULL_RESOLUTION==='1'?[1920,802]:[1280,720]);
     assert.ok(initial.pixels.some(pixel=>pixel[3]===255),'Actual decoded first-frame pixels');
     await clockWait(page,350);assert.equal((await canvasDraws(page,large.id)).length,defaultDraws);
     await figure.getByRole('button',{name:'Play GIF',exact:true}).click();
