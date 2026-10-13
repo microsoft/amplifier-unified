@@ -6,7 +6,7 @@ reads a file to reconstruct an older revision.
 import copy
 import time
 
-FIELDS = ('title', 'kind', 'path', 'workspacePath', 'url', 'body', 'contentResource', 'mcpState')
+FIELDS = ('title', 'kind', 'path', 'workspacePath', 'url', 'body', 'contentResource', 'mcpState', 'outputBinding')
 _CURRENT_MESSAGE = object()
 
 
@@ -76,7 +76,7 @@ def publication(row, state, version, *, message=_CURRENT_MESSAGE):
     if mid:
         link = {'messageId': mid, 'version': version}
         links = row.setdefault('publications', [])
-        if link not in links:
+        if not any(item.get('messageId') == mid and item.get('version') == version for item in links):
             links.append(link)
 
 

@@ -427,6 +427,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             raise AppError("Canvas artifact unavailable", 404)
         row = requested_canvas_version(request, row)
         canvas = {**row, **resource(service.db, row["body"]["$resource"])}
+        from .artifact_presentation import resolve_body
+        canvas.update(resolve_body(service.db, resource(service.db, row['body']['$resource']), row['kind'], row['sessionId']))
+        if row.get('outputBinding'):
+            canvas.pop('contentResource', None)
         from .canvas_downloads import filename
         if canvas.get('kind') in {'image', 'pdf'}:
             from .canvas_downloads import image_bytes, pdf_bytes

@@ -121,17 +121,64 @@ class Outputs:
         return {'images':images,'bytes':total,'limits':{'images':2,'maxBytes':MAX_FILE,'maxSide':4096},
                 'imageDelivery':'Both saved images are available. A direct agent inspection requests pixels together; this receipt is not pixels.'}
 
-    def fork(self,source_id,target,canvas_mapping=None,*,media_origins=None):
+    def validate_canvas_adapter(self, row, sid):
+        """First-copy preflight; malformed retained adapters are explicit skips."""
+        from .artifact_presentation import check_output, validate_definition
+        from .output_media import validate_media_reference
+        relevant = row.get('kind') in {'gif', 'mp4'} or row.get('outputBinding') or any(
+            isinstance(v, dict) and (v.get('kind') in {'gif', 'mp4'} or v.get('outputBinding'))
+            for v in row.get('versions', []) or [])
+        if not relevant:
+            return
+        versions, links = row.get('versions', []), row.get('publications', [])
+        if (not isinstance(versions, list) or any(not isinstance(v, dict) for v in versions)
+                or not isinstance(links, list) or any(not isinstance(link, dict) for link in links)):
+            raise ValueError('Retained adapter versions and publications must be saved definitions.')
+        identities = [v.get('version') for v in versions]
+        if (type(row.get('revision')) is not int or row['revision'] < 1
+                or any(type(v) is not int or v < 1 for v in identities)
+                or len(set(identities)) != len(identities)
+                or any(type(link.get('version')) is not int or link['version'] not in identities for link in links)):
+            raise ValueError('Retained adapter has an invalid or missing saved version.')
+        for entry in [row, *versions]:
+            kind = entry.get('kind', row.get('kind'))
+            if entry.get('outputBinding'):
+                binding = entry['outputBinding']
+                record = self.record(sid, binding['outputId'])
+                check_output(binding, record, sid)
+                body = self.app.state_resource(entry['body']['$resource'])
+                source = self.app.state_resource(record['canvasSource']['$resource']) if record.get('canvasSource') else None
+                validate_definition(entry, row, record, body, source)
+            if kind not in {'gif', 'mp4'}:
+                continue
+            if 'mediaReference' in entry or not entry.get('body'):
+                raise ValueError('Retained media adapter requires one exact saved body.')
+            values = []
+            for key in ('body', 'contentResource'):
+                if entry.get(key):
+                    body = self.app.state_resource(entry[key]['$resource'])
+                    if not isinstance(body, dict) or set(body) != {'mediaReference'}:
+                        raise ValueError('Retained media adapter has an invalid saved body.')
+                    reference = body['mediaReference']
+                    record = self.record(sid, reference.get('item', {}).get('id'))
+                    validate_media_reference(reference, record, sid, kind=kind)
+                    values.append(body)
+            if any(value != values[0] for value in values):
+                raise ValueError('Retained media adapter has conflicting saved bodies.')
+
+    def fork(self,source_id,target,canvas_mapping=None,*,media_origins=None,artifact_origins=None,adapter_skips=None):
         kept={row['id'] for row in target.get('messages',[]) if row.get('id')}
         rows=self.app.db.execute('SELECT value FROM output_records WHERE session_id=? ORDER BY created',(source_id,)).fetchall()
         mapping={}
         originals = [json.loads(saved) for saved, in rows]
-        skipped = []
+        skipped = list(adapter_skips or [])
+        invalid_canvas = {item['canvasId'] for item in skipped if 'canvasId' in item}
 
         def clone(original, value):
             value['parentId']=mapping.get(original.get('parentId'))
             value['evidenceIds']=[mapping[key] for key in original.get('evidenceIds',[]) if key in mapping]
             value.pop('canvasId', None)
+            value.pop('presentationArtifact', None)
             if canvas_mapping and original.get('canvasId') in canvas_mapping:
                 value['canvasId'] = canvas_mapping[original['canvasId']]
             saved=self.store.create(target['id'],value)
@@ -158,10 +205,13 @@ class Outputs:
                              and not row.get('observation') and not row.get('observation_id')
                              for row in target.get('messages', [])):
                     continue
-            elif message_id not in kept:
-                continue
+            else:
+                message_id = artifact_origins.get(message_id) if artifact_origins is not None else message_id
+                if message_id not in kept:
+                    continue
             value={key:copy.deepcopy(value) for key,value in original.items() if key not in {'id','sessionId','createdAt','revision','version','linked','parentId','evidenceIds'}}
             value['forkSource']={'sessionId':source_id,'outputId':original['id'],'sha256':original.get('sha256')}
+            value['origin'] = {**value.get('origin', {}), 'messageId': message_id}
             if original.get('kind') == 'media':
                 value['origin'] = {**value['origin'], 'messageId': message_id}
                 clone(original, value)
@@ -173,7 +223,7 @@ class Outputs:
             for source_canvas, target_canvas in list(canvas_mapping.items()):
                 row = next((r for r in self.app.state.get('canvasArtifacts', [])
                             if r['id'] == target_canvas and r.get('sessionId') == target['id']), None)
-                if not row or row.get('kind') != 'gif':
+                if not row or row.get('kind') not in {'gif', 'mp4'}:
                     continue
                 rewritten = copy.deepcopy(row)
                 try:
@@ -186,7 +236,8 @@ class Outputs:
                         references = []
                         for key in ('body', 'contentResource'):
                             if entry.get(key):
-                                body = self.fork_media_body(entry[key], source_id, target['id'], mapping)
+                                body = self.fork_media_body(entry[key], source_id, target['id'], mapping,
+                                                            kind=entry.get('kind', rewritten['kind']))
                                 if body is None:
                                     raise ValueError('GIF adapter has no surviving owning output.')
                                 references.append(body['$resource'])
@@ -201,7 +252,10 @@ class Outputs:
                     row.update(rewritten)
 
         for original, value in pending:
-            if original.get('canvasKind') == 'gif':
+            if original.get('canvasId') in invalid_canvas:
+                skipped.append({'outputId': original['id'], 'reason': 'Its retained Canvas adapter is invalid.'})
+                continue
+            if original.get('canvasKind') in {'gif', 'mp4'}:
                 try:
                     # Validate both original immutable snapshot and source
                     # adapter before creating any target output relationship.
@@ -209,11 +263,11 @@ class Outputs:
                     if (not source or json.loads(self.content(original)) !=
                             self.app.state_resource(source['$resource'])):
                         raise ValueError('GIF output snapshot differs from its source adapter.')
-                    remapped = self.fork_media_body(source, source_id, target['id'], mapping)
+                    remapped = self.fork_media_body(source, source_id, target['id'], mapping,
+                                                    kind=original['canvasKind'])
                     if remapped is None:
                         raise ValueError('GIF output adapter has no surviving owning output.')
-                    if original.get('canvasId') and (
-                            not canvas_mapping or original['canvasId'] not in canvas_mapping):
+                    if original.get('canvasId') in invalid_canvas:
                         raise ValueError('GIF output Canvas adapter did not survive fork validation.')
                     from .resource_files import put
                     body = self.app.state_resource(remapped['$resource'])
@@ -224,10 +278,89 @@ class Outputs:
                 except (ValueError, KeyError, TypeError, OSError) as exc:
                     skipped.append({'outputId': original['id'], 'reason': str(exc)})
                     continue
+            elif original.get('canvasSource'):
+                try:
+                    source = original['canvasSource']
+                    body = self.app.state_resource(source['$resource'])
+                    if 'outputReference' in body:
+                        from .artifact_presentation import check_output, output_binding
+                        binding = body['outputReference']
+                        check_output(binding, self.record(source_id, binding['outputId']), source_id)
+                        if binding['outputId'] not in mapping:
+                            raise ValueError('Output snapshot has no surviving owning output.')
+                        from .resource_files import put
+                        remapped = {'outputReference': output_binding(self.record(target['id'], mapping[binding['outputId']]))}
+                        data = json.dumps(remapped, ensure_ascii=False, sort_keys=True).encode()
+                        value.update(canvasSource=put(self.app.db, remapped),
+                                     body=put(self.app.db, {'encoding': 'utf-8', 'data': data.decode()}),
+                                     sha256=hashlib.sha256(data).hexdigest(), bytes=len(data))
+                except (ValueError, KeyError, TypeError, OSError) as exc:
+                    skipped.append({'outputId': original['id'], 'reason': str(exc)})
+                    continue
             clone(original, value)
+        # Exact output and Canvas versions are different namespaces. Rebind
+        # definitions and publications only after owning relationships exist.
+        if canvas_mapping:
+            from .artifact_presentation import output_binding
+            from .resource_files import put
+            for source_canvas, target_canvas in list(canvas_mapping.items()):
+                row = next(r for r in self.app.state['canvasArtifacts'] if r['id'] == target_canvas)
+                failed = False
+                for entry in [row, *row.get('versions', [])]:
+                    binding = entry.get('outputBinding')
+                    if not binding:
+                        continue
+                    identity = mapping.get(binding['outputId'])
+                    if identity is None:
+                        failed = True
+                        break
+                    entry['outputBinding'] = output_binding(self.record(target['id'], identity))
+                    for key in ('body', 'contentResource'):
+                        if not entry.get(key):
+                            continue
+                        body = self.app.state_resource(entry[key]['$resource'])
+                        if isinstance(body, dict) and 'outputReference' in body:
+                            old_binding = body['outputReference']
+                            nested_id = mapping.get(old_binding['outputId'])
+                            if nested_id is None:
+                                failed = True
+                                break
+                            entry[key] = put(self.app.db, {'outputReference': output_binding(
+                                self.record(target['id'], nested_id))})
+                if failed:
+                    self.app.state['canvasArtifacts'].remove(row)
+                    canvas_mapping.pop(source_canvas)
+                    skipped.append({'canvasId': source_canvas, 'reason': 'No surviving exact output binding.'})
+                    continue
+                links = []
+                for link in row.get('publications', []):
+                    old = link.get('outputId')
+                    if old and old not in mapping:
+                        continue
+                    if old:
+                        link['outputId'] = mapping[old]
+                    if link.get('imageGeneration', {}).get('parentId'):
+                        link['imageGeneration']['parentId'] = mapping.get(link['imageGeneration']['parentId'])
+                    links.append(link)
+                row['publications'] = links
+        for source_output, target_output in mapping.items():
+            original = next(r for r in originals if r['id'] == source_output)
+            mapped = original.get('presentationArtifact')
+            if not mapped or not canvas_mapping or mapped.get('id') not in canvas_mapping:
+                continue
+            target_canvas = canvas_mapping[mapped['id']]
+            canvas = next(r for r in self.app.state['canvasArtifacts'] if r['id'] == target_canvas)
+            record = self.record(target['id'], target_output)
+            from .artifact_presentation import output_binding
+            if any(entry.get('version') == mapped.get('version')
+                   and entry.get('outputBinding') == output_binding(record)
+                   for entry in canvas.get('versions', [])):
+                record['presentationArtifact'] = {'id': target_canvas, 'version': mapped['version'],
+                                                   'outputVersion': record['version']}
+                self.app.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(record), target_output))
         return skipped
 
-    def fork_media_body(self, body, source_id, target_id, mapping):
+    def fork_media_body(self, body, source_id, target_id, mapping, *, kind='gif'):
         """Remap only a compact GIF adapter; never clone its media bytes."""
         from .output_media import validate_media_reference
         from .resource_files import put
@@ -243,12 +376,12 @@ class Outputs:
         if source_output not in mapping:
             return None
         original = self.record(source_id, source_output)
-        validate_media_reference(reference, original, source_id, kind='gif')
+        validate_media_reference(reference, original, source_id, kind=kind)
         clone = self.record(target_id, mapping[source_output])
         fields = ('id', 'sessionId', 'title', 'filename', 'version', 'sha256', 'bytes', 'media')
         remapped = {'item': {key: copy.deepcopy(clone[key]) for key in fields},
                     'messageId': clone['origin']['messageId']}
-        validate_media_reference(remapped, clone, target_id, kind='gif')
+        validate_media_reference(remapped, clone, target_id, kind=kind)
         return put(self.app.db, {'mediaReference': remapped})
 
     async def dispatch(self,action,args,origin,command_id,*,image_identity=None):
@@ -346,7 +479,8 @@ class Outputs:
                         if not canvas:raise ValueError('This saved canvas is unavailable in the conversation.')
                         body=self.app.state_resource(canvas['body']['$resource'])
                         data=json.dumps(body,ensure_ascii=False,sort_keys=True).encode()
-                        value.update(canvasId=canvas['id'],canvasKind=canvas['kind'],canvasSource=copy.deepcopy(canvas['body']),filename='canvas.json',versionEvidence='snapshot')
+                        value.update(canvasId=canvas['id'],canvasVersion=canvas.get('revision', 1),
+                                     canvasKind=canvas['kind'],canvasSource=copy.deepcopy(canvas['body']),filename='canvas.json',versionEvidence='snapshot')
                 else:
                     parsed=urlsplit(args['url'])
                     if parsed.scheme not in {'http','https'} or not parsed.hostname or parsed.username or parsed.password or any(ord(c)<32 for c in args['url']):
@@ -385,6 +519,13 @@ class Outputs:
                     if linked_record.get('kind') == 'media':
                         self.media.authority(current, origin)
                     result=self.store.link(args['id'],args['expectedRevision'],action=='outputs.relink')
+                    if action == 'outputs.unlink':
+                        for canvas in self.app.state.get('canvasArtifacts', []):
+                            if canvas.get('sessionId') == session['id']:
+                                for publication in canvas.get('publications', []):
+                                    if publication.get('outputId') == result['id']:
+                                        publication['chat'] = 'none'
+                                        publication.pop('imageGeneration', None)
                 elif action=='outputs.comment':
                     record=self.record(session['id'],args['id'])
                     location={key:args[key] for key in ('path','side','line') if key in args}
@@ -412,8 +553,10 @@ class Outputs:
                 self.store.remember(identity,request,result)
                 if action in {'outputs.unlink','outputs.relink'} and result.get('kind') == 'media':
                     current['mediaRevision'] = current.get('mediaRevision', 0) + 1
-                    self.app._publish_changes(sessions={current['id']})
+                    self.app._publish_changes(sessions={current['id']}, globals={'canvasArtifacts'})
                 elif action == 'outputs.attachImage':
+                    self.app._publish_changes(globals={'canvasArtifacts'})
+                elif action == 'outputs.unlink':
                     self.app._publish_changes(globals={'canvasArtifacts'})
                 else:
                     self.app._save_changes()

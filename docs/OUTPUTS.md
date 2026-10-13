@@ -18,6 +18,29 @@ Validation:30 backend checks across output, resource-retention, server and canva
 
 ## Explicit visual inspection
 
+### General presentation adapters
+
+`canvas.present {sessionId, outputId, version, messageId?,
+presentation:{chat:"compact",canvas:"open"}, clientId?}` maps the exact output
+tuple to one saved Canvas definition. It does not attach the output again.
+Writing, safe text/data/images and saved Canvas bodies use their existing
+immutable owners; typed references do not duplicate those bytes. External
+documents remain addresses. HTML attached as an ordinary file does not gain
+execution because of its filename. Unsupported formats offer a compact
+download/handoff and return Canvas `unavailable`.
+
+Publications carry exact-version `outputId`, suppressing duplicate legacy media
+even in `chat:none`. Unlink suppresses that active publication but retains exact
+authorized library access. Fork and signed/reviewed transfer validate and remap
+both definition bindings and publication output identities.
+
+Only the canonical completed-receipt image-output producer projects durable
+`publication.imageGeneration: {verified:true, requestId, operation, parentId}`.
+It is bound to the exact output, Canvas version, body and original message, not
+MIME, a claimed request ID or the newest execution window. Verified means local
+bytes match a completed producer receipt, not visual inspection; private paths
+and account/receipt details are not part of that publication marker.
+
 Attach a rendered PNG as a file, then call `outputs.image` directly through `app_control` with that output ID and exact SHA-256. Do not nest this read inside `tool_exec`: its outer result does not retain the required direct app-control receipt. UI and agent use the same action. UI opens an authenticated preview without sending a message or changing the draft. An agent call keeps the exact tool receipt and supplies typed PNG pixels to the next supported provider request, through the existing surface-delivery boundary. Only the latest explicitly requested image is carried, within the current input; compaction, a changed input, or a missing exact tool result requires another explicit read. Cached request-budget pixels are revalidated before transport. A text receipt or successful canvas render is not visual QA.
 
 Image selection does not survive a new user input or resumed runtime. Prior successful inspection receipts remain historical evidence; they do not select images for the new input. If the user asks to compare the saved images again, make a fresh direct `outputs.images` call with both exact IDs and hashes, then judge visibility from the current request's pixels and `comparisonReady` status. Earlier missing-pixel reports do not establish current availability. Unrelated user requests do not renew image inspection.

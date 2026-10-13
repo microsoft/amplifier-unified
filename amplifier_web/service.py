@@ -44,6 +44,8 @@ def schema(properties=None, required=None):
     return {"type": "object", "properties": properties, "required": list(properties) if required is None else required, "additionalProperties": False}
 
 
+from .artifact_presentation import definitions as presentation_definitions, presentation_schema
+
 ACTION_DEFINITIONS = {
     "desktop.readiness": ("Inspect the serving host's native observation preflight and already-mounted conversation tools. No activation, capture, permission prompt, worker startup or provider change. Browser account/tab context is reported only when the owning transport exposes it.", schema({"sessionId": string(200)}, [])),
     "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Set verifyImports to probe the six public authoring libraries in isolated child processes. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200), "verifyImports": {"type": "boolean"}}, [])),
@@ -331,6 +333,9 @@ from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
+ACTION_DEFINITIONS.update(presentation_definitions(schema, string))
+ACTION_DEFINITIONS['canvas.show'][1]['properties'].update({
+    'presentation': presentation_schema(schema), 'messageId': string(200), 'clientId': string(100)})
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -380,7 +385,7 @@ for _access, _actions in {
     },
     "domain_authoritative": {
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
-        "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.openGif", "canvas.select", "canvas.reference",
+        "canvas.show", "canvas.present", "canvas.openFile", "canvas.openAttachment", "canvas.openGif", "canvas.select", "canvas.reference",
         *MESSAGE_INTERACTIONS,
         *operation_definitions(), *observation_definitions(schema, string),
         *visual_definitions(schema, string), *computer_visual_definitions(schema, string),
@@ -715,7 +720,8 @@ class AppService:
         result.update(navigation(result))
         result["workspaceExplorer"] = workspace_snapshot(result)
         result.pop("attentionRead", None)
-        return self.clients.project(result)
+        from .canvas_views import project_artifacts
+        return project_artifacts(self.clients.project(result))
 
     def get_state(self):
         # Explicit full reads remain compatible; browser hot paths use pages.
@@ -738,6 +744,8 @@ class AppService:
                     detail_project=self.projections.detail, demand=self.clients.records[client_id]['kind'] == 'web'))
                 cached['shellDataKey'] = self.projections.shell_key(self.state)
                 cached['shellChangeToken'] = self.shell.change_token(client_id)
+                from .canvas_views import project_artifacts
+                project_artifacts(cached)
                 if session_id is None:
                     self._client_snapshots[client_id] = cached
                     self._client_snapshot_preferences[client_id] = self._shared_preferences_stamp
@@ -749,12 +757,15 @@ class AppService:
             self._browser_snapshot = snapshot(self.state, derived, index=self.projections.sessions(self.state),
                                               copies=self._snapshot_copies, detail_project=self.projections.detail)
             self._browser_snapshot['shellDataKey'] = self.projections.shell_key(self.state)
+            from .canvas_views import project_artifacts
+            project_artifacts(self._browser_snapshot)
         if session_id is not None:
             self._session(session_id)
             from .browser_state import snapshot
             derived = {key: self._browser_snapshot[key] for key in ('attention', 'workspaceExplorer',
                 'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
-            return snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state))
+            from .canvas_views import project_artifacts
+            return project_artifacts(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state)))
         return self._browser_snapshot
 
     def session_state(self, session_id):
@@ -1418,6 +1429,8 @@ class AppService:
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
+        if action == 'canvas.show' and any(key in args for key in ('presentation', 'messageId', 'clientId')):
+            args.setdefault('sessionId', caller_session_id if origin == 'agent' else self.state.get('selectedSessionId'))
         try:
             validate(args, ACTION_DEFINITIONS[action][1])
             if action.startswith(CONFIGURATION_PREFIXES) and args.get("configurationTarget"):
@@ -1647,6 +1660,12 @@ class AppService:
             return await self.voice_visual.dispatch(action, args, command_id, origin)
         if action.startswith("outputs."):
             return await self.outputs.dispatch(action,args,origin,command_id)
+        if action == 'canvas.present' or action == 'canvas.show' and any(
+                key in args for key in ('presentation', 'messageId', 'clientId')):
+            from .artifact_presentation import dispatch, INPUT_DETACHED
+            return await dispatch(self, action, args, origin, command_id, expected_revision,
+                                  include_state=include_state, caller_session_id=caller_session_id,
+                                  detached_input=INPUT_DETACHED.get())
         if action.startswith('publishing.'):
             if origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
                 raise AppError('Publishing actions must target the calling conversation.', 409)
@@ -2350,9 +2369,10 @@ class AppService:
                     # Legacy UI-only sources keep their existing ID membership;
                     # canonical sources require exact pre-alignment provenance.
                     media_origins = {} if source.get('nativeProject') else None
+                    artifact_origins = {} if source.get('nativeProject') else None
                     try:
                         session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id'],
-                                                    media_origins=media_origins))
+                                                    media_origins=media_origins, artifact_origins=artifact_origins))
                     except ValueError as exc:
                         raise AppError(str(exc),409) from exc
                     session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
@@ -2388,9 +2408,11 @@ class AppService:
                 # session from the visible assistant bubbles alone.
                 from .session_store import fork_session
                 media_origins = {} if source.get('nativeProject') else None
+                artifact_origins = {} if source.get('nativeProject') else None
                 try:
                     session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"),
-                                                recovery=action == "session.recover", media_origins=media_origins))
+                                                recovery=action == "session.recover", media_origins=media_origins,
+                                                artifact_origins=artifact_origins))
                 except ValueError as exc:
                     raise AppError(str(exc),409) from exc
                 from .naming import persist
@@ -2829,8 +2851,12 @@ class AppService:
                 from .naming import persist
                 persist(self.data_dir,session)
             if action in {'session.fork','session.recover'} or action == 'message.edit' and args.get('mode','fork')=='fork':
-                canvas_mapping = fork_artifacts(self.state,source['id'],session,self.db)
-                adapter_skips = self.outputs.fork(source['id'],session,canvas_mapping,media_origins=media_origins)
+                adapter_skips = []
+                canvas_mapping = fork_artifacts(self.state,source['id'],session,self.db,
+                    origins=artifact_origins, validate_adapter=self.outputs.validate_canvas_adapter,
+                    skips=adapter_skips)
+                adapter_skips = self.outputs.fork(source['id'],session,canvas_mapping,
+                    media_origins=media_origins, artifact_origins=artifact_origins, adapter_skips=adapter_skips)
                 if adapter_skips:
                     diagnostic_result = {**(diagnostic_result or {}), 'retainedAdapterSkips': adapter_skips}
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
@@ -3944,7 +3970,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Visual capture must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'] in {'canvas.openFile', 'canvas.openAttachment'}:
+            if args['action'] in {'canvas.present', 'canvas.show', 'canvas.openFile', 'canvas.openAttachment'}:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('File navigation must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -3976,6 +4002,16 @@ class AppService:
                 result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), include_state=False, caller_session_id=session_id)
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
+            if args['action'] == 'canvas.present' or args['action'] == 'canvas.show' and any(
+                    key in action_args for key in ('presentation', 'messageId', 'clientId')):
+                from .artifact_presentation import INPUT_DETACHED
+                token = INPUT_DETACHED.set(input_origin is not None and input_origin['clientId'] is None)
+                try:
+                    return await self.dispatch(args['action'], action_args, origin='agent',
+                        command_id=args.get('id'), expected_revision=args.get('expectedRevision'),
+                        include_state=False, caller_session_id=session_id)
+                finally:
+                    INPUT_DETACHED.reset(token)
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_coordination = args['action'].startswith('coordination.')
             if args['action'].startswith('profiling.'):

@@ -6,6 +6,7 @@ import time
 import uuid
 
 from .state_storage import resource
+from .canvas_versions import _CURRENT_MESSAGE
 
 
 def restore_body(canvas, db, *, inline_documents=False):
@@ -19,6 +20,8 @@ def restore_body(canvas, db, *, inline_documents=False):
         return
     try:
         body = resource(db, reference['$resource'])
+        from .artifact_presentation import resolve_body
+        body = resolve_body(db, body, canvas.get('kind'), canvas.get('sessionId'))
         if not isinstance(body, dict):
             raise ValueError('Invalid saved canvas body.')
     except (KeyError, ValueError, OSError, TypeError):
@@ -43,7 +46,7 @@ def presentation(state, row):
         for key in ('view', 'tabOpen', 'lastViewedAt') if key in row})
 
 
-def remember(state, db):
+def remember(state, db, *, message=_CURRENT_MESSAGE):
     rows = state.setdefault('canvasArtifacts', [])
     canvas = state.get('canvas', {})
     if not canvas.get('kind') or canvas.get('placeholder') or canvas.get('app'):
@@ -56,6 +59,11 @@ def remember(state, db):
     if 'messageId' not in canvas:
         canvas['messageId'] = next((m['id'] for m in reversed(session.get('messages', [])) if m.get('role')=='user' and m.get('id')), None)
     canvas.setdefault('createdAt', time.time())
+    previous = next((r for r in rows if r['id'] == canvas['id']), None)
+    if previous and previous.get('outputBinding') and not canvas.get('_versionWrite'):
+        # A materialized view is not a new body owner. Passive latest viewing
+        # must never replace a typed reference with a duplicate content body.
+        return
     reference=canvas.get('contentResource')
     if not reference:
         # Connection/context/operation IDs change on every poll; they must never
@@ -68,7 +76,6 @@ def remember(state, db):
             # receipts, the agent context, or every subsequent state write.
             canvas['contentResource']=reference
             canvas.pop('content',None)
-    previous = next((r for r in rows if r['id']==canvas['id']), None)
     if canvas.get('selectedVersion') is not None:
         return  # Historical viewing can never replace the latest saved body.
     if previous and not canvas.get('_versionWrite'):
@@ -76,7 +83,7 @@ def remember(state, db):
         if canvas.get('revision', 1) != previous.get('revision', 1):
             return
 
-    record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','workspacePath','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView','contentResource','presentationKey') if key in canvas}
+    record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','workspacePath','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView','contentResource','presentationKey','outputBinding','imageRequestId') if key in canvas}
     if 'mcp' in canvas:
         from .resource_files import put
         record['mcpState'] = put(db, canvas['mcp'])
@@ -87,7 +94,7 @@ def remember(state, db):
     if not previous or canvas.get('_versionWrite'):
         record['_presentationWrite'] = canvas.pop('_presentationWrite', False)
         save(record, previous, state, force=canvas.pop('_forceVersion', False),
-             **({'message': None} if canvas.get('kind') == 'gif' else {}))
+             message=None if canvas.get('kind') in {'gif', 'mp4'} else message)
         record.pop('_presentationWrite', None)
     else:
         record.update({key: copy.deepcopy(previous[key]) for key in ('revision', 'versions', 'publications') if key in previous})
@@ -124,6 +131,8 @@ def load(state, db, identity, *, open_panel=True, version=None):
     if not selected.get('contentResource'):
         try:
             body = resource(db, selected['body']['$resource'])
+            from .artifact_presentation import resolve_body
+            body = resolve_body(db, body, selected.get('kind'), selected.get('sessionId'))
             if not isinstance(body, dict):
                 raise ValueError('Invalid saved canvas body.')
             canvas.update(copy.deepcopy(body))
@@ -219,17 +228,38 @@ def restore(state,db,*,open_panel=False):
     else:empty(state,open_panel=open_panel)
 
 
-def fork_artifacts(state, source_id, target, db=None):
+def fork_artifacts(state, source_id, target, db=None, *, origins=None, validate_adapter=None, skips=None):
     """Carry snapshots only through retained messages; never carry future artifacts."""
     kept={m['id'] for m in target.get('messages',[]) if m.get('id')}
+    translation = origins if origins is not None else {identity: identity for identity in kept}
+    source_kept = set(translation)
     mapping = {}
     for row in list(state.get('canvasArtifacts',[])):
-        if row.get('sessionId')==source_id and row.get('messageId') in kept:
+        if row.get('sessionId') == source_id:
+            # Validate retained adapters at the first copy boundary, before
+            # fork_definition can dereference malformed versions/publications.
+            if validate_adapter:
+                try:
+                    validate_adapter(row, source_id)
+                except (ValueError, KeyError, TypeError, OSError) as exc:
+                    if skips is not None:
+                        skips.append({'canvasId': row['id'], 'reason': str(exc)})
+                    continue
+            if (row.get('messageId') not in source_kept and not any(
+                    link.get('messageId') in source_kept for link in row.get('publications', []))):
+                continue
             from .canvas_versions import fork_definition
-            definition = fork_definition(row, kept, db)
+            definition = fork_definition(row, source_kept, db)
             if definition is None:
                 continue
             cloned = {**definition,'id':uuid.uuid4().hex,'sessionId':target['id'],'tabOpen':False,**({'sharedToolView':True} if row.get('kind')=='mcp-app' else {})}
+            cloned['messageId'] = translation.get(cloned.get('messageId')) or next(
+                (translation[link['messageId']] for link in cloned.get('publications', [])
+                 if link.get('messageId') in translation), None)
+            for link in cloned.get('publications', []):
+                link['messageId'] = translation.get(link.get('messageId'))
+            for entry in cloned.get('versions', []):
+                entry['messageId'] = translation.get(entry.get('messageId'))
             if cloned.get('app'):
                 cloned['app']['requests'] = []  # Forked history never replays approvals.
             state['canvasArtifacts'].append(cloned)
@@ -254,7 +284,14 @@ def image_output(state, session, output):
            'body': copy.deepcopy(output['body']),
            'imageRequestId': output['imageGeneration']['requestId'],
            'contentResource': copy.deepcopy(output['body'])}
+    from .artifact_presentation import output_binding, generation_binding
+    row['outputBinding'] = output_binding(output)
     save(row, None, state, message=mid)
+    for link in row['publications']:
+        link.update(outputId=output['id'], chat='inline')
+        marker = generation_binding(output, row, link['version'])
+        if marker:
+            link['imageGeneration'] = marker
     state.setdefault('canvasArtifacts', []).append(row)
     return row
 
