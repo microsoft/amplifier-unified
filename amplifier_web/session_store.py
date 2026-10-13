@@ -323,7 +323,7 @@ def _full_fork_view(messages, visible, target_id, created_at):
     return result
 
 
-def _media_fork_bindings(messages, visible, source, *, roles=('assistant',)):
+def _media_fork_bindings(messages, visible, source, *, roles=('assistant',), install_indexes=True):
     """Capture exact media provenance before legacy display alignment runs."""
     from .automatic_history import display_message
     from .media_saved_aliases import valid_id
@@ -358,7 +358,7 @@ def _media_fork_bindings(messages, visible, source, *, roles=('assistant',)):
                               and row['id'] != descriptor['id']))
         for claim in claims:
             bindings.setdefault(claim, []).append((position, row.get('id'), valid))
-        if valid:
+        if valid and install_indexes:
             # A pre-existing exact nativeMessageId/canonical spelling can lack
             # nativeIndex. Install its proven position, never a text guess.
             row['nativeIndex'] = index
@@ -459,7 +459,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     media_canonical, media_bindings = (_media_fork_bindings(messages, visible, source)
                                       if media_origins is not None else ({}, {}))
     artifact_canonical, artifact_bindings = (
-        _media_fork_bindings(messages, visible, source, roles=('user', 'assistant'))
+        _media_fork_bindings(messages, visible, source, roles=('user', 'assistant'), install_indexes=False)
         if artifact_origins is not None else ({}, {}))
     explicit_anchors = {i for i, row in enumerate(visible)
                         if type(row.get('nativeIndex')) is int or row.get('nativeMessageId')}

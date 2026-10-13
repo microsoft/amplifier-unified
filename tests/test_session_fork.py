@@ -750,3 +750,24 @@ def test_default_media_origin_map_remains_assistant_only(tmp_path):
     assert canonical_user not in media and 'exact-user-only-alias' not in media
     _assert_media_origin_map_not_returned(result, media)
     assert item == original
+
+
+def test_artifact_origin_capture_never_installs_indexes_or_changes_legacy_cutoff(tmp_path):
+    from amplifier_web.session_store import _media_fork_bindings
+    rows = [{'role': role, 'content': 'Repeated legacy ' + role}
+            for role in ('user', 'assistant', 'user', 'assistant')]
+    item, store = _media_origin_fork_source(tmp_path, rows, (2, 3))
+    item['messages'][0].pop('nativeIndex')
+    original = copy.deepcopy(item)
+    visible = copy.deepcopy(item['messages'])
+    canonical, bindings = _media_fork_bindings(
+        rows, visible, item, roles=('user', 'assistant'), install_indexes=False)
+    assert visible == original['messages'] and 2 in canonical and 2 in bindings
+    boundary = item['messages'][0]['id']
+    baseline = fork_session(tmp_path, item, 'baseline-legacy-cut', before_message_id=boundary,
+                            prepare_only=True)
+    with_artifacts = fork_session(tmp_path, item, 'artifact-legacy-cut', before_message_id=boundary,
+                                  prepare_only=True, artifact_origins={})
+    assert with_artifacts == baseline
+    assert baseline['context'] == []  # Collection did not promote a new explicit cutoff anchor.
+    assert item == original and store.load(item['id'])[0] == rows

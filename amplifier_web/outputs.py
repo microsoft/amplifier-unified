@@ -175,6 +175,28 @@ class Outputs:
         originals = [json.loads(saved) for saved, in rows]
         skipped = list(adapter_skips or [])
         invalid_canvas = {item['canvasId'] for item in skipped if 'canvasId' in item}
+        originals_by_id = {row['id']: row for row in originals}
+        published_library_outputs = set()
+        copied_canvases = {value: key for key, value in (canvas_mapping or {}).items()}
+        source_canvases = {row['id']: row for row in self.app.state.get('canvasArtifacts', [])
+                           if row.get('sessionId') == source_id}
+        # Canvas has already applied the canonical cutoff. Only its surviving,
+        # exact admitted publications can bring an originally unanchored output.
+        # Do not fabricate an origin or carry arbitrary library/future records.
+        from .artifact_presentation import output_binding, generation_binding
+        for row in self.app.state.get('canvasArtifacts', []):
+            if row.get('sessionId') != target['id'] or row.get('id') not in copied_canvases:
+                continue
+            source_row = source_canvases[copied_canvases[row['id']]]
+            for link in row.get('publications', []):
+                record = originals_by_id.get(link.get('outputId'))
+                if not record or record.get('origin', {}).get('messageId') is not None or link.get('messageId') not in kept:
+                    continue
+                entry = next((v for v in row.get('versions', []) if v.get('version') == link.get('version')), None)
+                if entry and (entry.get('outputBinding') == output_binding(record)
+                              or ('outputBinding' not in entry and generation_binding(
+                                  record, source_row, link['version']))):
+                    published_library_outputs.add(record['id'])
 
         def clone(original, value):
             value['parentId']=mapping.get(original.get('parentId'))
@@ -209,7 +231,7 @@ class Outputs:
                     continue
             else:
                 message_id = artifact_origins.get(message_id) if artifact_origins is not None else message_id
-                if message_id not in kept:
+                if message_id not in kept and original['id'] not in published_library_outputs:
                     continue
             value={key:copy.deepcopy(value) for key,value in original.items() if key not in {'id','sessionId','createdAt','revision','version','linked','parentId','evidenceIds'}}
             value['forkSource']={'sessionId':source_id,'outputId':original['id'],'sha256':original.get('sha256')}

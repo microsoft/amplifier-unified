@@ -469,16 +469,20 @@ async def test_signed_artifact_transfer_rejects_mapping_and_publication_namespac
 @pytest.mark.parametrize('defect', [
     'request', 'operation', 'parent', 'verified-bool', 'verified-integer', 'origin',
     'canvas-request', 'output-canvas', 'old-body', 'ordinary-version', 'ordinary-output',
+    'missing-output', 'legacy-missing-output', 'null-marker', 'old-content-resource',
+    'current-content-resource', 'legacy-content-resource', 'legacy-current-content-resource',
 ])
 async def test_signed_artifact_transfer_rejects_corrupt_or_inherited_generation_markers(
         tmp_path, monkeypatch, defect):
     from amplifier_portability.capsule import read_capsule
     from amplifier_web import portability_data
+    from test_output_images import png
     app, target, source, destination, root, destrepo, sid, output, _ = await setup_hosts(tmp_path, monkeypatch)
     try:
         host_env(monkeypatch, source)
         record, row, _, _ = await _portable_artifact(app, sid, root, output, 'generated', monkeypatch)
-        await _ordinary_portable_revision(app, sid, row)
+        if defect not in {'current-content-resource', 'legacy-current-content-resource'}:
+            await _ordinary_portable_revision(app, sid, row)
         receipt, _ = await export(app, target, sid, root)
         body = read_capsule(Path(receipt['package']))['body']
         portability_data.validate(body['payload'])
@@ -488,7 +492,20 @@ async def test_signed_artifact_transfer_rejects_corrupt_or_inherited_generation_
         saved = next(item for item in payload['outputs'] if item['id'] == record['id'])
         link = next(item for item in canvas['publications'] if item.get('outputId') == record['id'])
         marker = copy.deepcopy(link['imageGeneration'])
-        if defect in {'request', 'operation', 'parent', 'verified-bool', 'verified-integer'}:
+        if defect.startswith('legacy-'):
+            for entry in [canvas, *canvas['versions']]:
+                entry.pop('outputBinding', None)
+        if defect in {'missing-output', 'legacy-missing-output'}:
+            link.pop('outputId')
+        elif defect == 'null-marker':
+            link['imageGeneration'] = None
+        elif defect in {'old-content-resource', 'legacy-content-resource',
+                        'current-content-resource', 'legacy-current-content-resource'}:
+            other_image = _transfer_resource(payload, {'content': 'data:image/png;base64,' +
+                base64.b64encode(png(7, 2)).decode()})
+            entry = canvas if 'current' in defect else canvas['versions'][0]
+            entry['contentResource'] = other_image
+        elif defect in {'request', 'operation', 'parent', 'verified-bool', 'verified-integer'}:
             field, replacement = {
                 'request': ('requestId', 'synthetic-different-request'),
                 'operation': ('operation', 'edit'),
@@ -522,6 +539,59 @@ async def test_signed_artifact_transfer_rejects_corrupt_or_inherited_generation_
             ordinary = next(item for item in canvas['publications'] if item['version'] == 2)
             ordinary.update(outputId=output['id'], imageGeneration=marker)
         await _reject_signed_artifact(app, target, changed, tmp_path, destination, destrepo, monkeypatch)
+    finally:
+        host_env(monkeypatch, source); await app.close()
+        host_env(monkeypatch, destination); await target.close()
+
+
+@pytest.mark.parametrize('kind', ['canvas-app', 'mcp-app', 'settings'])
+async def test_signed_transfer_refuses_output_snapshot_without_interactive_owner_binding(tmp_path, monkeypatch, kind):
+    from amplifier_portability.capsule import read_capsule
+    app, target, source, destination, root, destrepo, sid, output, _ = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        record, row, _, _ = await _portable_artifact(app, sid, root, output, 'canvas', monkeypatch)
+        receipt, _ = await export(app, target, sid, root)
+        changed = copy.deepcopy(read_capsule(Path(receipt['package']))['body'])
+        saved = next(item for item in changed['payload']['outputs'] if item['id'] == record['id'])
+        canvas = next(item for item in changed['payload']['canvas'] if item['id'] == row['id'])
+        saved['canvasKind'] = kind
+        canvas['kind'] = kind
+        for entry in canvas['versions']:
+            entry['kind'] = kind
+        await _reject_signed_artifact(app, target, changed, tmp_path, destination, destrepo, monkeypatch)
+    finally:
+        host_env(monkeypatch, source); await app.close()
+        host_env(monkeypatch, destination); await target.close()
+
+
+async def test_legacy_generated_image_signed_transfer_preserves_unmodified_definitions(tmp_path, monkeypatch):
+    from test_portability_outputs import release_to, activate
+    app, target, source, destination, root, destrepo, sid, output, _ = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        record, row, _, mid = await _portable_artifact(app, sid, root, output, 'generated', monkeypatch)
+        for entry in [row, *row['versions']]:
+            entry.pop('outputBinding')
+        row['publications'] = [{'messageId': mid, 'version': 1}]
+        versions = copy.deepcopy(row['versions'])
+        original = copy.deepcopy(app.outputs.record(sid, record['id']))
+        content = app.outputs.content(original)
+        app._session(sid)['messages'] = []
+        app._save()
+        staged, released = await release_to(app, target, sid, source, destination, destrepo, monkeypatch)
+        host_env(monkeypatch, destination)
+        assert (await activate(target, sid, staged, released))['phase'] == 'active'
+        imported = next(item for item in target.state['canvasArtifacts'] if item['id'] == row['id'])
+        presented = (await target.dispatch('canvas.present', {'sessionId': sid, 'outputId': record['id'],
+            'version': record['version'], 'presentation': {'chat': 'inline', 'canvas': 'unchanged'}}))['result']
+        assert presented['id'] == row['id'] and presented['version'] == 1
+        assert presented['publication']['imageGeneration']['requestId'] == 'synthetic-portable-generation'
+        assert imported['versions'] == versions and imported['body'] == original['body']
+        assert imported['contentResource'] == original['body']
+        assert target.outputs.record(sid, record['id']) == original
+        assert target.outputs.content(original) == content
+        assert not target.runtime.workers
     finally:
         host_env(monkeypatch, source); await app.close()
         host_env(monkeypatch, destination); await target.close()

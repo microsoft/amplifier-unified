@@ -13,6 +13,7 @@ import time
 import uuid
 
 INPUT_DETACHED = ContextVar('artifact_presentation_detached_input', default=False)
+UNSUPPORTED_SNAPSHOTS = {'canvas-app', 'mcp-app', 'settings'}
 
 
 def presentation_schema(schema):
@@ -52,7 +53,8 @@ def validate_definition(entry, row, record, body, source_body=None):
     """Bind format and saved body as well as the output ID/version tuple."""
     kind = entry.get('kind', row.get('kind'))
     if record.get('bodyFormat') == 'canvas-image-v1':
-        if kind != 'image' or entry.get('body') != record.get('body'):
+        if (kind != 'image' or entry.get('body') != record.get('body')
+                or entry.get('contentResource', record.get('body')) != record.get('body')):
             raise ValueError('Generated image definition differs from its original body.')
     elif record.get('kind') == 'media':
         from .output_media import validate_media_reference
@@ -60,6 +62,8 @@ def validate_definition(entry, row, record, body, source_body=None):
             raise ValueError('Retained media definition has no exact media reference.')
         validate_media_reference(body['mediaReference'], record, row['sessionId'], kind=kind)
     elif record.get('kind') == 'canvas':
+        if record.get('canvasKind') in UNSUPPORTED_SNAPSHOTS:
+            raise ValueError('This Canvas output snapshot has no qualified interactive owner binding.')
         if kind != record.get('canvasKind') or body != source_body:
             raise ValueError('Canvas output definition differs from its admitted source.')
     elif (kind not in {'markdown', 'text', 'code', 'json', 'jsonl', 'image', 'pdf', 'output'}
@@ -123,10 +127,27 @@ def generation_binding(record, row, version):
             or record.get('canvasId') != row['id']
             or record.get('sessionId') != row.get('sessionId')
             or saved.get('kind') != 'image' or saved.get('body') != record.get('body')
-            or saved.get('outputBinding') != output_binding(record)):
+            or saved.get('contentResource', record.get('body')) != record.get('body')
+            or ('outputBinding' in saved and saved['outputBinding'] != output_binding(record))):
         return None
     return {'verified': True, 'requestId': receipt['requestId'],
             'operation': receipt['operation'], 'parentId': record.get('parentId')}
+
+
+def legacy_generation_output(service, row, version):
+    """Qualify the pre-adapter canonical join without changing saved versions."""
+    candidates = service.db.execute(
+        "SELECT value FROM output_records WHERE session_id=? "
+        "AND json_extract(value,'$.canvasId')=? "
+        "AND json_extract(value,'$.bodyFormat')='canvas-image-v1'",
+        (row['sessionId'], row['id'])).fetchall()
+    matched = [record for saved, in candidates
+               if generation_binding(record := json.loads(saved), row, version)]
+    if len(matched) > 1:
+        raise ValueError('The canonical saved image relationship is ambiguous.')
+    if matched:
+        output_bytes(service.db, matched[0])
+    return matched[0] if matched else None
 
 
 def admission(service, sid, mid):
@@ -162,6 +183,8 @@ def adapter(service, session, record):
     from .canvas_versions import definition, save
     from .resource_files import put
     from .state_storage import resource
+    if record.get('kind') == 'canvas' and record.get('canvasKind') in UNSUPPORTED_SNAPSHOTS:
+        raise ValueError('This Canvas output snapshot has no qualified interactive owner binding.')
     binding = output_binding(record)
     mapped = record.get('presentationArtifact')
     identity = mapped.get('id') if isinstance(mapped, dict) else record.get('canvasId') if record.get('bodyFormat') == 'canvas-image-v1' else None
@@ -169,8 +192,11 @@ def adapter(service, session, record):
                 if r['id'] == identity and r.get('sessionId') == session['id']), None) if identity else None
     if row is not None:
         for entry in row.get('versions', []) or [row]:
-            if entry.get('outputBinding') == binding:
-                version = entry.get('version', row.get('revision', 1))
+            version = entry.get('version', row.get('revision', 1))
+            if entry.get('outputBinding') == binding or (
+                    'outputBinding' not in entry and generation_binding(record, row, version)):
+                if record.get('bodyFormat') == 'canvas-image-v1':
+                    output_bytes(service.db, record)
                 return row, version
     if mapped:
         raise ValueError('The exact output adapter mapping is unavailable; it was not recreated.')
@@ -241,6 +267,8 @@ def publish(service, row, version, args, record=None):
     from .canvas_views import capabilities
     selected = definition(row, version, service.db)
     mode = args['presentation']['chat']
+    if record and record.get('kind') == 'canvas' and record.get('canvasKind') in UNSUPPORTED_SNAPSHOTS:
+        raise ValueError('This Canvas output snapshot has no qualified interactive owner binding.')
     if record and not record.get('linked') and mode != 'none':
         from .service import AppError
         raise AppError('Relink this output before creating an active chat publication.', 409)
@@ -249,18 +277,21 @@ def publish(service, row, version, args, record=None):
         raise AppError(capabilities(selected['kind'])['reason'], 409)
     links = row.setdefault('publications', [])
     mid = args.get('messageId')
-    retained_none = mode == 'none' and not mid and record is not None
+    same = [link for link in links if link.get('version') == version]
+    if not mid and mode == 'none' and len(same) > 1:
+        from .service import AppError
+        raise AppError('Supply messageId to suppress one exact retained publication.', 409)
+    existing = next((link for link in same if link.get('messageId') == mid), None) if mid else (
+        same[0] if len(same) == 1 else None)
+    retained_none = mode == 'none' and not mid and record is not None and existing is None
     if retained_none:
         # Suppress the exact legacy InlineMedia relationship even for a
         # library-only adapter. This is its admitted origin, not a new turn.
         mid = record.get('origin', {}).get('messageId')
-    same = [link for link in links if link.get('version') == version]
-    existing = next((link for link in same if link.get('messageId') == mid), None) if mid else (
-        same[0] if len(same) == 1 else None)
     legacy_mode = 'inline' if selected['kind'] in {'image', 'html', 'babylon', 'mermaid', 'dot'} else 'compact'
     if existing is None and mode != 'none':
         admission(service, row['sessionId'], args.get('messageId'))
-    elif existing is not None and existing.get('chat', legacy_mode) != mode:
+    elif existing is not None and mode != 'none' and existing.get('chat', legacy_mode) != mode:
         # Reusing an admitted identity to open is read-like. A changed
         # publication, however, still needs current explicit anchor admission.
         admission(service, row['sessionId'], args.get('messageId'))
@@ -402,15 +433,6 @@ async def dispatch(service, action, args, origin, command_id, expected_revision,
                 record = service.outputs.record(session['id'], args['outputId'])
                 if type(record.get('version')) is not int or record['version'] != args['version']:
                     raise AppError('Choose the exact owned output version, not a Canvas revision.', 409)
-                if not record.get('linked') and args['presentation']['chat'] != 'none':
-                    raise AppError('Relink this output before creating an active chat publication.', 409)
-                if args['presentation']['chat'] != 'none':
-                    # Check before adding a new adapter; an existing anchor is
-                    # reused below without recurring history qualification.
-                    existing = record.get('presentationArtifact') or (
-                        record.get('bodyFormat') == 'canvas-image-v1' and record.get('canvasId'))
-                    if not existing:
-                        admission(service, session['id'], args.get('messageId'))
                 row, version = adapter(service, session, record)
                 if any(row is saved for saved in before):
                     touched = row, copy.deepcopy(row)
@@ -426,6 +448,8 @@ async def dispatch(service, action, args, origin, command_id, expected_revision,
                     binding = selected['outputBinding']
                     record = service.outputs.record(session['id'], binding['outputId'])
                     check_output(binding, record, session['id'])
+                elif row.get('imageRequestId'):
+                    record = legacy_generation_output(service, row, version)
             publication = publish(service, row, version, args, record)
             canvas = open_canvas(service, row, version, args, detached_input=detached_input)
         except AppError:

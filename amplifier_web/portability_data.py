@@ -196,6 +196,10 @@ def _validate_media_bindings(value):
     sid = value['session']['id']
     outputs = {row['id']: row for row in value['outputs']}
     resources = value['resources']
+    generated = {}
+    for record in outputs.values():
+        if record.get('bodyFormat') == 'canvas-image-v1':
+            generated.setdefault(record.get('canvasId'), []).append(record)
 
     def check_reference(body, kind):
         if isinstance(body, dict) and 'outputReference' in body:
@@ -262,9 +266,16 @@ def _validate_media_bindings(value):
         retained = False
         current_ref = None
         latest_ref = None
+        current_saved = next((v for v in versions if v.get('version') == row.get('revision')), {})
         for entry in [row, *versions]:
             kind = entry.get('kind', row.get('kind'))
             binding = entry.get('outputBinding')
+            if 'outputBinding' not in entry:
+                for record in generated.get(row['id'], []):
+                    if (kind == 'image' and (
+                            any(entry.get(key) == record.get('body') for key in ('body', 'contentResource'))
+                            or entry is row and current_saved.get('body') == record.get('body'))):
+                        validate_definition(entry, row, record, resources[entry['body']['$resource']])
             if binding is not None:
                 version = entry.get('revision') if entry is row else entry.get('version')
                 if type(version) is not int or version < 1:
@@ -312,7 +323,7 @@ def _validate_media_bindings(value):
                 selected = by_version.get(link.get('version'))
                 if isinstance(selected, dict) and selected.get('outputBinding'):
                     raise ValueError('Exact output publication is missing its owning output identity.')
-                if link.get('imageGeneration') is not None:
+                if 'imageGeneration' in link:
                     raise ValueError('Generation publication is missing its owning output identity.')
                 continue
             if type(link.get('version')) is not int or link['version'] not in by_version:
@@ -321,8 +332,15 @@ def _validate_media_bindings(value):
             if record is None:
                 raise ValueError('Publication has no transferred owning output.')
             binding = by_version[link['version']].get('outputBinding')
-            check_output(binding, record, sid)
-            if link.get('imageGeneration') is not None:
+            if binding is None and 'outputBinding' not in by_version[link['version']]:
+                # Older canonical generated-image versions did not carry the
+                # adapter field. Qualify their existing exact receipt/body join,
+                # never rewrite immutable definitions during import.
+                if generation_binding(record, row, link['version']) is None:
+                    raise ValueError('Publication has no exact owning output binding.')
+            else:
+                check_output(binding, record, sid)
+            if 'imageGeneration' in link:
                 marker = link['imageGeneration']
                 if (not isinstance(marker, dict) or marker.get('verified') is not True
                         or link.get('messageId') != record.get('origin', {}).get('messageId')

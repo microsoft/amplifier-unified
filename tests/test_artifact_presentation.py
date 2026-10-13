@@ -534,6 +534,185 @@ async def test_unlink_suppression_is_durable_and_exact_library_access_survives(a
     assert app.clients.records['one']['canvas']['content'] == 'Keep original bytes'
 
 
+@pytest.mark.parametrize('selector', ['id', 'outputId'])
+@pytest.mark.parametrize('chat', ['compact', 'inline'])
+async def test_unlinked_output_has_same_active_publication_guard_for_either_identifier(app, selector, chat):
+    session = owner(app)
+    mid = session['messages'][0]['id']
+    output = (await call(app, 'outputs.write', {'sessionId': session['id'], 'title': 'Unlinked exact output',
+        'content': 'Retained unlinked content', 'variant': 'document', 'messageId': mid}))['result']
+    saved = (await call(app, 'canvas.present', {'sessionId': session['id'], 'outputId': output['id'],
+        'version': output['version'], 'messageId': mid,
+        'presentation': {'chat': 'compact', 'canvas': 'unchanged'}}))['result']
+    await call(app, 'outputs.unlink', {'sessionId': session['id'], 'id': output['id'],
+                                     'expectedRevision': output['revision']})
+    row = artifact(app, saved['id'])
+    before = copy.deepcopy(row)
+    args = {'sessionId': session['id'], selector: saved['id'] if selector == 'id' else output['id'],
+            'version': 1, 'messageId': mid, 'presentation': {'chat': chat, 'canvas': 'open'}}
+    with pytest.raises(AppError, match='Relink'):
+        await call(app, 'canvas.present', args)
+    assert row == before
+    opened = (await call(app, 'canvas.present', {**args, 'presentation': {'chat': 'none', 'canvas': 'open'}}))['result']
+    assert opened['canvas']['status'] == 'opened' and opened['publication']['chat'] == 'none'
+    await call(app, 'outputs.relink', {'sessionId': session['id'], 'id': output['id'],
+                                     'expectedRevision': output['revision'] + 1})
+    republished = (await call(app, 'canvas.present', args))['result']
+    assert republished['publication']['chat'] == chat and len(row['publications']) == 1
+    assert row['versions'] == before['versions']
+
+
+@pytest.mark.parametrize('backed', [False, True])
+async def test_none_suppresses_exact_retained_publication_without_origin_history(app, monkeypatch, backed):
+    from amplifier_web import artifact_presentation
+    session = owner(app)
+    mid = session['messages'][0]['id']
+    if backed:
+        output = (await call(app, 'outputs.write', {'sessionId': session['id'], 'title': 'Published library writing',
+            'content': 'Writing with no producer origin', 'variant': 'document'}))['result']
+        assert output['origin']['messageId'] is None
+        saved = (await call(app, 'canvas.present', {'sessionId': session['id'], 'outputId': output['id'],
+            'version': 1, 'messageId': mid,
+            'presentation': {'chat': 'compact', 'canvas': 'unchanged'}}))['result']
+    else:
+        saved = await save(app)
+    row = artifact(app, saved['id'])
+    versions = copy.deepcopy(row['versions'])
+    session['messages'] = []
+
+    def no_new_admission(*args):
+        pytest.fail('Retained suppression attempted a new history admission')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(artifact_presentation, 'admission', no_new_admission)
+        suppressed = (await call(app, 'canvas.present', {'sessionId': session['id'], 'id': row['id'],
+            'version': 1, 'presentation': {'chat': 'none', 'canvas': 'unchanged'}}))['result']
+    assert suppressed['publication']['status'] == 'published'
+    assert suppressed['publication']['messageId'] == mid and suppressed['publication']['chat'] == 'none'
+    assert len(row['publications']) == 1 and row['versions'] == versions
+    if backed:
+        assert suppressed['publication']['outputId'] == output['id']
+    with pytest.raises(AppError, match='messageId'):
+        await call(app, 'canvas.present', {'sessionId': session['id'], 'id': row['id'], 'version': 1,
+            'presentation': {'chat': 'compact', 'canvas': 'unchanged'}})
+
+
+async def test_none_without_message_id_refuses_multiple_retained_publications(app):
+    saved = await save(app)
+    session = owner(app)
+    await call(app, 'canvas.present', {'sessionId': session['id'], 'id': saved['id'], 'version': 1,
+        'messageId': session['messages'][1]['id'],
+        'presentation': {'chat': 'compact', 'canvas': 'unchanged'}})
+    before = copy.deepcopy(artifact(app, saved['id']))
+    with pytest.raises(AppError, match='one exact retained publication'):
+        await call(app, 'canvas.present', {'sessionId': session['id'], 'id': saved['id'], 'version': 1,
+            'presentation': {'chat': 'none', 'canvas': 'unchanged'}})
+    assert artifact(app, saved['id']) == before
+
+
+@pytest.mark.parametrize('selector', ['id', 'outputId'])
+async def test_legacy_generated_image_reuses_exact_canonical_receipt_body_and_versions(app, tmp_path, monkeypatch, selector):
+    from amplifier_web import resource_files
+    session = owner(app)
+    mid = session['messages'][0]['id']
+    _, data = receipt(tmp_path, 'synthetic-legacy-generation')
+    output = (await call(app, 'outputs.attachImage', {'sessionId': session['id'], 'messageId': mid,
+        'title': 'Pre-adapter image', 'receiptPath': 'synthetic-legacy-generation.json'}))['result']
+    row = artifact(app, output['canvasId'])
+    # Exact pre-change producer shape: canonical receipt/Canvas ID/shared body,
+    # but no general-adapter metadata on immutable saved definitions.
+    for entry in [row, *row['versions']]:
+        entry.pop('outputBinding')
+    row['publications'] = [{'messageId': mid, 'version': 1}]
+    versions = copy.deepcopy(row['versions'])
+    original = copy.deepcopy(app.outputs.record(session['id'], output['id']))
+    session['messages'] = []
+    (tmp_path / 'synthetic-legacy-generation.json').unlink()
+    (tmp_path / 'synthetic-legacy-generation.png').unlink()
+    puts = []
+    real_put = resource_files.put
+
+    def tracked_put(db, value):
+        puts.append(copy.deepcopy(value))
+        return real_put(db, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(resource_files, 'put', tracked_put)
+        presented = (await call(app, 'canvas.present', {'sessionId': session['id'],
+            selector: row['id'] if selector == 'id' else output['id'], 'version': 1,
+            'presentation': {'chat': 'inline', 'canvas': 'open'}}))['result']
+    assert presented['id'] == output['canvasId'] and presented['version'] == 1
+    assert presented['outputId'] == output['id'] and presented['outputVersion'] == output['version']
+    assert presented['canvas']['status'] == 'opened'
+    assert presented['publication']['imageGeneration'] == {
+        'verified': True, 'requestId': 'synthetic-legacy-generation', 'operation': 'generate', 'parentId': None}
+    assert row['versions'] == versions and row['revision'] == 1 and puts == []
+    assert app.outputs.record(session['id'], output['id']) == original
+    assert row['body'] == row['contentResource'] == output['body'] and app.outputs.content(output) == data
+    assert app.clients.records['one']['canvas']['content'].startswith('data:image/png;base64,')
+
+
+async def test_library_only_output_explicit_publication_survives_fork_without_fabricated_origin(app):
+    session = owner(app)
+    mid = session['messages'][0]['id']
+    records = []
+    for title in ('Surviving explicit publication', 'Unpublished library output', 'Future publication'):
+        records.append((await call(app, 'outputs.write', {'sessionId': session['id'], 'title': title,
+            'content': title, 'variant': 'document'}))['result'])
+    surviving, unanchored, future = records
+    saved = (await call(app, 'canvas.present', {'sessionId': session['id'], 'outputId': surviving['id'],
+        'version': 1, 'messageId': mid,
+        'presentation': {'chat': 'compact', 'canvas': 'unchanged'}}))['result']
+    await call(app, 'canvas.present', {'sessionId': session['id'], 'outputId': unanchored['id'],
+        'version': 1, 'presentation': {'chat': 'none', 'canvas': 'unchanged'}})
+    app._message(session, 'user', 'Future explicit publication')
+    await call(app, 'canvas.present', {'sessionId': session['id'], 'outputId': future['id'], 'version': 1,
+        'messageId': session['messages'][-1]['id'],
+        'presentation': {'chat': 'compact', 'canvas': 'unchanged'}})
+    original = copy.deepcopy(artifact(app, saved['id']))
+    await call(app, 'session.fork', {'id': session['id'], 'turn': 1})
+    target = app.clients.records['one']['selectedSessionId']
+    copied = app.outputs.store.list(target)['items']
+    assert len(copied) == 1 and copied[0]['forkSource']['outputId'] == surviving['id']
+    assert copied[0]['origin']['messageId'] is None and copied[0]['body'] == surviving['body']
+    clone = next(row for row in app._state['canvasArtifacts'] if row['sessionId'] == target)
+    assert clone['id'] != saved['id'] and clone['outputBinding']['outputId'] == copied[0]['id']
+    assert copied[0]['presentationArtifact']['id'] == clone['id']
+    assert clone['publications'][0]['outputId'] == copied[0]['id']
+    assert clone['publications'][0]['messageId'] in {m['id'] for m in app._session(target)['messages']}
+    opened = (await call(app, 'canvas.present', {'sessionId': target, 'outputId': copied[0]['id'],
+        'version': copied[0]['version'], 'presentation': {'chat': 'compact', 'canvas': 'open'}}))['result']
+    assert opened['canvas']['status'] == 'opened'
+    assert app.clients.records['one']['canvas']['content'] == 'Surviving explicit publication'
+    assert artifact(app, saved['id']) == original
+
+
+@pytest.mark.parametrize('kind', ['canvas-app', 'mcp-app', 'settings'])
+@pytest.mark.parametrize('selector', ['id', 'outputId'])
+async def test_interactive_output_snapshot_cannot_fabricate_missing_owner_state(app, kind, selector):
+    from amplifier_web.artifact_presentation import output_binding
+    session = owner(app)
+    saved = await save(app)
+    # Isolate snapshot admission from the independent live owner implementation.
+    artifact(app, saved['id'])['kind'] = kind
+    output = (await call(app, 'outputs.attach', {'sessionId': session['id'], 'kind': 'canvas',
+        'title': 'Unqualified interactive snapshot', 'canvasId': saved['id'],
+        'messageId': session['messages'][0]['id']}))['result']
+    if selector == 'id':
+        # A retained pre-correction adapter must not bypass the same pending
+        # owner qualification merely by using its Canvas selector.
+        for entry in [artifact(app, saved['id']), *artifact(app, saved['id'])['versions']]:
+            entry.update(kind=kind, outputBinding=output_binding(output))
+    before = copy.deepcopy(app._state['canvasArtifacts'])
+    with pytest.raises(AppError, match='interactive owner binding'):
+        await call(app, 'canvas.present', {'sessionId': session['id'],
+            selector: saved['id'] if selector == 'id' else output['id'],
+            'version': output['version'], 'messageId': session['messages'][0]['id'],
+            'presentation': {'chat': 'compact', 'canvas': 'open'}})
+    assert app._state['canvasArtifacts'] == before
+    assert 'presentationArtifact' not in app.outputs.record(session['id'], output['id'])
+
+
 async def test_durable_generation_binding_is_exact_and_not_inherited_by_ordinary_image_version(app, tmp_path):
     session = owner(app)
     mid = session['messages'][0]['id']
@@ -576,6 +755,25 @@ async def test_ordinary_image_and_claimed_request_id_never_gain_generation_marke
         'requestId': 'claimed', 'operation': 'generate', 'receiptSha256': 'a' * 64,
         'provenance': 'producer-reported; local artifact bytes verified'}}
     assert generation_binding(claimed, {**row, 'imageRequestId': 'claimed'}, 1) is None
+
+
+@pytest.mark.parametrize('pointer', ['body', 'contentResource'])
+async def test_generation_marker_rejects_each_competing_effective_saved_image_pointer(app, tmp_path, pointer):
+    from amplifier_web.artifact_presentation import generation_binding, validate_definition
+    session = owner(app)
+    _, _ = receipt(tmp_path, 'synthetic-pointer-generation')
+    output = (await call(app, 'outputs.attachImage', {'sessionId': session['id'],
+        'messageId': session['messages'][0]['id'], 'title': 'Exact image pointers',
+        'receiptPath': 'synthetic-pointer-generation.json'}))['result']
+    row = artifact(app, output['canvasId'])
+    assert generation_binding(output, row, 1) is not None
+    changed = copy.deepcopy(row)
+    changed['versions'][0][pointer] = {'$resource': 'a' * 64, 'bytes': 1}
+    assert generation_binding(output, changed, 1) is None
+    with pytest.raises(ValueError, match='original body'):
+        validate_definition(changed['versions'][0], changed, output,
+                            app.state_resource(output['body']['$resource']))
+    assert generation_binding(output, row, 1) is not None
 
 
 @pytest.mark.parametrize('format', ['gif', 'mp4'])
