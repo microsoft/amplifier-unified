@@ -3263,3 +3263,348 @@ async def test_discovered_worker_descriptor_http_empty_without_byte_report_or_mu
     client.session.headers['Authorization'] = ''
     client.session.cookie_jar.clear()
     assert (await client.get('/api/outputs/media', params=query, allow_redirects=False)).status in {401, 403}
+
+
+def gif_canvas_state(app):
+    """Only mutation owners, not caches or intentionally changed test authority."""
+    import copy
+    return copy.deepcopy({
+        'artifacts': app._state.get('canvasArtifacts', []),
+        'globalCanvas': app._state.get('canvas'),
+        'clients': {identity: {key: client.get(key) for key in
+                    ('canvas', 'canvasTabs', 'canvasViews', 'drafts', 'attachments', 'view')}
+                    for identity, client in app.clients.records.items()},
+        'outputs': app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall(),
+        'outputReceipts': app.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall(),
+        'commands': app.db.execute('SELECT * FROM commands ORDER BY id').fetchall(),
+        'resources': app.db.execute('SELECT * FROM state_resources ORDER BY id').fetchall(),
+    })
+
+
+def gif_open_args(args, record):
+    return {key: (args if key == 'messageId' else record)[key]
+            for key in ('sessionId', 'messageId', 'id', 'version', 'sha256')}
+
+
+async def test_gif_canvas_compact_reference_large_retention_replay_reload_and_peer(media_app):
+    import copy
+    import json
+    from pathlib import Path
+    from amplifier_web.service import AppService
+    from amplifier_web.state_storage import resource
+    from test_service import Runtime
+    app = media_app
+    args = media_args(app)
+    # A valid >5 MB GIF body in the existing 32 MiB output path. This is
+    # retention/admission evidence only; native pixels are the browser's job.
+    data = gif()[:-1] + b'\x21\xfe' + (b'\xff' + b'x' * 255) * 25_000 + b'\x00\x3b'
+    assert 5 * 1024 * 1024 < len(data) < MAX_BYTES
+    Path(app._session()['workspace'], args['path']).write_bytes(data)
+    args['expectedSha256'] = hashlib.sha256(data).hexdigest()
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    values = gif_open_args(args, record)
+    app.clients.attach('gif-clicker')
+    app.clients.attach('gif-peer')
+    with app.clients.bind('gif-peer'):
+        await app.dispatch('canvas.show', {'kind': 'text', 'content': 'Peer artifact', 'title': 'Peer'})
+        await app.dispatch('view.update', {'patch': {'draft': 'Peer unsent draft'}})
+    peer = copy.deepcopy(app.clients.records['gif-peer'])
+    peer_artifact = next(r for r in app.state['canvasArtifacts'] if r['id'] == peer['canvas']['id'])
+    peer_body = copy.deepcopy(peer_artifact['body'])
+    assert resource(app.db, peer_body['$resource']) == {'content': peer['canvas']['content']}
+    original_outputs = app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall()
+    with app.clients.bind('gif-clicker'):
+        await app.dispatch('view.update', {'patch': {'draft': 'Clicker unsent draft'}})
+        before_count = len(app.state['canvasArtifacts'])
+        app._last_storage_sweep = 0
+        opened = await app.dispatch('canvas.openGif', values, command_id='gif-user-click')
+        identity = opened['result']['id']
+        canvas = app.state['canvas']
+        row = next(row for row in app.state['canvasArtifacts'] if row['id'] == identity)
+        body = resource(app.db, row['body']['$resource'])
+        assert canvas['kind'] == row['kind'] == 'gif'
+        assert canvas['id'] == identity and canvas['open']
+        assert body == {'mediaReference': canvas['mediaReference']}
+        assert len(json.dumps(body).encode()) < 8000 and row['body']['bytes'] < 8000
+        assert 'base64' not in json.dumps(body) and app._session()['workspace'] not in json.dumps(body)
+        assert 'path' not in body['mediaReference']['item'] and 'body' not in body['mediaReference']['item']
+        assert 'content' not in body and 'surface' not in body
+        assert {key: body['mediaReference']['item'][key] for key in
+                ('sessionId', 'id', 'version', 'sha256')} == {
+                    key: values[key] for key in ('sessionId', 'id', 'version', 'sha256')}
+        assert body['mediaReference']['messageId'] == values['messageId']
+        assert row['messageId'] is None and row['publications'] == []
+        assert len(row['versions']) == row['revision'] == 1
+        duplicate = await app.dispatch('canvas.openGif', values, command_id='gif-user-click')
+        assert duplicate['duplicate'] and duplicate['result'] == opened['result']
+        assert (await app.dispatch('canvas.openGif', values))['result']['id'] == identity
+        await app.dispatch('canvas.select', {'id': identity, 'version': 1})
+        assert app.state['canvas']['mediaReference'] == body['mediaReference']
+        await app.dispatch('canvas.close', {})
+        await app.dispatch('canvas.reopen')
+        assert app.state['canvas']['id'] == identity and app.state['canvas']['open']
+        assert len(app.state['canvasArtifacts']) == before_count + 1
+        assert row['revision'] == 1 and len(row['versions']) == 1 and row['publications'] == []
+        assert app.state['view']['draft'] == 'Clicker unsent draft'
+        assert app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall() == original_outputs
+    assert app.clients.records['gif-peer']['canvas'] == peer['canvas']
+    assert app.clients.records['gif-peer']['drafts'] == peer['drafts']
+    assert app.clients.records['gif-peer']['canvasTabs'] == peer['canvasTabs']
+    assert app._storage_maintenance_task is not None
+    await app._storage_maintenance_task
+    retained_body = copy.deepcopy(app.outputs.record(values['sessionId'], record['id'])['body'])
+    for reference in (row['body'], retained_body):
+        assert app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (reference['$resource'],)).fetchone()
+    Path(app._session(values['sessionId'])['workspace'], args['path']).unlink()
+    directory, workspace = app.data_dir, app._session(values['sessionId'])['workspace']
+    await app.close()
+    reopened = AppService(directory, workspace=workspace, runtime=Runtime())
+    try:
+        reopened.clients.attach('gif-reloaded', resume='gif-clicker')
+        with reopened.clients.bind('gif-reloaded'):
+            assert reopened.state['canvas']['id'] == identity
+            assert reopened.state['canvas']['mediaReference'] == body['mediaReference']
+            assert reopened.state['view']['draft'] == 'Clicker unsent draft'
+            assert (await reopened.dispatch('canvas.openGif', values))['result']['id'] == identity
+            assert await reopened.outputs.media.bytes(values) == data
+            assert reopened.outputs.record(values['sessionId'], record['id'])['body'] == retained_body
+            rows = [r for r in reopened.state['canvasArtifacts'] if r['kind'] == 'gif']
+            assert len(rows) == 1 and rows[0]['revision'] == 1 and len(rows[0]['versions']) == 1
+            assert rows[0]['publications'] == []
+        # Persisted, unattached clients retain a compact body. Compare its
+        # exact reference/content before normal attach restores that body.
+        assert reopened.clients.records['gif-peer']['canvas']['contentResource'] == peer_body
+        assert resource(reopened.db, peer_body['$resource']) == {'content': peer['canvas']['content']}
+        reopened.clients.attach('gif-peer')
+        assert reopened.clients.records['gif-peer']['canvas'] == peer['canvas']
+        assert reopened.clients.records['gif-peer']['drafts'] == peer['drafts']
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize('case', [
+    'agent', 'no-client', 'different-client', 'non-web-client', 'foreign-session',
+    'wrong-message', 'wrong-output', 'wrong-version', 'wrong-hash', 'unlinked',
+    'mp4', 'corrupt', 'changed-chat', 'user-role', 'worker',
+])
+async def test_gif_canvas_fail_closed_without_any_mutation(media_app, case):
+    from pathlib import Path
+    from amplifier_web.resource_files import root
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    if case == 'mp4':
+        Path(app._session()['workspace'], args['path']).write_bytes(mp4())
+        args['expectedSha256'] = hashlib.sha256(mp4()).hexdigest()
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    values = gif_open_args(args, record)
+    app.clients.attach('gif-refusal', kind='api' if case == 'non-web-client' else 'web')
+    session = app._session(args['sessionId'])
+    if case == 'different-client':
+        values['clientId'] = 'another-client'
+    elif case in {'foreign-session', 'wrong-message', 'wrong-output'}:
+        await app.dispatch('session.create', {'title': 'Actual foreign GIF conversation'})
+        foreign = app._session()
+        await app.on_runtime_event('assistant.message', {'sessionId': foreign['id'], 'text': 'Foreign retained assistant GIF'})
+        foreign_args = media_args(app)
+        foreign_record = (await app.dispatch('outputs.attachMedia', foreign_args))['result']
+        key, value = {'foreign-session': ('sessionId', foreign['id']),
+                      'wrong-message': ('messageId', foreign_args['messageId']),
+                      'wrong-output': ('id', foreign_record['id'])}[case]
+        values[key] = value
+    elif case in {'wrong-version', 'wrong-hash'}:
+        key, value = {'wrong-version': ('version', 99), 'wrong-hash': ('sha256', '0' * 64)}[case]
+        values[key] = value
+    elif case == 'unlinked':
+        await app.dispatch('outputs.unlink', {'sessionId': args['sessionId'], 'id': record['id'], 'expectedRevision': 1})
+    elif case == 'corrupt':
+        internal = app.outputs.record(args['sessionId'], record['id'])
+        (root(app.db) / (internal['body']['$resource'] + '.json')).write_text('{"encoding":"base64","data":"corrupt"}')
+    elif case == 'user-role':
+        session['messages'][-1]['role'] = 'user'
+    elif case == 'worker':
+        session['sessionKind'] = 'worker'
+    elif case == 'changed-chat':
+        with app.clients.bind('gif-refusal'):
+            await app.dispatch('session.create', {'title': 'Different selected chat'})
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    with app.clients.bind(None if case == 'no-client' else 'gif-refusal'):
+        before = gif_canvas_state(app)
+        with pytest.raises(AppError):
+            await app.dispatch('canvas.openGif', values, origin='agent' if case == 'agent' else 'ui',
+                               command_id='refused-gif-open', include_state=False)
+        assert gif_canvas_state(app) == before
+
+
+async def test_gif_canvas_dirty_primary_rejected_before_remember(media_app, monkeypatch):
+    from amplifier_web import canvas_library
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('dirty-gif-client')
+    with app.clients.bind('dirty-gif-client'):
+        await app.dispatch('canvas.show', {'kind': 'text', 'content': 'Unsaved local edit', 'title': 'Keep me'})
+        view = app.canvas_views.summary('primary')
+        target = {key: view[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
+        await app.dispatch('canvas.views.dirty', {**target, 'dirty': True})
+        before = gif_canvas_state(app)
+        def forbidden(*args, **kwargs):
+            pytest.fail('Dirty GIF opening reached remember/save/select')
+        with monkeypatch.context() as action_patch:
+            action_patch.setattr(canvas_library, 'remember', forbidden)
+            with pytest.raises(AppError) as refused:
+                await app.dispatch('canvas.openGif', gif_open_args(args, record), command_id='dirty-click')
+            assert refused.value.status == 409 and refused.value.code == 'canvas_view_dirty'
+            assert gif_canvas_state(app) == before
+
+
+@pytest.mark.parametrize('change', ['role', 'chat', 'unlink', 'canonical-revision'])
+async def test_gif_canvas_final_proof_locked_recheck_without_nested_lock(media_app, monkeypatch, change):
+    import asyncio
+    from amplifier_web.service import AppError
+    app = media_app
+    session, corpus, store, _, canonical = cold_alias_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': canonical}
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('gif-proof-client')
+    values = gif_open_args(args, record)
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    real = app.outputs.media.identity
+    calls = 0
+    async def witnessed(*args, **kwargs):
+        nonlocal calls
+        assert not app.lock.locked(), 'Identity called from inside the action lock'
+        proof = await real(*args, **kwargs)
+        calls += 1
+        # Preflight identity, bytes start/end identities, then the final proof.
+        if calls == 4:
+            async with app.lock:
+                if change == 'role':
+                    session['messages'][0]['role'] = 'user'
+                elif change == 'chat':
+                    app.clients.record()['selectedSessionId'] = None
+                elif change == 'unlink':
+                    app.outputs.store.link(record['id'], 1, False)
+                else:
+                    session['nativeRevision'] = ['changed-after-proof']
+            assert not app.lock.locked()
+        return proof
+    monkeypatch.setattr(app.outputs.media, 'identity', witnessed)
+    with app.clients.bind('gif-proof-client'):
+        before = gif_canvas_state(app)
+        with pytest.raises(AppError):
+            await asyncio.wait_for(app.dispatch('canvas.openGif', values, command_id='proof-click', include_state=False), 10)
+        assert calls == 4
+        after = gif_canvas_state(app)
+        if change == 'unlink':
+            # The independent authority mutation is intentional, not an open
+            # side effect. Everything else must remain byte-for-byte unchanged.
+            before['outputs'] = after['outputs']
+        assert after == before
+
+
+@pytest.mark.parametrize('shape', ['canonical-tail-miss', 'cold-retained-alias'])
+async def test_gif_canvas_canonical_origin_without_rewriting_or_hydrating(media_app, monkeypatch, shape):
+    import copy
+    from amplifier_web import cold_display
+    app = media_app
+    session, _, _, directory, canonical = cold_alias_corpus(app)
+    message = canonical if shape == 'canonical-tail-miss' else 'saved-web-assistant'
+    args = {**media_args_without_hydration(session), 'messageId': message}
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    if shape == 'canonical-tail-miss':
+        session['messages'] = session['messages'][1:]
+        assert canonical not in {row['id'] for row in session['messages']}
+    else:
+        session, reference = await freeze_alias_display(app, session, hints=True)
+    app.clients.attach('gif-canonical-client')
+    native = (directory / 'transcript.jsonl').read_bytes()
+    metadata = copy.deepcopy(dict(dict.items(session)))
+    if shape == 'cold-retained-alias':
+        original = cold_display.load
+        def forbidden(db, pointer):
+            if pointer == reference:
+                pytest.fail('GIF opening hydrated the cold display body')
+            return original(db, pointer)
+        monkeypatch.setattr(cold_display, 'load', forbidden)
+    with app.clients.bind('gif-canonical-client'):
+        result = await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False)
+        assert result['result']['status'] == 'opened'
+        assert app.state['canvas']['mediaReference']['messageId'] == message
+    assert dict(dict.items(session)) == metadata
+    assert (directory / 'transcript.jsonl').read_bytes() == native
+    if shape == 'cold-retained-alias':
+        assert dict.get(session, '_coldFields')['messages'] == reference and not dict.__contains__(session, 'messages')
+
+
+@pytest.mark.parametrize('action', ['canvas.copy', 'canvas.download'])
+async def test_gif_canvas_direct_copy_download_refused_before_remember_save_or_effect(media_app, monkeypatch, action):
+    import copy
+    from amplifier_web import canvas_library, canvas_downloads
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('gif-direct-refusal')
+    with app.clients.bind('gif-direct-refusal'):
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep this unsent GIF draft'}})
+        identity = (await app.dispatch('canvas.openGif', gif_open_args(args, record)))['result']['id']
+        task = getattr(app, '_storage_maintenance_task', None)
+        if task:
+            await task
+        before = gif_canvas_state(app)
+        effects = copy.deepcopy(app.state.get('deviceCommands', []))
+
+        def forbidden(*args, **kwargs):
+            pytest.fail('Direct GIF copy/download reached remember, save or effect construction')
+
+        with monkeypatch.context() as patch:
+            patch.setattr(canvas_library, 'remember', forbidden)
+            patch.setattr(app.clients, 'remember_canvas', forbidden)
+            patch.setattr(app, '_save', forbidden)
+            patch.setattr(canvas_downloads, 'filename', forbidden)
+            with pytest.raises(AppError) as refused:
+                await app.dispatch(action, {'id': identity}, command_id='gif-direct-refused', include_state=False)
+        assert refused.value.status == 409
+        assert str(refused.value) == 'Use Download original on the retained GIF.'
+        assert gif_canvas_state(app) == before
+        assert app.state.get('deviceCommands', []) == effects
+        assert app.state['view']['draft'] == 'Keep this unsent GIF draft'
+
+
+async def test_gif_canvas_stale_alias_and_generic_forgery_refused(media_app):
+    from amplifier_web.service import AppError
+    app = media_app
+    session, _, _, directory, _ = cold_alias_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': 'saved-web-assistant'}
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('gif-immutable-client')
+    with app.clients.bind('gif-immutable-client'):
+        identity = (await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False))['result']['id']
+        before = gif_canvas_state(app)
+        for action, extra in [('canvas.versions.revise', {'content': '{"mediaReference":"forged"}'}),
+                              ('canvas.versions.restore', {'version': 1})]:
+            with pytest.raises(AppError, match='immutable'):
+                await app.dispatch(action, {'id': identity, 'sessionId': session['id'], 'expectedRevision': 1, **extra})
+            assert gif_canvas_state(app) == before
+        with pytest.raises(AppError):
+            await app.dispatch('canvas.show', {'kind': 'gif', 'content': 'forged'})
+        assert gif_canvas_state(app) == before
+        with pytest.raises(AppError):
+            await app.dispatch('canvas.views.inline', {'resourceId': identity, 'version': 1,
+                'messageId': args['messageId'], 'previewId': 'forged-inline'})
+        assert gif_canvas_state(app) == before
+        raw = (directory / 'transcript.jsonl').read_bytes()
+        session['messages'][0]['text'] += 'stale alias'
+        before = gif_canvas_state(app)
+        with pytest.raises(AppError):
+            await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False)
+        assert gif_canvas_state(app) == before
+        with pytest.raises(ValueError):
+            await app.outputs.media.bytes(gif_open_args(args, record))
+        assert (directory / 'transcript.jsonl').read_bytes() == raw

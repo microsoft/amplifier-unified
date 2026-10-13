@@ -154,6 +154,8 @@ def command(service, action, args, origin):
         return result
     if owner.get('historyReadOnlyReason') or owner.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
         raise AppError('This conversation is read-only here.', 409)
+    if row.get('kind') == 'gif':
+        raise AppError('Retained GIF references are immutable. Open the original GIF instead.', 409)
     if row.get('app') or row.get('kind') in {'mcp-app', 'browser'}:
         raise AppError('Use the surface or tool presentation contract to revise this artifact.', 409)
     if args['expectedRevision'] != latest(row):
