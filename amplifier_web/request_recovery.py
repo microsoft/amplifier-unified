@@ -41,9 +41,8 @@ class RecoveringProvider:
     def __getattr__(self, name):
         method = getattr(self.original, name)
         if name == 'stream' and callable(method):
-            async def stream(request, **kwargs):
-                async for event in self._stream(method, request, kwargs):
-                    yield event
+            def stream(request, **kwargs):
+                return self._stream(method, request, kwargs)
             return stream
         return method
 
@@ -98,20 +97,33 @@ class RecoveringProvider:
         generation = self._generation()
         for attempt in range(len(DELAYS) + 1):
             scope = {'exposed': False}
-            token = _ACTIVE.set(scope)
             iterator = None
             try:
                 try:
-                    iterator = method(request, **kwargs)
-                    async for event in iterator:
+                    token = _ACTIVE.set(scope)
+                    try:
+                        iterator = aiter(method(request, **kwargs))
+                    finally:
+                        _ACTIVE.reset(token)
+                    while True:
+                        token = _ACTIVE.set(scope)
+                        try:
+                            event = await anext(iterator)
+                        except StopAsyncIteration:
+                            return
+                        finally:
+                            _ACTIVE.reset(token)
+                        # Never retain a ContextVar token across a yield: the
+                        # next read or close can belong to another consumer task.
                         scope['exposed'] = True
                         yield event
                 finally:
                     if callable(getattr(iterator, 'aclose', None)):
-                        await iterator.aclose()
-                return
+                        token = _ACTIVE.set(scope)
+                        try:
+                            await iterator.aclose()
+                        finally:
+                            _ACTIVE.reset(token)
             except Exception as error:
                 if not await self._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs):
                     raise
-            finally:
-                _ACTIVE.reset(token)

@@ -124,6 +124,35 @@ async def test_stream_retries_only_before_any_exposed_event(host, partial):
     assert len(closed) == len(attempts)
 
 
+@pytest.mark.parametrize('different_task', [False, True])
+async def test_stream_close_releases_provider_immediately_without_leaking_scope(host, different_task):
+    from amplifier_web.request_recovery import _ACTIVE
+    closed = []
+    async def source(request):
+        try:
+            assert _ACTIVE.get() is not None
+            yield 'first'
+            yield 'second'
+        finally:
+            assert _ACTIVE.get() is not None
+            closed.append(True)
+    stream = RecoveringProvider(SimpleNamespace(stream=source), host).stream({})
+    async def read():
+        assert await anext(stream) == 'first'
+        assert _ACTIVE.get() is None
+    async def close():
+        await stream.aclose()
+        assert _ACTIVE.get() is None
+    if different_task:
+        await asyncio.create_task(read())
+        await asyncio.create_task(close())
+    else:
+        await read()
+        await close()
+    assert closed == [True]
+    assert host.hooks.events == []
+
+
 async def test_root_and_child_app_access_share_recovery_policy(host):
     from amplifier_web.app_guidance import install_app_access
     host.mount = AsyncMock()
