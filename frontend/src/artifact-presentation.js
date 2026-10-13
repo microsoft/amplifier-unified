@@ -45,6 +45,20 @@ export function artifactOverrideKey(state,item,messageId){
  return JSON.stringify([state.client?.hostInstanceId??null,item.row.sessionId,messageId,item.row.id,item.version]);
 }
 
+// Admission receipts can precede the corresponding host state. An older state
+// is not revocation, but it is not permission to display a body either.
+export function inlineViewAccess(record,state){
+ if(!record||record.revoked)return {status:record?'revoked':'pending'};
+ if(record.hostInstanceId!==state.client?.hostInstanceId||record.clientId!==(state.client?.id??state.client?.clientId))return {status:'revoked'};
+ // A deliberate close or failed-load cleanup is not host access revocation.
+ // Neither permits displaying old bytes; a retry must obtain a fresh admission.
+ if(record.localRelease)return {status:'closed'};
+ const view=(state.canvasWorkspace?.views||[]).find(value=>
+  ['viewId','resourceId','resourceRevision','generation'].every(field=>value[field]===record.view[field]));
+ if(view)return {status:'live',view};
+ return {status:record.seen||Number.isSafeInteger(record.stateRevision)&&state.revision>=record.stateRevision?'revoked':'pending'};
+}
+
 export function canvasOpenCommand(item,messageId,actions=[]){
  const names=new Set(actions.map(row=>row.name||row.action));
  const {row,version}=item;

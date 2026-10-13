@@ -9,6 +9,20 @@ const {inlineOwnership}=await server.ssrLoadModule('/src/conversation-navigation
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>server.close());
 const source=id=>({id,messages:[{id:id+'-last',text:'Current'}],messageWindow:{offset:1,before:id+'-last'},execution:{nodes:[],turns:[],segments:[]},executionWindow:{offset:1,before:'g-last',part:'groups'}});
 const response=value=>new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});
+test('startup, no selection and new-chat transitions have no retained window to dereference',async()=>{
+ let detail,root,value=null;
+ function Probe(){detail=useConversationDetail(value);return detail.controls}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});
+  assert.equal(detail.session,null);
+  value=source('one');await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(detail.session.id,'one');
+  value=undefined;await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(detail.session,undefined);
+  value=source('two');await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(detail.session.id,'two');
+ }finally{await act(async()=>root?.unmount())}
+});
 test('unchanged message branches survive parent renders and unrelated session updates',async()=>{
  let detail,root,value=source('one');
  function Probe(){detail=useConversationDetail(value);return detail.controls}
@@ -38,6 +52,9 @@ test('paired history failure preserves both windows and a retry commits them tog
   await act(async()=>{root=create(React.createElement(Probe))});
   let loading;await act(async()=>{loading=detail.earlier()});
   assert.equal(pending.length,2);
+  value={...value,status:'working',ownership:{status:'yielded'},collaborationGeneration:{id:'during-paging'},approvals:[{id:'current'}]};
+  await act(async()=>root.update(React.createElement(Probe)));
+  for(const key of ['status','ownership','collaborationGeneration','approvals'])assert.equal(detail.session[key],value[key],'Frozen paging retains only display fields');
   await act(async()=>pending[1](response({items:[{id:'g-first'}],turns:[],offset:0,before:null})));
   assert.equal(detail.session.execution.segments.length,0);
   await act(async()=>{pending[0](new Response(JSON.stringify({error:'Unavailable'}),{status:503}));await loading});
@@ -117,10 +134,19 @@ test('typing during an around fetch and automatic tail eviction keep the same pr
   inlineOwnership.settle(inlineOwnership.intent(view,true),{accepted:false});
   await act(async()=>{pending.shift()(response({messages:[{id:'earlier'}],execution:{nodes:[],turns:[]}}));assert.equal(await loading,false)});
   assert.equal(instance.identity,identity);assert.equal(instance.text,'PRIVATE TEXT');assert.equal(unmounts,0);
-  value={...value,messages:[{id:'new-tail'}],messageWindow:{offset:10,total:20}};
+  const shown=detail.session;
+  value={...value,messages:[{id:'new-tail'}],messageWindow:{offset:10,total:20},status:'working',
+   ownership:{status:'blocked',source:'fixture-peer'},historyReadOnlyReason:'History only',workspaceAvailable:false,
+   collaborationGeneration:{id:'generation-new',terminal:false},draftAttachments:[{id:'new-attachment'}],approvals:[{id:'new-approval',status:'pending'}],
+   execution:{nodes:[{id:'new-work'}],turns:[],segments:[],imageGeneration:[{id:'live-image-job'}]}};
   await act(async()=>root.update(React.createElement(Probe)));
   assert.equal(instance.identity,identity);assert.equal(instance.text,'PRIVATE TEXT');assert.equal(unmounts,0);
   assert.deepEqual(detail.session.messages.map(row=>row.id),['one-last']);
+  assert.equal(detail.session.messages,shown.messages);assert.equal(detail.session.messageWindow,shown.messageWindow);
+  for(const key of ['status','ownership','historyReadOnlyReason','workspaceAvailable','collaborationGeneration','draftAttachments','approvals'])
+   assert.equal(detail.session[key],value[key],key+' remains live while the display window is pinned');
+  assert.equal(detail.session.execution.imageGeneration,value.execution.imageGeneration);
+  assert.equal(detail.session.execution.nodes,shown.execution.nodes);
   // Exact host revocation is not a local navigation refusal.
   inlineOwnership.reconcile({...scope,canvasWorkspace:{views:[]}});
   await act(async()=>root.update(React.createElement(Probe)));

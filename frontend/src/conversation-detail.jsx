@@ -25,6 +25,13 @@ export function DetailText({text,reference,markdown=false,automatic=false,writin
  return <div className="a-detail-text" ref={element}>{markdown?<Markdown text={value??text} userContent={userContent} writingContext={writingContext} fileContext={fileContext}/>:<p>{value??text}</p>}{reference&&value===null&&(automatic&&!error?<span className="a-caption" role="status">{busy?'Loading complete response…':'Complete response loads when visible.'}</span>:<button type="button" className="a-link" disabled={busy} onClick={load}>{busy?'Loading full text…':error?'Retry loading full text':'Show full text'}</button>)}{error&&<p role="alert">{error}</p>}</div>;
 }
 const unique=rows=>[...new Map(rows.map(row=>[row.id,row])).values()];
+// Pin only the displayed window. Permissions, approvals, work and collaboration
+// metadata must always come from the current host session, even during paging.
+function retainWindow(live,shown){
+ return {...live,messages:shown.messages,messageWindow:shown.messageWindow,executionWindow:shown.executionWindow,
+  sharedHistoryOffset:shown.sharedHistoryOffset,sharedHistoryUserTurnOffset:shown.sharedHistoryUserTurnOffset,navigationOffset:shown.navigationOffset,
+  execution:{...live.execution,nodes:shown.execution?.nodes,turns:shown.execution?.turns,segments:shown.execution?.segments}};
+}
 export function useConversationDetail(source,beforeApply,dispatch){
  const [,refreshOwnership]=useState(0);
  useEffect(()=>inlineOwnership.subscribe(()=>refreshOwnership(value=>value+1)),[]);
@@ -41,7 +48,7 @@ export function useConversationDetail(source,beforeApply,dispatch){
   else if(originalSource?.sharedHistoryOffset<wait.before)wait.finish();
  },[originalSource]);
  useEffect(()=>()=>{paging.current=null;nativeWait.current?.finish('The conversation changed.')},[]);
- if(frozen?.id===source?.id)source=frozen;
+ if(frozen&&source&&frozen.id===source.id)source=retainWindow(source,frozen);
  const previous=useRef(source?.messageWindow?.total);
  useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null)},[originalSource?.id]);
  useEffect(()=>{setFocused(null);setJumpTarget(null)},[originalSource?.id]);
@@ -64,7 +71,7 @@ export function useConversationDetail(source,beforeApply,dispatch){
  // not a reconstructed editor snapshot. Revoked mounts are removed by the host
  // reconciliation boundary, so no old privileged window can veto that removal.
  const blocked=inlineOwnership.blocksWindow(candidate?.id,candidate?.messages);
- const session=blocked&&committed.current?.id===candidate?.id?committed.current:candidate;
+ const session=useMemo(()=>blocked&&candidate&&committed.current&&committed.current.id===candidate.id?retainWindow(candidate,committed.current):candidate,[blocked,candidate]);
  useLayoutEffect(()=>{committed.current=session},[session]);
  async function around(messageId,{jump=true,isCurrent=()=>true}={}){
   if(paging.current||!originalSource)return false;
