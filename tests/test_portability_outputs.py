@@ -402,7 +402,8 @@ async def attach_saved_media(app, sid, workspace, *, large=False):
     return result, message['id'], data
 
 
-async def test_media_transfer_rebinds_destination_context_without_changing_history_or_nested_outputs(tmp_path, monkeypatch):
+@pytest.mark.parametrize('origin', ['active', 'historical'])
+async def test_media_transfer_rebinds_destination_context_without_changing_history_or_nested_outputs(tmp_path, monkeypatch, origin):
     from amplifier_web.host.storage import SessionStore
     from amplifier_web import resource_files
     from test_output_images import png
@@ -412,6 +413,14 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         media, mid, data = await attach_saved_media(app, sid, root)
         await app.on_runtime_event('assistant.message', {'sessionId': sid, 'text': 'A later assistant page.'})
         store = SessionStore.for_app(app.data_dir, root)
+        if origin == 'historical':
+            # Host-admitted media survives an actual saved history edit. Neither
+            # source export nor signed destination admission reconstructs it.
+            app._session(sid)['messages'] = [row for row in app._session(sid)['messages'] if row['id'] != mid]
+            rows = store.load(sid)[0]
+            store.save(sid, [*rows[:1], {'role': 'user', 'content': 'Revised history without the retained media origin'}],
+                       {}, preserve_system=True)
+            assert all(row.get('id') != mid for row in app._session(sid)['messages'])
         raw = (store.directory(sid) / 'transcript.jsonl').read_bytes()
         # Existing small PNG and nested graph must survive alongside media.
         image = png()
@@ -480,6 +489,100 @@ async def test_media_transfer_total_32mib_refuses_without_omission_or_limit_rais
         with app.clients.bind('oversized-retained'):
             assert await app.outputs.media.bytes({**media, 'messageId': mid}) == data
         assert not app.runtime.workers and not target.runtime.workers
+    finally:
+        host_env(monkeypatch, source)
+        await app.close()
+        host_env(monkeypatch, destination)
+        await target.close()
+
+
+@pytest.mark.parametrize('defect', [
+    'missing-output', 'cross-output', 'cross-task', 'wrong-kind', 'wrong-version',
+    'wrong-hash', 'metadata', 'body', 'historical-version', 'duplicate-version',
+    'ambiguous-reference', 'payload-trust', 'missing-provenance',
+])
+async def test_signed_media_transfer_data_rejects_unbound_adapters_and_malformed_metadata(
+        tmp_path, monkeypatch, defect):
+    from amplifier_portability.capsule import read_capsule
+    from amplifier_web import portability_data, resource_files
+    from amplifier_web.host.storage import SessionStore
+    app, target, source, destination, root, destrepo, sid, out1, _ = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        media, mid, _ = await attach_saved_media(app, sid, root)
+        app.clients.attach('signed-media-source')
+        with app.clients.bind('signed-media-source'):
+            await app.dispatch('canvas.openGif', {
+                'sessionId': sid, 'id': media['id'], 'version': media['version'],
+                'sha256': media['sha256'], 'messageId': mid,
+            }, include_state=False)
+        app._session(sid)['messages'] = [row for row in app._session(sid)['messages'] if row['id'] != mid]
+        SessionStore.for_app(app.data_dir, root).save(sid, [
+            {'role': 'user', 'content': 'Edited history; media origin is historical only'},
+        ], {}, preserve_system=True)
+        app._save()
+        receipt, _ = await export(app, target, sid, root)
+        body = read_capsule(Path(receipt['package']))['body']
+        verified = target.portability.node.verify(app.portability.node.sign(body), kind='capsule',
+                                                  signer=app.portability.node.identity['id'])
+        portability_data.validate(verified['payload'])
+        changed = copy.deepcopy(body)
+        payload = changed['payload']
+        saved = next(row for row in payload['outputs'] if row['id'] == media['id'])
+        canvas = next(row for row in payload['canvas'] if row['kind'] == 'gif')
+        wrapper = copy.deepcopy(payload['resources'][canvas['body']['$resource']])
+        ref = wrapper['mediaReference']
+
+        def replace_resource(value):
+            prepared = resource_files.prepare(value)
+            payload['resources'][prepared.identity] = copy.deepcopy(value)
+            return {'$resource': prepared.identity, 'bytes': prepared.size}
+
+        if defect == 'missing-output':
+            payload['outputs'] = [row for row in payload['outputs'] if row['id'] != media['id']]
+            payload['outputReceipts'] = [row for row in payload['outputReceipts'] if row['value'].get('id') != media['id']]
+        elif defect == 'metadata':
+            saved['media']['width'] = True  # Equality with 1 must not make bool dimensions valid.
+        elif defect == 'body':
+            saved['body'] = replace_resource({'encoding': 'base64', 'data': 'AAAA'})
+        elif defect == 'payload-trust':
+            saved['trusted'] = True
+            saved['origin']['source'] = 'payload'
+        elif defect == 'missing-provenance':
+            saved['origin']['messageId'] = None
+        elif defect == 'wrong-kind':
+            canvas['kind'] = 'text'
+            canvas['versions'][0]['kind'] = 'text'
+        elif defect == 'duplicate-version':
+            canvas['versions'].append(copy.deepcopy(canvas['versions'][0]))
+        elif defect == 'historical-version':
+            ref['item']['id'] = 'missing-historical-media'
+            canvas['versions'].append({**copy.deepcopy(canvas['versions'][0]), 'version': 2})
+            canvas['revision'] = 2
+            # Only the old retained version is bad; latest body stays exact.
+            canvas['versions'][0]['body'] = replace_resource(wrapper)
+        else:
+            if defect == 'cross-output':
+                ref['item']['id'] = out1['id']
+            elif defect == 'cross-task':
+                ref['item']['sessionId'] = 'another-task'
+            elif defect == 'wrong-version':
+                ref['item']['version'] = 99
+            elif defect == 'wrong-hash':
+                ref['item']['sha256'] = '0' * 64
+            elif defect == 'ambiguous-reference':
+                wrapper['content'] = 'A second competing adapter body'
+            canvas['body'] = replace_resource(wrapper)
+            canvas['versions'][0]['body'] = copy.deepcopy(canvas['body'])
+        # A valid source signature does not waive pure owning-object binding.
+        signed = app.portability.node.sign(changed)
+        verified = target.portability.node.verify(signed, kind='capsule',
+                                                  signer=app.portability.node.identity['id'])
+        with pytest.raises(ValueError):
+            portability_data.validate(verified['payload'])
+        assert target.state['sessions'] == []
+        assert target.db.execute('SELECT COUNT(*) FROM output_records').fetchone()[0] == 0
+        assert not target.runtime.workers and not app.runtime.workers
     finally:
         host_env(monkeypatch, source)
         await app.close()

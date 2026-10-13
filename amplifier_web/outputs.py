@@ -145,6 +145,17 @@ class Outputs:
                 continue
             value={key:copy.deepcopy(value) for key,value in original.items() if key not in {'id','sessionId','createdAt','revision','version','linked','parentId','evidenceIds'}}
             value['forkSource']={'sessionId':source_id,'outputId':original['id'],'sha256':original.get('sha256')}
+            if original.get('canvasKind') == 'gif':
+                # Missing surviving-output mappings stay filtered. An adapter
+                # must never carry a source-owned pointer into its fork.
+                remapped = self.fork_media_body(original.get('canvasSource'), source_id, target['id'], mapping)
+                if remapped is None:
+                    continue
+                from .resource_files import put
+                body = self.app.state_resource(remapped['$resource'])
+                data = json.dumps(body, ensure_ascii=False, sort_keys=True).encode()
+                value.update(canvasSource=remapped, body=put(self.app.db, {'encoding': 'utf-8', 'data': data.decode()}),
+                             sha256=hashlib.sha256(data).hexdigest(), bytes=len(data))
             if original.get('kind') == 'media':
                 value['origin'] = {**value['origin'], 'messageId': message_id}
             value['parentId']=mapping.get(original.get('parentId'))
@@ -156,6 +167,58 @@ class Outputs:
             clone=self.store.create(target['id'],value);mapping[original['id']]=clone['id']
             for comment in self.store.comments(original['id']):
                 self.store.comment(clone['id'],{**comment,'forkSourceCommentId':comment['id']})
+        # Canvas cutoff filtering ran first. Qualify every retained GIF version
+        # against surviving output IDs, not equal text or source pointers.
+        if canvas_mapping:
+            for source_canvas, target_canvas in list(canvas_mapping.items()):
+                row = next((r for r in self.app.state.get('canvasArtifacts', [])
+                            if r['id'] == target_canvas and r.get('sessionId') == target['id']), None)
+                if not row or row.get('kind') != 'gif':
+                    continue
+                rewritten = copy.deepcopy(row)
+                valid = True
+                for entry in [rewritten, *rewritten.get('versions', [])]:
+                    if 'mediaReference' in entry:
+                        # Inline-only legacy definitions are retained in the
+                        # source library, not copied with a source-owned tuple.
+                        valid = False
+                        break
+                    for key in ('body', 'contentResource'):
+                        if entry.get(key):
+                            body = self.fork_media_body(entry[key], source_id, target['id'], mapping)
+                            if body is None:
+                                valid = False
+                                break
+                            entry[key] = body
+                if valid:
+                    row.update(rewritten)
+                else:
+                    self.app.state['canvasArtifacts'].remove(row)
+                    canvas_mapping.pop(source_canvas)
+
+    def fork_media_body(self, body, source_id, target_id, mapping):
+        """Remap only a compact GIF adapter; never clone its media bytes."""
+        from .output_media import validate_media_reference
+        from .resource_files import put
+        if not body:
+            return None
+        value = self.app.state_resource(body['$resource'])
+        if not isinstance(value, dict) or set(value) != {'mediaReference'}:
+            return None
+        reference = value['mediaReference']
+        if not isinstance(reference, dict) or not isinstance(reference.get('item'), dict):
+            return None
+        source_output = reference['item'].get('id')
+        if source_output not in mapping:
+            return None
+        original = self.record(source_id, source_output)
+        validate_media_reference(reference, original, source_id, kind='gif')
+        clone = self.record(target_id, mapping[source_output])
+        fields = ('id', 'sessionId', 'title', 'filename', 'version', 'sha256', 'bytes', 'media')
+        remapped = {'item': {key: copy.deepcopy(clone[key]) for key in fields},
+                    'messageId': clone['origin']['messageId']}
+        validate_media_reference(remapped, clone, target_id, kind='gif')
+        return put(self.app.db, {'mediaReference': remapped})
 
     async def dispatch(self,action,args,origin,command_id,*,image_identity=None):
         from .service import AppError

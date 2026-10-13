@@ -2835,7 +2835,11 @@ async def assert_resident_media_refused(app, session, directory, identities, mon
         patch.setattr(app, '_publish_changes', publish)
         with app.clients.bind('resident-refusal-browser'):
             for index, identity in enumerate(identities):
-                assert (await app.outputs.media.describe(session['id'], identity))['items'] == []
+                if isinstance(identity, str) and any(ord(char) < 32 for char in identity):
+                    with pytest.raises(ValueError):
+                        await app.outputs.media.describe(session['id'], identity)
+                else:
+                    assert (await app.outputs.media.describe(session['id'], identity))['items'] == []
                 command = 'resident-refusal-' + str(index)
                 with pytest.raises(AppError):
                     await app.dispatch('outputs.attachMedia', {**args, 'messageId': identity},
@@ -3451,10 +3455,18 @@ async def test_gif_canvas_fail_closed_without_any_mutation(media_app, case):
         await task
     with app.clients.bind(None if case == 'no-client' else 'gif-refusal'):
         before = gif_canvas_state(app)
-        with pytest.raises(AppError):
-            await app.dispatch('canvas.openGif', values, origin='agent' if case == 'agent' else 'ui',
-                               command_id='refused-gif-open', include_state=False)
-        assert gif_canvas_state(app) == before
+        if case in {'unlinked', 'user-role'}:
+            opened = await app.dispatch('canvas.openGif', values, include_state=False)
+            assert opened['result']['status'] == 'opened'
+            assert await app.outputs.media.bytes(values) == gif()
+            if case == 'user-role':
+                with pytest.raises(AppError):
+                    await app.dispatch('outputs.attachMedia', args, command_id='new-under-user-origin')
+        else:
+            with pytest.raises(AppError):
+                await app.dispatch('canvas.openGif', values, origin='agent' if case == 'agent' else 'ui',
+                                   command_id='refused-gif-open', include_state=False)
+            assert gif_canvas_state(app) == before
 
 
 async def test_gif_canvas_dirty_primary_rejected_before_remember(media_app, monkeypatch):
@@ -3493,38 +3505,41 @@ async def test_gif_canvas_final_proof_locked_recheck_without_nested_lock(media_a
     task = getattr(app, '_storage_maintenance_task', None)
     if task:
         await task
-    real = app.outputs.media.identity
+    real = app.outputs.media.bytes
     calls = 0
-    async def witnessed(*args, **kwargs):
+    async def witnessed(*read_args, **kwargs):
         nonlocal calls
-        assert not app.lock.locked(), 'Identity called from inside the action lock'
-        proof = await real(*args, **kwargs)
+        assert not app.lock.locked(), 'Body read called from inside the action lock'
+        data = await real(*read_args, **kwargs)
         calls += 1
-        # Preflight identity, bytes start/end identities, then the final proof.
-        if calls == 4:
-            async with app.lock:
-                if change == 'role':
-                    session['messages'][0]['role'] = 'user'
-                elif change == 'chat':
-                    app.clients.record()['selectedSessionId'] = None
-                elif change == 'unlink':
-                    app.outputs.store.link(record['id'], 1, False)
-                else:
-                    session['nativeRevision'] = ['changed-after-proof']
-            assert not app.lock.locked()
-        return proof
-    monkeypatch.setattr(app.outputs.media, 'identity', witnessed)
+        async with app.lock:
+            if change == 'role':
+                session['messages'][0]['role'] = 'user'
+            elif change == 'chat':
+                app.clients.record()['selectedSessionId'] = None
+            elif change == 'unlink':
+                app.outputs.store.link(record['id'], 1, False)
+            else:
+                session['nativeRevision'] = ['changed-after-body']
+        return data
+    def forbidden(*args, **kwargs):
+        pytest.fail('Retained GIF open consulted transcript identity')
+    monkeypatch.setattr(app.outputs.media, 'identity', forbidden)
+    monkeypatch.setattr(app.outputs.media, 'bytes', witnessed)
     with app.clients.bind('gif-proof-client'):
         before = gif_canvas_state(app)
-        with pytest.raises(AppError):
-            await asyncio.wait_for(app.dispatch('canvas.openGif', values, command_id='proof-click', include_state=False), 10)
-        assert calls == 4
+        if change == 'chat':
+            with pytest.raises(AppError):
+                await asyncio.wait_for(app.dispatch('canvas.openGif', values, command_id='proof-click', include_state=False), 10)
+        else:
+            opened = await asyncio.wait_for(app.dispatch('canvas.openGif', values, command_id='proof-click', include_state=False), 10)
+            assert opened['result']['status'] == 'opened'
+        assert calls == 1
         after = gif_canvas_state(app)
-        if change == 'unlink':
-            # The independent authority mutation is intentional, not an open
-            # side effect. Everything else must remain byte-for-byte unchanged.
-            before['outputs'] = after['outputs']
-        assert after == before
+        if change == 'chat':
+            assert after == before
+        elif change == 'unlink':
+            assert app.outputs.record(session['id'], record['id'])['linked'] is False
 
 
 @pytest.mark.parametrize('shape', ['canonical-tail-miss', 'cold-retained-alias'])
@@ -3621,11 +3636,13 @@ async def test_gif_canvas_stale_alias_and_generic_forgery_refused(media_app):
         raw = (directory / 'transcript.jsonl').read_bytes()
         session['messages'][0]['text'] += 'stale alias'
         before = gif_canvas_state(app)
+        assert (await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False))['result']['id'] == identity
+        assert await app.outputs.media.bytes(gif_open_args(args, record)) == gif()
+        assert app.outputs.record(session['id'], record['id'])['origin']['messageId'] == args['messageId']
         with pytest.raises(AppError):
-            await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False)
-        assert gif_canvas_state(app) == before
+            await app.dispatch('outputs.attachMedia', args, command_id='stale-alias-new-admission')
         with pytest.raises(ValueError):
-            await app.outputs.media.bytes(gif_open_args(args, record))
+            await app.outputs.media.identity(session['id'], args['messageId'])
         assert (directory / 'transcript.jsonl').read_bytes() == raw
 
 def test_full_resolution_gif_admission_keeps_format_and_budgets():
@@ -3639,31 +3656,15 @@ def test_full_resolution_gif_admission_keeps_format_and_budgets():
         validate_media(oversized)
 
 
-async def test_media_discovery_requalifies_transient_revision_race(media_app, monkeypatch):
-    from amplifier_web.media_message_identity import StaleMediaIdentityError
-    from unittest.mock import AsyncMock
+async def test_media_discovery_does_not_qualify_or_retry_transcript_identity(media_app, monkeypatch):
     session = media_app._session()
     media_app.clients.attach('race-browser')
     media = media_app.outputs.media
-    original = media.identity
-    calls = 0
-    async def racing(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise StaleMediaIdentityError('The saved assistant identity changed during media access.')
-        return await original(*args, **kwargs)
-    monkeypatch.setattr(media, 'identity', racing)
+    def forbidden(*args, **kwargs):
+        pytest.fail('Retained discovery invoked transcript identity')
+    monkeypatch.setattr(media, 'identity', forbidden)
     with media_app.clients.bind('race-browser'):
         assert (await media.describe(session['id'], session['messages'][0]['id']))['items'] == []
-        assert calls == 2
-        failed = AsyncMock(side_effect=StaleMediaIdentityError('still changing'))
-        monkeypatch.setattr(media, 'identity', failed)
-        with pytest.raises(StaleMediaIdentityError):
-            await media.describe(session['id'], session['messages'][0]['id'])
-        assert failed.await_count == 3
-        denied = AsyncMock(side_effect=ValueError('identity collision'))
-        monkeypatch.setattr(media, 'identity', denied)
-        with pytest.raises(ValueError, match='collision'):
-            await media.describe(session['id'], session['messages'][0]['id'])
-        assert denied.await_count == 1
+        session['executionRevision'] = session.get('executionRevision', 0) + 1
+        session['messages'][0]['role'] = 'user'
+        assert (await media.describe(session['id'], session['messages'][0]['id']))['items'] == []

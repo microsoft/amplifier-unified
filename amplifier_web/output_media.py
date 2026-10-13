@@ -254,6 +254,8 @@ def retained_facts(record, sid):
             or not isinstance(origin, dict) or not isinstance(origin.get('source'), str)
             or origin['source'] not in {'ui', 'agent'}
             or not text(origin.get('messageId'), 200)
+            or not origin['messageId'].strip()
+            or any(ord(char) < 32 for char in origin['messageId'])
             or not integer(record.get('version'), 1, 2**63 - 1)
             or not isinstance(record.get('sha256'), str)
             or not re.fullmatch(r'[a-f0-9]{64}', record['sha256'])
@@ -311,11 +313,19 @@ def validate_media_reference(reference, record, sid, *, kind):
         raise ValueError('Invalid retained media reference.')
     item = reference['item']
     fields = ('id', 'sessionId', 'title', 'filename', 'version', 'sha256', 'bytes', 'media')
+    if isinstance(item, dict):
+        retained_facts({**record, **item}, sid)
     if (not isinstance(item, dict) or set(item) != set(fields)
             or any(item[key] != record[key] or type(item[key]) is not type(record[key]) for key in fields)
             or reference['messageId'] != record['origin']['messageId']
             or kind != 'gif' or record['media']['mimeType'] != 'image/gif'):
         raise ValueError('Media reference must match its exact owning output, kind, version and hash.')
+
+
+def _validate_retained_source(source, signature, data, record):
+    validate_retained_body(data, record)
+    if _signature(source) != signature:
+        raise ValueError('Media backing file changed during validation.')
 
 
 def read_verified(root, value, expected_sha256):
@@ -628,9 +638,13 @@ class Media:
         self.authority(session, 'ui')
         record = self.outputs.record(sid, values['id'])
         retained_facts(record, sid)
+        version = values['version']
+        if isinstance(version, str) and re.fullmatch(r'[1-9][0-9]{0,18}', version):
+            version = int(version)
         if (record['id'] != values['id']
                 or record.get('origin', {}).get('messageId') != values['messageId']
-                or record.get('version') != int(values['version']) or record.get('sha256') != values['sha256']):
+                or type(version) is not int or record.get('version') != version
+                or record.get('sha256') != values['sha256']):
             raise ValueError('Choose the exact retained assistant media version and hash.')
         return record
 
@@ -684,7 +698,7 @@ class Media:
         from .resource_files import settle_worker
         async with self.app.lock:
             before = self.snapshot(values)
-            record, source, client = before
+            record, source, _client = before
         # Bounded workers also serialize cache decisions: no durable byte store.
         async with self.workers:
             signature = await settle_worker(_signature, source)
@@ -699,7 +713,7 @@ class Media:
                 self.cache[key] = (data, signature, time.monotonic())
                 while len(self.cache) > 2 or sum(len(row[0]) for row in self.cache.values()) > 64 * 1024 * 1024:
                     self.cache.popitem(last=False)
-            await settle_worker(validate_retained_body, data, record)
+            await settle_worker(_validate_retained_source, source, signature, data, record)
         async with self.app.lock:
             if self.snapshot(values) != before:
                 raise ValueError('Media source authority changed during read.')
@@ -710,7 +724,7 @@ class Media:
         from .resource_files import settle_worker
         async with self.app.lock:
             before = self.snapshot(values)
-            record, source, client = before
+            record, source, _client = before
         async with self.workers:
             await settle_worker(_signature, source)
         async with self.app.lock:

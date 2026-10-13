@@ -205,6 +205,7 @@ def _validate_media_bindings(value):
         return reference
 
     for row in outputs.values():
+        refs = []
         if row.get('kind') == 'media':
             retained_facts(row, sid)
             resource = resources[row['body']['$resource']]
@@ -213,7 +214,9 @@ def _validate_media_bindings(value):
             validate_retained_body(base64.b64decode(resource['data'], validate=True), row)
         # Generic output snapshots of a GIF adapter also retain its binding.
         if row.get('canvasSource'):
-            check_reference(resources[row['canvasSource']['$resource']], row.get('canvasKind'))
+            ref = check_reference(resources[row['canvasSource']['$resource']], row.get('canvasKind'))
+            if ref is not None:
+                refs.append(ref)
         if row.get('kind') == 'canvas' and row.get('body'):
             resource = resources[row['body']['$resource']]
             content = (base64.b64decode(resource['data'], validate=True).decode()
@@ -227,10 +230,16 @@ def _validate_media_bindings(value):
                         raise ValueError('Duplicate retained adapter field.')
                     result[key] = child
                 return result
-            check_reference(json.loads(content, object_pairs_hook=unique), row.get('canvasKind'))
+            ref = check_reference(json.loads(content, object_pairs_hook=unique), row.get('canvasKind'))
+            if ref is not None:
+                refs.append(ref)
+        if refs and any(ref != refs[0] for ref in refs):
+            raise ValueError('Output media adapter differs from its saved source.')
     for row in value['canvas']:
-        versions = row.get('versions', [])
+        versions = [*row.get('versions', []), *row.get('app', {}).get('versions', [])]
         retained = False
+        current_ref = None
+        latest_ref = None
         for entry in [row, *versions]:
             kind = entry.get('kind', row.get('kind'))
             refs = []
@@ -244,10 +253,20 @@ def _validate_media_bindings(value):
             retained = retained or bool(refs)
             if refs and any(ref != refs[0] for ref in refs):
                 raise ValueError('Ambiguous retained media adapter references.')
+            if refs:
+                version = entry.get('revision', 1) if entry is row else entry.get('version')
+                if type(version) is not int or version < 1:
+                    raise ValueError('Invalid retained media adapter version.')
+                if entry is row:
+                    current_ref = refs[0]
+                elif version == row.get('revision'):
+                    latest_ref = refs[0]
             if kind == 'gif' and not bodies and 'mediaReference' not in entry:
                 raise ValueError('Retained GIF adapter has no saved body.')
         if retained and len({entry['version'] for entry in versions}) != len(versions):
             raise ValueError('Duplicate retained Canvas version identities.')
+        if current_ref is not None and latest_ref is not None and current_ref != latest_ref:
+            raise ValueError('Latest retained media adapter differs from its saved version.')
 
 
 def _validate(value):
