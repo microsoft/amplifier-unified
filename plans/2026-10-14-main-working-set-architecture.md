@@ -237,10 +237,12 @@ target. Report loading, partial, unavailable and retryable errors distinctly.
 Measure first readable messages separately from Work detail and worker/provider
 readiness. Changing chats must not mount a runtime just to display history.
 
-Existing clients promise complete initial/session snapshots in some paths. Retain
-that compatibility behavior until a new resource capability is negotiated and
-qualified. Internally avoid redundant work now; do not silently return partial
-snapshots through an unchanged contract. The same resource owners serve web, TUI,
+The bundled web client and server ship together. Change their contract together
+and remove superseded bundled paths instead of adding backward-compatibility
+fallbacks or negotiation. This applies to future bundled transport migrations too.
+Independently released clients, custom packages and explicit complete-snapshot
+APIs have separate contracts: do not silently truncate those responses. Qualify
+contract changes with their owners. The same resource owners serve web, TUI,
 companion and future clients; presentation and local device behavior stay in clients.
 
 ## Contracts, modules and repositories
@@ -250,7 +252,7 @@ these amendments before dependent implementation:
 
 | Document owner | Required decision |
 | --- | --- |
-| [Browser transport](../docs/browser-state-transport.md) and [live sessions](../docs/clients/live-sessions.md) | Resource capabilities, lifecycle, versions, snapshot completeness, cursor expiry and compatibility fallback |
+| [Browser transport](../docs/browser-state-transport.md) and [live sessions](../docs/clients/live-sessions.md) | Resource capabilities, lifecycle, versions, snapshot completeness, cursor expiry and independent-client version policy |
 | [State scopes](../docs/clients/state-scopes.md) and [on-demand Work](../docs/on-demand-work.md) | Interest versus execution lifetime, summary/detail coverage, append/edit/recovery and bounded read snapshots |
 | [History directory](../docs/on-demand-history-directory.md) and [conversation library](../docs/CONVERSATION-LIBRARY.md) | Default visibility, older search, availability, counts, source associations and reconciliation coverage |
 | [Storage design](../docs/architecture/state-and-storage.md) | Canonical/derived ownership, projector checkpoints, crash recovery and DB lifecycle |
@@ -283,10 +285,10 @@ depend on all repositories sharing a branch or changing in lockstep.
 | Step | Work and ownership | Exit; rollback |
 | --- | --- | --- |
 | 0. Freeze evidence and scope | Integration owner records the .141 baseline, fixtures, contracts and telemetry. Preserve the qualified narrow query and diagnostic patches as small independent changes. | Exact-source paired results, known failures and remaining hypotheses recorded. No architectural cutover. |
-| 1. Stop unnecessary work | Catalog owner removes redundant aggregates; host/client owners introduce demand before projection, starting with navigation and selected-chat opening. | Identical authorized results; hidden pages not queried; no dormant runtime starts; affected browser journey and pre-handler timings pass. Retain compatible endpoints. |
+| 1. Stop unnecessary work | Catalog owner removes redundant aggregates; host/client owners introduce demand before projection, starting with navigation and selected-chat opening. | Identical authorized results; hidden pages not queried; no dormant runtime starts; affected browser journey and pre-handler timings pass. Update bundled contracts atomically; preserve explicit independent-client contracts. |
 | 2. Bound catalog operations | Catalog owner implements page queries, dependency-specific counts, targeted existence repair and background incremental reconciliation/CLI hints. | Fixed active set stays bounded as dormant history grows; missing/offline/rename/watch-loss/restart fixtures pass. New default visibility waits for its contract decision. Rebuild index without changing canonical files. |
 | 3. Bound selected-history cost | Projection owner builds JIT import and incremental message/Work indexes behind the agreed interface; host owner adds bounded process scheduling. | Cold import is explicit and cancellable; warm pages avoid full-log parsing; source changes and crash recovery preserve results. Old read path remains selectable per session during qualification. |
-| 4. Complete client resource migration | Web owner consolidates fetch/cache/subscription logic; TUI and companion owners qualify shared APIs against fixture hosts. | Independent drafts, rapid switching, hidden clients, slow viewers and reconnect pass; no broad snapshot construction for migrated clients. Retire legacy paths only after compatibility inventory is clear. |
+| 4. Complete client resource migration | Web owner consolidates fetch/cache/subscription logic; TUI and companion owners qualify shared APIs against fixture hosts. | Independent drafts, rapid switching, hidden clients, slow viewers and reconnect pass; no broad snapshot construction for migrated clients. Remove superseded bundled paths; qualify independent-client contracts with their owners. |
 | 5. Extract proven owners | Component and distribution owners publish independent packages/repos and fixture/version matrix. | Real substitution and mixed-version/rollback tests; no private imports or shared working tree. Not a prerequisite for earlier performance releases or an automatic AHP/ACP adoption. |
 
 Steps 2 and 3 can run in parallel after interfaces and integration ownership are
@@ -339,8 +341,8 @@ and native identity conflicts; stale cursors; edits during import; cancellation;
 DB corruption; disk full; watcher overflow; offline roots; crash between canonical
 commit and index update; writer handoff; and deleting an index then rebuilding
 without replay or canonical history changes. Large history must not block unrelated
-admission. Rebuilding must preserve durable deletion/suppression. Exercise a mixed
-population of legacy complete-snapshot and new resource-capable clients. With two
+admission. Rebuilding must preserve durable deletion/suppression. Exercise the current bundled client alongside independently supported
+complete-snapshot and resource-capable clients. With two
 viewers sharing an import, one leaving must not cancel the other viewer's read or
 accepted work. Revoking read access while a projection is running must prevent its
 result from being disclosed. Raw provider diagnostics remain available on demand under existing

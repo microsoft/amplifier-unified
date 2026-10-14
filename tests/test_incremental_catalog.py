@@ -929,11 +929,77 @@ async def test_tombstone_totals_are_complete_and_removal_is_published(tmp_path, 
     assert app.state['sharedHistory']['sessionCount'] == 2
     revision = app.state['revision']
     shutil.rmtree(saved.parent.parent)
-    await app.history.refresh(force=False)
+    # A prior cooperative scan may still be suspended inside this project.
+    # Ordinary refresh advances bounded recovery; await the confirmed removal
+    # rather than requiring it in whichever single slice runs next.
+    for _ in range(64):
+        await app.history.refresh(force=False)
+        assert app.state['sharedHistory']['error'] is None
+        if app.state['sharedHistory']['sessionCount'] == 1:
+            break
     assert app.state['sharedHistory']['sessionCount'] == 1
     assert app.state['revision'] > revision
     durable = load_saved_state(app.db)
     assert durable['sharedHistory']['sessionCount'] == 1
+
+
+async def test_removed_project_during_pending_recovery_publishes_eventual_absence(
+        tmp_path, app_factory, monkeypatch):
+    import shutil
+
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    saved = native_session(first, 'first-root')
+    native_session(second, 'second-root')
+    app = app_factory()
+    index = app.history.index
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    for _ in range(64):
+        await app.history.refresh(force=False)
+        if app.state['sharedHistory']['reconciliation']['phase'] == 'complete':
+            break
+    assert app.state['sharedHistory']['sessionCount'] == 2
+    assert app.state['sharedHistory']['reconciliation']['phase'] == 'complete'
+
+    # Suspend warm discovery immediately after it observes this project's
+    # session entry. Removing the project then reproduces an actual race with
+    # the cooperative reader, without relying on wall time or machine load.
+    observed = []
+    directories = index._recovery_directories
+    def observe(path):
+        for directory in directories(path):
+            if path == saved.parent:
+                observed.append(directory)
+            yield directory
+    monkeypatch.setattr(index, '_recovery_directories', observe)
+    index._recovery_budget = 1
+    index._reconcile_at = 0
+    for _ in range(64):
+        await app.history.refresh(force=False)
+        if observed:
+            break
+    assert observed == [saved]
+    assert index._recovery is not None
+    revision = app.state['revision']
+    shutil.rmtree(saved.parent.parent)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, {project_slug(first)}))
+
+    for _ in range(64):
+        await app.history.refresh(force=False)
+        history = app.state['sharedHistory']
+        assert history['error'] is None
+        if history['sessionCount'] == 1:
+            break
+        # A suspended reader can retain an uncertain row for this slice, but
+        # must expose that uncertainty until fresh absence proof retires it.
+        assert any(issue.get('nativeProject') == project_slug(first)
+                   for issue in history['issues'])
+    assert app.state['sharedHistory']['sessionCount'] == 1
+    assert app.state['revision'] > revision
+    assert load_saved_state(app.db)['sharedHistory']['sessionCount'] == 1
+    assert app.directory.resolve('first-root') is None
+    assert app.directory.resolve('second-root') is not None
+    assert app.state['sharedHistory']['issues'] == []
+    assert app.runtime.started == [] and app.runtime.sent == []
 
 
 async def test_empty_recovery_slice_avoids_rewalking_registered_workspace_catalog(

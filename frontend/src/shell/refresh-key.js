@@ -1,3 +1,4 @@
+import {navigationDemandKey} from './navigation-demand.js';
 const pick=(value,keys)=>Object.fromEntries(keys.map(key=>[key,value?.[key]]));
 
 // Custom navigation scopes are covered by the host's complete-catalog key.
@@ -8,7 +9,7 @@ export function shellRefreshKey(state){
  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
  return JSON.stringify([state.shellDataKey??state.revision,state.shellChangeToken,
   state.selectedSessionId,state.selectedWorkspaceId,!!state.runtime?.available,
-  pick(state.view,['workSurface','workWorkspaceId']),
+  pick(state.view,['workSurface','workWorkspaceId']),navigationDemandKey(state),
   pick(session,['id','title','status','autoName','bundle','workspaceId','naming']),
   pick(state.canvas,['id','kind','title','open'])]);
 }

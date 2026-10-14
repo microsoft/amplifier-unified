@@ -19,6 +19,7 @@ import {AttentionBadge} from './attention';
 import {chatPage,isTopLevelChat} from './chat-navigation';
 import {sessionStatus} from './session-status';
 import {ownershipState} from './ownership';
+import {hasNavigationResource} from './shell/navigation-demand';
 
 export function WorkDialog({label,onClose,children,initialFocus}){
  const ref=useRef(null);useModalFocus(ref,true,onClose);
@@ -100,23 +101,23 @@ export function WorkspaceFiles({workspace,state,act}){
 }
 function WorkBrowser({host,workspaceHost,state,act}){
  const model=useNavigationController(host,'chats'),workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),now=useActivityClock(),nav=useContext(WorkNavigationContext);
- const surface=workSurface(state),workspace=workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats';
+ const surface=workSurface(state),workspace=workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=surface!=='chat';
  const workspacePending=surface==='workspace'&&(workspaceModel.state.navigationWorkspacePending||model.state.navigationWorkspacePending);
  const setTab=tab=>act('view.update',{patch:{workWorkspaceTab:tab}});
  const view=surface==='chats'?{...model.view,...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,navChatScope:'all'}:{...model.view,navChatScope:'workspace'};
- const page=chatPage({...model.state,view},model.workspace,{section:surface==='chats'?'search':'workspace'});
+ const page=surface==='chats'||surface==='workspace'&&tab==='chats'?chatPage({...model.state,view},model.workspace,{section:surface==='chats'?'search':'workspace'}):null;
  const viewAct=(name,args)=>{if(name!=='view.update'||surface!=='chats')return model.act(name,args);const next={...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,...args.patch};if(!Object.hasOwn(args.patch,'navChatPage'))delete next.navChatPage;return model.act(name,{patch:{navRecentView:next}})};
- return <div className="a-work-browser" data-part="work-browser"><NavigationEditor model={model}/><NavigationEditor model={workspaceModel}/>
+ return <div className="a-work-browser" data-part="work-browser"><NavigationEditor model={model}/><NavigationEditor model={workspaceModel}/>{active&&<>
   <div className="a-work-browser-heading"><div><h1>{surface==='workspace'?workspacePending?'Loading workspace…':workspace?.name||'Workspace unavailable':surface==='workspaces'?'Your workspaces':'Search chats'}</h1><p>{surface==='workspace'?'A place for related chats and files.':surface==='workspaces'?'Keep related work together. Each workspace has its own chats and files.':'Find a chat by name, workspace or saved description.'}</p></div><button type="button" className="a-primary" disabled={surface==='workspace'&&(workspacePending||!workspace)} onClick={()=>surface==='workspaces'?nav.create():nav.newChat(surface==='workspace'?workspace?.path:undefined)}><Plus/>{surface==='workspaces'?'New workspace':'New chat'}</button></div>
-  <div hidden={surface!=='workspace'||tab!=='details'}><WorkspaceResources state={state} act={act} workspaceId={workspace?.id}/></div>
+  {surface==='workspace'&&tab==='details'&&<WorkspaceResources state={state} act={act} workspaceId={workspace?.id}/>}
   {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceBundleDefault key={workspace.id} workspace={workspace} state={state} act={act}/>}
-  {surface==='workspaces'?<WorkspaceExplorer state={workspaceModel.state} act={workspaceModel.act} onEdit={workspaceModel.setDraft} heading={false} onSelect={row=>nav.browse('workspace',row.workspaceId)}/>:<>
+  {surface==='workspaces'?(hasNavigationResource(workspaceModel.state,'workspaceExplorer')?<WorkspaceExplorer state={workspaceModel.state} act={workspaceModel.act} onEdit={workspaceModel.setDraft} heading={false} onSelect={row=>nav.browse('workspace',row.workspaceId)}/>:<p role="status">Loading workspaces…</p>):<>
    {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceReadiness state={state} act={act} workspaceId={workspace.id}/>}
    {surface==='workspace'&&workspace&&<><div className="a-work-tabs" role="group" aria-label="Workspace view">{['chats','files','details'].map(key=><button key={key} type="button" aria-pressed={tab===key} data-action="view.update" onClick={()=>setTab(key)}>{key[0].toUpperCase()+key.slice(1)}</button>)}</div>{tab==='details'&&<div className="a-work-details"><CopyDetail label="Folder" value={workspace.path}/><p>Chats are discovered from native Amplifier history for this folder. Files stay in place and are visible from your terminal.</p><button className="a-soft" onClick={()=>workspaceModel.setDraft({mode:'rename',id:workspace.id,name:workspace.name})}>Rename workspace</button><WorkspaceCleanup key={workspace.id} id={workspace.id} act={act}/><WorkspaceConfiguration key={workspace.id} workspace={workspace} state={state} act={act}/></div>}{tab==='files'&&<WorkspaceFiles key={workspace.id} workspace={workspace} state={state} act={act}/>}</>}
 
    {surface==='workspace'&&workspacePending?<p role="status">Loading workspace…</p>:surface==='workspace'&&!workspace?<p>This workspace is no longer available. Choose another workspace from the sidebar.</p>:surface==='chats'?<ChatSearch page={page} model={model} view={view} viewAct={viewAct} now={now}/>:tab==='chats'&&<ChatList planAct={surface==='workspace'?act:undefined} page={page} model={model} view={view} viewAct={viewAct} now={now} showLocation={surface==='chats'}/>}
   </>}
- </div>;
+ </>}</div>;
 }
 export function WorkSurface({shell,state,act}){
  const chats=shell.composition.instances.find(row=>row.package==='builtin.chats'),workspaces=shell.composition.instances.find(row=>row.package==='builtin.workspaces');

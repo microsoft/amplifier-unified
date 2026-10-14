@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.142",
+      "title": "Request only the navigation views you use",
+      "changes": [
+        "The built-in sidebar requests pins, recent chats and workspace shortcuts without also constructing hidden search and workspace chat pages. Search and workspace pages load when opened.",
+        "Navigation avoids duplicate chat counts and uses direct lookups for sparse pins and archive records. Read receipts, titles and status changes no longer recount the complete library.",
+        "Delayed navigation responses cannot replace a newer page choice. Missing page data stays visibly loading, and unfinished edits remain preserved.",
+        "Custom navigation components and explicit full-snapshot queries retain their existing interfaces."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.141",
       "title": "Keep observations responsive and deliver retained collaboration results",
       "changes": [

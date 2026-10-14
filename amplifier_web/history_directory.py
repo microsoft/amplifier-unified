@@ -38,6 +38,13 @@ FIELDS = {
     '_catalogId', '_catalogRecentAt', '_deleting',
 }
 PUBLIC_ID_BATCH = 128
+MEMBERSHIP_COLUMNS = ('id', 'native_id', 'native_project', 'parent_id', 'native_parent_id',
+                      'session_kind', 'workspace', 'workspace_id', 'history_managed',
+                      'alias_id', 'hidden_id')
+
+
+def _membership(values):
+    return tuple(values[COLUMNS.index(key)] for key in MEMBERSHIP_COLUMNS)
 
 
 def initialize(db):
@@ -61,6 +68,10 @@ def initialize(db):
                'is_error INTEGER, value TEXT, PRIMARY KEY(owner,slot))')
     db.execute('CREATE INDEX IF NOT EXISTS history_notice_owner ON history_directory_notices(owner)')
     db.execute('CREATE TABLE IF NOT EXISTS history_directory_layout(version INTEGER NOT NULL, revision INTEGER NOT NULL)')
+    if 'membership_revision' not in {row[1] for row in db.execute('PRAGMA table_info(history_directory_layout)')}:
+        # Add a generation, not a second catalog. Existing scalar rows already
+        # contain the comparison facts; no historical payload migration is needed.
+        db.execute('ALTER TABLE history_directory_layout ADD COLUMN membership_revision INTEGER NOT NULL DEFAULT 0')
     db.execute('CREATE TABLE IF NOT EXISTS history_directory_locations(path TEXT PRIMARY KEY,available INTEGER NOT NULL)')
     db.execute('CREATE TABLE IF NOT EXISTS history_directory_order(id INTEGER PRIMARY KEY CHECK(id=1), next INTEGER NOT NULL)')
     db.execute('INSERT OR IGNORE INTO history_directory_order VALUES(1,0)')
@@ -346,6 +357,7 @@ class HistoryDirectory:
     def sync(self, rows, state, *, deleted=()):
         """Transactionally project only committed/admitted owners; never prune absences."""
         changed = False
+        membership_changed = False
         resident_ids = {item['id'] for item in state.get('sessions', ())}
         for position, row in enumerate(rows):
             prior = self.db.execute("SELECT ordinal, json_extract(summary, '$._coordinationTaskActive') FROM history_local_rows WHERE id=?", (row['id'],)).fetchone()
@@ -372,6 +384,7 @@ class HistoryDirectory:
             current = self.db.execute('SELECT ' + ','.join(COLUMNS) + ',startup FROM history_local_rows WHERE id=?', (row['id'],)).fetchone()
             if current == (*values, startup):
                 continue
+            membership_changed |= current is None or _membership(current) != _membership(values)
             marks = ','.join('?' for _ in range(len(COLUMNS) + 1))
             from .history_directory_observations import sync as observation_sync
             observation_sync(self, row, state=state)
@@ -382,14 +395,18 @@ class HistoryDirectory:
         for identity in deleted:
             from .history_directory_observations import sync as observation_sync
             observation_sync(self, identity, state=state, deleted=True)
-            changed = bool(self.db.execute('DELETE FROM history_local_rows WHERE id=?', (identity,)).rowcount) or changed
+            removed = bool(self.db.execute('DELETE FROM history_local_rows WHERE id=?', (identity,)).rowcount)
+            changed |= removed
+            membership_changed |= removed
             self.db.execute('DELETE FROM history_directory_notices WHERE owner=?', (identity,))
         if changed:
-            self.db.execute('UPDATE history_directory_layout SET revision=revision+1 WHERE version=1')
+            self.db.execute('UPDATE history_directory_layout SET revision=revision+1, '
+                            'membership_revision=membership_revision+? WHERE version=1',
+                            (int(membership_changed),))
 
     def finish_migration(self):
         if not ready(self.db):
-            self.db.execute('INSERT INTO history_directory_layout VALUES(1,1)')
+            self.db.execute('INSERT INTO history_directory_layout(version,revision) VALUES(1,1)')
 
     def _sync_live(self, state):
         if self.snapshot:
@@ -707,10 +724,29 @@ class HistoryDirectory:
         return workspace_counts(self, state, archive=archive)
 
     def root_count(self, state=None):
-        from .history_directory_observations import revision
         state = self._frozen_state if self.snapshot else state if state is not None else self.service._state
+        self._sync_live(state)
+        local = self.db.execute('SELECT membership_revision FROM history_directory_layout WHERE version=1').fetchone()
+        native = (self.db.execute('SELECT observation_membership FROM history_native.native_revisions WHERE namespace=?',
+                                 (self._native_namespace,)).fetchone() if self._native_path else None)
+        # Only unsaved membership differences matter. Ordinary admission of an
+        # existing saved owner, receipt changes, and streaming/status/title
+        # updates must not turn a count read into another catalog query.
+        overlays = []
+        for identity, values in self._live_values.items():
+            current = _membership(values)
+            saved = self.db.execute('SELECT ' + ','.join(MEMBERSHIP_COLUMNS) +
+                                    ' FROM history_local_rows WHERE id=?', (identity,)).fetchone()
+            if saved is None or tuple(saved) != current:
+                overlays.append(current)
+        from .managed_deletion import tombstones
+        suppression = (tuple(sorted(set(state.get('hiddenNativeSessions', ())))),
+                       tuple(sorted(set(state.get('hiddenNativeWorkspaces', ())))),
+                       tuple(sorted(json.dumps((row.get('id'), row.get('project'), sorted(row.get('ids') or [])),
+                                              separators=(',', ':')) for row in tombstones(self.db))))
         stamp = (self._native_path, self._native_namespace,
-                 tuple(sorted(revision(self, state).items())),
+                 local[0] if local else 0, native[0] if native else 0,
+                 tuple(sorted(overlays, key=lambda row: row[0])), suppression,
                  self.db.execute('PRAGMA main.data_version').fetchone()[0],
                  self.db.execute('PRAGMA history_native.data_version').fetchone()[0]
                  if self._native_path else None)

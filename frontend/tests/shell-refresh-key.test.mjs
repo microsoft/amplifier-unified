@@ -19,6 +19,13 @@ test('browsing another workspace refreshes shell without changing the active cha
  assert.notEqual(shellRefreshKey(first),shellRefreshKey({...first,view:{...first.view,workSurface:'chat'}}));
 });
 
+test('workspace tabs refresh their changed resource demand without a shared revision change',()=>{
+ const chats={...state,view:{workSurface:'workspace',workWorkspaceId:'work',workWorkspaceTab:'chats'}};
+ const files={...chats,view:{...chats.view,workWorkspaceTab:'files'}};
+ assert.notEqual(shellRefreshKey(chats),shellRefreshKey(files));
+ assert.notEqual(shellRefreshKey(files),shellRefreshKey({...files,view:{...files.view,workWorkspaceTab:'details'}}));
+});
+
 test('navigation, module changes, client selection and visible summaries invalidate shell',()=>{
  for(const patch of [{shellDataKey:'navigation-2'},{shellChangeToken:'host:1'},{shellChangeToken:'new-host:0'},
   {selectedSessionId:null},{selectedWorkspaceId:'other'},{runtime:{available:false}},

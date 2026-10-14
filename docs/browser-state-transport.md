@@ -1,5 +1,39 @@
 # Browser state transport and idle work
 
+## Shell navigation resources
+
+The bundled browser must send `navigationResources` to `GET /api/shell` as a JSON
+array of resource names (at most 16 entries and 4,096 characters). The allowed
+names are `chatNavigation`, `homeNavigation`, `pinnedNavigation`,
+`recentNavigation`, `workspaceShortcuts`, `workspaceExplorer`, `sidebarSearch`,
+`sidebarWorkspace`, `sidebarRecent`, `sidebarPinned`, and `workspaceOverview`.
+The host rejects missing or invalid demand before constructing projections.
+Resource selection applies to the built-in Chats and Workspaces snapshots; custom
+navigation packages and explicit `shell.query`/`shell.inspect` reads keep their
+complete existing snapshots. `compact=1` changes wire encoding, not demand. The
+bundled browser and server ship together and use this contract directly; no
+old-bundle fallback or capability negotiation is required. Independently released
+clients and custom packages remain governed by their explicit contracts.
+
+Built-in browser snapshots contain `navigationResources`, the supplied resource names.
+An omitted resource was not requested; it is not an empty result. Base instance
+generation, view/controller metadata, selected registration and permitted actions
+remain available. `recentNavigation` also supplies `recentShortcuts` and
+`recentScope`; `workspaceShortcuts` supplies pinned-excluding shortcuts too.
+Sidebar page names map to the corresponding `sidebarNavigation` fields. Attention
+receipts and organization summaries cover the requested visible rows.
+
+The browser asks for sidebar pins, recent shortcuts and workspace shortcuts,
+then adds search, workspace chats or the workspace explorer when that surface
+needs it. Demand and workspace tab participate in request identity. Superseded
+responses cannot populate a newly selected surface; absent/mismatched pages show
+loading until their matching resource arrives. Retained controller/draft state
+does not require constructing a hidden workspace page. Releasing read demand
+does not cancel accepted work or replay commands. This changes the current bundled navigation transport. Stream snapshots and
+the separate AHP development track are unchanged.
+
+## Existing stream and receipt behavior
+
 Browsers opt into compact action receipts with `X-Amplifier-State-Transport:
 delta-v1`. Current hosts advertise `websocket` at client attachment; browsers
 connect to `/api/events/ws?transport=delta-v1` with their attached `clientId`.

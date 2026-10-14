@@ -7,6 +7,7 @@ import {SlotOverflow} from './slot-overflow';
 import {shellRefreshKey} from './refresh-key';
 import {navigationSnapshot} from './navigation-snapshot';
 import {expandShell,retainEqual} from './wire';
+import {navigationResources,navigationDemandKey,hasNavigationResource} from './navigation-demand';
 
 export const ShellContext=createContext(null);
 export function useShellContext(){return useContext(ShellContext)}
@@ -31,12 +32,23 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
  const [presentationEdits,setPresentationEdits]=useState([]),presentationQueue=useRef(Promise.resolve());
  const latest=useRef({data:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null),again=useRef(false),loadedKey=useRef(null);
  latest.current.refreshKey=shellRefreshKey(state);latest.current.dispatch=dispatch;latest.current.state=displayState;latest.current.connection=connection;
+ latest.current.navigationResources=navigationResources(state);latest.current.demandKey=navigationDemandKey(state);
  const refresh=useCallback(()=>{
   if(document.hidden){again.current=true;return Promise.resolve()}
   if(inflight.current){again.current=true;return inflight.current}
   again.current=false;
-  const requestedKey=latest.current.refreshKey;
-  inflight.current=request('/api/shell?compact=1&clientId='+encodeURIComponent(clientId)+(recovery?'&recovery=1':'')).then(expandShell).then(next=>{
+  const requestedKey=latest.current.refreshKey,requestedDemand=latest.current.demandKey,resources=latest.current.navigationResources;
+  const query=new URLSearchParams({compact:'1',clientId,navigationResources:JSON.stringify(resources)});
+  if(recovery)query.set('recovery','1');
+  inflight.current=request('/api/shell?'+query).then(expandShell).then(next=>{
+   // A completed read belongs to the scope that requested it. Coalesce a fresh
+   // read instead of letting an old surface replace the newly requested data.
+   if(requestedDemand!==latest.current.demandKey){again.current=true;return}
+   for(const instance of next.resolvedInstances||[]){
+    if(!['builtin.chats','builtin.workspaces'].includes(instance.package))continue;
+    const snapshot=next.snapshots?.[instance.id];
+    if(!resources.every(resource=>hasNavigationResource(snapshot,resource)))throw Error('Navigation is still loading. Refresh to try again.');
+   }
    loadedKey.current=requestedKey;
    next=retainEqual(latest.current.data,next);
    latest.current.data=next;setData(next);setError('');latest.current.connection.onRecovered?.();
@@ -48,7 +60,7 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
      host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn());
     }
    }
-  }).catch(e=>{if(transportFailure(e)&&latest.current.data&&latest.current.connection.onError)latest.current.connection.onError(e);else setError(e.message)}).finally(()=>{
+  }).catch(e=>{if(requestedDemand!==latest.current.demandKey){again.current=true;return}if(transportFailure(e)&&latest.current.data&&latest.current.connection.onError)latest.current.connection.onError(e);else setError(e.message)}).finally(()=>{
    inflight.current=null;
    // A waiter owns this request, not every later invalidation. Live updates
    // can keep arriving indefinitely; continue refreshing without extending

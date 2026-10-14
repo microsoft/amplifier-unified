@@ -16,6 +16,7 @@ from amplifier_web.native_history import NativeHistory
 from amplifier_web.session_projection import view_path
 from amplifier_web.attention import session_item_at
 from amplifier_web.state_records import save_working
+from active_client_diagnostics import AdmissionDiagnostics
 
 
 async def main():
@@ -46,6 +47,8 @@ async def main():
                                voice=False, background_updates=False, preload_providers=False)
         app['control_token'] = 'fixture-active-client-token'
         service = app['service']
+        admission_diagnostics = AdmissionDiagnostics(service)
+        app.middlewares.insert(0, admission_diagnostics.middleware)
         await service.history.close()
         service.history.index = NativeHistory(root/'native', watch=False,
             cache_path=native.path, directory=True)
@@ -129,16 +132,20 @@ async def main():
             return web.json_response({'ticks': ticks})
 
         async def admit(request):
-            identity = (await request.json())['id']
+            with admission_diagnostics.span('bodyRead'):
+                identity = (await request.json())['id']
+            admission_diagnostics.call(identity)
             native = sessions[0].get('runtimeSessionId') or sessions[0]['id']
-            result = await admission(service, sessions[0]['id'], {'call': {
-                'id': identity, 'rootSessionId': native, 'sessionId': native,
-                'producerId': 'fixture-active-client', 'kind': 'llm', 'phase': 'running',
-                'provider': 'synthetic', 'model': 'synthetic', 'startedAt': time.time()}})
-            saved = json.loads(view_path(service.data_dir, sessions[0]).read_text())
-            execution = saved['execution']
-            receipts = execution.get('nodes', []) + execution.get('retiredUsageNodes', [])
-            assert any(row.get('id') == identity and row.get('admittedAt') for row in receipts)
+            with admission_diagnostics.span('capacity'):
+                result = await admission(service, sessions[0]['id'], {'call': {
+                    'id': identity, 'rootSessionId': native, 'sessionId': native,
+                    'producerId': 'fixture-active-client', 'kind': 'llm', 'phase': 'running',
+                    'provider': 'synthetic', 'model': 'synthetic', 'startedAt': time.time()}})
+            with admission_diagnostics.span('receiptRead', cpu=True):
+                saved = json.loads(view_path(service.data_dir, sessions[0]).read_text())
+                execution = saved['execution']
+                receipts = execution.get('nodes', []) + execution.get('retiredUsageNodes', [])
+                assert any(row.get('id') == identity and row.get('admittedAt') for row in receipts)
             return web.json_response(result)
 
         async def metrics(request):
@@ -160,6 +167,11 @@ async def main():
         app.router.add_post('/fixture/progress', control)
         app.router.add_post('/fixture/admit', admit)
         app.router.add_get('/fixture/metrics', metrics)
+        async def diagnostics(request):
+            return web.json_response({'admissions': admission_diagnostics.snapshot(),
+                'performance': service.performance_diagnostics.snapshot(),
+                'requests': list(getattr(service, 'request_timings', ()))})
+        app.router.add_get('/fixture/diagnostics', diagnostics)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, '127.0.0.1', 0)
