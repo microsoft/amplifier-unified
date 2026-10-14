@@ -86,7 +86,7 @@ ACTION_DEFINITIONS = {
     "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
     "canvas.openAttachment": ("Open a sent text attachment from the currently displayed conversation in Canvas; never submits or replays work.", schema({"sessionId":string(200),"id":string(32),"clientId":string(200)}, ["sessionId","id"])),
     "canvas.openGif": ("Open an exact retained assistant GIF in the originating browser client's Canvas, only on an explicit UI click. Does not send, generate, or attach anything.", schema({"sessionId":string(200),"messageId":string(200),"id":string(100),"version":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"clientId":string(200)}, ["sessionId","messageId","id","version","sha256"])),
-    "canvas.openFile": ("Open a local file in Canvas for the selected chat and its unchanged workspace. Exact artifact references verify reported bytes in the recorded execution folder. Optional showConversation opens the named chat from that workspace's Files page atomically with a successful preview; stale pages and unavailable files do not navigate. Never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200),"showConversation":{"type":"boolean"},"referenceRequestId":string(200),"expectedSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}, ["sessionId","workspace","path"])),
+    "canvas.openFile": ("Open a local file in Canvas for the selected chat and its unchanged workspace. Exact artifact references verify reported bytes in the recorded execution folder. Optional showConversation opens the named chat from that workspace's Files page atomically with a successful preview; stale pages and unavailable files do not navigate. Never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200),"showConversation":{"type":"boolean"},"referenceRequestId":string(200),"referenceResponseRevision":{"type":"integer","minimum":1},"expectedSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
     "canvas.select": ("Reopen Latest or an exact immutable saved version in the calling chat. Omit version for Latest; version views are read-only. Supply clientId when multiple clients display that chat.", schema({"id":string(100),"clientId":string(100),"sessionId":string(200),"version":{"type":"integer","minimum":1}}, ["id"])),
@@ -1830,6 +1830,20 @@ class AppService:
                     resolver=self.peer_attribution.resolve, message_rows=rows))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
+        retained_file = None
+        if action == 'canvas.openFile' and args.get('referenceRequestId'):
+            from .result_artifacts import load as load_retained_file
+            async with self.lock:
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                response = self.collaboration.receipt(args['referenceRequestId']).get('response') or {}
+                has_retained_version = 'artifacts' in response or args.get('referenceResponseRevision') is not None
+            if has_retained_version:
+                retained_file = await load_retained_file(self.collaboration, args['sessionId'], args['referenceRequestId'],
+                    args['path'] + '@sha256:' + args.get('expectedSha256', ''), args.get('referenceResponseRevision'))
         gif_proof = gif_record = None
         if action == 'canvas.openGif':
             media = self.outputs.media
@@ -2100,7 +2114,7 @@ class AppService:
                 from .workspace_canvas import canvas_command
                 if action == 'canvas.openFile':
                     from .canvas_files import open_file
-                    diagnostic_result = open_file(self, args, origin)
+                    diagnostic_result = open_file(self, args, origin, retained_file=retained_file)
                 elif action == 'canvas.openGif':
                     from .canvas_library import open_gif
                     diagnostic_result = open_gif(self, args, gif_proof)

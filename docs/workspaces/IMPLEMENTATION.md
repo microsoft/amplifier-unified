@@ -22,6 +22,65 @@ independent repositories and narrow layouts; the 681 frontend checks pass.
 This qualification does not claim deployment, immutable backups or resource
 teardown for independently owned processes and services.
 
+## Retained reported results — 2026-10-14
+
+Fresh `coordination.reply` declarations capture supported local SHA-256 file
+references before acknowledgment. The existing output registry and private
+resource store own those immutable bytes; request receipts retain only the
+declared references, verification outcomes and output identities. Files are
+bounded to 8 MiB each and 16 MiB per declaration. Opaque references remain
+unverified. The producing generation, execution directory/revision, request
+and declaring operation are retained as provenance. This is an exact file
+snapshot, not proof of repository integration or semantic correctness.
+
+Capture runs outside the service lock, then rechecks generation, Stop, placement
+and response revision. Output relationships and reply acknowledgment commit
+together. Precommit failures roll back the reply and its output relationships;
+postcommit lost acknowledgments return the original identity without rereading
+files. Existing resource reachability preserves saved bytes. Missing/corrupt
+retained resources never fall back silently to a mutable source. Missing,
+changed, over-limit or external sources remain explicit report states and
+cannot qualify a successful dependency.
+
+Canonical resource encoding and hashing run in the capture worker. The existing
+async resource writer retains SQLite writer exclusion while its disk worker
+settles, including cancellation. Artifact API/Canvas reads detach their resource
+index, perform file I/O, decoding and hash verification outside the app lock,
+then recheck request/revision and current navigation before presenting bytes.
+Saved output downloads use the same async reader. No live database connection
+enters those workers. Legacy output inspection/image actions retain their prior
+implementation; this is not a claim that all output paths have been optimized.
+
+`coordination.artifact` exposes bounded text and the exact saved download through
+the agent bridge and per-session HTTP command API. It checks the original
+request participants and workspace, including when reading an explicit older
+response revision. This does not expose the producing conversation's library.
+Related work shows saved-version status, opens those bytes in Canvas and offers
+a download. Source editing, deletion or removal of the original working copy
+does not change the result. Old replies retain their prior digest-checked source
+fallback; they are not relabeled as snapshots.
+
+Qualification after combining with assignment control: 418 focused Python
+checks, including real dispatch/bridge/HTTP routes, rollback/lost acknowledgment,
+restart, deletion before first open, foreign-reader rejection, stale generation,
+placement, Stop and response revisions, total/per-file bounds and corrupt-resource
+refusal. The production-service Chromium journey passes two roots and two rounds,
+deletion before first preview, later edit/deletion, exact download, bounded agent
+read, reload, mobile layout and private-draft preservation. The browser runtime
+and terminal anchors are scripted; it does not claim live model cooperation.
+Frontend tests pass (681). The prior two browser fixture failures assumed that
+reported files still existed and used an unresolved relative Playwright URL;
+their logs were retained and the corrected journey passes.
+
+The installed wheel passes 422 focused checks using the selected native runtime,
+including four Core/Foundation child-admission cases inherited from assignment
+control. All 601 packaged application Python/static files match the candidate
+source. This is package and local-runtime evidence, not publication or installed
+shared-host adoption; broad combined-program qualification remains separate.
+
+Remaining scope: combined repository/dependency validation, retention-aware
+checkout cleanup, full repeated provider journeys and release/adoption.
+
 ## Assignment admission and scoped Stop — 2026-10-14
 
 New commissioned roots now share their initiating root's assignment. Nested
@@ -413,7 +472,7 @@ competing stores.
 | Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
 | Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context, advisory overlap and supported file-tool source conflicts delivered above. Remaining: broader independent/commissioned/native-worker lifecycle and concurrency acceptance |
 | Assignment control | Existing task, capacity and interruption owners | Commissioned-root aggregate admission and scoped Stop delivered above. Request-only accounting/interruption inside an independent mixed conversation remains an explicit adapter limitation; no whole-chat control is substituted. |
-| Durable results and integration | Artifact/resource owner and worktree integration | Retain exact versions before mutable sources disappear; validate the combined candidate and preserve uncertain cleanup effects |
+| Durable results and integration | Artifact/resource owner and worktree integration | Report-time exact file retention delivered above; validate combined repository/dependency candidates and preserve uncertain cleanup effects |
 | Complete supported user journeys | Shared action/API layer, browser and terminal clients | Repeated two-round real-provider work, failure and Stop variants, independent and commissioned peers, disconnect/restart, private client state and measured responsiveness |
 | Release and adoption | Existing package/release and instance owners | Qualify the combined package, migrate retained records, activate fresh workers in an owned candidate instance, and separately verify intended release adoption |
 
