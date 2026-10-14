@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.143",
+      "title": "Build only the selected chat context",
+      "changes": [
+        "Ordinary browser updates no longer rebuild duplicate chat and workspace navigation pages. Those pages load through the navigation service when needed.",
+        "Worker history is requested only while its dialog is open. Chat summaries retain indexed worker counts without loading the workers, and opening a worker retains its parent link.",
+        "Separate browser windows keep independent page requests, drafts and Canvas input. Unrequested or stale worker pages show loading instead of an empty result."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.142",
       "title": "Request only the navigation views you use",
       "changes": [
