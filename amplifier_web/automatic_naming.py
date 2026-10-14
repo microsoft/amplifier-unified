@@ -1,11 +1,37 @@
 """Idle, bounded naming of discovered chats; independent of read-only previews."""
 import asyncio
+from collections.abc import MutableMapping
 import json
 import time
 
 from .naming import directory_for, read
 from .naming_backfill import BUSY, NamingBackfill, default_provider
-from .session_navigation import is_top_level
+
+
+class AttemptReceipts(MutableMapping):
+    """Point access to durable attempt receipts, with no startup history cache."""
+    def __init__(self, db):
+        self.db = db
+
+    def __getitem__(self, identity):
+        row = self.db.execute('SELECT source FROM automatic_naming_attempts WHERE id=?', (identity,)).fetchone()
+        if row is None:
+            raise KeyError(identity)
+        return row[0]
+
+    def __setitem__(self, identity, source):
+        self.db.execute('INSERT INTO automatic_naming_attempts VALUES (?,?) '
+            'ON CONFLICT(id) DO UPDATE SET source=excluded.source', (identity, source))
+
+    def __delitem__(self, identity):
+        if not self.db.execute('DELETE FROM automatic_naming_attempts WHERE id=?', (identity,)).rowcount:
+            raise KeyError(identity)
+
+    def __iter__(self):
+        return (row[0] for row in self.db.execute('SELECT id FROM automatic_naming_attempts'))
+
+    def __len__(self):
+        return self.db.execute('SELECT COUNT(*) FROM automatic_naming_attempts').fetchone()[0]
 
 
 def idle(service):
@@ -29,7 +55,7 @@ class AutomaticNaming:
         # An interrupted or failed naming request is never retried at startup.
         # A changed transcript or naming policy makes a new attempt eligible.
         service.db.execute('CREATE TABLE IF NOT EXISTS automatic_naming_attempts (id TEXT PRIMARY KEY, source TEXT NOT NULL)')
-        self.attempts = dict(service.db.execute('SELECT id,source FROM automatic_naming_attempts'))
+        self.attempts = AttemptReceipts(service.db)
         service.db.commit()
 
     async def _provider_ready(self, session):
@@ -50,23 +76,30 @@ class AutomaticNaming:
                 backfill = self.service.naming_backfill = NamingBackfill(self.service)
             if backfill.running:
                 return
-            # Hot catalog fields only: this does not hydrate conversation bodies.
-            candidates = sorted((row for row in self.service.state['sessions']
-                if row.get('historyManaged') and row.get('nativeProject') and is_top_level(row)
-                and row.get('autoName') is not False and row.get('nativeAvailable') is not False
-                and row.get('workspaceAvailable') is not False
-                and row.get('nativeNameSource') not in {'manual', 'generated'}
-                and row.get('titleSource') not in {'manual', 'generated'}),
-                key=lambda row: row.get('recentActivityAt') or row.get('createdAt') or 0, reverse=True)
+            # The complete directory owns discovery. Decode only this pass's
+            # window; unrelated dormant owners never enter the working set.
+            directory = self.service.directory
+            where = ("history_managed AND native_project IS NOT NULL AND session_kind='root' "
+                "AND COALESCE(auto_name,1) AND available "
+                "AND COALESCE(name_source,'') NOT IN ('manual','generated') "
+                "AND COALESCE(title_source,'') NOT IN ('manual','generated')")
+            sql, params = directory.effective()
+            total = directory.db.execute(sql + ' SELECT COUNT(*) FROM directory_rows WHERE ' + where, params).fetchone()[0]
             self.next_scan = self.clock() + 15
             chosen = {}
             ready = {}
             # Catalog recovery can tick every 100 ms. Bound both the cadence
             # and metadata reads, rotating through large unnamed histories.
-            start = self.cursor % max(1, len(candidates))
-            window = (candidates[start:] + candidates[:start])[:32]
+            start = self.cursor % max(1, total)
+            size = min(32, total)
+            order = 'COALESCE(recent,created,0) DESC,ordinal,id'
+            window = directory.select(where, limit=size, offset=start, order=order)
+            if len(window) < size:
+                window += directory.select(where, limit=size-len(window), order=order)
             for session in window:
                 self.cursor += 1
+                if session.get('nativeAvailable') is False:
+                    continue
                 source = json.dumps([session.get('nativeRevision'), read(directory_for(self.service.data_dir, session)).get('name_policy_revision', 0)], sort_keys=True)
                 if self.attempts.get(session['id']) == source or backfill.eligibility(session):
                     continue
@@ -84,7 +117,6 @@ class AutomaticNaming:
                 _, identities = backfill.start({'ids': list(chosen), 'limit': 2})
                 for identity in identities:
                     self.attempts[identity] = chosen[identity]
-                    self.service.db.execute('INSERT INTO automatic_naming_attempts VALUES (?,?) ON CONFLICT(id) DO UPDATE SET source=excluded.source', (identity, chosen[identity]))
                 self.service._publish_changes(sessions=set(identities), globals={'namingBackfill'})
                 if identities:
                     self.service._task(self._run(backfill, identities, chosen))
@@ -99,5 +131,4 @@ class AutomaticNaming:
             for identity in retry:
                 if self.attempts.get(identity) == sources[identity]:
                     self.attempts.pop(identity, None)
-                    self.service.db.execute('DELETE FROM automatic_naming_attempts WHERE id=?', (identity,))
             self.service.db.commit()

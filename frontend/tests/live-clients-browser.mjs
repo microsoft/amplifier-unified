@@ -1,4 +1,5 @@
 import {readComposerDraft} from './composer-test-helpers.mjs';
+import {openSettingsDialog} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -28,7 +29,7 @@ try{
  assert.notEqual(await a.evaluate(()=>window.amplifier.getState().client.id),await b.evaluate(()=>window.amplifier.getState().client.id));
  await act(a,'session.select',{id:first});await act(b,'session.select',{id:first});
  await composer(a).fill('Draft belonging to A');await composer(b).fill('Draft belonging to B');
- await b.getByRole('button',{name:'Settings',exact:true}).click();
+ await openSettingsDialog(b);
  await b.getByRole('heading',{name:'Settings',exact:true}).waitFor();
  assert.equal(await a.locator('[role=dialog]').count(),0);
  await b.getByRole('button',{name:'Close panel',exact:true}).click();

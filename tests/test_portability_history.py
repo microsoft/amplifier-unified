@@ -61,7 +61,10 @@ async def test_known_transfer_still_blocks_unavailable_history(tmp_path, app_fac
     row = native_rows(app)[0]
     if fence_source == 'local':
         monkeypatch.setattr(app.portability.node, 'fenced', lambda sid: sid == row['id'])
+    before_residents = [item['id'] for item in app.state['sessions']]
+    assert row['id'] not in before_residents
     assert app.portability.fenced(row['id'])
+    assert [item['id'] for item in app.state['sessions']] == before_residents
     before = files_snapshot(folder)
     await select(app, row['id'])
     assert [message['text'] for message in app._session(row['id'])['messages']] == ['Saved CLI question', 'Saved CLI answer']

@@ -77,9 +77,11 @@ async def test_http_detail_and_scoped_state_have_published_revisions(tmp_path, a
     target = service.state['selectedSessionId']
     await service.dispatch('session.create', {'title':'Browser chat'})
     selected = service.state['selectedSessionId']; revision = service.state['revision']
-    target_index = next(index for index,row in enumerate(service.state['sessions']) if row['id']==target)
+    response = await client.get('/api/state/detail', params={'path':'/sessions'})
+    directory_page = await response.json()
+    target_path = next(item['path'] for item in directory_page['items'] if item['value']['id']==target)
     await service.on_runtime_event('assistant.delta', {'sessionId':target,'text':'background'})
-    response = await client.get('/api/state/detail', params={'path':f'/sessions/{target_index}/streaming','revision':str(revision)})
+    response = await client.get('/api/state/detail', params={'path':target_path+'/streaming','revision':str(revision)})
     assert response.status == 400
     assert 'App state changed' in (await response.json())['error']
     await service.on_runtime_event('assistant.delta', {'sessionId':target,'text':' continuation'})
@@ -88,11 +90,15 @@ async def test_http_detail_and_scoped_state_have_published_revisions(tmp_path, a
     assert response.status == 200 and scoped['revision'] == revision + 2
     assert scoped['selectedSessionId'] == selected == service.state['selectedSessionId']
     assert next(row for row in scoped['sessions'] if row['id']==target)['streaming'] == 'background continuation'
-    response = await client.get('/api/state/detail', params={'path':f'/sessions/{target_index}/streaming','revision':str(scoped['revision'])})
+    response = await client.get('/api/state/detail')
+    overview = await response.json()
+    assert response.status == 200
+    response = await client.get('/api/state/detail', params={'path':target_path+'/streaming','revision':str(scoped['revision']),'directoryRevision':overview['directoryRevision']})
     detail = await response.json()
+    assert response.status == 200, detail
     assert detail['value'] == 'background continuation' and detail['revision'] == scoped['revision']
     await service.on_runtime_event('assistant.delta', {'sessionId':target,'text':' more'})
-    response = await client.get('/api/state/detail', params={'path':f'/sessions/{target_index}/streaming'})
+    response = await client.get('/api/state/detail', params={'path':target_path+'/streaming'})
     detail = await response.json()
     assert detail['value'] == 'background continuation more' and detail['revision'] == scoped['revision'] + 1
 

@@ -137,7 +137,7 @@ async def test_unknown_new_task_preparation_or_submission_never_replays_after_re
     now[0] += 61; await app.schedules.tick()
     run = app.schedules.store.runs(sid)[0]
     assert run['phase'] == 'unknown' and run['destinationSessionId']
-    count = len(app.state['sessions'])
+    identities = {row['id'] for row in app.directory.select(limit=-1)}
     assert len(runtime.inputs) == (1 if failure_point == 'after_admission' else 0)
     await app.close()
     runtime2 = ConfiguredRuntime()
@@ -146,7 +146,8 @@ async def test_unknown_new_task_preparation_or_submission_never_replays_after_re
     try:
         now[0] += 1000
         await restored.schedules.tick(); await restored.schedules.tick()
-        assert len(restored.state['sessions']) == count and not runtime2.inputs
+        assert {row['id'] for row in restored.directory.select(limit=-1)} == identities
+        assert not runtime2.inputs
         latest = restored.schedules.store.run(sid, run['id'])
         assert latest['destinationSessionId'] == run['destinationSessionId'] and latest['phase'] == 'unknown'
         await restored.dispatch('schedule.reconcile', {'sessionId': sid, 'runId': run['id'], 'expectedRevision': latest['revision'], 'resolution': 'abandoned', 'evidence': 'Inspected the reserved task and original effects; do not repeat.'})

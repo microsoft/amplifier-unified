@@ -59,6 +59,55 @@ async def worker(app, sid, wid="child-a", **patch):
     await app.on_runtime_event("worker.updated", {"sessionId": sid, "id": wid, "kind": "session", "parentSessionId": "native-parent", "runId": "run-1", "persistent": True, "status": "running", **patch})
 
 
+async def test_list_pages_dormant_peers_without_admission_or_body_reads(app, monkeypatch):
+    caller, peer = app.state['sessions']
+    peer_id = peer['id']
+    peer['workers'] = [{'id': 'saved-child', 'status': 'completed', 'name': 'Retained worker', 'kind': 'session'}]
+    app.state.setdefault('runtimeControl', {})[peer_id] = {'task.get': {'task': {
+        'id': 'saved-task', 'status': 'blocked', 'revision': 3, 'questionIds': []}}}
+    foreign = app._new_session({'title': 'Other workspace'})
+    foreign['workspace'] = str(app.data_dir / 'elsewhere')
+    internal = app._new_session({'title': 'Private job', 'purpose': 'test'})
+    app.state['sessions'].extend([foreign, internal])
+    app._save()
+    home, workspace = app.data_dir, app.default_workspace
+    await app.close()
+    restored = AppService(home, Runtime(), workspace=workspace)
+    try:
+        assert {row['id'] for row in restored.state['sessions']} == {caller['id']}
+        selected, draft = restored.state['selectedSessionId'], restored.state['view']['draft']
+        admitted = restored._session
+        def caller_only(identity=None, *args, **kwargs):
+            assert identity in {None, caller['id']}, 'Discovery admitted a dormant peer'
+            return admitted(identity, *args, **kwargs)
+        monkeypatch.setattr(restored, '_session', caller_only)
+        import amplifier_web.session_projection as projection
+        original_hydrate = projection.hydrate
+        monkeypatch.setattr(projection, 'hydrate', lambda *args, **kwargs: pytest.fail('Root discovery loaded saved views'))
+        rows = []
+        offset = 0
+        while True:
+            page = restored.coordination.list({'limit': 1, 'offset': offset}, caller['id'])
+            rows.extend(page['items'])
+            if page['nextOffset'] is None:
+                break
+            offset = page['nextOffset']
+        assert {row['target']['sessionId'] for row in rows} == {caller['id'], peer_id}
+        saved = next(row for row in rows if row['target']['sessionId'] == peer_id)
+        assert saved['taskId'] == 'saved-task' and saved['attention']
+        assert saved['canFollowup'] and not saved['canInterrupt']
+        assert saved['peerActions'] == [{'modes': ['notify', 'queue']}]
+        monkeypatch.setattr(projection, 'hydrate', original_hydrate)
+        explicit = restored.coordination.list({'sessionId': peer_id, 'includeWorkers': True}, caller['id'])
+        assert [row['kind'] for row in explicit['items']] == ['conversation', 'worker']
+        assert explicit['items'][1]['target']['workerId'] == 'saved-child'
+        assert {row['id'] for row in restored.state['sessions']} == {caller['id']}
+        assert (restored.state['selectedSessionId'], restored.state['view']['draft']) == (selected, draft)
+        assert not restored.runtime.sent and not restored.runtime.messages
+    finally:
+        await restored.close()
+
+
 async def wait(app, targets, **args):
     return (await app.dispatch("coordination.wait", {"targets": targets, **args}))["result"]
 

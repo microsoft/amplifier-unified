@@ -78,9 +78,16 @@ def setup_routes(app, streams):
         if offset < 0 or not 1 <= limit <= 100:
             raise AppError("Choose a nonnegative offset and a limit from 1 to 100.")
         workspace = request.query.get("workspace")
-        rows = [row for row in service.state["sessions"] if workspace is None or row.get("workspace") == workspace]
-        return web.json_response({"protocolVersion": 1, "items": [summary(row) for row in rows[offset:offset+limit]],
-            "nextOffset": offset+limit if offset+limit < len(rows) else None})
+        directory = getattr(service, "directory", None)
+        if directory is not None:
+            rows = directory.select("workspace=?" if workspace is not None else "1",
+                [workspace] if workspace is not None else [], offset=offset, limit=limit+1, state=service.state)
+            page, more = rows[:limit], len(rows)>limit
+        else:
+            rows = [row for row in service.state["sessions"] if workspace is None or row.get("workspace") == workspace]
+            page, more = rows[offset:offset+limit], offset+limit<len(rows)
+        return web.json_response({"protocolVersion": 1, "items": [summary(row) for row in page],
+            "nextOffset": offset+limit if more else None})
 
     async def state(request):
         require_client()

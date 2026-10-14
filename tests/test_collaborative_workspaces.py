@@ -1028,7 +1028,74 @@ async def test_outstanding_creation_bound_does_not_count_completed_history(app):
     assert created["delivery"] == "creation_pending"
     await settled(app, "bounded-create", "created")
     await settled(app, created["initialInputId"], "accepted")
-    assert len(app.state["sessions"]) == 11 and len(app.runtime.inputs) == 1
+    assert app.directory.root_count() == 11 and len(app.runtime.inputs) == 1
+
+
+@pytest.mark.parametrize('obligation', ['task', 'task-metadata', 'runtime-task', 'runtime-task-metadata', 'queued'])
+async def test_creation_cap_counts_dormant_owners_without_admitting_them(app, monkeypatch, obligation):
+    source = app.state['sessions'][0]
+    directory = app.data_dir / 'sessions' / source['id']
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'effective-configuration.json').write_text(json.dumps({'providers': [], 'tools': []}))
+    peers = [app._new_session({'title': f'Dormant helper {index}'}) for index in range(8)]
+    for index, peer in enumerate(peers):
+        peer.update(status='idle', collaboration={'creatorSessionId': source['id']})
+        if obligation.startswith('task'):
+            peer['task'] = {'id': 'task-' + peer['id'], 'status': 'active'}
+        elif obligation.startswith('runtime-task'):
+            app.state.setdefault('runtimeControl', {})[peer['id']] = {
+                'task.get': {'task': {'id': 'task-' + peer['id'], 'status': 'active'}}}
+        else:
+            app.collaboration.insert('queued-' + str(index), 'saved-test-binding', {
+                'requestId': 'queued-' + str(index), 'commandAction': 'coordination.send',
+                'senderSessionId': source['id'], 'target': {'sessionId': peer['id']},
+                'delivery': 'queued', 'protocol': 2})
+    app.state['sessions'].extend(peers)
+    app._save()
+    source_id, home = source['id'], app.data_dir
+    await app.close()
+    runtime = Runtime()
+    restored = runtime.app = AppService(home, runtime, workspace=app.default_workspace)
+    try:
+        dormant = {peer['id'] for peer in peers}
+        assert not dormant.intersection(row['id'] for row in restored.state['sessions'])
+        if obligation.endswith('-metadata'):
+            # A canonical title/availability update must not erase the saved
+            # active-task obligation merely because the owner is not resident.
+            metadata = [restored.directory.resolve(identity) for identity in dormant]
+            for row in metadata:
+                row['description'] = 'Refreshed while dormant'
+            restored.directory.sync(metadata, restored.state)
+            restored.db.commit()
+        source = restored._session(source_id)
+        await generation(restored, source, 'current-host-generation', ['current-input'])
+        original = restored._admit_session
+
+        def no_peer_admission(metadata):
+            assert metadata['id'] not in dormant
+            return original(metadata)
+
+        monkeypatch.setattr(restored, '_admit_session', no_peer_admission)
+        with pytest.raises(AppError, match='eight outstanding'):
+            await agent_action(restored, source, 'coordination.create',
+                {'title': 'Would exceed cap', 'text': 'A ninth helper'}, 'dormant-cap')
+        assert not restored.db.execute("SELECT 1 FROM commands WHERE id='dormant-cap'").fetchone()
+        assert not dormant.intersection(row['id'] for row in restored.state['sessions'])
+        assert not runtime.inputs
+        if obligation.endswith('-metadata'):
+            monkeypatch.setattr(restored, '_admit_session', original)
+            completed = restored._session(peers[0]['id'])
+            if obligation.startswith('runtime-task'):
+                restored.state['runtimeControl'][completed['id']]['task.get']['task']['status'] = 'completed'
+            else:
+                completed.pop('task', None)
+            restored._save()
+            created = await agent_action(restored, source, 'coordination.create',
+                {'title': 'Freed task slot', 'text': 'One helper has completed'}, 'dormant-cap')
+            assert created['delivery'] == 'creation_pending'
+            await settled(restored, 'dormant-cap', 'created')
+    finally:
+        await restored.close()
 
 
 @pytest.mark.parametrize("mode", ["notify", "queue", "steer"])

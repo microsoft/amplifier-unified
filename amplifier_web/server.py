@@ -153,8 +153,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         for key in ("offset", "limit", "revision"):
             if key in request.query:
                 args[key] = int(request.query[key])
+        if 'directoryRevision' in request.query:
+            args['directoryRevision'] = request.query['directoryRevision']
         await service._flush_pending_progress()
-        return web.json_response(read_state(service.state_context(), args, resolve=service.state_resource))
+        return web.json_response(read_state(service.state_context(), args, resolve=service.state_resource, directory=service.directory))
 
     async def conversation_detail(request):
         from .browser_detail import page, read_text

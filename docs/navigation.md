@@ -292,7 +292,12 @@ Elapsed time comes from actual conversation activity, refreshed every 30 seconds
 unknown timestamps display a dash. Pending approval titles, tool arguments,
 provider errors, and transcripts are not copied into the navigation projection.
 Working and attention filters run on the complete matching library before paging,
-so counts include conversations beyond the current page.
+so counts include conversations beyond the current page. These predicates,
+ordering, and counts run against the shared indexed history directory. Only the
+requested page is decoded; a dormant chat can appear in search, pins, workspace
+counts, or worker history without becoming a resident session. Independent client
+selection and Canvas state survive working-set eviction; explicit selection or
+execution uses the common keyed admission path.
 
 Full paths remain the workspace identity and search target. Compact labels use
 unique path suffixes from the complete available registry; equal folder names

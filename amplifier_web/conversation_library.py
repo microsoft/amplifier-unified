@@ -30,11 +30,13 @@ def organization(state):
     return state.setdefault('conversationOrganization', {'archived': {}, 'collections': []})
 
 
-def projection(state, session_ids=()):
+def projection(state, session_ids=(), *, directory=None):
     value = organization(state)
     from .session_navigation import is_top_level
     excluded = {row['id'] for row in state.get('sessions', []) if not is_top_level(row)}
-    return {'archivedCount': len(value['archived'].keys() - excluded),
+    if directory is not None:
+        from .history_directory_query import archived_count
+    return {'archivedCount': archived_count(directory, state) if directory else len(value['archived'].keys() - excluded),
         'archived': {sid: value['archived'][sid] for sid in session_ids if sid in value['archived']}}
 
 

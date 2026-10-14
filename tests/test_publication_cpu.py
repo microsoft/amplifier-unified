@@ -10,6 +10,9 @@ from test_browser_state import catalog
 async def test_empty_questions_are_independent_and_stale_rows_clear(app_factory):
     app = app_factory()
     rows = catalog(app, count=20, workers=2, workspaces=2)
+    # This controller case intentionally exercises admitted mutable owners.
+    app.state['sessions'] = rows
+    app.questions.sync()
     first = rows[0]["questions"]
     app.questions.sync()
     assert rows[0]["questions"] is first
@@ -28,6 +31,8 @@ async def test_empty_questions_are_independent_and_stale_rows_clear(app_factory)
 async def test_worktree_grouping_reads_external_handoffs_each_time(app_factory, monkeypatch):
     app = app_factory()
     rows = catalog(app, count=3, workers=1, workspaces=2)
+    app.state['sessions'] = rows
+    app.projections.invalidate(state=app.state)
     records = [
         {"id": "a", "sessionId": rows[1]["id"]},
         {"id": "b", "sessionId": rows[0]["id"]},
@@ -64,8 +69,9 @@ async def test_root_counts_and_shell_key_observe_save_without_revision(app_facto
     app = app_factory()
     rows = catalog(app, count=100, workers=10, workspaces=4)
     index = app.projections.sessions(app.state)
-    assert len(index.roots) == 100
-    assert [row["id"] for row in index.roots] == [row["id"] for row in rows[:100]]
+    assert app.directory.root_count() == 100
+    assert [row['id'] for row in app.directory.select("session_kind='root'", limit=100, order='ordinal,id')] == [row['id'] for row in rows[:100]]
+    assert len(index.roots) == 2  # The remaining roots stay in the directory.
     key = app.projections.shell_key(app.state)
     for i in range(2):
         app.clients.attach(f"root-client-{i}")
@@ -73,23 +79,29 @@ async def test_root_counts_and_shell_key_observe_save_without_revision(app_facto
             assert app.browser_state()["library"]["sessionCount"] == 100
             assert app.projections.sessions(app.state) is index
     revision = app.state["revision"]
-    rows[-1].update(sessionKind="root", parentId=None, nativeParentId=None)
+    promoted_owner = app._session(rows[-1]['id'], hydrate=False)
+    promoted_owner.update(sessionKind="root", parentId=None, nativeParentId=None)
     app._save()
     assert app.state["revision"] == revision
-    assert len(app.projections.sessions(app.state).roots) == 101
+    assert app.directory.root_count() == 101
     assert app.browser_state()["library"]["sessionCount"] == 101
     promoted = app.projections.shell_key(app.state)
     assert promoted != key  # classification alone changes the semantic key
     from amplifier_web.browser_state import navigation
-    expected = navigation({**app.state, "attention": app.projections.attention(app.state)})
+    expected = navigation({**app.state, 'sessions': app.directory.select(limit=-1, order='ordinal,id'),
+                           "attention": app.projections.attention(app.state)})
     assert app.browser_state()["chatNavigation"] == expected["chatNavigation"]
-    rows[-1].update(sessionKind="worker", parentId=rows[0]["id"], nativeParentId=rows[0]["nativeIdentity"])
+    promoted_owner.update(sessionKind="worker", parentId=rows[0]["id"], nativeParentId=rows[0]["nativeIdentity"])
     app._save()
-    assert len(app.projections.sessions(app.state).roots) == 100
-    assert app.projections.shell_key(app.state) == key
-    rows[8]["title"] = "off-page change"
+    assert app.directory.root_count() == 100
+    demoted = app.projections.shell_key(app.state)
+    # Directory generations invalidate both changes, without hashing every
+    # summary to discover that this classification has returned to its old value.
+    assert demoted != promoted
+    assert app.projections.shell_key(app.state) == demoted
+    app._session(rows[8]['id'], hydrate=False)['title'] = 'off-page change'
     app._save()
-    assert app.projections.shell_key(app.state) != key
+    assert app.projections.shell_key(app.state) != demoted
 
 
 def test_root_index_counts_sequence_not_deduplicated_ids():

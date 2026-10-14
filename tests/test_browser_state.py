@@ -34,9 +34,21 @@ def catalog(app, count=5000, workers=120, workspaces=150):
             'nativeParentId': None if index < count else rows[0]['nativeIdentity'],
             'recentActivityAt': 1000 + index, '_catalogRecentAt': 1000 + index,
             '_catalogId': identity, 'nativeRevision': [(1000 + index)*1_000_000_000, 120]})
+    rows[1]['draft'] = 'Private sentinel draft keeps its saved owner reference'
     app.state.update(sessions=rows, workspaces=registrations, selectedSessionId=rows[0]['id'],
                      selectedWorkspaceId=registrations[0]['id'])
     app.state['view']['navChatScope'] = 'all'
+    # The complete durable directory remains queryable; ordinary navigation
+    # starts with only the selected owner and a private-body sentinel admitted.
+    app.directory.sync(rows, app.state)
+    # Every local directory row has an actual durable owner. Admission must not
+    # mistake an orphaned summary for a recoverable saved conversation.
+    from amplifier_web.automatic_history import INDEX_FIELDS
+    from amplifier_web.state_records import UPSERT
+    app.db.executemany(UPSERT, (('session', row['id'], json.dumps({
+        **{key: row[key] for key in INDEX_FIELDS if key in row}, '$native': True})) for row in rows))
+    app.db.commit()
+    app.state['sessions'] = rows[:2]
     app._publish()
     return rows
 
@@ -66,7 +78,8 @@ async def test_large_catalog_bounded_receipts_publications_and_complete_agent_ac
     assert public['subagentNavigation']['total'] == 120
     assert next(row for row in public['sessions'] if row['id'] == rows[0]['id'])['messages'][0]['text'] == 'Selected chat retained'
     saved = load_saved_state(app.db)
-    assert len(saved['sessions']) == 1
+    assert {row['id'] for row in saved['sessions']} == {row['id'] for row in rows}
+    assert all(row.get('$native') and 'messages' not in row for row in saved['sessions'])
     page = await app.app_bridge('get_state', {'path':'/sessions','offset':4500,'limit':3}, rows[0]['id'])
     assert page['total'] == 5120 and page['items'][0]['value']['id'] == rows[4500]['id']
     result = await app.app_bridge('dispatch', {'action':'session.pin','args':{'id':rows[4500]['id'],'pinned':True}}, rows[0]['id'])
@@ -101,8 +114,8 @@ async def test_navigation_pages_keep_worker_parent_and_full_workspace_counts(app
 
 async def test_offpage_error_and_approval_still_produce_attention(app_factory):
     app = app_factory(); rows = catalog(app)
-    rows[4500]['error'] = 'Provider unavailable'
-    rows[4501]['approvals'] = [{'id':'pending-permission', 'status':'pending', 'tool':'filesystem'}]
+    app._session(rows[4500]['id'], hydrate=False)['error'] = 'Provider unavailable'
+    app._session(rows[4501]['id'], hydrate=False)['approvals'] = [{'id':'pending-permission', 'status':'pending', 'tool':'filesystem'}]
     app._publish()
     attention = {row['id']: row for row in app.browser_state()['attention']['items']}
     failed = attention['session:'+rows[4500]['id']]
@@ -130,7 +143,7 @@ async def test_selected_worker_count_reuses_unfiltered_navigation_and_keeps_othe
     for history, expected_scans in [
         ({'sessionId': selected, 'filter': '', 'index': 1}, 0),
         ({'sessionId': selected, 'filter': 'no matching workers', 'index': 0}, 0),
-        ({'sessionId': other, 'filter': '', 'index': 0}, 60),
+        ({'sessionId': other, 'filter': '', 'index': 0}, 0),
     ]:
         monkeypatch.setattr(browser_state, 'direct_child', original)
         app.state['view']['subagentHistory'] = history
@@ -138,7 +151,7 @@ async def test_selected_worker_count_reuses_unfiltered_navigation_and_keeps_othe
         calls.clear()
         monkeypatch.setattr(browser_state, 'direct_child', counted)
         # An explicit off-page detail target must not change selected counts.
-        public = browser_state.snapshot(app.state, derived, session_id=other)
+        public = browser_state.snapshot(app.state, derived, session_id=other, directory=app.directory)
         assert next(row for row in public['sessions'] if row['id'] == selected)['subagentCount'] == 60
         assert public['selectedSessionId'] == selected
         assert len(calls) == expected_scans
@@ -204,7 +217,7 @@ async def test_stream_publications_coalesce_but_final_response_flushes(app_facto
 
 async def test_offpage_text_notifications_keep_compact_final_messages(app_factory):
     app = app_factory(); rows = catalog(app)
-    target = rows[4501]
+    target = app._session(rows[4501]['id'], hydrate=False)
     target['messages'] = [{'id':'text-response','role':'assistant','via':'text','text':'A useful result'*10000,'createdAt':100}]
     target['status'] = 'idle'; app._publish()
     public = app.browser_state()
@@ -216,7 +229,7 @@ async def test_offpage_text_notifications_keep_compact_final_messages(app_factor
 
 async def test_voice_session_and_direct_saved_changes_keep_current_snapshot(app_factory):
     app = app_factory(); rows = catalog(app)
-    target = rows[4501]
+    target = app._session(rows[4501]['id'], hydrate=False)
     target['messages'] = [{'id':'voice-result','role':'assistant','via':'call','text':'Voice result','createdAt':100}]
     app.state['voice'] = {'sessionId':target['id'], 'status':'connected'}
     app._publish()
@@ -231,7 +244,7 @@ async def test_voice_session_and_direct_saved_changes_keep_current_snapshot(app_
 
 async def test_explicit_snapshot_target_does_not_change_selection_or_default_cache(app_factory):
     app = app_factory(); rows = catalog(app)
-    target = rows[4501]
+    target = app._session(rows[4501]['id'], hydrate=False)
     target['messages'] = [{'id':'finished','role':'assistant','text':'Headless result','createdAt':100}]
     target['generations'] = [{'event':'generation.finished','text':'Headless result','generation_id':'done'}]
     app._publish()

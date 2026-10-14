@@ -98,6 +98,12 @@ async def main():
             app['control_token'] = 'fixture-browser-control-token'
             service = app['service']
             await service.history.refresh()
+            async with asyncio.timeout(30):
+                while service.state.get('sharedHistory', {}).get('reconciliation', {}).get('phase') != 'complete':
+                    if service.state.get('sharedHistory', {}).get('error'):
+                        raise AssertionError(service.state['sharedHistory']['error'])
+                    await service.history.refresh(force=False)
+                    await asyncio.sleep(.01)
             if generation == 0:
                 await service.dispatch('session.create', {'title': 'Quiet older chat', 'workspace': str(paths['one'])})
                 quiet = service.state['selectedSessionId']
@@ -110,12 +116,13 @@ async def main():
                 chat.pop('navigationActivityPending', None)
                 for row in chat['messages']:
                     row['createdAt'] = 1_600_000_000
-                initial = next(row['id'] for row in service.state['sessions'] if row.get('nativeIdentity') == 'alpha-201')
+                initial = service.directory.resolve('alpha-201')['id']
                 await service.dispatch('session.select', {'id': initial})
                 await service.dispatch('view.update', {'patch': {'navPinned': True}})
                 service._save()
             if generation == 0 and os.environ.get('AMPLIFIER_NAVIGATION_PROOF') == '1':
-                by_native = {row.get('nativeIdentity'): row for row in service.state['sessions']}
+                by_native = {identity: service._session(identity, hydrate=False)
+                             for identity in ('alpha-200', 'alpha-199', 'alpha-198', 'alpha-197')}
                 by_native['alpha-200'].update(status='working', recentActivityAt=time.time()-120)
                 by_native['alpha-199'].update(approvals=[{'id': 'navigation-approval', 'title': 'Allow workspace access', 'status': 'pending'}], recentActivityAt=time.time()-240)
                 by_native['alpha-198'].update(completion={'id': 'navigation-completion', 'at': time.time()-600}, recentActivityAt=time.time()-600)
@@ -138,6 +145,46 @@ async def main():
                 asyncio.get_running_loop().call_later(.1, restart.set)
                 return web.json_response({'restarting': True, 'generation': generation})
 
+            async def directory_info(request):
+                # This proof must not enumerate the dormant library to inspect it.
+                row = service.directory.resolve(initial)
+                resident = next((item for item in service.state['sessions'] if item['id'] == initial), {})
+                return web.json_response({'initialSession': initial, 'generation': generation,
+                    'rootCount': service.directory.root_count(service.state),
+                    'residentCount': len(service.state['sessions']),
+                    'title': row['title'], 'available': row.get('workspaceAvailable'),
+                    'residentAvailable': resident.get('workspaceAvailable'),
+                    'residentReadOnlyReason': resident.get('historyReadOnlyReason'),
+                    'physicalAvailable': paths['one'].is_dir(),
+                    'runtimeStarts': runtime.started, 'runtimeSends': runtime.sent})
+
+            async def directory_change(request):
+                payload = await request.json()
+                if 'title' in payload:
+                    metadata = home / 'projects' / project_slug(paths['one']) / 'sessions' / 'alpha-201' / 'metadata.json'
+                    value = json.loads(metadata.read_text())
+                    value.update(name=str(payload['title']), name_revision=value.get('name_revision', 0) + 1)
+                    metadata.write_text(json.dumps(value))
+                if 'available' in payload:
+                    parked = paths['one'].with_name('temporarily-unavailable')
+                    source, destination = (parked, paths['one']) if payload['available'] else (paths['one'], parked)
+                    source.rename(destination)
+                # Force the observation into a later cooperative slice. A
+                # forced first slice must not hide missing delta propagation.
+                budget = service.history.index._recovery_budget
+                service.history.index._recovery_budget = 1
+                try:
+                    await service.history.refresh(force=True)
+                    async with asyncio.timeout(30):
+                        while service.state.get('sharedHistory', {}).get('reconciliation', {}).get('phase') != 'complete':
+                            await service.history.refresh(force=False)
+                            await asyncio.sleep(.01)
+                finally:
+                    service.history.index._recovery_budget = budget
+                assert not service.state.get('sharedHistory', {}).get('error')
+                assert not service.state.get('sharedHistory', {}).get('issues')
+                return await directory_info(request)
+
             async def update_status(request):
                 payload = await request.json()
                 await service.update_manager.publish(
@@ -150,6 +197,8 @@ async def main():
             app.router.add_get('/api/fixture/info', info)
             app.router.add_post('/api/fixture/agent', agent)
             app.router.add_post('/api/fixture/restart', restart_server)
+            app.router.add_get('/api/fixture/directory', directory_info)
+            app.router.add_post('/api/fixture/directory', directory_change)
             runner = web.AppRunner(app)
             await runner.setup()
             site = web.TCPSite(runner, '127.0.0.1', port)

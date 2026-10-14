@@ -1,7 +1,7 @@
-"""Bounded browser projections over the complete in-memory history catalog.
+"""Bounded browser projections over a shared, nonresident history directory.
 
-The native catalog is an index, not browser state. Actions and JSON Pointer
-reads still address the complete catalog; browsing only publishes one page.
+Directory queries provide pages/counts; SessionIndex owns admitted live rows.
+Explicit full-state compatibility is separate from ordinary browser projections.
 """
 from copy import deepcopy
 from collections import OrderedDict
@@ -37,7 +37,8 @@ def direct_child(row, parent):
 
 class SessionIndex:
     """Shared catalog facts for one saved generation; no client drafts or views."""
-    def __init__(self, state):
+    def __init__(self, state, *, directory=None):
+        self.directory = directory
         self.by_id = {}
         self.positions = {}
         self.parents = {}
@@ -142,7 +143,7 @@ class SessionIndex:
                 if direct_child(self.by_id[key], parent)]
 
 
-def navigation(state, *, chats=chat_snapshot, index=None):
+def navigation(state, *, chats=chat_snapshot, index=None, directory=None):
     index = index or SessionIndex(state)
     chat = chats(state)
     header_view = {**state.get('view', {}), 'navChatScope': 'workspace', 'navFilter': '', 'navArchive': 'active', 'navCollection': None}
@@ -159,16 +160,21 @@ def navigation(state, *, chats=chat_snapshot, index=None):
     query = requested.get('filter', '')
     query = query if isinstance(query, str) else ''
     parent_row = index.by_id.get(parent, {})
-    all_children = index.children(parent_row)
-    children = [row for row in all_children if _matches((row.get('title', ''), row.get('description', ''), row['id'], row.get('nativeIdentity', '')), query)]
-    children.sort(key=lambda row: -recent_activity(row))
-    pages = max(1, (len(children) + 49) // 50)
-    index = requested.get('index', 0)
-    index = max(0, min(pages - 1, index)) if type(index) is int else 0
-    start, end = index * 50, min(len(children), (index + 1) * 50)
-    workers = {'items': [summary(row) for row in children[start:end]], 'total': len(children), 'unfilteredTotal': len(all_children),
-               'index': index, 'pages': pages, 'start': start, 'end': end,
-               'scope': {'sessionId': parent, 'filter': query}}
+    if directory is not None:
+        parent_row = parent_row or directory.resolve(parent) or {}
+        workers = directory.children(state, parent_row, query, requested.get('index', 0))
+        workers['scope']['sessionId'] = parent
+    else:
+        all_children = index.children(parent_row)
+        children = [row for row in all_children if _matches((row.get('title', ''), row.get('description', ''), row['id'], row.get('nativeIdentity', '')), query)]
+        children.sort(key=lambda row: -recent_activity(row))
+        pages = max(1, (len(children) + 49) // 50)
+        index = requested.get('index', 0)
+        index = max(0, min(pages - 1, index)) if type(index) is int else 0
+        start, end = index * 50, min(len(children), (index + 1) * 50)
+        workers = {'items': [summary(row) for row in children[start:end]], 'total': len(children), 'unfilteredTotal': len(all_children),
+                   'index': index, 'pages': pages, 'start': start, 'end': end,
+                   'scope': {'sessionId': parent, 'filter': query}}
     return {'chatNavigation': chat, 'headerChatNavigation': {'items': header['items'], 'total': header['total']},
             'subagentNavigation': workers}
 
@@ -197,14 +203,15 @@ class SnapshotCopies:
 
 
 def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None,
-             detail_project=None, demand=False):
+             detail_project=None, demand=False, directory=None):
     index = index or SessionIndex(state)
+    directory = directory or index.directory
     result = dict(state)
     result.update(derived)
     visible = {row['id'] for name in ('chatNavigation', 'headerChatNavigation', 'subagentNavigation')
                for row in derived[name]['items']}
     selected = state.get('selectedSessionId')
-    selected_row = index.by_id.get(selected, {})
+    selected_row = index.by_id.get(selected) or (directory.resolve(selected) if directory else None) or {}
     visible.add(selected_row.get('parentId'))
     full = {selected, session_id, state.get('voice', {}).get('sessionId')}
     if client_id is None:
@@ -213,13 +220,16 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     visible.add(derived['subagentNavigation']['scope']['sessionId'])
     workers = derived['subagentNavigation']
     selected_children = (workers['unfilteredTotal'] if workers['scope']['sessionId'] == selected
-                         else len(index.children(selected_row))) if selected_row else 0
+                         else directory.children(state, selected_row)['unfilteredTotal'] if directory else len(index.children(selected_row))) if selected_row else 0
     detail_project = detail_project or project
-    result['sessions'] = [{**((row if row['id']==session_id else detail_project(row)) if row['id'] in full else summary(row)),
+    visible_rows = dict(index.by_id)
+    if directory is not None:
+        visible_rows.update({row['id']:row for row in directory.summary_ids(visible - visible_rows.keys(), state=state)})
+    result['sessions'] = [{**((row if row['id']==session_id else detail_project(row)) if row['id'] in full and row['id'] in index.by_id else summary(row)),
                            **({'subagentCount': selected_children} if row['id'] == selected else {})}
-                          for row in (index.by_id[key] for key in sorted(visible & index.by_id.keys(), key=index.positions.__getitem__))]
+                          for row in (visible_rows[key] for key in sorted(visible & visible_rows.keys(), key=lambda key: (index.positions.get(key, len(index.positions)), key)))]
     from .conversation_library import projection as organization_projection
-    result['conversationOrganization'] = organization_projection(state, visible)
+    result['conversationOrganization'] = organization_projection(state, visible, directory=directory)
     # Report history is read through bounded coordination cursors, never copied
     # into every browser progress snapshot. The worker's latest report remains.
     result['sessions'] = [{**row, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
@@ -240,8 +250,10 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
                                       if key != 'text' or state.get('notificationSettings', {}).get('preview', True)}
                                      for row in index.notifications]
     selected_root = selected_row if selected_row and is_top_level(selected_row) else None
-    continuation = selected_root or index.first_root
-    result['library'] = {'sessionCount': len(index.roots), 'workspaceCount': len(state.get('workspaces', [])),
+    first = directory.select("session_kind='root'", limit=1,
+                             order='created DESC, ordinal DESC, id', state=state) if directory and not selected_root else []
+    continuation = selected_root or (first[0] if first else index.first_root)
+    result['library'] = {'sessionCount': directory.root_count(state) if directory else len(index.roots), 'workspaceCount': len(state.get('workspaces', [])),
                          'continueSessionId': continuation['id'] if continuation else None,
                          'bounded': True, 'detailPath': '/api/state/detail'}
     for key in ('attentionRead', 'nativePresentation', 'conversationExports'):

@@ -256,7 +256,7 @@ class ColdDisplay:
         if not value.get('historyManaged') or value.get('historyLoaded'):
             self.touch(identity)
         record = ColdRecord(value, self.service.db)
-        record.touch = lambda: self.touch(dict.__getitem__(record, 'id'))
+        record.touch = lambda sid=identity: self.touch(sid)
         return record
 
     def track_restored(self):

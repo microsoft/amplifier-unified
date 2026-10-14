@@ -3202,7 +3202,7 @@ async def test_discovered_worker_descriptor_http_empty_without_byte_report_or_mu
         {'role': 'assistant', 'content': 'Synthetic child saved response.'},
     ], {'name': 'Synthetic worker', 'parent_session_id': sid})
     await service.history.refresh()
-    child = next(row for row in service.state['sessions'] if row.get('nativeIdentity') == native)
+    child = service._session(native, hydrate=False)
     assert child['sessionKind'] == 'worker'
     child_id = child['id']  # Never assume the native and public identities coincide.
     service.clients.attach('worker-http-browser')

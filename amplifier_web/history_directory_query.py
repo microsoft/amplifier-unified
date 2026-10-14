@@ -1,0 +1,245 @@
+"""Bounded navigation queries over the shared effective history directory.
+
+Filtering, ordering and counts run in SQLite. Only the requested page is decoded;
+querying history never admits a session or starts its runtime.
+"""
+import json
+
+from .chat_navigation import PAGE_SIZE, valid_recent_limit, _matches
+from .navigation_summary import path_labels
+
+
+def _rows(directory, sql, params):
+    cursor = directory.db.execute(sql, params)
+    names = [column[0] for column in cursor.description]
+    return (dict(zip(names, row)) for row in cursor)
+
+
+def _registry(state, archive=None):
+    rows = [row for row in state.get('workspaces', [])
+            if isinstance(row.get('path'), str) and row['path']
+            and (row.get('available') is True if archive is None else
+                 (row.get('available') is True or row.get('archived'))
+                 and (archive == 'all' or bool(row.get('archived')) == (archive == 'archived')))]
+    if archive is not None:
+        from .workspace_navigation import _path
+        rows = [row for row in rows if _path(row['path']) is not None]
+    by_path = {row['path']: row for row in rows}
+    return rows, by_path
+
+
+def _base(directory, state, *, archive=None):
+    sql, params = directory.effective(state)
+    rows, by_path = _registry(state, archive)
+    directory.db.create_function('directory_lower', 1, lambda text: str(text or '').lower(), deterministic=True)
+    directory.db.create_function('directory_match', 7,
+        lambda query, *fields: int(_matches(fields, query)), deterministic=True)
+    path_expression = 'p.path=d.workspace'
+    registry = [{**row, '_pathOwner': by_path[row['path']]['id'] == row['id']} for row in rows]
+    if archive is not None:
+        from .workspace_navigation import _path
+        from pathlib import PureWindowsPath
+        def normalized(value):
+            path = _path(value)
+            return ('windows:' + str(path).casefold() if isinstance(path,PureWindowsPath) else 'posix:' + str(path)) if path is not None else None
+        directory.db.create_function('directory_path',1,normalized,deterministic=True)
+        owners = {normalized(row['path']):row['id'] for row in rows}
+        paths = {}
+        for row in rows:
+            paths.setdefault(normalized(row['path']),row['path'])
+        registry = [{**row,'path':paths[normalized(row['path'])], '_pathOwner':owners[normalized(row['path'])]==row['id']} for row in rows]
+        path_expression = 'directory_path(p.path)=directory_path(d.workspace)'
+    sql += """, navigation_workspaces AS (
+      SELECT json_extract(value,'$.id') id,json_extract(value,'$.path') path,
+             COALESCE(json_extract(value,'$.name'),'') name,
+             json_extract(value,'$._pathOwner') path_owner FROM json_each(?)
+    ), navigation_pins AS (SELECT value id,CAST(key AS INTEGER) position FROM json_each(?)),
+    navigation_archived AS (SELECT value id FROM json_each(?)),
+    navigation_rows AS (
+      SELECT d.*, COALESCE(w.id,p.id) resolved_workspace_id,
+        COALESCE(w.path,p.path,d.workspace,'') resolved_workspace,
+        COALESCE(w.name,p.name,CASE WHEN d.managed THEN 'No workspace' ELSE '' END) workspace_name,
+        pin.position pin_position, a.id IS NOT NULL archived
+      FROM directory_rows d
+      LEFT JOIN navigation_workspaces w ON w.id=d.workspace_id
+      LEFT JOIN navigation_workspaces p ON w.id IS NULL AND PATH_EXPRESSION AND p.path_owner
+      LEFT JOIN navigation_pins pin ON pin.id=d.id
+      LEFT JOIN navigation_archived a ON a.id=d.id
+    )"""
+    sql = sql.replace('PATH_EXPRESSION',path_expression)
+    return sql, [*params, json.dumps(registry), json.dumps(state.get('pinnedSessionIds', [])),
+                 json.dumps(list(state.get('conversationOrganization', {}).get('archived', {})))], rows
+
+
+def _chat_query(directory, state, section):
+    sql, params, workspaces = _base(directory, state)
+    view = state.get('view', {})
+    by_id = {row['id']: row for row in workspaces}
+    selected = by_id.get(state.get('selectedWorkspaceId'))
+    mode = 'all' if view.get('navChatScope') == 'all' else 'workspace'
+    query = view.get('navFilter', '')
+    query = query if isinstance(query, str) else ''
+    scope = {'mode': mode, 'workspaceId': selected['id'] if mode == 'workspace' and selected else None,
+             'filter': query, 'selectedSessionId': state.get('selectedSessionId')}
+    sort = view.get('navSort', 'activity')
+    if sort != 'activity': scope['sort'] = sort
+    location = view.get('navLocationFilter', 'all') if mode == 'all' else 'all'
+    if location != 'all': scope['locationFilter'] = location
+    archive = view.get('navArchive', 'active')
+    if archive != 'active': scope['archive'] = archive
+    status = view.get('navStatusFilter', 'all')
+    if status != 'all': scope['statusFilter'] = status
+    where = ["session_kind='root'", '(resolved_workspace_id IS NOT NULL OR managed)']
+    if mode == 'workspace':
+        where += ['NOT managed', 'resolved_workspace_id=?']
+        params.append(selected['id'] if selected else None)
+    if location == 'managed': where.append('managed')
+    if archive != 'all': where.append('archived' if archive == 'archived' else 'NOT archived')
+    if query:
+        where.append('directory_match(?,title,description,id,COALESCE(native_id,id),resolved_workspace,workspace_name)')
+        params.append(query)
+    if section:
+        scope['section'] = section
+        if section in {'pinned', 'recent', 'shortcuts'}:
+            where.append('pin_position IS NOT NULL' if section == 'pinned' else 'pin_position IS NULL')
+        if section in {'recent', 'shortcuts', 'search'}:
+            scope['showAgentCreated'] = view.get('navShowAgentCreated') is True
+            if not scope['showAgentCreated']:
+                where.append('(NOT agent_created OR id=?)')
+                params.append(state.get('selectedSessionId'))
+    sql += ', eligible AS (SELECT * FROM navigation_rows WHERE ' + ' AND '.join(where) + ')'
+    counts = dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)
+    for kind, count in directory.db.execute(sql + ' SELECT activity_kind,COUNT(*) FROM eligible GROUP BY activity_kind', params):
+        if kind in counts: counts[kind] = count
+    if status != 'all':
+        sql += ', filtered AS (SELECT * FROM eligible WHERE activity_kind=?)'
+        params.append(status)
+    else:
+        sql += ', filtered AS (SELECT * FROM eligible)'
+    ordering = 'directory_lower(title)' if sort == 'name' else '-COALESCE(created,0)' if sort == 'created' else '-COALESCE(recent,0)'
+    order = f'pin_position IS NULL,CASE WHEN pin_position IS NOT NULL THEN pin_position END,CASE WHEN pin_position IS NULL THEN {ordering} END,ordinal,id'
+    return sql, params, scope, counts, order, workspaces
+
+
+def _chat_row(directory, row, labels):
+    row = dict(row)
+    metadata = directory.decode(row)
+    managed = bool(row['managed'])
+    result = {'id': row['id'], 'title': row['title'] or 'Untitled conversation',
+              'description': row['description'] or '',
+              **{key: metadata[key] for key in ('titleSource','nativeNameSource','autoName','naming','configurationBusy') if key in metadata},
+              'status': row['status'] or 'idle', 'workspace': row['resolved_workspace'],
+              'workspaceId': row['resolved_workspace_id'], 'workspaceName': row['workspace_name'],
+              'workspaceLabel': 'No workspace' if managed else labels[row['resolved_workspace']],
+              'activity': {'kind': row['activity_kind'], 'label': row['activity_label']},
+              'runtimeSessionId': metadata.get('runtimeSessionId') or metadata.get('nativeIdentity'),
+              'createdAt': row['created'], 'pinned': row['pin_position'] is not None,
+              'agentCreated': bool(row['agent_created']), 'recentActivityAt': row['recent'] or 0}
+    if row['archived']: result['archived'] = True
+    if managed: result['location'] = {'kind': 'managed'}
+    return result
+
+
+def chats(directory, state, *, section=None):
+    sql, params, scope, counts, order, workspaces = _chat_query(directory, state, section)
+    total = directory.db.execute(sql + ' SELECT COUNT(*) FROM filtered', params).fetchone()[0]
+    view = state.get('view', {})
+    if section == 'shortcuts':
+        limit = view.get('navRecentLimit', 20)
+        limit = limit if valid_recent_limit(limit) else 20
+        scope.update(limit=limit, viewRevision=view.get('navRecentRevision', 0))
+        start, end = 0, min(total, limit)
+        result = {'total': total, 'remaining': total-end, 'limit': limit, 'start': start, 'end': end,
+                  'scope': scope, 'dataRevision': state.get('revision', 0), 'activityCounts': counts}
+    else:
+        size = (40 if total > 50 else 50) if section else PAGE_SIZE
+        saved = view.get('navChatPage')
+        matched = isinstance(saved, dict) and saved.get('sort', 'activity') == scope.get('sort', 'activity') and all(saved.get(k) == v for k,v in scope.items())
+        inferred = 0
+        if scope['mode'] == 'workspace' and section != 'recent' and scope['selectedSessionId']:
+            found = directory.db.execute(sql + f', ranked AS (SELECT id,ROW_NUMBER() OVER (ORDER BY {order})-1 position FROM filtered) SELECT position FROM ranked WHERE id=?', [*params, scope['selectedSessionId']]).fetchone()
+            if found: inferred = found[0] // size
+        requested = saved['index'] if matched and type(saved.get('index')) is int else inferred
+        if section == 'pinned': requested = view.get('navPinnedPage', 0)
+        pages = max(1, (total+size-1)//size)
+        index = max(0, min(pages-1, requested))
+        start, end = index*size, min(total, (index+1)*size)
+        result = {'total':total,'index':index,'pages':pages,'start':start,'end':end,'scope':scope,'activityCounts':counts}
+    labels = path_labels(row['path'] for row in workspaces)
+    rows = _rows(directory, sql + f' SELECT * FROM filtered ORDER BY {order} LIMIT ? OFFSET ?', [*params,end-start,start])
+    result['items'] = [_chat_row(directory,row,labels) for row in rows]
+    return result
+
+
+def workspace_counts(directory, state, archive='active'):
+    sql, params, _ = _base(directory, state, archive=archive)
+    sql += " SELECT resolved_workspace,COUNT(*),SUM(unread),MAX(recent),activity_kind,activity_label FROM navigation_rows WHERE session_kind='root' AND resolved_workspace_id IS NOT NULL GROUP BY resolved_workspace,activity_kind,activity_label"
+    result = {}
+    for path, count, unread, recent, kind, label in directory.db.execute(sql, params):
+        entry = result.setdefault(path, {'chatCount':0,'unread':0,'recentActivityAt':0,
+                                         'activityCounts':dict.fromkeys(('attention','working','unread','idle'),0)})
+        entry['chatCount'] += count
+        entry['unread'] += unread or 0
+        entry['recentActivityAt'] = max(entry['recentActivityAt'],recent or 0)
+        entry['activityCounts'][kind] = entry['activityCounts'].get(kind,0)+count
+        if kind == 'attention':
+            category = {'Work blocked':'blocked','Approval requested':'decision','Answer requested':'decision'}.get(label,'error')
+            entry['activityCounts'][category] = entry['activityCounts'].get(category,0)+count
+    return result
+
+
+def root_count(directory, state):
+    sql, params = directory.effective(state)
+    return directory.db.execute(sql + " SELECT COUNT(*) FROM directory_rows WHERE session_kind='root'", params).fetchone()[0]
+
+
+def children(directory, state, parent, query='', index=0):
+    sql, params = directory.effective(state)
+    aliases = list({parent.get(key) for key in ('id','nativeIdentity','runtimeSessionId')} - {None})
+    predicate = "session_kind!='root' AND id!=? AND (parent_id=? OR (native_parent_id IN (SELECT value FROM json_each(?)) AND CASE WHEN native_project IS NOT NULL AND ? IS NOT NULL THEN native_project=? ELSE workspace=? END))"
+    params = [*params,parent.get('id'),parent.get('id'),json.dumps(aliases),parent.get('nativeProject'),parent.get('nativeProject'),parent.get('workspace')]
+    sql += ', child_rows AS (SELECT * FROM directory_rows WHERE '+predicate+')'
+    unfiltered = directory.db.execute(sql+' SELECT COUNT(*) FROM child_rows',params).fetchone()[0]
+    if query:
+        directory.db.create_function('directory_child_match',5,lambda q,*fields:int(_matches(fields,q)),deterministic=True)
+        sql += ', matched AS (SELECT * FROM child_rows WHERE directory_child_match(?,title,description,id,native_id))'
+        params.append(query)
+    else: sql += ', matched AS (SELECT * FROM child_rows)'
+    total = directory.db.execute(sql+' SELECT COUNT(*) FROM matched',params).fetchone()[0]
+    pages = max(1,(total+49)//50)
+    index = max(0,min(pages-1,index)) if type(index) is int else 0
+    start,end = index*50,min(total,(index+1)*50)
+    from .browser_state import summary
+    rows = _rows(directory, sql+' SELECT * FROM matched ORDER BY recent DESC,ordinal,id LIMIT ? OFFSET ?',[*params,end-start,start])
+    return {'items':[summary(directory.decode(row)) for row in rows],'total':total,'unfilteredTotal':unfiltered,
+            'index':index,'pages':pages,'start':start,'end':end,'scope':{'sessionId':parent.get('id'),'filter':query}}
+
+
+def pinned_navigation(directory, state, workspaces):
+    """Combine typed pin identities in SQL before decoding the visible page."""
+    from .pinned_navigation import ordered_ids
+    scoped = {**state, 'view': {**state.get('view', {}), 'navStatusFilter': 'all'}}
+    sql, params, _, _, _, registrations = _chat_query(directory, scoped, 'pinned')
+    workspace_rows = {f'workspace:{row["workspaceId"]}': row for row in workspaces}
+    sql += """, pin_order AS (SELECT value id,CAST(key AS INTEGER) position FROM json_each(?)),
+      pin_members AS (SELECT 'session:'||id id FROM filtered UNION ALL SELECT value id FROM json_each(?)),
+      pin_rows AS (SELECT o.id,o.position FROM pin_order o JOIN pin_members m ON m.id=o.id)"""
+    params += [json.dumps(ordered_ids(state)), json.dumps(list(workspace_rows))]
+    total = directory.db.execute(sql+' SELECT COUNT(*) FROM pin_rows',params).fetchone()[0]
+    pages = max(1,(total+49)//50)
+    index = max(0,min(pages-1,state.get('view',{}).get('navPinnedPage',0)))
+    start,end = index*50,min(total,(index+1)*50)
+    ids = [row[0] for row in directory.db.execute(sql+' SELECT id FROM pin_rows ORDER BY position LIMIT ? OFFSET ?',[*params,end-start,start])]
+    chat_ids = [key[len('session:'):] for key in ids if key.startswith('session:')]
+    labels = path_labels(row['path'] for row in registrations)
+    rows = _rows(directory, sql+' SELECT * FROM filtered WHERE id IN (SELECT value FROM json_each(?))',[*params,json.dumps(chat_ids)])
+    chats = {f'session:{row["id"]}':_chat_row(directory,row,labels) for row in rows}
+    return {'items':[{'id':key,'kind':key.split(':',1)[0],'row':chats[key] if key in chats else workspace_rows[key]} for key in ids],
+            'total':total,'index':index,'pages':pages,'start':start,'end':end}
+
+
+def archived_count(directory, state):
+    archived = state.get('conversationOrganization',{}).get('archived',{})
+    sql,params = directory.effective(state)
+    excluded = directory.db.execute(sql+" SELECT COUNT(*) FROM directory_rows WHERE session_kind!='root' AND id IN (SELECT value FROM json_each(?))",[*params,json.dumps(list(archived))]).fetchone()[0]
+    return len(archived)-excluded

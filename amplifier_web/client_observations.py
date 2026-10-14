@@ -63,6 +63,102 @@ def public_notice(row, item, slot):
             'timestamp': timestamp if type(timestamp) in {int, float} else None}
 
 
+class DirectoryFacts:
+    """A leased SQLite view; retain one bounded decoded block, never all facts."""
+    BLOCK = 64
+
+    def __init__(self, owner, directory, state, *, where='1', params=()):
+        self.owner, self.directory, self.state = owner, directory, state
+        self.where, self.params = where, tuple(params)
+        self.sql, self.base = directory.effective(state)
+        self.length = directory.db.execute(self.sql+' SELECT COUNT(*) FROM directory_rows WHERE '+where,
+                                          [*self.base,*params]).fetchone()[0]
+        self.block_start, self.block = -1, []
+        self.query_view = None
+        self.cursor = None
+        self.cursor_position = -1
+        self.pins = frozenset(state.get('pinnedSessionIds', ()))
+        self.read = state.get('attentionRead', {})
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        if not 0 <= index < self.length:
+            raise IndexError(index)
+        start = index // self.BLOCK * self.BLOCK
+        if start != self.block_start:
+            from .history_directory import COLUMNS
+            if self.cursor is None or self.cursor_position != start:
+                if self.cursor is not None:
+                    self.cursor.close()
+                self.cursor = self.directory.db.execute(self.sql+' SELECT '+','.join(COLUMNS)+
+                    ' FROM directory_rows WHERE '+self.where+' ORDER BY ordinal,id LIMIT -1 OFFSET ?',
+                    [*self.base,*self.params,start])
+            selected = self.cursor.fetchmany(self.BLOCK)
+            self.cursor_position = start + len(selected)
+            self.block = [self.owner.row_facts(self.directory.decode(row), self.read, self.pins) for row in selected]
+            self.block_start = start
+        return self.block[index-start]
+
+    def for_query(self, query):
+        scope = query['scope']
+        where = ["session_kind!='internal'"]
+        params = []
+        if scope != 'all':
+            where.append("session_kind='root'" if scope == 'roots' else "session_kind!='root'")
+        if query['collection'] == 'sessions':
+            pinned = 'id IN (SELECT value FROM json_each(?))'
+            activity = query['activity']
+            clauses = {'execution':'execution','preparing':'preparing','loading':'loading',
+                       'idle':'NOT(execution OR preparing OR loading)', 'active':'(execution OR preparing)'}
+            if activity == 'active-or-pinned':
+                where.append('(execution OR preparing OR '+pinned+')')
+                params.append(json.dumps(list(self.pins)))
+            elif activity in clauses:
+                where.append(clauses[activity])
+            if query['pinned'] != 'all':
+                where.append(('' if query['pinned']=='true' else 'NOT ')+pinned)
+                params.append(json.dumps(list(self.pins)))
+            if query['workspace'] is not None:
+                where.append('workspace=?')
+                params.append(query['workspace'])
+        else:
+            # Native summaries have no app notices. Read only local rows with
+            # possible notice facts; public_notice remains the canonical filter.
+            where.append("notice_count>0")
+        predicate = ' AND '.join(where)
+        if self.query_view is None or (self.query_view.where,self.query_view.params) != (predicate,tuple(params)):
+            if self.query_view is not None:
+                self.query_view.discard_block()
+            self.query_view = DirectoryFacts(self.owner,self.directory,self.state,where=predicate,params=params)
+        return self.query_view
+
+    def activity_counts(self):
+        result = {role:dict(executionCount=0,preparingCount=0,loadingCount=0,
+                            attentionCount=0,requiresActionCount=0) for role in ('roots','delegates')}
+        rows = self.directory.db.execute(self.sql+" SELECT session_kind,SUM(execution),SUM(preparing),SUM(loading) FROM directory_rows WHERE session_kind!='internal' GROUP BY session_kind",self.base)
+        for kind,execution,preparing,loading in rows:
+            count = result['roots' if kind=='root' else 'delegates']
+            for key,value in zip(('executionCount','preparingCount','loadingCount'),(execution,preparing,loading)):
+                count[key] += value or 0
+        return result
+
+    def discard_block(self):
+        if self.cursor is not None:
+            self.cursor.close()
+            self.cursor = None
+        self.block.clear()
+        self.block_start = self.cursor_position = -1
+
+    def close(self):
+        self.discard_block()
+        if self.query_view is not None:
+            self.query_view.discard_block()
+            self.query_view = None
+        self.directory.close()
+
+
 class Observations:
     def __init__(self, service):
         self.service = service
@@ -77,6 +173,9 @@ class Observations:
         self.snapshots = OrderedDict()
         self.leases = {}
         self.completed = OrderedDict()
+        self.directory_revision = None
+        self.counts_revision = None
+        self.ready_counts_cache = None
         # No catalog work on hosts that never read an observation resource.
         service.projections.observation_listener = self.invalidate
 
@@ -103,13 +202,23 @@ class Observations:
         return (session, row.get('workspace'), notices)
 
     def refresh(self):
-        """One shared public-facts index; retain unchanged rows by identity.
+        """Refresh semantic revisions from the directory's metadata owners.
 
-        Cold construction and unscoped saves cost O(catalog + notices). Scoped
-        saves inspect only their rows; proven transcript-only saves cost zero.
-        No transcript, prompt, tool argument or error body is retained here.
+        The legacy in-memory fallback retains public facts for standalone owners
+        without a directory. Directory readers decode only bounded pages.
         """
-        if not self.pending:
+        directory = getattr(self.service, 'directory', None)
+        directory_revision = getattr(directory, 'observation_revision', None) if directory else None
+        if directory is not None and isinstance(directory_revision, dict):
+            # Directory ownership distinguishes residency from membership.
+            # Admission/eviction alone cannot change a public generation.
+            self.directory_revision = directory_revision
+            self.saved_pins = frozenset(self.service._state.get('pinnedSessionIds', ()))
+            self.saved_read = dict(self.service._state.get('attentionRead', {}))
+            self.pending = self.all_dirty = False
+            self.dirty.clear()
+            return
+        if not self.pending and directory_revision == self.directory_revision:
             return
         state = self.service._state
         pins = frozenset(state.get('pinnedSessionIds', ()))
@@ -119,7 +228,7 @@ class Observations:
             self.saved_pins, self.saved_read = frozenset(), {}
         pins_changed = pins != self.saved_pins
         read_changed = read != self.saved_read
-        if not (self.all_dirty or self.dirty or pins_changed or read_changed):
+        if not (self.all_dirty or self.dirty or pins_changed or read_changed or directory_revision != self.directory_revision):
             self.pending = False
             return
         # Global receipts/pins affect public facts even on an otherwise scoped save.
@@ -136,6 +245,12 @@ class Observations:
             if any(sid not in self.facts or sid not in index.by_id for sid in self.dirty):
                 order = tuple(row['id'] for row in rows)
         changed = set()
+        if directory is not None and directory_revision != self.directory_revision:
+            if isinstance(directory_revision, dict) and isinstance(self.directory_revision, dict):
+                changed.update(key for key in self.generations if directory_revision.get(key) != self.directory_revision.get(key))
+            else:
+                changed.update(self.generations)
+        self.directory_revision = directory_revision
         if order != self.order:
             changed.update(self.generations)
             retained = set(order)
@@ -173,7 +288,13 @@ class Observations:
         return self.revision_for('activity')
 
     def revision_for(self, collection):
+        if isinstance(self.directory_revision, dict):
+            return self.directory_key(collection,self.directory_revision)
         return f'{self.service.instance_id}:{collection}:{self.generations[collection]}'
+
+    def directory_key(self, collection, revisions):
+        digest = hashlib.sha256(json.dumps(revisions[collection],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        return f'{self.service.instance_id}:{collection}:{digest}'
 
     def require_client(self):
         if self.service.clients.current.get() is None:
@@ -191,8 +312,10 @@ class Observations:
                 del self.completed[key]
         live = {lease['revision'] for lease in self.leases.values()}
         for key, value in list(self.snapshots.items()):
-            if key not in live and key != self.revision_for(value['collection']):
-                del self.snapshots[key]
+            if key not in live and (isinstance(value['rows'], DirectoryFacts) or key != self.revision_for(value['collection'])):
+                rows = self.snapshots.pop(key)['rows']
+                if isinstance(rows, DirectoryFacts):
+                    rows.close()
 
     def cursor(self, query, position, revision, lease_id):
         if lease_id is None:
@@ -218,7 +341,20 @@ class Observations:
                 for key in keys[:-MAX_COMPLETED]:
                     del self.completed[key]
             self.reclaim()
+        revision = value.get('revision')
+        if revision in self.snapshots and not any(row['revision']==revision for row in self.leases.values()):
+            snapshot = self.snapshots[revision]
+            if isinstance(snapshot['rows'], DirectoryFacts):
+                self.snapshots.pop(revision)['rows'].close()
         return value
+
+    def close(self):
+        for snapshot in self.snapshots.values():
+            if isinstance(snapshot['rows'], DirectoryFacts):
+                snapshot['rows'].close()
+        self.snapshots.clear()
+        self.leases.clear()
+        self.completed.clear()
 
     def snapshot(self, token, query):
         self.refresh()
@@ -257,8 +393,30 @@ class Observations:
             if sum(row['collection'] == collection for row in self.snapshots.values()) >= MAX_SNAPSHOTS:
                 raise AppError('Observation snapshots are busy; finish a traversal or retry after expiry.',
                                503, code='observation_busy')
+            directory = getattr(self.service, 'directory', None)
+            if directory is not None:
+                reader = directory.read_snapshot(self.service._state)
+                try:
+                    rows = DirectoryFacts(self, reader, reader._frozen_state)
+                    # Native discovery can commit on another thread between
+                    # refresh and BEGIN. Label exactly these pinned read views.
+                    from .history_directory_observations import revision as directory_revision
+                    actual = self.directory_key(collection,directory_revision(reader,reader._frozen_state))
+                    if actual != revision:
+                        revision = actual
+                        owner = self.service.clients.current.get()
+                        lease_id = next((key for key,value in self.leases.items()
+                            if value['owner']==owner and value['revision']==revision and value['query']==query),None)
+                    if revision in self.snapshots:
+                        rows.close()
+                        return self.snapshots[revision],position,lease_id,None
+                except BaseException:
+                    reader.close()
+                    raise
+            else:
+                rows = tuple(self.facts[sid] for sid in self.order)
             self.snapshots[revision] = {'revision': revision, 'collection': collection,
-                                       'rows': tuple(self.facts[sid] for sid in self.order), 'counts': None}
+                                       'rows': rows, 'counts': None}
         return self.snapshots[revision], position, lease_id, None
 
     def query(self, params, collection):
@@ -298,6 +456,8 @@ class Observations:
         if replay is not None:
             return replay
         rows = snapshot['rows']
+        if isinstance(rows, DirectoryFacts):
+            rows = rows.for_query(query)
         items, inspected = [], 0
         while position < len(rows) and inspected < SCAN_BUDGET and len(items) < query['limit']:
             session, workspace, notices = rows[position]
@@ -338,17 +498,30 @@ class Observations:
         if scope not in {'roots', 'delegates', 'all'}:
             raise AppError('Unsupported activity scope.')
         query = {'collection': 'activity', 'scope': scope}
+        if cursor is None:
+            self.refresh()
+            self.reclaim()
+            if self.counts_revision == self.revision_for('activity') and self.ready_counts_cache is not None:
+                self.counts_cache = self.ready_counts_cache
+                counts = self.ready_counts_cache['counts']
+                value = counts[scope] if scope != 'all' else {key: counts['roots'][key] + counts['delegates'][key] for key in counts['roots']}
+                return {'revision': self.counts_revision, 'status': 'ready', 'nextCursor': None, **value}
         snapshot, _, lease_id, replay = self.snapshot(cursor, query)
         if replay is not None:
             return replay
+        directory_rows = snapshot['rows'] if isinstance(snapshot['rows'], DirectoryFacts) else None
         if snapshot['counts'] is None:
             snapshot['counts'] = {'position': 0, 'slot': -1,
-                'counts': {role: dict(executionCount=0, preparingCount=0, loadingCount=0,
-                                     attentionCount=0, requiresActionCount=0) for role in ('roots', 'delegates')}}
+                'counts': directory_rows.activity_counts() if directory_rows else
+                    {role: dict(executionCount=0, preparingCount=0, loadingCount=0,
+                                attentionCount=0, requiresActionCount=0) for role in ('roots', 'delegates')}}
         cache = self.counts_cache = snapshot['counts']
-        rows = snapshot['rows']
+        rows = directory_rows.for_query({'scope':'all','collection':'attention'}) if directory_rows else snapshot['rows']
         inspected = 0
-        while cache['position'] < len(rows) and inspected < COUNT_BUDGET:
+        # Reserve room for decoding canonical notice slots and one lookahead
+        # block; a directory page does not have a prebuilt whole-library tuple.
+        budget = COUNT_BUDGET // 2 if directory_rows else COUNT_BUDGET
+        while cache['position'] < len(rows) and inspected < budget:
             session, _, notices = rows[cache['position']]
             inspected += 1
             if session['role'] == 'internal':
@@ -357,8 +530,9 @@ class Observations:
                 continue
             count = cache['counts']['roots' if session['role'] == 'root' else 'delegates']
             if cache['slot'] == -1:
-                for flag, value in session['activity'].items():
-                    count[flag + 'Count'] += int(value)
+                if not directory_rows:
+                    for flag, value in session['activity'].items():
+                        count[flag + 'Count'] += int(value)
                 cache['slot'] = 0
                 continue
             if cache['slot'] < len(notices):
@@ -373,6 +547,8 @@ class Observations:
         if cache['position'] < len(rows):
             return {'revision': snapshot['revision'], 'status': 'collecting',
                     'nextCursor': self.cursor(query, [cache['position'], cache['slot'] + 1], snapshot['revision'], lease_id)}
+        self.counts_revision = snapshot['revision']
+        self.ready_counts_cache = cache
         counts = cache['counts']
         value = counts[scope] if scope != 'all' else {k: counts['roots'][k] + counts['delegates'][k] for k in counts['roots']}
         return self.finish(query, cursor, lease_id,
@@ -408,5 +584,8 @@ def discovery(service):
 def setup_routes(app):
     observations = Observations(app['service'])
     app['observations'] = observations
+    async def close_observations(app):
+        observations.close()
+    app.on_cleanup.append(close_observations)
     app.router.add_get('/api/activity', observations.summary)
     app.router.add_get('/api/attention', observations.attention)

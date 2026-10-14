@@ -104,8 +104,7 @@ async def test_selected_refresh_rechecks_source_after_waiting_for_initial_read(
     directory = native_session(tmp_path / 'cli', 'overlapping-selection')
     app = app_factory()
     await app.history.refresh()
-    row = next(row for row in app.state['sessions']
-               if row.get('nativeIdentity') == 'overlapping-selection')
+    row = app._session('overlapping-selection', hydrate=False)
     app.state['selectedSessionId'] = row['id']
     entered, queued, release = asyncio.Event(), asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
@@ -166,7 +165,7 @@ async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_pa
         for i in range(200)])
     app = app_factory()
     await app.history.refresh()
-    row = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'bounded-reader')
+    row = app._session('bounded-reader', hydrate=False)
     original = automatic_history.read_transcript
     seen = []
     def read(source, **kwargs):
@@ -238,9 +237,10 @@ async def test_projects_and_chats_appear_automatically_without_loading_transcrip
     registrations = [row for row in app.state['workspaces'] if row.get('nativeProject') == project_slug(workspace)]
     assert len(registrations) == 1
     assert registrations[0]['path'] == str(workspace)
-    rows = native_rows(app)
+    rows = app.directory.select()
     assert {row['nativeIdentity'] for row in rows} == {'cli-root', child.name}
-    assert all(row['messages'] == [] and row['historyLoaded'] is False for row in rows)
+    assert all('messages' not in row and row['historyLoaded'] is False for row in rows)
+    assert not app.state['sessions']
     assert all(row['runtimeSessionId'] == row['nativeIdentity'] for row in rows)
     assert not app.runtime.started and not app.runtime.sent
 
@@ -279,7 +279,8 @@ async def test_selected_history_loads_a_page_and_earlier_pages_keep_message_ids(
     assert first['sharedHistoryOffset'] == 105
     assert [row['text'] for row in first['messages']] == [f'Message {number}' for number in range(105, 205)]
     first_ids = {row['text']: row['id'] for row in first['messages']}
-    assert next(row for row in native_rows(app) if row['nativeIdentity'] == 'unopened-history')['messages'] == []
+    assert app.directory.resolve('unopened-history')['historyLoaded'] is False
+    assert 'unopened-history' not in {row['id'] for row in app.state['sessions']}
 
     await app.dispatch('session.history', {'id': selected['id'], 'before': first['sharedHistoryOffset']})
     await finish_actions(app)
@@ -494,7 +495,7 @@ async def test_hidden_chats_and_workspaces_are_not_resurrected_by_refresh_or_res
     original_chat, original_workspace = files_snapshot(chat_dir), files_snapshot(workspace_dir)
     app = app_factory()
     await app.history.refresh()
-    hidden_chat = next(row for row in native_rows(app) if row['nativeIdentity'] == 'hide-chat')
+    hidden_chat = app._session('hide-chat', hydrate=False)
     hidden_workspace = next(row for row in app.state['workspaces'] if row.get('path') == str(tmp_path / 'hidden-workspace'))
     # Compatibility with an already-hidden pre-upgrade registration. New
     # workspace chats expose Archive; session.delete no longer hides history.
@@ -1187,7 +1188,7 @@ async def test_agent_history_search_reads_unloaded_native_chat_without_selection
         {"role": "assistant", "content": "Saved answer"}])
     app = app_factory(workspace=workspace)
     await app.history.refresh()
-    target = next(row for row in app.state["sessions"] if row.get("nativeIdentity") == "search-target")
+    target = app.directory.resolve('search-target')
     before = copy.deepcopy(app.state)
     files = files_snapshot(directory)
     result = await app.app_bridge("history", {"action": "search", "query": "unique decision"}, target["id"])

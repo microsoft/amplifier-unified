@@ -156,7 +156,8 @@ async def test_reused_native_catalog_reconciles_local_filters_errors_and_selecti
     service.queue_sessions = {queue: saved['id']}
     selected_loads = []
 
-    async def load(identity):
+    async def load(identity, *, only_if_changed=False):
+        assert only_if_changed is True
         selected_loads.append(identity)
 
     monkeypatch.setattr(history, 'load', load)

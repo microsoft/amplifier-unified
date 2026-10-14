@@ -81,13 +81,18 @@ class MemoryConsolidation:
 
     async def run(self, workspace, ids):
         async with self.app.lock:
-            selected = [row['id'] for row in self.app.state['sessions'] if row.get('workspace', '') == workspace
-                        and (ids is None or row['id'] in ids)]
+            if ids is None:
+                selected = self.recall.registered_ids({'workspace': workspace},
+                    {'includeInternal': True, 'includeChildren': True})
+            else:
+                selected = [row['id'] for sid in ids
+                            if (row := self.recall.registered(sid)) is not None
+                            and row.get('workspace', '') == workspace]
         for sid in selected:
             identity = None
             try:
                 async with self.app.lock:
-                    session = copy.deepcopy(self.app._session(sid))
+                    session = self.recall.source(sid)
                     config = self.data.settings(workspace)
                     if not eligible(session, config):
                         continue
@@ -121,7 +126,7 @@ class MemoryConsolidation:
                 candidates = verified_candidates(result['text'], [row['text'] for row in rows], known=known)
                 saved = []
                 async with self.app.lock:
-                    current = self.app._session(sid)
+                    current = self.recall.source(sid)
                     latest = self.data.settings(workspace)
                     if latest['revision'] != config['revision'] or not eligible(current, latest) or snapshot(current)[1] != signature:
                         raise ValueError('Source or memory settings changed before saving.')
@@ -149,6 +154,9 @@ class MemoryConsolidation:
                     self.data.finish(identity, {'status': 'completed', 'saved': saved,
                         'sourceRevision': signature, 'provider': result.get('provider'), 'model': result.get('model')})
                     if saved:
+                        # Only the explicitly requested completed operation
+                        # needs a mutable owner for its saved-memory notice.
+                        current = self.app._session(sid)
                         self.app._message(current, 'system', f"Memory saved {len(saved)} workspace reference(s). Review, correct, or delete them in Settings → Recall. References: " + ', '.join(n['id'] for n in saved), 'memory')
                         self.app._publish_changes(sessions={sid})
                     self.data.activity(workspace, {'status':'completed','saved':len(saved)})
@@ -170,9 +178,10 @@ class MemoryConsolidation:
         sid = source['sessionId']
         if sid in config['excludedSessions']:
             raise ValueError('The source conversation was withdrawn from memory.')
-        session = next((row for row in self.app.state['sessions'] if row['id'] == sid), None)
-        if session is None:
-            raise ValueError('The original source conversation was removed.')
+        try:
+            session = self.recall.source(sid)
+        except (OSError, KeyError) as exc:
+            raise ValueError('The original source conversation is unavailable or was removed.') from exc
         if session.get('_deleting') or session.get('workspace') != config['workspace']:
             raise ValueError('The source conversation is unavailable in this workspace.')
         row = next((r for r in human_rows(session) if r['id'] == source['messageId']), None)

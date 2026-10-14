@@ -894,8 +894,9 @@ class Management:
             if not saved:raise ValueError('The requested session was not found')
             rows,meta=saved
             async with self.service.lock:
-                existing=next((s for s in self.service.state['sessions'] if s['id']==identity),None)
-                if existing:self.service.state['selectedSessionId']=identity
+                metadata=self.service.directory.resolve(identity)
+                existing=self.service._session(metadata['id']) if metadata is not None else None
+                if existing:self.service.state['selectedSessionId']=existing['id']
                 else:
                     workspace=meta.get('working_dir') or meta.get('workspace') or self.service.default_workspace
                     if not Path(workspace).is_dir():raise ValueError('Restore this session’s original workspace before opening it.')
@@ -906,6 +907,12 @@ class Management:
                         visible=display_message(row,index,session)
                         if visible:self.service._message(session,visible['role'],visible['text'],source='import',nativeIndex=index)
                     self.service.state['sessions'].insert(0,session);self.service.state['selectedSessionId']=identity
+                    # Explicit re-import may restore a previously cleaned owner;
+                    # do not let its old navigation suppression hide it again.
+                    from .automatic_history import identity as native_identity
+                    from .session_files import project_slug
+                    hidden=native_identity(project_slug(workspace),identity)
+                    self.service.state['hiddenNativeSessions']=[key for key in self.service.state.get('hiddenNativeSessions',[]) if key!=hidden]
                 self.service._publish_full(reason='History import or cleanup changes catalog membership')
         elif action=='history.export':
             session=self.session(args)
@@ -927,12 +934,16 @@ class Management:
         elif action=='history.cleanup':
             cutoff=time.time()-args.get('days',30)*86400
             async with self.service.publishing.lock, self.service.lock:
-                eligible=[s for s in self.service.state['sessions'] if s['id']!=self.service.state['selectedSessionId'] and not self.service.publishing.owns_records(s['id']) and s['status'] in {'idle','stopped','interrupted','error'} and max([s.get('createdAt',0),s.get('updatedAt',0)]+[m.get('createdAt',0) for m in s['messages']])<cutoff]
+                from .recovery import bulk_sessions
+                eligible=[s for s in bulk_sessions(self.service, include_native=True) if s['id']!=self.service.state['selectedSessionId'] and not self.service.publishing.owns_records(s['id']) and s['status'] in {'idle','stopped','interrupted','error'} and max([s.get('createdAt',0),s.get('updatedAt',0)]+[m.get('createdAt',0) for m in s.get('messages',[])])<cutoff]
                 if args.get('apply'):
                     identities={s['id'] for s in eligible}
                     for session in eligible:
                         self.service.history.hide_session(session)
+                    self.service.forget_session_records(identities)
                     self.service.state['sessions']=[s for s in self.service.state['sessions'] if s['id'] not in identities]
+                    for identity in identities:
+                        self.service.state.get('runtimeControl',{}).pop(identity,None)
                     if args.get('purge'):
                         import shutil
                         store=SessionStore(self.service.data_dir/'sessions')

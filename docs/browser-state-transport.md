@@ -48,7 +48,7 @@ After a completed pass with working notifications, cold reconciliation is due
 again after 15 minutes. Without notifications, or after an unavailable pass, a new
 bounded pass is due after 60 seconds; losing a working watch shortens any later
 deadline. Neither failure restores eager whole-library background scans. Manual
-refresh still forces reconciliation. Discovery exposes its actual phase and last
+refresh requests a new bounded reconciliation pass. Discovery exposes its actual phase and last
 completed time; partial coverage is not advertised as complete and there is no
 fixed whole-library completion deadline. Diagnostic counters distinguish empty
 deltas, skipped/full/delta merges, metadata reads and actual recovery steps.
@@ -74,6 +74,40 @@ sync, and attention counts group unread outcomes by workspace once rather than
 scanning all outcomes for each registration. No canonical event/transcript,
 receipt durability, freshness interval, ownership fence or publication boundary
 is weakened by these CPU-path changes.
+
+## Durable directory and admitted owners
+
+The shared server keeps the complete native/local history directory in SQLite.
+Warm startup reads only global records and selected or pending owners; it does
+not restore every cached session or file signature. Native discovery writes
+changed metadata into indexed scalar rows. Navigation, counts, archive/search
+filters and public observation pages query those facts before decoding the
+requested metadata page. They do not admit a runtime or transcript.
+
+Application `sessions` memory is an admitted working set, not proof of complete
+membership. Exact scoped lookup resolves dormant owners from the directory and
+restores their committed presentation/runtime record when detail or execution
+actually needs it. Client selection and Canvas pointers survive non-residency.
+An ambiguous raw native ID stays ambiguous even when only one project is loaded.
+
+Ordinary global/scoped saves preserve all unmaterialized durable records.
+Explicit deletion/reset records the exact local owners it removes. Garbage
+collection still enumerates complete durable roots, including dormant records;
+cache eviction has no deletion authority. Idle metadata retirement retains
+connected selections, active and pending work, recently used owners and borrowed
+mutable aliases. It removes only disposable memory/cache entries after a keyed
+commit; uncertain ownership remains resident. Retirement probes and ownership
+checks have cooperative budgets rather than an unbounded publication walk.
+
+Explicit legacy full-state reads, recovery backup and export may deliberately
+enumerate saved records. Ordinary JSON Pointer reads page the directory before
+loading the requested owners. Indexed `/sessions` reads carry `directoryRevision`
+alongside the app `revision` when the caller requires a stable index; see the
+[Canvas state access contract](canvas.md). The browser shell and ordinary metadata
+refresh must never invoke those complete reads. The same directory serves all
+clients; it is not a browser-specific cache. Native-only equal-sort ties use
+stable project/native identity order, while migrated local overlays preserve
+their prior saved order.
 
 ## Acceptance
 

@@ -56,17 +56,22 @@ class Coordination:
     def task(self, sid):
         return self.service.state.get("runtimeControl", {}).get(sid, {}).get("task.get", {}).get("task") or {}
 
-    def snapshot(self, target, *, include_results=True):
-        session = self.service._session(target["sessionId"])
+    def snapshot(self, target, *, include_results=True, session=None, task=None, live=True):
+        session = self.service._session(target["sessionId"]) if session is None else session
         wid = target.get("workerId")
         worker = next((row for row in session.get("workers", []) if row["id"] == wid), None) if wid else None
         if wid and worker is None:
             raise ValueError("Worker not found in the specified conversation")
         value = worker if wid else session
+        if wid and not live and (value.get('status') in ACTIVE
+                                 or value.get('persistent') and value.get('status') == 'idle'):
+            # A saved persistent worker is not a live process after restart.
+            # Match admission's interrupted projection without mutating storage.
+            value = {**value, 'status': 'interrupted'}
         status = value.get("status", "interrupted")
         approvals = [row["id"] for row in session.get("approvals", []) if row.get("status") == "pending" and (not wid or row.get("sessionId") in {wid, value.get("sessionId")})]
         # Saved question/task references remain owned by their existing stores.
-        task = self.task(session["id"])
+        task = self.task(session["id"]) if task is None else task
         questions = [row["id"] for row in session.get("questions", []) if row.get("status") == "pending"]
         results = (value.get("reportReceipts", []) if wid else [
             {"id": message["id"], "sequence": index + 1, "text": message.get("text", ""),
@@ -97,20 +102,47 @@ class Coordination:
             "wakeable": status not in ACTIVE or bool(approvals or questions)}
 
     def list(self, args, caller=None):
-        sessions = [self.service._session(args["sessionId"])] if args.get("sessionId") else [row for row in self.service.state["sessions"] if row.get("sessionKind", "root") == "root"]
         workspace = args.get("workspace") or (self.service._session(caller).get("workspace") if caller else None)
-        if workspace:
-            sessions = [row for row in sessions if row.get("workspace") == workspace]
         offset, limit = args.get("offset", 0), args.get("limit", 100)
-        sessions = sessions[offset:offset + limit + 1]
+        directory = self.service.directory
+        if args.get('sessionId'):
+            metadata = directory.resolve(args['sessionId'])
+            if metadata is None:
+                from .service import AppError
+                raise AppError('Conversation not found.', 404)
+            sessions = [metadata] if not workspace or metadata.get('workspace') == workspace else []
+            sessions = sessions[offset:offset + limit + 1]
+        else:
+            sessions = directory.select("session_kind='root'" + (' AND workspace=?' if workspace else ''),
+                (workspace,) if workspace else (), offset=offset, limit=limit + 1)
         more = len(sessions) > limit
         sessions = sessions[:limit]
         caller_workspace = self.service._session(caller)["workspace"] if caller else None
         include_workers = args.get("includeWorkers", not bool(caller))
+        residents = {row['id']: row for row in self.service.state['sessions']}
         items = []
-        for session_number, session in enumerate(sessions):
+        for session_number, metadata in enumerate(sessions):
+            session = residents.get(metadata['id'])
+            if session is None:
+                session = metadata
+                if include_workers:
+                    # Explicit worker detail reads only this page's saved views;
+                    # no worker is prepared and no owner enters the working set.
+                    from .directory_state import _owner
+                    from .state_records import load_owner
+                    saved, _ = load_owner(self.service.db, session['id'])
+                    if saved is None and self.service.db.execute('SELECT 1 FROM history_local_rows WHERE id=?', (session['id'],)).fetchone():
+                        raise ValueError('Saved conversation details are unavailable; its directory entry was retained.')
+                    session = _owner(directory, metadata, self.service.state)
+            task = self.task(session['id'])
+            if session['id'] not in self.service.state.get('runtimeControl', {}):
+                from .state_records import load_owner
+                from .cold_display import ColdRecord
+                _, control = load_owner(self.service.db, session['id'])
+                task = ColdRecord(control or {}, self.service.db).get('task.get', {}).get('task') or {}
             for target in [{"sessionId": session["id"]}, *({"sessionId": session["id"], "workerId": worker["id"]} for worker in session.get("workers", []) if include_workers)]:
-                item = self.snapshot(target, include_results=False)
+                item = self.snapshot(target, include_results=False, session=session, task=task,
+                                     live=session['id'] in residents)
                 if not target.get("workerId"):
                     item.update(workspace=session.get("workspace"), collaboration=session.get("collaboration"))
                 if caller and session["id"] != caller:

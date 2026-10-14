@@ -129,6 +129,8 @@ async def test_scope_end_invalidates_inflight_and_late_callbacks_even_after_retu
                 if app.queue_clients.get(queue) == 'browser-one': app.unsubscribe(queue)
         else:
             app._state['sessions'] = [s for s in app._state['sessions'] if s['id'] != sid]
+            app.forget_session_records({sid})
+            app._save()
             app.clients.reconcile('browser-one')
     with pytest.raises(AppError, match='permission ended'):
         await task

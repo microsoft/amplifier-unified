@@ -241,7 +241,8 @@ async def test_committed_sparse_cold_manifest_owns_blob_through_other_session_sa
     reference = put(app.db, [{'id': 'cold', 'role': 'assistant', 'text': 'x'*20000}])
     rows[0][MARKER] = {'messages': reference}
     app._publish(session_ids={rows[0]['id']}, detail_only=True, record_only=True)
-    assert load(app.db)['sessions'][0][MARKER]['messages'] == reference
+    saved = next(row for row in load(app.db)['sessions'] if row['id'] == rows[0]['id'])
+    assert saved[MARKER]['messages'] == reference
     # Handing out the mutable body consumes the live marker, not the committed
     # root. This other-session commit must not collect the still-owned payload.
     del rows[0]['messages']

@@ -10,11 +10,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from .naming import automatic_metadata
 import copy
+import hashlib
+import itertools
 import json
 import math
 import os
 from pathlib import Path
 import re
+import sqlite3
 import stat
 import threading
 import time
@@ -24,10 +27,12 @@ from collections import OrderedDict, deque
 from .session_files import amplifier_home, project_slug
 
 _MAX_METADATA = 8 * 1024 * 1024
+_METADATA_FIELDS_VERSION = 2
 _STAMP_FILES = ('metadata.json', 'metadata.json.backup', 'transcript.jsonl',
                 'transcript.jsonl.backup', 'naming.json', os.path.join('context-intelligence', 'metadata.json'))
 _FIELDS = (
-    'name', 'title', 'description', 'name_source', 'bundle', 'bundle_name',
+    'name', 'title', 'description', 'name_source', 'name_revision', 'name_policy_revision',
+    'name_auto', 'name_auto_revision', 'bundle', 'bundle_name',
     'parent_id', 'parent_session_id', 'agent_name', 'created', 'created_at', 'started_at', 'updated_at',
     'last_updated', 'last_event_at', 'ended_at', 'turn_count', 'working_dir',
     'cwd', 'project_dir', 'workspace', 'model', 'status', 'forked_from_turn', 'forked_at',
@@ -74,6 +79,10 @@ def _small_metadata(value):
         for key in ('working_dir', 'cwd', 'project_dir', 'workspace'):
             if not result.get(key) and isinstance(config.get(key), str):
                 result[key] = config[key]
+    # The cache-format marker is not canonical metadata. In particular it may
+    # not turn a missing/empty metadata read into positive resume evidence.
+    if result:
+        result['_nativeFieldsVersion'] = _METADATA_FIELDS_VERSION
     return result
 
 
@@ -122,7 +131,7 @@ class NativeHistory:
     UNWATCHED_RECONCILE_INTERVAL = 60
     RECOVERY_SLICE_SECONDS = .025
 
-    def __init__(self, home=None, *, known_workspaces=(), watch=False, cache_path=None):
+    def __init__(self, home=None, *, known_workspaces=(), watch=False, cache_path=None, directory=False):
         self.home = Path(home).expanduser().resolve() if home is not None else amplifier_home()
         self.known_workspaces = known_workspaces
         self._files = {}
@@ -166,6 +175,15 @@ class NativeHistory:
         self._scan_original_projects = None
         self._recovery_modified = set()
         self._recovery_issues_changed = False
+        # Consumer cutover is explicit: legacy scan/load still return complete
+        # detached snapshots. The shared directory consumes metadata pages.
+        self.directory = bool(directory and cache_path is not None)
+        self._directory_journal = OrderedDict()
+        self._directory_pending = {'sessions': {}, 'removed': set()}
+        self._directory_unsaved = set()
+        self._directory_recovery_project = None
+        self._directory_recovery_changes = {}
+        self._directory_recovery_staged = False
 
     def _load_catalog(self):
         # Called only from the discovery worker, never in host construction.
@@ -189,15 +207,30 @@ class NativeHistory:
             from .native_catalog import NativeCatalog
             self._catalog = NativeCatalog(self._cache_path, self.home)
             self._catalog.stop = self._closing
-            cached_projects, cached_files = self._catalog.load()
-            if not was_loaded:
+            if self.directory:
+                cached_projects, cached_files = self._catalog.load_projects(), {}
+            else:
+                cached_projects, cached_files = self._catalog.load()
+            if not was_loaded or (self.directory and not self._projects and not self._directory_unsaved
+                                  and self._recovery_status['phase'] == 'not-started'):
                 self._projects, self._files = cached_projects, cached_files
                 self._file_projects = set(self._projects)
                 self._cached_start = bool(cached_projects)
             else:
                 # Live memory contains newer canonical reads after a failed
                 # cache save. Reconnect may not replace it with stale disk rows.
-                self._catalog.save(self._projects, cached_projects, self._files, self._files)
+                if self.directory:
+                    names = self._directory_unsaved
+                    saved = self._catalog.save(
+                        {key: self._projects[key] for key in names if key in self._projects},
+                        {key: cached_projects[key] for key in names if key in cached_projects},
+                        self._files, self._dirty_files)
+                    self._directory_record(saved)
+                    self._directory_compact(names)
+                    self._directory_unsaved.clear()
+                    self._dirty_files.clear()
+                else:
+                    self._catalog.save(self._projects, cached_projects, self._files, self._files)
             self._cache_error = False
             self._cache_rejected_stamp = None
             self._cache_retry_delay = 5
@@ -297,7 +330,7 @@ class NativeHistory:
         return self._watch.take() if self._watch else (False, set())
 
     def _read(self, path, issues, project, identity=None):
-        previous = self._files.get(path)
+        previous = self._cached_file(path)
         try:
             signature = _signature(path)
         except FileNotFoundError:
@@ -306,7 +339,7 @@ class NativeHistory:
         except (OSError, ValueError):
             issues.append({'kind': 'unreadable', 'nativeProject': project, 'nativeIdentity': identity})
             return previous[1] if previous else {}
-        if previous and previous[0] == signature:
+        if previous and previous[0] == signature and (previous[2] or previous[1].get('_nativeFieldsVersion') == _METADATA_FIELDS_VERSION):
             if previous[2]:
                 issues.append({'kind': 'unreadable', 'nativeProject': project, 'nativeIdentity': identity})
             return previous[1]
@@ -335,7 +368,7 @@ class NativeHistory:
         """Canonical parsing/backup recovery belongs to Foundation."""
         from amplifier_foundation.session.history import SessionHistoryStore
         path = directory / 'metadata.json'
-        previous = self._files.get(path)
+        previous = self._cached_file(path)
         try:
             stamps = []
             for candidate in (path, directory / 'metadata.json.backup'):
@@ -349,7 +382,7 @@ class NativeHistory:
             if not any(stamps) and previous:
                 return previous[1]
             signature = tuple(stamps)
-            if previous and previous[0] == signature:
+            if previous and previous[0] == signature and (previous[2] or previous[1].get('_nativeFieldsVersion') == _METADATA_FIELDS_VERSION):
                 if previous[2]:
                     issues.append({'kind': 'unreadable', 'nativeProject': project, 'nativeIdentity': directory.name})
                 return previous[1]
@@ -368,6 +401,114 @@ class NativeHistory:
         self._dirty_files.add(path)
         self._file_projects.add(project)
         return value
+
+    def _cached_file(self, path):
+        previous = self._files.get(path)
+        if previous is None and self.directory and self._catalog is not None:
+            try:
+                previous = self._catalog.file(path)
+            except (OSError, ValueError, sqlite3.Error):
+                # Corrupt disposable file metadata cannot prevent a fresh
+                # canonical read; it is replaced by the next successful save.
+                self._cache_error = True
+            if previous is not None:
+                self._files[path] = previous
+        return previous
+
+    def _trim_files(self):
+        if self.directory and len(self._files) > 1024:
+            for path in tuple(self._files):
+                if path not in self._dirty_files:
+                    self._files.pop(path, None)
+                    if len(self._files) <= 1024:
+                        break
+
+    def _directory_record(self, saved):
+        if not saved:
+            return
+        for project, identity in saved['removed']:
+            key = project, identity
+            self._directory_pending['sessions'].pop(key, None)
+            self._directory_pending['removed'].add(key)
+            if project == self._directory_recovery_project and not self._directory_recovery_staged:
+                self._directory_recovery_changes[identity] = None
+        for row in saved['sessions']:
+            key = row['nativeProject'], row['nativeIdentity']
+            self._directory_pending['sessions'][key] = row
+            self._directory_pending['removed'].discard(key)
+            if key[0] == self._directory_recovery_project and not self._directory_recovery_staged:
+                self._directory_recovery_changes[key[1]] = row
+
+    def _directory_compact(self, names):
+        from .native_catalog import CatalogRows
+        for name in names:
+            current = self._projects.get(name)
+            if current is not None:
+                self._projects[name] = {'workspace': current['workspace'],
+                                        'sessions': CatalogRows(self._catalog, name)}
+        self._trim_files()
+
+    def _directory_result(self, since, force, previous, changed, issues, watching, reconcile):
+        """Bounded changes plus a directory invalidation, never a library reset body."""
+        old_token = self._snapshot_revision
+        pending = self._directory_pending
+        workspace_changes = [self._projects[name]['workspace'] for name in changed if name in self._projects
+                             and self._projects[name]['workspace'] != previous.get(name, {}).get('workspace')]
+        removed_projects = sorted(set(previous) - self._projects.keys())
+        altered = bool(old_token is None or changed or pending['sessions'] or pending['removed']
+                       or issues != self._snapshot_issues)
+        if altered:
+            next_token = object()
+            overflow = len(pending['sessions']) + len(pending['removed']) > 512
+            delta = {'sessions': [] if overflow else list(pending['sessions'].values()),
+                     'removed': [] if overflow else sorted(pending['removed']),
+                     'workspaces': workspace_changes, 'removedProjects': removed_projects,
+                     'invalidate': overflow}
+            if old_token is not None:
+                self._directory_journal[old_token] = (next_token, copy.deepcopy(delta))
+                while len(self._directory_journal) > 4:
+                    self._directory_journal.popitem(last=False)
+            self._snapshot_revision = next_token
+            self._snapshot_issues = copy.deepcopy(issues)
+            self._directory_pending = {'sessions': {}, 'removed': set()}
+            self._snapshot_projects = tuple(self._projects.items())
+        reset = force or since is None
+        sessions, removed, workspaces, retired = {}, set(), {}, set()
+        cursor = since
+        while cursor is not self._snapshot_revision and not reset:
+            entry = self._directory_journal.get(cursor)
+            if entry is None:
+                reset = True
+                break
+            cursor, delta = entry
+            if delta['invalidate']:
+                reset = True
+                break
+            for name, identity in delta['removed']:
+                sessions.pop((name, identity), None); removed.add((name, identity))
+            for row in delta['sessions']:
+                key = row['nativeProject'], row['nativeIdentity']
+                sessions[key] = row; removed.discard(key)
+            for name in delta['removedProjects']:
+                retired.add(name); workspaces.pop(name, None)
+            for row in delta['workspaces']:
+                name = row['nativeProject']
+                workspaces[name] = row; retired.discard(name)
+            if len(sessions) + len(removed) > 512:
+                reset = True
+        if reset:
+            # Invalidation directs consumers to requery their requested pages
+            # and admitted IDs. It never means the on-disk directory is empty.
+            sessions, removed, retired = {}, set(), set()
+            workspaces = {name: project['workspace'] for name, project in self._projects.items()}
+        result = copy.deepcopy({'reset': reset, 'directoryReady': self._catalog is not None,
+            'workspaces': list(workspaces.values()), 'sessions': list(sessions.values()),
+            'removed': sorted(removed), 'removedProjects': sorted(retired),
+            'issues': issues, 'projectCount': len(self._projects), **self._totals,
+            'metadataReads': self._reads, 'reconciled': reconcile,
+            'notificationsReady': watching, 'reconciliation': self._recovery_status})
+        result['base'] = since
+        return self._snapshot_revision, result
 
     @staticmethod
     def _directories(directory):
@@ -404,6 +545,13 @@ class NativeHistory:
         Include absent files so new metadata/transcripts are discovered. A
         bounded full reconciliation also re-resolves symlinks and permissions.
         """
+        if self.directory:
+            steps = self._project_stamp_steps(project, known)
+            while True:
+                try:
+                    next(steps)
+                except StopIteration as done:
+                    return done.value
         paths = [project / 'metadata.json', project / 'sessions']
         paths.extend(known.get(project.name, ()))
         paths.extend(self._project_paths.get(project.name, ()))
@@ -472,7 +620,15 @@ class NativeHistory:
                                    info.st_size, info.st_mtime_ns, info.st_ctime_ns))
                 except FileNotFoundError:
                     values.append((path, None))
-            leaves[directory.name] = values
+            leaves[directory.name] = (hashlib.sha256(json.dumps(values).encode()).digest()
+                                      if self.directory else values)
+        if self.directory:
+            # Keep one digest per project, not every dormant file's Path/stamp
+            # tuple. Temporary leaf digests make scandir ordering immaterial.
+            digest = hashlib.sha256(json.dumps(result).encode())
+            for name in sorted(leaves):
+                digest.update(name.encode()); digest.update(b'\0'); digest.update(leaves[name])
+            return (*result[:2], ('directory-digest-v1', digest.hexdigest()))
         for name in sorted(leaves):
             result.extend(leaves[name])
         return tuple(result)
@@ -525,8 +681,10 @@ class NativeHistory:
         except OSError:
             issues.append({'kind': 'unreadable', 'nativeProject': slug})
             return self._projects.get(slug)
+        from .native_catalog import CatalogRows, CatalogPatchRows
+        lazy = self.directory and isinstance((prior or {}).get('sessions'), (CatalogRows, CatalogPatchRows))
         rows = ([row for row in prior['sessions'] if row['nativeIdentity'] not in transcript_ids]
-                if partial else [])
+                if partial and not lazy else [])
         candidates = set(known.get(slug, ()))
         if partial:
             candidates.add(prior['workspace']['path'])
@@ -534,7 +692,8 @@ class NativeHistory:
         candidate = self._working_dir(project_metadata, slug)
         if candidate:
             candidates.add(candidate)
-        previous_rows = {row['nativeIdentity']: row for row in self._projects.get(slug, {}).get('sessions', [])}
+        previous_rows = prior['sessions'] if lazy else {
+            row['nativeIdentity']: row for row in self._projects.get(slug, {}).get('sessions', [])}
         for directory in directories:
             yield
             if directory is None:
@@ -550,11 +709,12 @@ class NativeHistory:
             if not safe:
                 issues.append({'kind': 'unreadable', 'nativeProject': slug,
                                'nativeIdentity': directory.name})
-                if directory.name in previous_rows:
+                previous_row = previous_rows.get(directory.name)
+                if previous_row is not None:
                     # Workspace resolution below may change this summary.
                     # Retained revision bases and SQLite comparisons must keep
                     # the old row immutable even while a leaf is unreadable.
-                    rows.append(dict(previous_rows[directory.name]))
+                    rows.append(dict(previous_row))
                 continue
             # CLI worker IDs can contain ':' and '_'. All existing basenames
             # are safe to index; root execution has a narrower ID contract.
@@ -601,13 +761,12 @@ class NativeHistory:
                 bundle = bundle.removeprefix('bundle:')
                 if bundle == 'unknown':
                     bundle = None
-            name = (_text(meta.get('name')) or _text(meta.get('title'))
-                    or _text(meta.get('agent_name')) or f'Conversation {directory.name[:8]}')
+            name = _text(meta.get('name')) or _text(meta.get('title')) or _text(meta.get('agent_name'))
             kind, parent = classify_session(directory.name, native, capture)
             rows.append({
                 'id': uuid.uuid5(uuid.NAMESPACE_URL, f'amplifier-session:{slug}/{directory.name}').hex,
                 'nativeIdentity': directory.name, 'nativeProject': slug,
-                'name': name, 'title': name, 'description': _text(meta.get('description')) or '',
+                'name': name, 'title': name or f'Conversation {directory.name[:8]}', 'description': _text(meta.get('description')) or '',
                 'bundle': bundle, 'parentId': parent, 'sessionKind': kind,
                 **({'sessionPurpose': meta['session_purpose']} if kind == 'internal'
                    and isinstance(meta.get('session_purpose'), str)
@@ -616,6 +775,8 @@ class NativeHistory:
                 'transcriptAvailable': bool(transcript and transcript[2]),
                 'transcriptRevision': list(transcript[1:]) if transcript else None,
                 'nameSource': _text(meta.get('name_source')), 'autoName': automatic_metadata(meta),
+                'nameRevision': meta['name_revision'] if type(meta.get('name_revision')) is int and meta['name_revision'] >= 0 else 0,
+                'namePolicyRevision': meta['name_policy_revision'] if type(meta.get('name_policy_revision')) is int and meta['name_policy_revision'] >= 0 else 0,
             })
         if partial and candidates != {prior['workspace']['path']}:
             # A concurrent metadata save can change workspace resolution even
@@ -639,6 +800,12 @@ class NativeHistory:
             'workerSessionCount': sum(row['sessionKind'] == 'worker' for row in rows),
             'internalSessionCount': sum(row['sessionKind'] == 'internal' for row in rows),
         }
+        if partial and lazy:
+            for field, kind in (('sessionCount', 'root'), ('workerSessionCount', 'worker'),
+                                ('internalSessionCount', 'internal')):
+                workspace[field] += prior['workspace'].get(field, 0) - sum(
+                    bool((previous_rows.get(identity) or {}).get('sessionKind') == kind)
+                    for identity in transcript_ids)
         for row in rows:
             if partial and row['nativeIdentity'] not in transcript_ids:
                 continue  # Old immutable summaries are not modified in place.
@@ -659,10 +826,13 @@ class NativeHistory:
             elif not row['bundle']:
                 reason = 'This session does not record a resumable bundle.'
             row.update(canResume=reason is None, readOnlyReason=reason)
-        rows = [previous_rows[row['nativeIdentity']] if row == previous_rows.get(row['nativeIdentity']) else row
-                for row in rows]
+        if not lazy:
+            rows = [previous_rows[row['nativeIdentity']] if row == previous_rows.get(row['nativeIdentity']) else row
+                    for row in rows]
         if bounded:
             rows.sort(key=lambda row: row['nativeIdentity'])
+        if partial and lazy:
+            rows = CatalogPatchRows(prior['sessions'], rows, transcript_ids - {row['nativeIdentity'] for row in rows})
         return {'workspace': workspace, 'sessions': rows}
 
     def _safe_project(self, project):
@@ -726,6 +896,17 @@ class NativeHistory:
             self._recovery_status['phase'] = 'unavailable'
 
     def _recover_project(self, project, known):
+        if self.directory:
+            self._directory_recovery_project = project.name
+            self._directory_recovery_changes = {}
+        try:
+            yield from self._recover_project_steps(project, known)
+        finally:
+            if self.directory:
+                self._directory_recovery_project = None
+                self._directory_recovery_changes = {}
+
+    def _recover_project_steps(self, project, known):
         yield
         if not project.exists():
             self._set_recovered_project(project.name, None)
@@ -737,13 +918,16 @@ class NativeHistory:
             self._project_inputs[project.name] = value
             return
         before = self._projects.get(project.name)
+        if self.directory and before is not None and before['workspace'].get('path'):
+            if (yield from self._recover_cached_project_steps(project, known)):
+                return
         cached = self._project_inputs.get(project.name)
         try:
             stamp = yield from self._project_stamp_steps(project, known)
         except (OSError, RuntimeError):
             stamp = None
         unchanged = bool(stamp is not None and cached and cached[0] == stamp)
-        if (not unchanged and before is not None and stamp is not None and cached
+        if (not self.directory and not unchanged and before is not None and stamp is not None and cached
                 and cached[0] and not cached[1] and before['workspace'].get('path')):
             # Automatic discovery registers an already resolved workspace.
             # That registration changes header inputs, not canonical rows.
@@ -776,17 +960,32 @@ class NativeHistory:
             # Recreated storage must enter through a fresh invalidation/recovery.
             return
         if current is not before and result is not None and current is not None:
-            baseline_rows = {row['nativeIdentity']: row for row in before['sessions']} if before else {}
-            current_rows = {row['nativeIdentity']: row for row in current['sessions']}
             merged = {row['nativeIdentity']: row for row in result['sessions']}
             # Accept cold independently reconciled rows while keeping newer
             # watched rows. A hot session cannot starve the rest of its project.
-            for identity in baseline_rows.keys() | current_rows.keys():
-                if current_rows.get(identity) is not baseline_rows.get(identity):
-                    if identity in current_rows:
-                        merged[identity] = current_rows[identity]
+            if self.directory:
+                for identity, row in self._directory_recovery_changes.items():
+                    if row is not None:
+                        merged[identity] = row
                     else:
                         merged.pop(identity, None)
+                # This slice's targeted updates precede the recovery step but
+                # are committed only after it. They are newer than the saved
+                # row journal too, and must win before the single transaction.
+                from .native_catalog import CatalogPatchRows
+                if isinstance(current['sessions'], CatalogPatchRows):
+                    merged.update(current['sessions'].changed)
+                    for identity in current['sessions'].removed:
+                        merged.pop(identity, None)
+            else:
+                baseline_rows = {row['nativeIdentity']: row for row in before['sessions']} if before else {}
+                current_rows = {row['nativeIdentity']: row for row in current['sessions']}
+                for identity in baseline_rows.keys() | current_rows.keys():
+                    if current_rows.get(identity) is not baseline_rows.get(identity):
+                        if identity in current_rows:
+                            merged[identity] = current_rows[identity]
+                        else:
+                            merged.pop(identity, None)
             workspace_fields = ('path', 'id', 'available')
             if before is not None and any(current['workspace'].get(key) != before['workspace'].get(key)
                                           for key in workspace_fields):
@@ -806,6 +1005,194 @@ class NativeHistory:
             self._set_recovered_project(project.name, before if result == before else result)
             self._recovery_issues_changed |= self._project_inputs.get(project.name, (None, []))[1] != issues
             self._project_inputs[project.name] = (stamp, issues)
+
+    @staticmethod
+    def _directory_stamp(directory):
+        info = directory.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            raise OSError('Native sessions directory is unavailable or substituted')
+        return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns
+
+    @staticmethod
+    def _canonical_absent(path):
+        try:
+            path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        return False  # Permission/IO failures propagate; uncertainty is not absence.
+
+    @staticmethod
+    def _bound_recovery_issues(issues, project):
+        if len(issues) > 64:
+            count = sum(item.get('additionalCount', 1) for item in issues[63:])
+            issues[63:] = [{'kind': 'unreadable', 'nativeProject': project, 'additionalCount': count}]
+
+    @staticmethod
+    def _cached_source_matches(facts, signatures):
+        if facts is None:
+            return False
+        files = facts['files']
+        sources = {'metadata.json': (signatures['metadata.json'], signatures['metadata.json.backup']),
+                   'naming.json': signatures['naming.json'],
+                   os.path.join('context-intelligence', 'metadata.json'):
+                       signatures[os.path.join('context-intelligence', 'metadata.json')]}
+        from .native_catalog import tuples
+        for name, signature in sources.items():
+            cached, valid = files[name]
+            if not valid or tuples(cached) != signature:
+                return False
+        transcript = signatures['transcript.jsonl'] or signatures['transcript.jsonl.backup']
+        return (tuples(facts['transcriptRevision']) == (transcript[1:] if transcript else None)
+                and facts['transcriptAvailable'] == bool(transcript and transcript[2]))
+
+    def _recover_cached_project_steps(self, project, known):
+        """Probe warm membership without restoring unchanged metadata payloads.
+
+        The disposable SQL generation owns the seen set. Python retains only a
+        64-ID batch; canonical parsing and cache mutation use the same targeted
+        path as watcher changes. Unresolved/new workspace repair remains the
+        separate cold recovery path above.
+        """
+        from .native_catalog import CatalogPatchRows
+        slug = project.name
+        prior = self._projects[slug]
+        workspace = prior['workspace']
+        path = workspace['path']
+        # A changed registration or path interpretation needs cold canonical
+        # resolution. An unchanged saved path is never execution admission.
+        if (set(known.get(slug, ())) - {path} or str(Path(path).resolve()) != path
+                or project_slug(path) != slug):
+            return False
+        issues = []
+        project_metadata = self._read(project / 'metadata.json', issues, slug)
+        candidate = self._working_dir(project_metadata, slug)
+        if candidate not in {None, path}:
+            return False
+        catalog = self._catalog
+        token = None
+        previous_staged = self._directory_recovery_staged
+        self._directory_recovery_staged = True
+        try:
+            initial_directory = self._directory_stamp(project / 'sessions')
+            token = catalog.recovery_begin(slug)
+            available = Path(path).is_dir()
+            if workspace['available'] != available:
+                updated = {**workspace, 'available': available}
+                self._set_recovered_project(slug, {'workspace': updated,
+                    'sessions': CatalogPatchRows(prior['sessions'], [])})
+            batch = []
+            for directory in self._recovery_directories(project / 'sessions'):
+                yield
+                if not self._safe_project(project):
+                    raise OSError('Native project changed during recovery')
+                if directory is None:
+                    continue
+                identity = directory.name
+                try:
+                    self._directory_stamp(directory)
+                    signatures = {}
+                    for name in _STAMP_FILES:
+                        try:
+                            signatures[name] = _signature(directory / name)
+                        except FileNotFoundError:
+                            signatures[name] = None
+                except (OSError, ValueError):
+                    issues.append({'kind': 'unreadable', 'nativeProject': slug, 'nativeIdentity': identity})
+                    self._bound_recovery_issues(issues, slug)
+                    signatures = None
+                batch.append((identity, signatures))
+                if len(batch) == 64:
+                    if not (yield from self._recover_cached_batch(project, known, token, batch, issues)):
+                        return False
+                    batch = []
+            if batch and not (yield from self._recover_cached_batch(project, known, token, batch, issues)):
+                return False
+            if (not self._safe_project(project)
+                    or self._directory_stamp(project / 'sessions') != initial_directory):
+                issues.append({'kind': 'unstable-project', 'nativeProject': slug})
+            current = self._projects.get(slug)
+            if current is None:
+                return True  # A newer canonical project removal won.
+            if current['workspace'].get('path') != path:
+                return False
+            if not issues:
+                # Targeted updates collected earlier in this slice have not yet
+                # reached save(); protect them alongside committed watched rows.
+                if isinstance(current['sessions'], CatalogPatchRows):
+                    changed = iter(current['sessions'].changed)
+                    while group := list(itertools.islice(changed, 64)):
+                        catalog.recovery_seen(token, group)
+                after = ''
+                while True:
+                    yield
+                    if (not self._safe_project(project)
+                            or self._directory_stamp(project / 'sessions')[:2] != initial_directory[:2]):
+                        raise OSError('Native project changed during recovery')
+                    current = self._projects.get(slug)
+                    if current is None:
+                        break
+                    pending = current['sessions'] if isinstance(current['sessions'], CatalogPatchRows) else None
+                    if pending:
+                        changed = iter(pending.changed)
+                        while group := list(itertools.islice(changed, 64)):
+                            catalog.recovery_seen(token, group)
+                    missing = catalog.recovery_missing(token, after=after, limit=64)
+                    if not missing:
+                        break
+                    # A newly written session can arrive while the generator is
+                    # suspended. Probe current membership and physical absence
+                    # without yielding between evidence and the patch/counts.
+                    removed = [(identity, kind) for identity, kind in missing
+                               if not (pending and identity in pending.removed)
+                               and self._canonical_absent(project / 'sessions' / identity)]
+                    after = missing[-1][0]
+                    if removed:
+                        updated = dict(current['workspace'])
+                        for field, kind in (('sessionCount', 'root'), ('workerSessionCount', 'worker'),
+                                            ('internalSessionCount', 'internal')):
+                            updated[field] -= sum(row_kind == kind for _, row_kind in removed)
+                        self._set_recovered_project(slug, {'workspace': updated,
+                            'sessions': CatalogPatchRows(current['sessions'], [], [identity for identity, _ in removed])})
+            old_issues = self._project_inputs.get(slug, (None, []))[1]
+            self._project_inputs[slug] = ((tuple(sorted(known.get(slug, ()))),), issues)
+            self._recovery_issues_changed |= old_issues != issues
+            return True
+        except (OSError, ValueError, sqlite3.Error):
+            old_issues = self._project_inputs.get(slug, (None, []))[1]
+            issues.append({'kind': 'unreadable', 'nativeProject': slug})
+            self._bound_recovery_issues(issues, slug)
+            self._project_inputs[slug] = (None, issues)
+            self._recovery_issues_changed |= old_issues != issues
+            return True
+        finally:
+            self._directory_recovery_staged = previous_staged
+            if token is not None:
+                try:
+                    catalog.recovery_abort(token)
+                except (OSError, ValueError, sqlite3.Error):
+                    pass  # The next project generation replaces stale scratch rows.
+
+    def _recover_cached_batch(self, project, known, token, batch, issues):
+        catalog = self._catalog
+        identities = [identity for identity, _ in batch]
+        catalog.recovery_seen(token, identities)
+        cached = catalog.recovery_facts(project.name, identities)
+        for identity, signatures in batch:
+            if signatures is None or self._cached_source_matches(cached.get(identity), signatures):
+                continue
+            # A fresh targeted notification may have already replaced this row.
+            # Re-read canonical metadata; never publish the batch's older facts.
+            yield
+            # Capture the current patch after the suspension boundary. Driving
+            # this one-ID reader without another yield cannot replace a watched
+            # update that arrived while an earlier prior object was captured.
+            result = self._scan_project(project, known, issues,
+                transcript_ids={identity}, target_only=True)
+            self._bound_recovery_issues(issues, project.name)
+            if result is None:
+                return False  # Workspace ambiguity requires cold resolution.
+            self._set_recovered_project(project.name, result)
+        return True
 
     def _set_recovered_project(self, name, result):
         """Copy live membership once only when recovery publishes a change."""
@@ -911,6 +1298,21 @@ class NativeHistory:
             self._load_catalog()
             if self._closing.is_set():
                 raise InterruptedError('Native discovery is closing')
+            if self.directory and _changes and self._catalog is None:
+                # A broken disposable directory must not turn background
+                # discovery into a growing in-memory copy of canonical history.
+                # Retain the last bounded failed slice for retry; selected
+                # canonical readers and explicit complete scan stay independent.
+                self._reads = 0
+                self._recovery_status['steps'] = 0
+                if self._totals is None:
+                    self._totals = {field: sum(project['workspace'].get(field, 0)
+                                              for project in self._projects.values())
+                                    for field in ('sessionCount', 'workerSessionCount', 'internalSessionCount')}
+                token, result = self._directory_result(since, force, self._projects, set(),
+                    [{'kind': 'unavailable-catalog-cache'}], False, False)
+                result['reconciliation'].update(phase='unavailable', steps=0)
+                return token, result
             previous_projects = self._projects
             self._scan_original_projects = previous_projects
             self._recovery_modified = set()
@@ -949,7 +1351,8 @@ class NativeHistory:
             wildcard = '*' in dirty_projects
             # Missing caches and unavailable watches still use bounded
             # discovery. Neither condition admits an eager cold-library scan.
-            incremental = self._watch_enabled and _changes and not force
+            incremental = _changes and (self.directory or (self._watch_enabled and not force))
+            root_issue = None
             if incremental:
                 # The previous detached journal retains old project objects.
                 # Discovery and missed-notification coverage advance separately.
@@ -965,6 +1368,24 @@ class NativeHistory:
                 dirty_projects = {item[0] for item in dirty}
                 projects = [self.home / 'projects' / name for name in sorted(dirty_projects)
                             if name not in {'', '.', '..'} and Path(name).name == name]
+                # Watch loss must not leave an earlier complete generation
+                # advertised as fresh until the next periodic sweep. This is
+                # one root probe, not a directory or session enumeration.
+                try:
+                    if not stat.S_ISDIR((self.home / 'projects').stat(follow_symlinks=False).st_mode):
+                        raise OSError('Native history root is substituted')
+                except FileNotFoundError:
+                    if self._projects:
+                        root_issue = 'unavailable-root'
+                except OSError:
+                    root_issue = 'unreadable-root'
+                if root_issue:
+                    projects = None
+                    if self._recovery is not None:
+                        self._recovery.close()
+                        self._recovery = None
+                    self._recovery_status.update(phase='unavailable', steps=0)
+                    self._reconcile_at = now  # Resume bounded recovery after repair.
             else:
                 projects = None
             try:
@@ -1004,9 +1425,9 @@ class NativeHistory:
                                       if watching and (incremental or not reconcile) and '*' not in dirty_projects
                                       and project.name not in dirty else set())
                     partial = bool(transcript_ids and workspace.get('path')
-                                   and workspace.get('available') == available and cached
-                                   and cached[0] and cached[0][0] == known_paths
-                                   and not cached[1])
+                                   and workspace.get('available') == available
+                                   and ((self.directory and cached is None) or
+                                        (cached and cached[0] and cached[0][0] == known_paths and not cached[1])))
                     if incremental and not partial:
                         if project.name not in self._recovery_queued:
                             self._recovery_urgent.append(project.name)
@@ -1045,7 +1466,7 @@ class NativeHistory:
                     self._files = {path: value for path, value in self._files.items()
                                    if path.relative_to(self.home / 'projects').parts[0] in existing}
                     self._file_projects.intersection_update(existing)
-            if incremental and (reconcile or wildcard or self._recovery is not None or self._recovery_urgent):
+            if incremental and not root_issue and (reconcile or wildcard or self._recovery is not None or self._recovery_urgent):
                 self._recovery_slice(known, watching=watching)
                 reconcile = False  # A slice is not a completed full-library merge.
             if incremental:
@@ -1056,7 +1477,9 @@ class NativeHistory:
                 else:
                     issues = ([{'kind': 'unavailable-catalog-cache'}] if self._cache_error else [])
                     issues.extend(issue for issue in self._snapshot_issues
-                                  if issue.get('kind') != 'unavailable-catalog-cache')
+                                  if issue.get('kind') not in {'unavailable-catalog-cache', 'unavailable-root', 'unreadable-root'})
+                if root_issue:
+                    issues.append({'kind': root_issue})
             candidates = ((dirty_projects | self._recovery_modified) if incremental else
                           self._projects.keys() | previous_projects.keys())
             changed_projects = {key for key in candidates
@@ -1074,19 +1497,37 @@ class NativeHistory:
                         self._totals[field] += after.get(field, 0) - before.get(field, 0)
             if self._catalog is not None and (changed_projects or self._dirty_files):
                 try:
-                    self._catalog.save(
+                    saved = self._catalog.save(
                         {key: self._projects[key] for key in changed_projects if key in self._projects},
                         {key: previous_projects[key] for key in changed_projects if key in previous_projects},
                         self._files, self._dirty_files)
                     self._dirty_files.clear()
+                    if self.directory:
+                        self._directory_record(saved)
+                        effective = {row['nativeProject'] for row in (saved or {}).get('sessions', [])}
+                        effective.update(name for name, _ in (saved or {}).get('removed', []))
+                        effective.update(name for name in changed_projects
+                            if self._projects.get(name, {}).get('workspace') != previous_projects.get(name, {}).get('workspace'))
+                        for name in changed_projects - effective:
+                            if name in previous_projects:
+                                self._projects[name] = previous_projects[name]
+                        changed_projects = effective
+                        self._directory_compact(changed_projects)
+                        self._directory_unsaved.difference_update(changed_projects)
                 except Exception as exc:
                     import sqlite3
                     if not isinstance(exc, (OSError, ValueError, sqlite3.Error)):
                         raise
                     self._catalog = None
+                    if self.directory:
+                        self._directory_unsaved.update(changed_projects)
                     self._cache_error = True
                     self._cache_retry_at = time.monotonic() + self._cache_retry_delay
                     issues.append({'kind': 'unavailable-catalog-cache'})
+            self._trim_files()
+            if self.directory and _changes:
+                return self._directory_result(since, force, previous_projects, changed_projects,
+                                              issues, watching, reconcile)
             projects = (tuple(self._projects.items()) if changed_projects or self._snapshot_revision is None
                         else self._snapshot_projects)
             if (self._snapshot_revision is None
