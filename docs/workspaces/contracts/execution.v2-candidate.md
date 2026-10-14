@@ -278,6 +278,9 @@ support; replacement or older adapters refuse before submission. Stop, responsib
 invalidate delayed admission. This is an observation boundary, not a filesystem
 lock against external writers. Stable command identities retain uncertain
 admission without repeating commands after lost acknowledgment or restart.
+If no parent validation or collection receipt committed, retrying takes fresh
+internal source observations. Completed parent retries return their retained
+receipt without repeating observations or command execution.
 
 Explicit collection reads that operation's native terminal evidence and checks
 the candidate again. Command exit, output completeness, source/dependency match

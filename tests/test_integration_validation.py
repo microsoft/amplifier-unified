@@ -273,6 +273,55 @@ async def test_postcommit_collection_ack_preserves_exact_bytes_without_rereading
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize('action', ['validate', 'collect'])
+@pytest.mark.parametrize('initial_match', [True, False])
+async def test_failed_parent_commit_retry_uses_fresh_source_observations(project, monkeypatch, action, initial_match):
+    app, sid, roots, calls = project
+    if action == 'collect':
+        await validate(app, sid, roots[0])
+        await validate(app, sid, roots[1], 'second')
+    source = roots[0] / 'source.txt'
+    if not initial_match:
+        source.write_text('different candidate\n')
+    identity = 'failed-parent'
+    original = app._save_changes
+    def fail_parent(**kwargs):
+        if app.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
+            raise OSError('injected before parent commit')
+        return original(**kwargs)
+    async def retry():
+        if action == 'validate':
+            return (await validate(app, sid, roots[0], identity))['result']
+        return await collect(app, sid, ['run', 'second'], identity)
+    monkeypatch.setattr(app, '_save_changes', fail_parent)
+    with pytest.raises(AppError, match='before parent commit'):
+        await retry()
+    assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone()
+    retained_checks = {row[0] for row in app.db.execute("SELECT id FROM commands WHERE json_extract(receipt,'$.commandAction')='integration.check'")}
+    assert retained_checks  # Subordinate observations survived the failed parent.
+    source.write_text('changed after failed commit\n' if initial_match else 'original\n')
+    monkeypatch.setattr(app, '_save_changes', original)
+    result = await retry()
+    if action == 'validate':
+        assert result['beforeStatus'] == ('mismatch' if initial_match else 'matched')
+        assert result['phase'] == ('not_started' if initial_match else 'admitting')
+        assert result['beforeCheckId'] not in retained_checks
+        assert len(calls) == (0 if initial_match else 1)
+    else:
+        assert result['status'] == ('mismatch' if initial_match else 'passed')
+        assert not set(result['checkIds']) & retained_checks
+        assert len(calls) == 2
+    # Once the parent commits, later changes cannot rewrite its retained result
+    # or cause another observation/command on an exact retry.
+    saved = app.collaboration.receipt(identity)['result']
+    saved_checks = {row[0] for row in app.db.execute("SELECT id FROM commands WHERE json_extract(receipt,'$.commandAction')='integration.check'")}
+    saved_calls = len(calls)
+    source.write_text('changed after successful parent commit\n')
+    assert await retry() == saved
+    assert {row[0] for row in app.db.execute("SELECT id FROM commands WHERE json_extract(receipt,'$.commandAction')='integration.check'")} == saved_checks
+    assert len(calls) == saved_calls
+
+
 @pytest.mark.parametrize('change', ['execution', 'stop', 'responsibility'])
 async def test_authority_changes_during_source_io_refuse_new_validation(project, monkeypatch, change):
     app, sid, roots, calls = project

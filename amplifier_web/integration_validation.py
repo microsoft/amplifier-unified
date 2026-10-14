@@ -66,9 +66,11 @@ def save(app, identity, digest, value):
         raise
 
 
-async def check(app, sid, capture_id, identity):
+async def check(app, sid, capture_id):
+    # Parent retries reuse only committed parent results. An incomplete attempt
+    # must observe current source, not reuse a check saved before its rollback.
     return (await evidence.dispatch(app, 'integration.check', {'sessionId': sid, 'id': capture_id},
-                                    'ui', identity, None))['result']
+                                    'ui', str(uuid.uuid4()), None))['result']
 
 
 @asynccontextmanager
@@ -89,7 +91,7 @@ async def admit(app, sid, identity, command):
         if run.get('kind') != 'validation' or run.get('operationCommand') != command or run.get('phase') != 'admitting':
             raise ValueError('This exact integration invocation is no longer awaiting admission.')
         require_authority(app, sid, run['authority'], admission=True)
-    current = await check(app, sid, run['captureId'], str(uuid.uuid4()))
+    current = await check(app, sid, run['captureId'])
     async with bound_repositories(app, current), app.lock:
         require_authority(app, sid, run['authority'], admission=True)
         latest = evidence.receipt(app, sid, identity)
@@ -187,7 +189,7 @@ async def collect(app, args, origin, identity, digest, captured):
         if sum(len(row.get('references', [])) for row in declared.values()) > 16:
             raise ValueError('At most sixteen exact result references may be retained.')
         native = {root: operation(app, sid, run) for root, run in by_root.items()}
-    after = await check(app, sid, candidate['id'], identity + ':after')
+    after = await check(app, sid, candidate['id'])
     from .result_artifacts import prepare_files, MAX_DECLARATION
     files = {}
     total = 0
@@ -200,7 +202,7 @@ async def collect(app, args, origin, identity, digest, captured):
         raise ValueError('The combined result exceeds the sixteen MiB file limit.')
     # Bracket result capture too; artifacts can survive later source changes,
     # while the candidate match always reports this collection's observation.
-    final = await check(app, sid, candidate['id'], identity + ':final')
+    final = await check(app, sid, candidate['id'])
     from .resource_files import put_prepared_async
     async with bound_repositories(app, final), app.lock:
         require_authority(app, sid, captured)
@@ -286,7 +288,7 @@ async def dispatch(app, action, args, origin, command_id, caller):
         if root not in {row['repositoryPath'] for row in candidate['repositories']}:
             raise ValueError('Choose one exact repository from the saved candidate.')
         if not args['command'].strip(): raise ValueError('Choose an explicit validation command.')
-        before = await check(app, sid, candidate['id'], identity + ':before')
+        before = await check(app, sid, candidate['id'])
         async with app.lock:
             require_authority(app, sid, captured, admission=True)
             prior = app.collaboration.duplicate(identity, digest)
