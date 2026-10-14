@@ -1,14 +1,3 @@
-// Restore the public component contract while retaining shared object identity.
-export function expandShell(next){
- if(!next.snapshotRefs)return next;
- const snapshots={...next.snapshots};
- for(const [id,refs] of Object.entries(next.snapshotRefs)){
-  snapshots[id]={...snapshots[id]};
-  for(const [key,index] of Object.entries(refs))snapshots[id][key]=next.sharedSnapshotValues[index];
- }
- const {sharedSnapshotValues,snapshotRefs,...rest}=next;
- return {...rest,snapshots};
-}
 // Preserve equal branches without allocating two large serialized strings.
 export function retainEqual(previous,next){
  if(previous===next)return previous;

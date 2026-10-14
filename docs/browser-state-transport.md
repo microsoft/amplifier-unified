@@ -1,43 +1,83 @@
 # Browser state transport and idle work
 
-## Shell navigation resources
+## Shell bootstrap and active resources
 
-The bundled browser must send `navigationResources` to `GET /api/shell` as a JSON
-array of resource names (at most 16 entries and 4,096 characters). The allowed
-names are `chatNavigation`, `homeNavigation`, `pinnedNavigation`,
+The bundled browser gets shell descriptors once from `GET /api/shell?bundled=1`,
+with its attached `clientId`, a positive safe-integer `demandId`, `scope`, and
+`navigationResources`. Both arrays use JSON query encoding; resources have at
+most 16 entries and 4,096 characters. The scope is exactly
+`[selectedSessionId, selectedWorkspaceId, workSurface, workWorkspaceId, workWorkspaceTab]`;
+the last two values are null outside the workspace surface. The host validates
+the scope against that client's authoritative presentation before accepting it.
+The response has `hostInstanceId`, `shellBootstrapKey`, `instanceGenerations`,
+composition/package descriptors and the initial `shellResources` envelope.
+Every bound web state frame advertises the descriptor key, even before resource
+registration. The canonical `client.hostInstanceId` also fences old-host HTTP
+completions, so a server restart initiates a fresh bootstrap rather than retaining
+the previous host's descriptors.
+It does not construct snapshots for built-in non-navigation controls: those
+already consume ordinary selected browser state.
+
+`POST /api/shell/resources` changes read interest with
+`{clientId, demandId, resources, scope, reason}`. IDs increase within a document;
+an older ID, or reuse with different scope/resources, is rejected. The response
+contains the current bounded resource baseline. This operation cannot execute
+or replay a command. Built-in Recent Retry uses `host.refreshResources()` to
+read the same demand after uncertainty; it never replays the view write or issues
+a complete `shell.query`. Hidden pages release navigation interest. A dropped
+subscription can be registered again after reconnect without fetching descriptors
+whose bootstrap key is unchanged.
+
+Subsequent updates travel in `state.shellResources` through the existing
+WebSocket/SSE state transport. Its complete bounded envelope is
+`{hostInstanceId, clientId, demandId, bootstrapKey, scope, instances}`. Each
+instance has a generation and named `{revision, value}` resources. The existing
+immutable state-delta baseline transmits changed branches only. Bounded queue
+coalescing remains safe because retained frames represent the complete current
+resource set, not an unacknowledged chain of partial shell events. Reconnect
+supplies a fresh state baseline. Late HTTP responses cannot overwrite a newer
+resource revision, and old host, module, demand or scope identities are rejected.
+
+Page names are `chatNavigation`, `homeNavigation`, `pinnedNavigation`,
 `recentNavigation`, `workspaceShortcuts`, `workspaceExplorer`, `sidebarSearch`,
 `sidebarWorkspace`, `sidebarRecent`, `sidebarPinned`, and `workspaceOverview`.
-The host rejects missing or invalid demand before constructing projections.
-Resource selection applies to the built-in Chats and Workspaces snapshots; custom
-navigation packages and explicit `shell.query`/`shell.inspect` reads keep their
-complete existing snapshots. `compact=1` changes wire encoding, not demand. The
-bundled browser and server ship together and use this contract directly; no
-old-bundle fallback or capability negotiation is required. Independently released
-clients and custom packages remain governed by their explicit contracts.
+The implicit `context` resource owns controller metadata and receipts for the
+union of the active pages' visible rows. Page values contain only their fields;
+`recentNavigation` additionally owns `recentShortcuts`/`recentScope`, and
+`workspaceShortcuts` owns pinned-excluding shortcuts. Missing coverage means
+loading, not an empty result. Changes to private module views have their own
+monotonic `viewRevision`; the HTTP `result.shellView` receipt prevents an older
+queued context frame from briefly restoring an acknowledged prior value.
 
-Built-in browser snapshots contain `navigationResources`, the supplied resource names.
-An omitted resource was not requested; it is not an empty result. Base instance
-generation, view/controller metadata, selected registration and permitted actions
-remain available. `recentNavigation` also supplies `recentShortcuts` and
-`recentScope`; `workspaceShortcuts` supplies pinned-excluding shortcuts too.
-Sidebar page names map to the corresponding `sidebarNavigation` fields. Attention
-receipts and organization summaries cover the requested visible rows.
+The server reuses immutable resource values while semantic dependencies match.
+Canonical conditional global writes report the keys that actually changed;
+their dependency epochs advance only after successful commit. Session facts
+retain the directory's semantic revision authority. Ordinary telemetry, streamed
+text, selected Canvas and host revision changes do not cause a descriptor GET.
+Composition, module generation or host changes do. No global `shellDataKey` or
+app-revision fallback drives the bundled client's reads.
 
-The browser asks for sidebar pins, recent shortcuts and workspace shortcuts,
-then adds search, workspace chats or the workspace explorer when that surface
-needs it. Demand and workspace tab participate in request identity. Superseded
-responses cannot populate a newly selected surface; absent/mismatched pages show
-loading until their matching resource arrives. Retained controller/draft state
-does not require constructing a hidden workspace page. Releasing read demand
-does not cancel accepted work or replay commands. This changes the current bundled navigation transport; the separate AHP
-development track remains unchanged.
+Resource subscriptions are disposable and explicitly bounded: at most 32 clients,
+4 MiB of encoded values per client and 32 MiB total. These are encoded-value limits,
+not a Python heap guarantee. Disconnected clients can be retired after a 60-second
+grace period; a durable saved client record alone does not retain read interest.
+An oversized resource reports a bounded error without blocking unrelated chat
+publication or retaining its payload. Unsent drafts and accepted work remain owned
+by their original authorities when read caches are released.
+
+Independent custom packages still receive their complete existing snapshot via
+`customSnapshot`; explicit `shell.query`, `shell.inspect` and unbundled shell reads
+retain their contracts. This is not compatibility negotiation for older bundled
+clients: web and server adopt this protocol together. The separate AHP track is
+unchanged. DOM diagnostics expose bounded reason labels, resource names, request
+IDs and timings only, never titles, filters, paths, prompts or drafts.
 
 ## Selected browser context
 
 Ordinary attached web snapshots and action receipts carry the selected chat's
-context. `/api/shell` owns chat/header/sidebar and workspace navigation pages;
-the stream does not construct or include `chatNavigation`,
-`headerChatNavigation`, or `workspaceExplorer`. The bundled client and server
+context. The shell resource owner supplies requested navigation pages through
+`shellResources`; ordinary state does not duplicate `chatNavigation`,
+`headerChatNavigation`, or `workspaceExplorer` at the root. The bundled client and server
 use this contract together, without an old-bundle fallback.
 
 Every such snapshot carries sorted `browserResources` coverage containing
@@ -51,8 +91,8 @@ The selected summary retains `subagentCount`, obtained by the canonical indexed
 parent predicate without decoding a child page. A selected child's exact parent
 summary remains available for Open parent. Selected messages, Work details,
 approvals/questions, private drafts and Canvas, voice context, attention and
-receipts keep their existing behavior. Shell changes still use their existing
-change token and data key. This slice does not suspend selected-chat history or
+receipts keep their existing behavior. Shell descriptor and resource revisions
+have separate owners. This slice does not suspend selected-chat history or
 Work when another surface is open.
 
 Explicit complete-state reads, custom component context, unbound/integration
@@ -68,7 +108,7 @@ Older clients and hosts retain `/api/events?transport=delta-v1` SSE. Actions ret
 result, effects, idempotency receipt and revision. `stateRevision` and
 `hostInstanceId` identify the authoritative state that must arrive before an
 optimistic control settles. Shell composition receipts use a separate revision
-domain and continue to synchronize through shell events.
+domain; the bundled stream carries the descriptor key and resource generations.
 
 Each event stream starts with a complete `state` frame. Later `state-delta`
 frames contain a base revision, result revision and changed JSON paths. An array

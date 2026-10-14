@@ -18,6 +18,7 @@ import {ChatDelete} from '../chat-delete';
 import {PathField} from '../settings-ui';
 import {readItems} from '../attention';
 import {useNavigation} from '../../../packages/shell-sdk/index.js';
+import {waitForSnapshot} from './wait-for-snapshot';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
@@ -164,7 +165,7 @@ export function useRecentShortcuts(host,state,act){
  const initial={limit:recentLimit(state.recentNavigation?.scope?.limit??state.view?.navRecentLimit),showAgentCreated:state.view?.navShowAgentCreated===true};
  const [settings,setSettings]=useState(initial),[page,setPage]=useState(state.recentNavigation||{items:[],total:0,remaining:0,limit:initial.limit});
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
- const accepted=useRef(page),intent=useRef(null),sequence=useRef(0),mounted=useRef(true),waiting=useRef(false),uncertain=useRef(false);
+ const accepted=useRef(page),intent=useRef(null),sequence=useRef(0),mounted=useRef(true),waiting=useRef(false),uncertain=useRef(false),readWait=useRef(null);
  const latest=useRef(null);latest.current={host,state,act};
  const scopeFor=current=>{
   const mode=current.sidebarNavigation?.pinned?.scope?.mode||'all';
@@ -185,7 +186,7 @@ export function useRecentShortcuts(host,state,act){
   accepted.current=candidate;uncertain.current=false;setPage(candidate);
   setSettings({limit:candidate.scope.limit,showAgentCreated:candidate.scope.showAgentCreated});
  };
- useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;sequence.current++}},[]);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;sequence.current++;readWait.current?.abort()}},[]);
  useLayoutEffect(()=>{
   const candidate=state.recentNavigation;
   if(waiting.current||!candidate||!newer(candidate))return;
@@ -211,11 +212,16 @@ export function useRecentShortcuts(host,state,act){
    const receipt=await patch(act,{navRecentLimit:wanted.limit,navShowAgentCreated:wanted.showAgentCreated});
    if(receipt?.accepted===false)throw Error(receipt.error||'Recent settings were not saved.');
    if(!mounted.current||ticket!==sequence.current)return;
-   const current=latest.current.host.getSnapshot(),candidate=current.recentNavigation;
-   if(!recentPageMatches(candidate,desired(wanted,current))
-    ||!Object.entries(scope).every(([key,value])=>candidate.scope[key]===value)
-    ||!(candidate.scope.viewRevision>=minRevision)||!newer(candidate))
-    throw Error('Recent could not be refreshed. The previous chats are kept.');
+   const controller=new AbortController();readWait.current=controller;
+   const candidate=await waitForSnapshot(latest.current.host,current=>{
+    if(!Object.entries(scope).every(([key,value])=>scopeFor(current)[key]===value))
+     throw Error('Recent changed during the read. The previous chats are kept.');
+    const page=current.recentNavigation;
+    return recentPageMatches(page,desired(wanted,current))
+     &&Object.entries(scope).every(([key,value])=>page.scope[key]===value)
+     &&page.scope.viewRevision>=minRevision&&newer(page)?page:null;
+   },{signal:controller.signal});
+   if(!mounted.current||ticket!==sequence.current)return;
    accept(candidate);intent.current=null;
   }catch(error){if(mounted.current&&ticket===sequence.current){uncertain.current=true;setError(error.message||'Recent could not be refreshed. The previous chats are kept.')}}
   finally{if(mounted.current&&ticket===sequence.current){waiting.current=false;setBusy(false)}}
@@ -226,9 +232,9 @@ export function useRecentShortcuts(host,state,act){
   const ticket=++sequence.current;waiting.current=true;setBusy(true);
   const scope=scopeFor(latest.current.state);
   try{
-   const receipt=await request('/api/actions',{method:'POST',body:{id:crypto.randomUUID(),action:'shell.query',args:{clientId:host.clientId,instanceId:host.instanceId}}});
+   const snapshot=await host.refreshResources();
    if(!mounted.current||ticket!==sequence.current)return;
-   const current=latest.current.host.getSnapshot(),read=receipt.result?.recentNavigation,live=current.recentNavigation;
+   const current=latest.current.host.getSnapshot(),read=snapshot?.recentNavigation,live=current.recentNavigation;
    // A shell snapshot received during this read may already be newer. Prefer
    // that evidence, never restore the delayed response over it.
    const after=(a,b)=>(a?.scope?.viewRevision??0)>(b?.scope?.viewRevision??0)
@@ -239,8 +245,8 @@ export function useRecentShortcuts(host,state,act){
      ?snapshot.view.navShowAgentCreated===true:value?.scope?.showAgentCreated
    });
    const matching=(value,snapshot)=>recentPageMatches(value,desired(savedSettings(value,snapshot),current));
-   const useLive=matching(live,current)&&(!matching(read,receipt.result)||after(live,read));
-   const candidate=useLive?live:read,saved=savedSettings(candidate,useLive?current:receipt.result);
+   const useLive=matching(live,current)&&(!matching(read,snapshot)||after(live,read));
+   const candidate=useLive?live:read,saved=savedSettings(candidate,useLive?current:snapshot);
    if(!recentPageMatches(candidate,desired(saved,current))
     ||!Object.entries(scope).every(([key,value])=>candidate.scope[key]===value)||!newer(candidate))
     throw Error('Recent changed during the read. Retry to read the current list.');

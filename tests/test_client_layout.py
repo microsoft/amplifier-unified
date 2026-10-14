@@ -39,6 +39,7 @@ async def test_layout_is_client_local_durable_and_does_not_rewrite_catalog(app, 
     await command(app, {'draft': 'Keep my unsent words'})
     with app.clients.bind('one'):
         before = app.browser_state()
+        page = app.projections.chats(app.state)
         own_queue = app.subscribe()
     with app.clients.bind('two'):
         other_queue = app.subscribe()
@@ -54,7 +55,9 @@ async def test_layout_is_client_local_durable_and_does_not_rewrite_catalog(app, 
         result = await command(app, {'navExpanded': True, 'navWidth': 300, 'canvasOverviewWidth': 340, 'canvasWidth': 720}, command_id='layout-one')
     assert result['state']['view']['navExpanded'] is True
     assert result['state']['view']['draft'] == 'Keep my unsent words'
-    assert result['state']['chatNavigation'] is before['chatNavigation']
+    assert 'chatNavigation' not in before and 'chatNavigation' not in result['state']
+    with app.clients.bind('one'):
+        assert app.projections.chats(app.state) is page
     assert own_queue.get_nowait()['view']['navWidth'] == 300
     assert other_queue.empty()
     assert app.clients.records['two'] == other

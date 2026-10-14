@@ -140,6 +140,8 @@ class ShellModules:
         # Expanded prefixes belong to the attached document/module session,
         # never the durable records copied to a reload or another client.
         self.recent_limits = {}
+        from .shell_resources import ShellResources
+        self.resources = ShellResources(self)
 
     def get(self, kind, identity, default=None):
         row = self.db.execute('SELECT value FROM shell_records WHERE kind=? AND id=?', (kind, identity)).fetchone()
@@ -178,6 +180,7 @@ class ShellModules:
         # event. A host epoch also repairs reconnects after a restart.
         self.change_tokens[identity] = self.change_tokens.get(identity, 0) + 1
         self.service._client_snapshots.pop(identity, None)
+        observed = None
         for queue in self.service.queues:
             if self.service.queue_sessions.get(queue) is not None:
                 continue
@@ -185,7 +188,16 @@ class ShellModules:
                 continue
             if queue.full():
                 queue.get_nowait()
-            queue.put_nowait({'shellClientId': identity})
+            if self.resources.registered(identity) and self.service.queue_clients.get(queue) == identity:
+                # A complete client snapshot survives bounded-queue coalescing.
+                # The existing transport sends only changed resource leaves;
+                # a dropped intermediate observation cannot lose a page update.
+                if observed is None:
+                    with self.service.clients.bind(identity):
+                        observed = self.service.browser_state()
+                queue.put_nowait(observed)
+            else:
+                queue.put_nowait({'shellClientId': identity})
 
     def change_token(self, identity):
         return f'{self.service.instance_id}:{self.change_tokens.get(identity, 0)}'
@@ -281,7 +293,7 @@ class ShellModules:
                     return {'status': 'deferred', 'instanceId': old['id'], 'reason': 'State schema migration is not supported; the current module remains active.'}
         return None
 
-    def inspect(self, identity, *, snapshots=False, recovery=False, navigation_resources=None):
+    def inspect(self, identity, *, snapshots=False, recovery=False, navigation_resources=None, bundled=False):
         client = self.client(identity)
         composition = DEFAULT if recovery else client['preview']['composition'] if client['preview'] else client['composition']
         result = {'clientId': identity, 'apiVersion': API, **client, 'effectiveComposition': composition, 'resolvedInstances': components.resolved(composition),
@@ -293,7 +305,15 @@ class ShellModules:
                 result['packages'][package] = {'manifest': self.manifest(package), 'url': None if package in BUILTINS else f'/api/shell/packages/{package}.mjs'}
             except Exception as exc:
                 result['packages'][package] = {'error': str(exc)}
-        if snapshots:
+        if bundled:
+            # Built-in controls consume the browser state stream. Descriptors
+            # and activation generations are independent of their live data.
+            result['instanceGenerations'] = {item['id']: client['views'].get(item['id'], {}).get('generation', 0)
+                                             for item in components.resolved(composition)}
+            result['hostInstanceId'] = self.service.instance_id
+            result['shellBootstrapKey'] = self.resources.bootstrap_key(identity)
+            result['shellResources'] = self.resources.snapshot(identity)
+        elif snapshots:
             result['snapshots'] = {}
             for item in components.resolved(composition):
                 if not result['packages'][item['package']].get('error'):
@@ -339,7 +359,7 @@ class ShellModules:
             view['navChatScope'] = 'all'
         return {**state, 'selectedWorkspaceId': workspace_id, 'view': view}
 
-    def navigation(self, client, instance, *, identity=None, navigation_resources=None):
+    def navigation(self, client, instance, *, identity=None, navigation_resources=None, context_visible_ids=None):
         from .shell_navigation_demand import resources_for
         requested = resources_for(instance, navigation_resources)
         wants = lambda name: requested is None or name in requested
@@ -389,6 +409,10 @@ class ShellModules:
         visible_ids = {row['id'] for page in (chat_page, home, pins, recent, search, workspace_chats)
                        if page is not None for row in page['items']} | {row['id'] for row in (recent_navigation['items'] if recent_navigation is not None else [])}
         visible_ids.update(item['row']['id'] for item in (pinned_navigation['items'] if pinned_navigation is not None else []) if item['kind'] == 'session')
+        # A context-only refresh observes the rows in retained active pages,
+        # without rebuilding those pages just to recover their identities.
+        if context_visible_ids is not None:
+            visible_ids.update(context_visible_ids)
         # Exact review receipts for these bounded rows; never error bodies or
         # unrelated settings/permission notices from the full attention inbox.
         error_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
@@ -399,7 +423,8 @@ class ShellModules:
         shortcuts = projections.workspaces({**scoped, 'view': {**view, 'navWorkspaceMode': 'recent', 'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}}) if wants('workspaceShortcuts') else None
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
-        result = {'view': view, 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
+        result = {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
+                'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
                 'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
                 'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
@@ -597,12 +622,14 @@ class ShellModules:
             if any(row['id'] == target and row['package'] == 'builtin.chats' for row in composition['instances']):
                 item = client['views'].setdefault(target, {'view': {}, 'dirty': False})
                 item['view'].update(navChatScope='workspace', navWorkspaceList=False, navFilter='', navStatusFilter='all')
+                item['viewRevision'] = item.get('viewRevision', 0) + 1
                 self.put('client', identity, client)
                 self.notify(identity)
         if args['action'] == 'session.pin':
             item = client['views'].setdefault(args['instanceId'], {'view': {}, 'dirty': False})
             page = self.navigation(client, instance)['chatNavigation']
             item['view']['navChatPage'] = {**page['scope'], 'index': 0}
+            item['viewRevision'] = item.get('viewRevision', 0) + 1
             self.put('client', identity, client)
             self.notify(identity)
 
@@ -670,8 +697,12 @@ class ShellModules:
                 item['view']['navRecentRevision'] = item['view'].get('navRecentRevision', 0) + 1
             if 'dirty' in args:
                 item['dirty'] = args['dirty']
+            item['viewRevision'] = item.get('viewRevision', 0) + 1
             self.put('client', identity, client)
-            result = {'status': 'updated'}
+            result = {'status': 'updated', 'shellView': {
+                'instanceId': args['instanceId'], 'generation': item.get('generation', 0),
+                'viewRevision': item['viewRevision'],
+                'view': copy.deepcopy(self.scoped_state(client, instance)['view'])}}
             changed = True
         elif action == 'shell.report':
             preview_id = client['preview']['id'] if client['preview'] else None
@@ -728,6 +759,7 @@ class ShellModules:
                         if action == 'shell.recover':
                             view['dirty'] = False
                             view['view'].pop('workspaceDraft', None)
+                            view['viewRevision'] = view.get('viewRevision', 0) + 1
                 if action == 'shell.changes.preview':
                     client['preview'] = {'id': args['changeId'], 'composition': composition}
                 else:

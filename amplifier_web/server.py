@@ -615,14 +615,54 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         except ValidationError:
             raise AppError('A valid shell clientId is required.') from None
         navigation_resources = parse_navigation_resources(request.query.get('navigationResources'))
+        bundled = request.query.get('bundled') == '1'
+        if bundled:
+            demand_id, scope = shell_demand(request.query.get('demandId'), request.query.get('scope'))
         # inspect may initialize a client and persist appearance defaults.
         # It must not commit another operation's resource savepoints.
         async with service.lock:
+            if bundled:
+                service.shell.resources.register(client_id, demand_id, navigation_resources, scope,
+                                                 recovery=request.query.get('recovery') == '1')
+                service._client_snapshots.pop(client_id, None)
             result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1',
-                                           navigation_resources=navigation_resources)
-        if request.query.get('compact') == '1':
+                                           navigation_resources=navigation_resources, bundled=bundled)
+        if request.query.get('compact') == '1' and not bundled:
             from .shell_wire import compact
             result = compact(result)
+        from .performance_diagnostics import count
+        count(service, 'shell.bootstrap.read' if bundled else 'shell.inspect.read')
+        return web.json_response(result)
+
+    def shell_demand(demand, scope):
+        try:
+            if not isinstance(demand, str) or not demand.isascii() or not demand.isdecimal() or len(demand) > 16:
+                raise ValueError
+            if not isinstance(scope, str) or len(scope) > 4096:
+                raise ValueError
+            return int(demand), json.loads(scope)
+        except (ValueError, RecursionError):
+            raise AppError('Supply a valid shell demand and scope.', 400) from None
+
+    async def shell_resources(request):
+        payload = await request.json()
+        if (not isinstance(payload, dict) or set(payload) - {'clientId', 'demandId', 'resources', 'scope', 'reason'}
+                or not {'clientId', 'demandId', 'resources', 'scope'} <= set(payload)):
+            raise AppError('Invalid shell resource request.', 400)
+        # Labels are fixed diagnostics, never free-form input, filters or paths.
+        reason = payload.get('reason', 'demand')
+        if reason not in {'demand', 'scope', 'reconnect', 'resume', 'missing', 'retry', 'visibility', 'manual'}:
+            raise AppError('Invalid shell resource request reason.', 400)
+        identity = payload['clientId']
+        if not isinstance(identity, str) or identity != service.clients.current.get():
+            raise AppError('Shell resources must target this attached client.', 400)
+        async with service.lock:
+            service.shell.resources.register(identity, payload['demandId'], payload['resources'], payload['scope'],
+                recovery=service.shell.resources.clients.get(identity, {}).get('recovery', False))
+            service._client_snapshots.pop(identity, None)
+            result = service.shell.resources.snapshot(identity)
+        from .performance_diagnostics import count
+        count(service, 'shell.resources.request.' + reason)
         return web.json_response(result)
 
     async def shell_package(request):
@@ -633,6 +673,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.Response(text=source, content_type='text/javascript', headers={'Cache-Control': 'no-store'})
 
     app.router.add_get('/api/shell', shell_state)
+    app.router.add_post('/api/shell/resources', shell_resources)
     app.router.add_get('/api/shell/packages/{digest}.mjs', shell_package)
 
     if voice:

@@ -9,13 +9,6 @@ export function navigationResources(state){
  return resources.sort();
 }
 
-export function navigationDemandKey(state){
- const view=state?.view||{},surface=view.workSurface||'chat';
- return JSON.stringify([navigationResources(state),surface,
-  surface==='workspace'?view.workWorkspaceId??null:null,
-  surface==='workspace'?view.workWorkspaceTab||'chats':null]);
-}
-
 export function hasNavigationResource(snapshot,resource){
  return Array.isArray(snapshot?.navigationResources)&&snapshot.navigationResources.includes(resource);
 }

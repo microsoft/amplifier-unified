@@ -38,6 +38,24 @@ Python initially. A faster language cannot remove unnecessary queries, unsafe
 invalidation, or ownership ambiguity. Profile an isolated component before
 considering a Rust implementation behind the same interface.
 
+## Implementation progress, October 14
+
+Releases .142/.143 bound the requested navigation pages and remove duplicate
+ordinary-state projections. Live .143 measurement reduced shell response size and
+cost, but did not stop repeated reads: its broad `shellDataKey` changed with no
+selection, status, model, Canvas or shell-token change. Selected Work reconstruction
+also remains slow on large histories; these are separate outstanding costs.
+
+The .144 candidate replaces that refresh fan-in with the
+[existing-stream shell resource contract](../docs/browser-state-transport.md#shell-bootstrap-and-active-resources).
+Descriptors load once per host/composition generation. Explicit demand selects
+pages, canonical committed changes invalidate their semantic dependencies, and
+immutable resource revisions travel through the existing state-delta baseline.
+Independent component snapshots retain their SDK contract. Bounded diagnostics
+record reasons and timings without conversation content. Qualification and live
+adoption are separate evidence; this entry does not claim the candidate is
+published or that selected-history performance has been solved.
+
 ## Ownership and data flow
 
 ```mermaid

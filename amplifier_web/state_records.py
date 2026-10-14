@@ -113,8 +113,15 @@ def save(db, state, references, session_ids, global_keys=()):
         if key in {'sessions', 'runtimeControl', 'revision'}:
             raise ValueError('Global records cannot replace scoped session authority.')
         values.append(('global', key, {'present': key in state, 'value': state.get(key)}))
-    db.executemany(UPSERT,
-                   ((kind, identity, json.dumps(value)) for kind, identity, value in values))
+    # The canonical conditional write already knows whether a global actually
+    # changed. Return those owner keys for post-commit read-model invalidation;
+    # readers need neither a second registry scan nor a serialized-value hash.
+    changed_globals = set()
+    for kind, identity, value in values:
+        changed = db.execute(UPSERT, (kind, identity, json.dumps(value))).rowcount
+        if kind == 'global' and changed:
+            changed_globals.add(identity)
+    return changed_globals
 
 
 def load_working(db, identities=()):
@@ -182,8 +189,9 @@ def save_working(db, state, references, identities, *, global_keys=None, deleted
         references = {identity: value for identity, value in references.items() if identity not in deleted}
         state = {**state, 'runtimeControl': {identity: value for identity, value in state.get('runtimeControl', {}).items()
                                             if identity not in deleted}}
-    save(db, state, references, identities | deleted, global_keys)
+    changed_globals = save(db, state, references, identities | deleted, global_keys)
     # Membership now lives in keyed records, not a complete ID array which must
     # be decoded at every restart. Explicit load() already enumerates records.
     db.execute('INSERT INTO state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value '
                'WHERE state.value != excluded.value', (EMPTY_BASE,))
+    return changed_globals
