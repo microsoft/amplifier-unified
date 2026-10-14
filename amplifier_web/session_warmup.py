@@ -5,6 +5,24 @@ import asyncio
 import copy
 from pathlib import Path
 
+from .performance_diagnostics import measure
+
+
+def preparation_source(session):
+    """Detach runtime startup inputs without traversing retained display history.
+
+    Normal workers restore canonical history themselves. Only a fork explicitly
+    needs the supplied message context; activity projections never start work.
+    Keep these inputs aligned with RuntimeManager._start_locked's configuration.
+    """
+    fields = ('id', 'workspace', 'workingDirectory', 'executionRevision', 'bundle',
+              'selection', 'runtimeSessionId', 'nativeIdentity', 'forkContext',
+              'replaceSavedSelection', 'bundleReplacement')
+    source = {key: session[key] for key in fields if key in session}
+    if session.get('forkContext'):
+        source['messages'] = session.get('messages', [])
+    return copy.deepcopy(source)
+
 
 class SessionWarmup:
     def __init__(self, service):
@@ -40,7 +58,8 @@ class SessionWarmup:
                 session = self.service._session(identity)
                 if not self.allowed(session):
                     return
-                source = copy.deepcopy(session)
+                with measure(self.service, 'warmup.snapshot', synchronous=True, session_id=identity):
+                    source = preparation_source(session)
 
             preparing = True
 
