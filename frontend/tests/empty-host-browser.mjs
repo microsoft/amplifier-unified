@@ -18,7 +18,9 @@ async function stopFixture(){
   fixture.kill('SIGTERM');
  });
  assert.equal(escalated,false,'Fixture cleanup exceeded its graceful shutdown budget');
- assert.deepEqual(result,[0,null],'Fixture must finish application and temporary-directory cleanup');
+ // Windows kill uses TerminateProcess, not a catchable POSIX signal.
+ if(process.platform==='win32')assert.ok(result[0]===0||result[1]==='SIGTERM','Fixture must exit after termination');
+ else assert.deepEqual(result,[0,null],'Fixture must finish application and temporary-directory cleanup');
 }
 try{
  const url=await new Promise((resolve,reject)=>{

@@ -8,6 +8,7 @@ import sys
 import pytest
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='SIGTERM graceful cleanup is a POSIX fixture contract')
 @pytest.mark.parametrize('mode', [None, '--first-use', '--startup-failure'])
 async def test_sigterm_closes_fixture_and_removes_owned_temporary_home(tmp_path, mode):
     fixture = Path(__file__).parent / 'fixtures/empty_host_ui_server.py'

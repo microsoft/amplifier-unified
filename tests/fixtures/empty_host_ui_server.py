@@ -161,7 +161,10 @@ async def main(home):
     app["allowed_origins"] = app["allowed_origins"] | {url}
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for signum in (signal.SIGTERM, signal.SIGINT):
+    # Windows event loops cannot register Unix signals; preserve fixture startup
+    # there while POSIX qualification exercises graceful application teardown.
+    shutdown_signals = (signal.SIGTERM, signal.SIGINT) if os.name == 'posix' else ()
+    for signum in shutdown_signals:
         loop.add_signal_handler(signum, stopped.set)
     print(json.dumps({"url": url}), flush=True)
     try:
@@ -170,7 +173,7 @@ async def main(home):
         try:
             await runner.cleanup()
         finally:
-            for signum in (signal.SIGTERM, signal.SIGINT):
+            for signum in shutdown_signals:
                 loop.remove_signal_handler(signum)
 
 
