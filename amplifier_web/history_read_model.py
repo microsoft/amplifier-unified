@@ -145,11 +145,24 @@ class ModelStore:
         if row is None or row[2] > MAX_MODEL_BYTES:
             return None
         receipt, body = json.loads(row[0]), json.loads(row[1])
+        if (not isinstance(receipt, dict) or not isinstance(body, dict)
+                or not isinstance(receipt.get('inputDigest'), str)
+                or not isinstance(receipt.get('paths'), list)
+                or not isinstance(receipt.get('revisions'), list)
+                or not isinstance(receipt.get('proofs'), dict)):
+            raise ValueError('Invalid cached model receipt')
         if receipt.get('schema') != SCHEMA:
             self.remove(key)
             return None
         body['nodes'] = [json.loads(row[0]) for row in self.db.execute(
             'SELECT body FROM nodes WHERE identity=? ORDER BY position', (key,))]
+        if not all(isinstance(node, dict) and isinstance(node.get('id'), str) for node in body['nodes']):
+            raise ValueError('Invalid cached model nodes')
+        for proof in receipt['proofs'].values():
+            if (not isinstance(proof, dict) or type(proof.get('offset')) is not int
+                    or proof['offset'] < 0 or not isinstance(proof.get('identity'), str)
+                    or not isinstance(proof.get('sha256'), str) or len(proof['sha256']) != 64):
+                raise ValueError('Invalid cached source proof')
         return {**receipt, 'tree': body, 'bytes': row[2]}
 
     def save(self, key, value, *, source_only=False, positions=None):
@@ -340,12 +353,16 @@ class SelectedHistoryReadModel:
                     if not isinstance(data, dict) or data.get('kind') in {'tool', 'llm'}:
                         return None
                     name = event.get('event')
+                    if not isinstance(name, str):
+                        return None
                     if name not in NON_WORK_EVENTS:
                         # Appending a completion to an existing child tool cannot
                         # create a model call, child admission or root transcript
                         # association. Root association changes remain conservative.
                         sid = data.get('session_id') or event.get('session_id') or proof['identity']
                         call = data.get('tool_call_id') or data.get('call_id')
+                        if not isinstance(sid, str) or not isinstance(call, str):
+                            return None
                         candidates = by_canonical.get((sid, f'tool:{sid}:{call}'), ())
                         if (name not in {'tool:post', 'tool:error'} or len(candidates) != 1
                                 or sid in {root, inputs['id']} and transcript_present
@@ -354,8 +371,10 @@ class SelectedHistoryReadModel:
                         position = candidates[0]
                         original = updates.get(position, nodes[position])
                         references = original.get('_eventFields', {}).values()
+                        from .delegate_exchange import tool_name
                         if (not original.get('_eventFields') or any(row.get('path') != path for row in references)
-                                or original.get('label') in {'todo', 'delegate', 'live_worker'}):
+                                or not isinstance(original.get('startedAt'), (int, float))
+                                or tool_name(original) in {'todo', 'delegate', 'live_worker'}):
                             return None
                         index = EventIndex(Path(path), proof['identity'])
                         canonical = f'tool:{sid}:{call}'

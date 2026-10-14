@@ -533,3 +533,58 @@ async def test_real_process_host_publication_and_passive_receipt(source, tmp_pat
         assert session['execution'] == EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
     finally:
         await view.close()
+
+
+@pytest.mark.parametrize('label', ['todo', 'namespace.delegate', 'namespace.live_worker'])
+def test_completion_with_derived_semantics_uses_reference(source, model, label):
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': label, 'tool_input': {'command': 'fixture'}}, 10)
+    inspect(model, session)
+    append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'complete'}, 80)
+    expected = EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
+    result = inspect(model, session)
+    assert result['diagnostics']['counters']['events.model.rebuilt'] == 1
+    assert session['execution'] == expected
+
+
+def test_completion_that_establishes_first_timestamp_rebuilds_order(source, model):
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash', 'tool_input': {}}, None)
+    append(path, 'tool:post', {'tool_call_id': 'two', 'tool_name': 'bash', 'result': 'done'}, 20)
+    inspect(model, session)
+    append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'complete'}, 80)
+    expected = EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
+    result = inspect(model, session)
+    assert result['diagnostics']['counters']['events.model.rebuilt'] == 1
+    assert session['execution'] == expected
+
+
+@pytest.mark.parametrize('name,data', [([], {}), ('tool:post', {'tool_call_id': ['invalid']}), ('tool:post', {'session_id': [], 'tool_call_id': 'leaf'})])
+def test_malformed_append_uses_reference_instead_of_poisoning_model(source, model, name, data):
+    session, path = source
+    family(session, path, 2)
+    inspect(model, session)
+    append(path, name, data, 80)
+    expected = EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
+    result = inspect(model, session)
+    assert result['status'] == 'complete'
+    assert session['execution'] == expected
+
+
+def test_malformed_disposable_receipt_rebuilds_requested_native_source(source, tmp_path):
+    session, path = source
+    family(session, path, 2)
+    home = tmp_path / 'host'
+    first = models.SelectedHistoryReadModel(home)
+    inspect(first, session)
+    first.store.db.execute("UPDATE models SET receipt='{}'")
+    first.store.db.commit()
+    first.close()
+    second = models.SelectedHistoryReadModel(home)
+    try:
+        result = inspect(second, session)
+        assert result['diagnostics']['counters']['events.model.cache_invalid'] == 1
+        assert result['diagnostics']['counters']['events.model.rebuilt'] == 1
+        assert len(session['execution']['nodes']) == 6
+    finally:
+        second.close()
