@@ -417,3 +417,14 @@ and browser profiles remain unallocated by this workspace adapter. A documented
 working-files namespace is not provisioned isolation. Unknown operation cwd,
 remote publishing state or resources outside these owners must remain explicit
 coverage limits, never reported absent or safely isolated.
+
+### Notification display provenance — 2026-10-14
+
+A retained versioned notification is labelled as an Amplifier update when its
+exact command, payload binding, original request and per-revision wait claim
+match. This covers negative reports, observations, preparation failures and
+older successful revisions after a later report. It establishes authorship, not
+current qualification, permission or successful dependency completion. Same-root
+preparation updates require the same exact system claim; arbitrary self-messages
+and imported or prose-only attribution remain unverified. Reads use only the
+requested page's bounded command identities and never open the producing chat.
