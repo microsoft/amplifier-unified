@@ -267,6 +267,7 @@ class Publisher:
             self._db.execute("PRAGMA synchronous=FULL")
             self._db.execute("CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, body TEXT NOT NULL, PRIMARY KEY(kind,id))")
             self._db.execute("CREATE TABLE IF NOT EXISTS receipts (session TEXT, request TEXT, fingerprint TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session,request))")
+            self._db.execute("CREATE INDEX IF NOT EXISTS publishing_resources ON records(json_extract(body,'$.sessionId'),kind,id)")
             self._recover()
         except BaseException:
             self._lock_file.close()
@@ -661,6 +662,52 @@ class Publisher:
                     if kind == "site":
                         record["revision"] += 1
                     self._put(kind, record)
+
+    def resources(self, session_id, limit=25, before=None):
+        """Observe one indexed task page through the actual listener owner.
+
+        The cursor is [kind,id]; only selected retained listeners are inspected.
+        Release manifests, receipts, and unrelated task history stay on disk.
+        """
+        _identifier(session_id, "session_id")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise PublishingError("invalid_argument", "Resource page size must be between 1 and 100")
+        if before is not None and (not isinstance(before, list) or len(before) != 2
+                or before[0] not in {'preview', 'site'} or not isinstance(before[1], str)):
+            raise PublishingError("invalid_argument", "Invalid publishing resource cursor")
+        with self._mutex:
+            self._check_open()
+            where = "json_extract(body,'$.sessionId')=? AND kind IN ('preview','site')"
+            params = [session_id]
+            if before:
+                where += " AND (kind,id)>(?,?)"
+                params.extend(before)
+            # Site/preview records contain no file manifests; still whitelist
+            # the projection rather than transporting future owner-only fields.
+            rows = self._db.execute("SELECT kind,id FROM records WHERE " + where +
+                                    " ORDER BY kind,id LIMIT ?", (*params, limit + 1)).fetchall()
+            items = []
+            for kind, identity in rows[:limit]:
+                record = self._get(kind, identity)
+                listeners = self._previews if kind == 'preview' else self._sites
+                server = listeners.get(identity)
+                if record['status'] == 'running' and (server is None or not server.thread.is_alive()):
+                    stale = listeners.pop(identity, None)
+                    if stale:
+                        stale.stop()
+                    record.update(status='interrupted', previousUrl=record.get('url'), url=None, updatedAt=_now())
+                    if kind == 'site':
+                        record['revision'] += 1
+                    self._put(kind, record)
+                running = record['status'] == 'running' and server is not None and server.thread.is_alive()
+                release = record.get('releaseId')
+                items.append({**{key: record.get(key) for key in
+                              ('id', 'sessionId', 'siteId', 'releaseId', 'status', 'updatedAt', 'accessPolicy')},
+                              'kind': kind, 'owner': 'publishing', 'evidence': 'listener-owner',
+                              'url': server.url if running else None,
+                              'port': server.server_port if running else None,
+                              'releaseDirectory': str(self._content / release / 'files') if release else None})
+            return {'items': items, 'nextCursor': list(rows[limit - 1]) if len(rows) > limit else None}
 
     def export_release(self, release_id, session_id):
         """Return verified immutable bytes as a portable import payload.
