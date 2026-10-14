@@ -95,6 +95,36 @@ async def finish_actions(app):
         await asyncio.wait_for(asyncio.gather(*list(app.tasks)), timeout=5)
 
 
+async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_path, app_factory, monkeypatch):
+    from amplifier_web import automatic_history
+    native_session(tmp_path / 'native-project', 'bounded-reader', [
+        {'role': 'user' if i % 2 == 0 else 'assistant', 'content': f'Message {i}'}
+        for i in range(200)])
+    app = app_factory()
+    await app.history.refresh()
+    row = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'bounded-reader')
+    original = automatic_history.read_transcript
+    seen = []
+    def read(source, **kwargs):
+        assert not {'execution', 'workers', 'configuration', 'historyActivity'} & source.keys()
+        if kwargs['before'] is None:
+            assert 'messages' not in source
+        else:
+            assert all(set(message) <= {'nativeIndex', 'nativeMessageId', 'role', 'text'}
+                       for message in source['messages'])
+        seen.append(kwargs)
+        return original(source, **kwargs)
+    monkeypatch.setattr(automatic_history, 'read_transcript', read)
+    await app.history.load(row['id'], limit=100)
+    assert len(row['messages']) == 100
+    assert row['messages'][0]['text'] == 'Message 100'
+    await app.history.load(row['id'], before=100, limit=100)
+    assert [message['text'] for message in row['messages']] == [f'Message {i}' for i in range(200)]
+    assert not row.get('historyError')
+    assert not app.runtime.started and not app.runtime.sent
+    assert seen == [{'before': None, 'limit': 100}, {'before': 100, 'limit': 100}]
+
+
 async def test_workspace_availability_tracks_real_folders_without_removing_history(tmp_path, app_factory):
     native = tmp_path / 'cli' / 'same-name'
     saved = native_session(native, 'cli-root')

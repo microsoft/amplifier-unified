@@ -70,6 +70,34 @@ async def test_idle_refresh_skips_projection_but_detects_appends_replacements_an
     assert calls.count('read') == 4
 
 
+@pytest.mark.parametrize('positions,expected', [
+    ([0, 2, 4], 'message-1'),
+    ([2, 0, 4], 'message-1'),  # Unsorted windows keep their presentation order.
+    ([0, 2, 2, 4], 'message-2'),  # Last duplicate within the range wins.
+    ([0, 4], 'message-0'),
+])
+def test_native_action_anchor_preserves_window_order(source, positions, expected):
+    session, path = source
+    session['messages'] = [{'id': f'message-{i}', 'nativeIndex': position,
+                            'role': 'user' if position == 0 else 'assistant'}
+                           for i, position in enumerate(positions)]
+    index = EventIndex(path, 'native')
+    index.nodes['tool'] = {'id': 'tool', 'kind': 'tool', 'label': 'bash',
+                           'sessionId': 'native', 'eventOrder': 7,
+                           'phase': 'completed', 'startedAt': 10, 'endedAt': 11}
+    index.refresh = lambda: True
+    index.associations = lambda _: {7: {'turn': 0, 'position': 3}}
+    index.association_revision = (None, (None, None, None))
+    view = EventLogView(None)
+    view.indexes[str(path)] = index
+    tree = view.read(session)
+    assert tree['nodes'][0]['anchorMessageId'] == expected
+    turn_anchor = next(row['id'] for row in session['messages'] if row['nativeIndex'] == 0)
+    assert tree['turns'][0]['anchorMessageId'] == turn_anchor
+    assert tree['turns'][0]['startedAt'] == 10
+    assert tree['turns'][0]['endedAt'] == 11
+
+
 def test_canonical_body_exact_unredacted_untruncated_and_never_written(source,tmp_path):
     session,path=source
     arguments={'command':'show fixture','token':'user-owned-fixture-token','reasoning':'a literal tool argument'}

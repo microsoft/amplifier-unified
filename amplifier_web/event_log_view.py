@@ -651,6 +651,20 @@ class EventLogView:
             self.read_revisions[session['id']] += tuple(
                 (str(path), stamp) for path, stamp in zip(transcript_paths, root_index.association_revision[1]))
         native_messages = [row for row in messages if type(row.get('nativeIndex')) is int]
+        native_by_index = {}
+        for row in native_messages:
+            native_by_index.setdefault(row['nativeIndex'], row)
+        native_positions = [row['nativeIndex'] for row in native_messages]
+        native_ordered = all(a <= b for a, b in zip(native_positions, native_positions[1:]))
+
+        def preceding_native(start, stop):
+            if native_ordered:
+                position = bisect_right(native_positions, stop) - 1
+                return native_messages[position] if position >= 0 and native_positions[position] >= start else None
+            # Preserve original presentation order for older unsorted windows.
+            return next((row for row in reversed(native_messages)
+                         if start <= row['nativeIndex'] <= stop), None)
+
         associated_turns = {}
         for node in nodes:
             association = associations.get(node.get('eventOrder')) if node.get('sessionId') in aliases else None
@@ -714,7 +728,7 @@ class EventLogView:
             at = node.get('startedAt')
             association = associations.get(node.get('eventOrder')) if node.get('sessionId') in aliases else None
             if association and native_messages:
-                anchor = next((row for row in native_messages if row['nativeIndex'] == association['turn']), None)
+                anchor = native_by_index.get(association['turn'])
                 # Native history and live admission describe the same input.
                 # Preserve its host turn rather than leaving an empty running
                 # placeholder beside a second canonical work group. An anchor
@@ -731,9 +745,9 @@ class EventLogView:
                 turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
                                       'canonicalHistory': True, 'phase': 'completed'})
                 if association['position'] is not None:
-                    preceding = [row for row in native_messages if association['turn'] <= row['nativeIndex'] <= association['position']]
-                    if preceding:
-                        node['anchorMessageId'] = preceding[-1]['id']
+                    preceding = preceding_native(association['turn'], association['position'])
+                    if preceding is not None:
+                        node['anchorMessageId'] = preceding['id']
                     elif key in host_turns:
                         node.pop('anchorMessageId', None)  # Keep live message/timing placement until its index arrives.
                     else:
@@ -814,11 +828,14 @@ class EventLogView:
                     # incomplete. This is pre-existing data, never a new capture.
                     nodes.append(copy.deepcopy(row))
         nodes.sort(key=lambda row: (row.get('startedAt') or 0, row.get('eventOrder', 0)))
+        foreground_by_turn = {}
+        for row in nodes:
+            if row.get('lifecycle') != 'background':
+                foreground_by_turn.setdefault(row.get('turnId'), []).append(row)
         for turn in turns.values():
             # Naming and other auxiliary calls retain their own lifecycle and
             # usage, but cannot reopen or extend a completed foreground turn.
-            members = [row for row in nodes if row.get('turnId') == turn['id']
-                       and row.get('lifecycle') != 'background']
+            members = foreground_by_turn.get(turn['id'], [])
             starts = [row['startedAt'] for row in members if isinstance(row.get('startedAt'), (int, float))]
             ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
             if starts:turn['startedAt'] = min(starts)

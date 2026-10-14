@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.131",
+      "title": "Keep chat switching independent of navigation refreshes",
+      "changes": [
+        "A delayed navigation refresh no longer holds up subsequent chat selections. Continuous background updates cannot indefinitely extend a completed refresh request.",
+        "History loading copies only the inputs needed to read messages and paging anchors, avoiding unrelated execution and configuration payloads.",
+        "Long execution histories use indexed message placement and grouped turn timing instead of repeatedly scanning the complete history.",
+        "Further investigation of intermittent server latency continues. These fixes do not establish that every live-server delay is resolved."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.130",
       "title": "Faster chat navigation and background maintenance",
       "changes": [
