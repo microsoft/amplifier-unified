@@ -2,12 +2,14 @@
 import asyncio
 from collections import OrderedDict
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
 import os
 import re
 import stat
+import time
 from pathlib import Path
 
 
@@ -289,7 +291,46 @@ def resolve(db, identity, value):
     return value
 
 
-def references(value):
+class ReferenceBudgetExceeded(ValueError):
+    def __init__(self, reason):
+        super().__init__('Background resource roots exceeded the ' + reason + ' budget.')
+        self.reason = reason
+
+
+class ReferenceBudget:
+    """Cooperative background admission, never a partial reachability proof.
+
+    Check fields as well as containers so one wide list cannot escape the work
+    limit. JSON is indivisible; refuse oversized records before decoding and
+    check time again afterwards. Explicit/offline collection has no such budget.
+    """
+    def __init__(self, *, seconds=0.020, fields=50_000, json_chars=262_144, clock=None):
+        self.clock = clock or time.monotonic
+        self.deadline = self.clock() + seconds
+        self.max_fields, self.max_json_chars = fields, json_chars
+        self.fields = 0
+
+    def check(self):
+        if self.clock() >= self.deadline:
+            raise ReferenceBudgetExceeded('deadline')
+
+    def step(self):
+        self.fields += 1
+        if self.fields > self.max_fields:
+            raise ReferenceBudgetExceeded('fields')
+        if self.fields % 64 == 0:
+            self.check()
+
+    def decode(self, text):
+        self.check()
+        if len(text) > self.max_json_chars:
+            raise ReferenceBudgetExceeded('json-size')
+        value = json.loads(text)
+        self.check()
+        return value
+
+
+def references(value, *, budget=None):
     """Walk containers, not every scalar, without hydrating cold payloads.
 
     Shared projections can expose the same mutable graph several times. Keep a
@@ -299,6 +340,8 @@ def references(value):
     from .cold_display import ColdRecord
     pending, seen, visited = [value], {}, 0
     while pending:
+        if budget is not None:
+            budget.step()
         current = pending.pop()
         if isinstance(current, dict):
             if type(current) is dict or isinstance(current, ColdRecord):
@@ -322,6 +365,8 @@ def references(value):
         if isinstance(reference, str):
             yield reference
         for child in children:
+            if budget is not None:
+                budget.step()
             # Most fields are strings/numbers. Avoid a recursive generator and
             # Mapping ABC checks for ordinary JSON scalars on this hot path.
             kind = type(child)
@@ -331,22 +376,33 @@ def references(value):
                 pending.append(child)
 
 
-def retained_references(db, state):
+def retained_references(db, state, *, budget=None, phase=None):
     """References from complete state and durable client/operation records."""
-    pending = list(references(state))
+    with phase('live') if phase else nullcontext():
+        if budget is not None:
+            budget.check()
+        pending = list(references(state, budget=budget))
+        if budget is not None:
+            budget.check()
     # A hydrated mutable field can drop its in-memory cold reference before its
     # next save. The last committed global manifest still owns that exact blob.
-    from .state_records import load
-    saved = load(db) if db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() else None
-    if saved:
-        pending.extend(references(saved))
-    # Persisted client records remain roots even before ClientViews is loaded
-    # at startup, and when their browser is disconnected or another is bound.
-    for table in ('smart_tool_operations', 'client_views', 'conversation_shares', 'output_records'):
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
-            for (text,) in db.execute('SELECT value FROM ' + table):
-                pending.extend(references(json.loads(text)))
+    with phase('durable') if phase else nullcontext():
+        from .state_records import load
+        decode = budget.decode if budget is not None else json.loads
+        saved = load(db, decode=decode) if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() else None
+        if saved:
+            pending.extend(references(saved, budget=budget))
+        # Persisted client records remain roots even before ClientViews is loaded
+        # at startup, and when their browser is disconnected or another is bound.
+        for table in ('smart_tool_operations', 'client_views', 'conversation_shares', 'output_records'):
+            if budget is not None:
+                budget.check()
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
+                for (text,) in db.execute('SELECT value FROM ' + table):
+                    pending.extend(references(decode(text), budget=budget))
+        if budget is not None:
+            budget.check()
     return pending
 
 

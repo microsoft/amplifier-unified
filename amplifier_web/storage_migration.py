@@ -178,21 +178,39 @@ async def _maintenance_async(service):
     deletion, recheck every root and source index under the writer boundary.
     A changed, unavailable or uncertain graph defers the sweep in its entirety.
     """
-    from .resource_files import retained_references, detach, ReferenceEdges, settle_worker
+    from .resource_files import (retained_references, detach, ReferenceEdges, settle_worker,
+                                 ReferenceBudget, ReferenceBudgetExceeded)
     from .performance_diagnostics import measure, count
 
     edges = getattr(service, '_resource_edges', None)
     if edges is None:
         edges = service._resource_edges = ReferenceEdges()
     before = (edges.hits, edges.misses, edges.bytes_read)
+    deferred = None
 
     def roots():
+        nonlocal deferred
         state = _roots(service)
         rows = state if isinstance(state, list) else [state]
         if any(isinstance(row, dict) and row.get('_viewRecoveryPending') for row in rows):
             return None
+        budget = ReferenceBudget()
+        current_phase = 'live'
+
+        def phase(name):
+            nonlocal current_phase
+            current_phase = name
+            return measure(service, 'storage.gc.roots.' + name, synchronous=True)
+
         with measure(service, 'storage.gc.roots', synchronous=True):
-            return set(retained_references(service.db, state))
+            try:
+                return set(retained_references(service.db, state, budget=budget, phase=phase))
+            except ReferenceBudgetExceeded as exc:
+                # An incomplete root proof cannot authorize even the unindexed
+                # directory sweep. Keep everything and retry on a later save.
+                deferred = {'deferred': True, 'reason': 'root-budget-exhausted',
+                            'budgetReason': exc.reason, 'phase': current_phase}
+                return None
 
     def inspect(source):
         with measure(service, 'storage.gc.body', synchronous=True):
@@ -233,6 +251,8 @@ async def _maintenance_async(service):
                     except ValueError:
                         valid = False
                 _finish(service, set(sources) if valid else None)
+                if deferred is not None:
+                    service._resource_scan_status.update(deferred)
             except BaseException:
                 service.db.rollback()
                 raise
@@ -242,6 +262,8 @@ async def _maintenance_async(service):
         service._storage_maintenance_error = type(exc).__name__
         logging.getLogger(__name__).warning('Storage maintenance deferred.', exc_info=True)
     finally:
+        if deferred is not None:
+            count(service, 'storage.gc.rootsDeferred')
         count(service, 'storage.gc.edgeHits', edges.hits - before[0])
         count(service, 'storage.gc.edgeMisses', edges.misses - before[1])
         count(service, 'storage.gc.bodyBytesRead', edges.bytes_read - before[2])

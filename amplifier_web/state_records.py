@@ -19,17 +19,17 @@ def initialize(db):
         id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,id))''')
 
 
-def load(db):
+def load(db, *, decode=json.loads):
     row = db.execute('SELECT value FROM state WHERE id=1').fetchone()
     if row is None:
         return None
-    state = json.loads(row[0])
+    state = decode(row[0])
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='state_records'").fetchone():
         return state
     sessions = {row['id']: row for row in state.get('sessions', [])}
     controls = state.setdefault('runtimeControl', {})
     for kind, identity, text in db.execute('SELECT kind,id,value FROM state_records'):
-        value = json.loads(text)
+        value = decode(text)
         if kind == 'revision':
             if identity != '' or type(value) is not int or value < state['revision']:
                 raise ValueError('Invalid saved state revision; original records were preserved.')
