@@ -44,7 +44,11 @@ The transport admits at most eight jobs, with 32 MiB encoded inputs, 64 MiB resu
 and 256 MiB aggregate spool reservation. Shared exact-key/input jobs outlive an
 individual canceled waiter. EOF, shutdown, timeout and a failed worker retire
 owned files and the process. The process budget is 768 MiB: Unix address-space
-limits and resident high-water checks, or a Windows process-commit Job Object.
+limits and cooperative resident checks, or a Windows process-commit Job Object.
+Linux charges the worker's current resident pages from `/proc/self/statm`:
+`ru_maxrss` can inherit the launching host's pre-exec high-water mark and reject
+a small fresh worker. The address-space cap remains unchanged; unavailable or
+malformed resident accounting refuses the worker rather than disabling its guard.
 These are distinct memory measurements, not a universal hard RSS guarantee.
 Platform acceptance must identify which policy was exercised.
 

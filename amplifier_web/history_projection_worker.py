@@ -69,9 +69,20 @@ def memory_policy(limit):
     soft, hard = resource.getrlimit(resource.RLIMIT_AS)
     cap = min(limit, hard) if hard != resource.RLIM_INFINITY else limit
     resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
+    page_size = os.sysconf('SC_PAGE_SIZE') if sys.platform.startswith('linux') else None
     def check():
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if peak * (1 if sys.platform == 'darwin' else 1024) > limit:
+        if page_size is not None:
+            # Linux ru_maxrss can retain the pre-exec parent's high-water mark.
+            # Charge this worker's current resident pages, not inherited history.
+            # Missing/malformed accounting refuses the worker; never disable it.
+            with open('/proc/self/statm', encoding='ascii') as stream:
+                resident = int(stream.read(256).split()[1]) * page_size
+            if resident < 0:
+                raise ValueError('Invalid resident accounting')
+        else:
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            resident = peak * (1 if sys.platform == 'darwin' else 1024)
+        if resident > limit:
             raise MemoryLimit()
     check()
     return check
