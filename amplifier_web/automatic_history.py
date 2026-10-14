@@ -895,10 +895,18 @@ class AutomaticHistory:
                 # then require fresh canonical evidence for every positive case.
                 raise ValueError(session['historyReadOnlyReason'])
             if session.get('historyManaged'):
-                await asyncio.to_thread(self.index.validate_resume, copy.deepcopy(session))
+                # Admission verifies native identity and workspace, not the
+                # browser's retained messages or potentially huge activity tree.
+                source = {key: session[key] for key in
+                          ('id', 'nativeProject', 'nativeIdentity', 'workspace')
+                          if key in session}
+                await asyncio.to_thread(self.index.validate_resume, source)
             if session.get('workspaceAvailable') is False or not session.get('workspace'):
                 raise ValueError('This project folder is unavailable. Its saved chats can be read, but the folder must be restored before continuing work.')
-            current_revision = await asyncio.to_thread(revision, copy.deepcopy(session))
+            source = {key: session[key] for key in
+                      ('id', 'nativeProject', 'nativeIdentity', 'runtimeSessionId')
+                      if key in session}
+            current_revision = await asyncio.to_thread(revision, source)
             if not session.get('historyLoaded', True) or session.get('historyLoading') or current_revision != session.get('nativeRevision'):
                 await self.load(session_id, only_if_changed=True)
                 session = self.service._session(session_id)

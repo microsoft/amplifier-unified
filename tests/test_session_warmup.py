@@ -1,6 +1,6 @@
 import asyncio
 import copy
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -135,6 +135,73 @@ async def test_unchanged_history_refresh_skips_loading_and_publication(service):
         await service.history.refresh_session(session['id'])
     read.assert_not_called()
     assert service.state['revision'] == revision
+
+
+@pytest.mark.parametrize('fork', [False, True])
+async def test_preparation_detaches_startup_inputs_without_copying_display_history(service, fork):
+    class DisplayOnly(list):
+        def __deepcopy__(self, memo):
+            raise AssertionError('Preparing a worker traversed retained display history')
+
+    session = service._session()
+    previous = dict(session)
+    session.update(nativeProject='fixture', nativeIdentity='native-chat',
+                   runtimeSessionId='runtime-chat', nativeRevision=[1, 2],
+                   historyManaged=True, historyLoaded=True,
+                   workingDirectory=session['workspace'], executionRevision=3,
+                   selection={'instance': 'synthetic', 'model': 'model', 'effort': 'high'},
+                   replaceSavedSelection=True, bundleReplacement={'root': 'synthetic'},
+                   execution=DisplayOnly(), workers=DisplayOnly(),
+                   messages=[{'role': 'user', 'text': 'Explicit fork context'}] if fork else DisplayOnly())
+    if fork:
+        session['forkContext'] = {'sessionId': 'parent', 'before': 2}
+    runtime = AsyncMock()
+    service.runtime.prewarm = runtime
+    try:
+        with patch.object(service.history.index, 'validate_resume') as validate, \
+                patch('amplifier_web.automatic_history.revision', return_value=[1, 2]) as stamp, \
+                patch('amplifier_web.automatic_history.read_transcript') as read:
+            await service.warmup.run(session['id'])
+        validate.assert_called_once_with({'id': session['id'], 'nativeProject': 'fixture',
+                                         'nativeIdentity': 'native-chat', 'workspace': session['workspace']})
+        stamp.assert_called_once_with({'id': session['id'], 'nativeProject': 'fixture',
+                                      'nativeIdentity': 'native-chat', 'runtimeSessionId': 'runtime-chat'})
+        read.assert_not_called()
+        runtime.assert_awaited_once()
+        source = runtime.await_args.args[0]
+        assert source['workingDirectory'] == session['workspace'] and source['executionRevision'] == 3
+        assert source['nativeIdentity'] == 'native-chat' and source['runtimeSessionId'] == 'runtime-chat'
+        assert source['replaceSavedSelection'] is True
+        assert source['bundleReplacement'] == {'root': 'synthetic'}
+        assert 'execution' not in source and 'workers' not in source
+        assert source['selection'] == session['selection'] and source['selection'] is not session['selection']
+        source['selection']['effort'] = 'low'
+        assert session['selection']['effort'] == 'high'
+        if fork:
+            assert source['messages'] == session['messages'] and source['messages'] is not session['messages']
+            source['messages'][0]['text'] = 'Detached'
+            source['forkContext']['before'] = 1
+            assert session['messages'][0]['text'] == 'Explicit fork context'
+            assert session['forkContext']['before'] == 2
+        else:
+            assert 'messages' not in source
+    finally:
+        session.clear()
+        session.update(previous)
+
+
+async def test_small_resume_snapshot_still_requires_fresh_canonical_admission(service):
+    session = service._session()
+    session.update(nativeProject='fixture', nativeIdentity='native-chat',
+                   historyManaged=True, historyLoaded=True)
+    with patch.object(service.history.index, 'validate_resume',
+                      side_effect=ValueError('Native workspace metadata changed')) as validate, \
+            patch('amplifier_web.automatic_history.revision') as stamp:
+        with pytest.raises(ValueError, match='Native workspace metadata changed'):
+            await service.history.ensure_loaded(session['id'])
+    validate.assert_called_once()
+    stamp.assert_not_called()
+    assert not service.runtime.started
 
 
 async def test_exception_before_worker_events_settles_only_preparation(service):
