@@ -70,7 +70,11 @@ class StateProjections:
                         if key[0] in {'workspace-index', 'workspaces', 'chat-registry', 'chat-index', 'chats', 'directory-chats'}}
             self.previous_navigation = (self.values.get(('shell-data-key',)), retained)
         index = self.values.get(('session-index',))
-        self.values = {}
+        # Directory workspace entries carry their complete aggregate/registry
+        # inputs. A chat title or worker update cannot invalidate those facts.
+        self.values = {key: value for key, value in self.values.items()
+                       if self.directory is not None and key[0] in
+                       {'workspace-index', 'workspaces', 'workspace-shortcuts'}}
         if index is not None and session_ids is not None and index.patch(state, session_ids):
             self.values[('session-index',)] = index
 
@@ -192,15 +196,34 @@ class StateProjections:
         from .workspace_navigation import _index
         archive = state.get('view', {}).get('navWorkspaceArchive', 'active')
         directory = self.directory
-        key = ('workspace-index', archive, directory.navigation_revision) if directory else ('workspace-index', archive)
+        key = ('workspace-index', archive, *self.workspace_dependencies(state)) if directory else ('workspace-index', archive)
         return self.get(key,
             lambda: _index(state, aggregates=directory.workspace_counts(state, archive=archive) if directory else None))
 
+    def workspace_dependencies(self, state):
+        resources = getattr(getattr(self.service, 'shell', None), 'resources', None)
+        # The service advances this epoch only after actual committed registry
+        # changes. Standalone projection owners have no commit publisher.
+        registry = (resources._epochs({'workspaces'}) if resources is not None else
+                    json.dumps(state.get('workspaces', []), sort_keys=True, separators=(',', ':')))
+        stamp = (self.directory.workspace_revision, registry)
+        if getattr(self, '_workspace_dependencies', None) != stamp:
+            workspace_keys = {'workspace-index', 'workspaces', 'workspace-shortcuts'}
+            self.values = {key: value for key, value in self.values.items() if key[0] not in workspace_keys}
+            if self.previous_navigation is not None:
+                previous, retained = self.previous_navigation
+                self.previous_navigation = (previous, {key: value for key, value in retained.items()
+                                                       if key[0] not in workspace_keys})
+            self._workspace_dependencies = stamp
+        return stamp
+
     def workspaces(self, state):
-        self.refresh_navigation(state)
+        if self.directory is None:
+            self.refresh_navigation(state)
         from .workspace_navigation import _index, snapshot
         index = self.workspace_index(state)
-        return self.get(('workspaces', self.directory.navigation_revision if self.directory else None, *self.workspace_scope(state)), lambda: snapshot(state, index=index))
+        dependencies = self.workspace_dependencies(state) if self.directory else ()
+        return self.get(('workspaces', *dependencies, *self.workspace_scope(state)), lambda: snapshot(state, index=index))
 
     def chat_catalog(self, state, *, section=None):
         self.refresh_navigation(state)
@@ -252,7 +275,8 @@ class StateProjections:
         scoped = {**state, 'view': {**state.get('view', {}), 'navWorkspaceMode': 'recent',
                                    'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}}
         index = self.workspace_index(scoped)
-        return self.get(('workspace-shortcuts', self.directory.navigation_revision if self.directory else None, *self.workspace_scope(scoped)),
+        dependencies = self.workspace_dependencies(scoped) if self.directory else ()
+        return self.get(('workspace-shortcuts', *dependencies, *self.workspace_scope(scoped)),
                         lambda: snapshot(scoped, index=index, exclude_pinned=True)['rows'])
 
     def browser(self, state, *, selected_context=False):
