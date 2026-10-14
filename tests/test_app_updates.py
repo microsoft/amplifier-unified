@@ -44,7 +44,7 @@ def test_candidate_probe_checks_worker_import_boundary(tmp_path, bootstrap_kind)
     import sys
     from amplifier_web.update_diagnostics import probe_record
 
-    # The simulated host sees both sibling packages. Only the clean child can
+    # The simulated host sees the app-owned sibling packages. Only the clean child can
     # distinguish the original bootstrap defect from a healthy host import.
     source = Path(app_updates.__file__).parent
     package = tmp_path / "amplifier_web"
@@ -56,15 +56,19 @@ def test_candidate_probe_checks_worker_import_boundary(tmp_path, bootstrap_kind)
     shutil.copy2(source / "runtime_bootstrap.py", package)
     shutil.copy2(source / "collaboration_input.py", package)
     shutil.copytree(source.parent / "amplifier_operations", tmp_path / "amplifier_operations")
+    shutil.copytree(source.parent / "amplifier_kernels", tmp_path / "amplifier_kernels")
     (tmp_path / "pam.py").write_text("def authenticate(*args): return True\n")
     metadata = tmp_path / "amplifier_unified-99.0.0.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: amplifier-unified\nVersion: 99.0.0\n")
     if bootstrap_kind == "web-only":
         path = package / "runtime_bootstrap.py"
-        path.write_text(path.read_text().replace(
-            '("amplifier_web", "amplifier_operations")', '("amplifier_web",)'
-        ))
+        original = path.read_text()
+        broken = original.replace(
+            '("amplifier_web", "amplifier_operations", "amplifier_kernels")', '("amplifier_web",)'
+        )
+        assert broken != original, "The web-only fault must change the current bootstrap"
+        path.write_text(broken)
     elif bootstrap_kind == "leaking":
         path = package / "runtime_bootstrap.py"
         path.write_text(path.read_text().replace(
