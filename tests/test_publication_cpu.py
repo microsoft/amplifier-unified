@@ -76,7 +76,9 @@ async def test_root_counts_and_shell_key_observe_save_without_revision(app_facto
     for i in range(2):
         app.clients.attach(f"root-client-{i}")
         with app.clients.bind(f"root-client-{i}"):
-            assert app.browser_state()["library"]["sessionCount"] == 100
+            # Bound web frames expose selected context, not library aggregates.
+            assert "sessionCount" not in app.browser_state()["library"]
+            assert app.directory.root_count() == 100
             assert app.projections.sessions(app.state) is index
     revision = app.state["revision"]
     promoted_owner = app._session(rows[-1]['id'], hydrate=False)

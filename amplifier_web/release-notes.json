@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.149",
+      "title": "Keep unchanged chat navigation stable",
+      "changes": [
+        "Native history refresh and the live chat owner no longer overwrite each other\u2019s metadata, avoiding repeated navigation rebuilds for unchanged chats.",
+        "Real title and availability changes still update, while active chats retain their stable navigation activity and parent links.",
+        "Publishing and selected-view qualification now follow the current Canvas and bounded history contracts."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.148",
       "title": "Skip media lookups in chats without linked media",
       "changes": [
