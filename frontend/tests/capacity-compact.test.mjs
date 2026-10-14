@@ -12,7 +12,7 @@ test('compact model evidence refreshes usage without resetting edits or reading 
  let calls=0,root;
  const result=()=>({budget:{revision:1,enabled:true,maxTotalTokens:100,warningFraction:.8,unknownPolicy:'pause'},admission:{state:calls>1?'paused':'active',reasons:[],warnings:[]},usage:{calls:calls>1?1:0,metrics:{},providers:[],receipts:[],receiptCount:0,offset:0},observedAt:1});
  const dispatch=async name=>{assert.equal(name,'capacity.read');calls++;return {result:result()}};
- const frame=(revision,total=0)=>({id:'selected',execution:{detailsDeferred:true,segments:[{id:'group',detailRevision:revision}],aggregateUsage:{calls:total,totalTokens:total*10},get nodes(){throw Error('Compact consumer must not read deferred nodes')}}});
+ const frame=(revision,total=0)=>{const execution={detailsDeferred:true,segments:[{id:'group',detailRevision:revision}],aggregateUsage:{calls:total,totalTokens:total*10}};Object.defineProperty(execution,'nodes',{get(){throw Error('Compact consumer must not read deferred nodes')}});return {id:'selected',execution}};
  const render=session=>React.createElement(CapacityControls,{session,act:dispatch});
  try{
   await act(async()=>{root=create(render(frame('a')))});assert.equal(calls,0,'No read before the user inspects capacity');
