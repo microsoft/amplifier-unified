@@ -63,6 +63,12 @@ class StateProjections:
                 # Streaming text does not alter navigation, attention or shell
                 # evidence. Keep those immutable facts; detail is built anew.
                 return
+        if state is None:
+            # An explicit unknown invalidation may follow direct global edits,
+            # without a canonical commit epoch. It cannot reuse prior pages.
+            self.values.clear()
+            self.previous_navigation = None
+            return
         # Keep only navigation results, not active sessions, notifications, or
         # worker pages. Those must observe each saved generation independently.
         if self.previous_navigation is None:
@@ -74,7 +80,7 @@ class StateProjections:
         # inputs. A chat title or worker update cannot invalidate those facts.
         self.values = {key: value for key, value in self.values.items()
                        if self.directory is not None and key[0] in
-                       {'workspace-index', 'workspaces', 'workspace-shortcuts'}}
+                       {'workspace-index', 'workspaces', 'workspace-shortcuts', 'directory-chats', 'pinned-navigation'}}
         if index is not None and session_ids is not None and index.patch(state, session_ids):
             self.values[('session-index',)] = index
 
@@ -208,7 +214,7 @@ class StateProjections:
                     json.dumps(state.get('workspaces', []), sort_keys=True, separators=(',', ':')))
         stamp = (self.directory.workspace_revision, registry)
         if getattr(self, '_workspace_dependencies', None) != stamp:
-            workspace_keys = {'workspace-index', 'workspaces', 'workspace-shortcuts'}
+            workspace_keys = {'workspace-index', 'workspaces', 'workspace-shortcuts', 'pinned-navigation'}
             self.values = {key: value for key, value in self.values.items() if key[0] not in workspace_keys}
             if self.previous_navigation is not None:
                 previous, retained = self.previous_navigation
@@ -238,19 +244,64 @@ class StateProjections:
         index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True)), lambda: catalog(catalog_state, indexed=registrations))
         return index
 
+    def root_navigation_dependencies(self, state):
+        resources = getattr(getattr(self.service, 'shell', None), 'resources', None)
+        fields = {'workspaces', 'pinnedSessionIds', 'conversationOrganization'}
+        globals_key = (resources._epochs(fields) if resources is not None else
+                      json.dumps({key: state.get(key) for key in sorted(fields)}, sort_keys=True))
+        stamp = (self.directory.root_navigation_revision, globals_key)
+        if getattr(self, '_root_navigation_dependencies', None) != stamp:
+            root_keys = {'directory-chats', 'pinned-navigation', 'root-selection'}
+            self.values = {key: value for key, value in self.values.items() if key[0] not in root_keys}
+            if self.previous_navigation is not None:
+                previous, retained = self.previous_navigation
+                self.previous_navigation = (previous, {key: value for key, value in retained.items()
+                                                       if key[0] not in root_keys})
+            self._root_navigation_dependencies = stamp
+        return stamp
+
     def chats(self, state, *, section=None):
         directory = self.directory
         if directory is not None:
-            self.refresh_navigation(state)
-            return self.get(('directory-chats', directory.navigation_revision, section, *self.chat_scope(state)),
+            dependencies = self.root_navigation_dependencies(state)
+            scope = self.navigation_page_scope(state, section=section)
+            page = self.get(('directory-chats', *dependencies, section, *scope),
                             lambda: directory.chats(state, section=section))
+            if section in {'shortcuts', 'pinned'} and page['scope']['selectedSessionId'] != state.get('selectedSessionId'):
+                # Selection is a receipt, except for the selected agent-created
+                # root admitted by the Recent filter. Never mutate a shared page.
+                return {**page, 'scope': {**page['scope'], 'selectedSessionId': state.get('selectedSessionId')}}
+            return page
         from .chat_navigation import snapshot
         index = self.chat_catalog(state, section=section)
         return self.get(('chats', section, *self.chat_scope(state)), lambda: snapshot(state, indexed=index, section=section))
 
+    def navigation_page_scope(self, state, *, section):
+        selected, workspace, view = self.chat_scope(state)
+        if self.directory is None or section not in {'shortcuts', 'pinned'}:
+            return selected, workspace, view
+        if section == 'pinned' or state.get('view', {}).get('navShowAgentCreated') is True:
+            selected = None
+        elif selected:
+            def exception():
+                sql, params = self.directory.effective(state, public_ids=[selected])
+                row = self.directory.db.execute(sql +
+                    " SELECT id FROM directory_rows WHERE id=? AND session_kind='root' AND agent_created LIMIT 1",
+                    [*params, selected]).fetchone()
+                return row[0] if row else None
+            selected = self.get(('root-selection', self.directory.root_navigation_revision, selected), exception)
+        if state.get('view', {}).get('navChatScope') == 'all':
+            workspace = None
+        # General pages retain selection: their saved-page match and inferred
+        # workspace rank are selection-dependent. Shortcuts have no such page.
+        return selected, workspace, view
+
     def pinned_navigation(self, state):
         from .pinned_navigation import ordered_ids
-        key = ('pinned-navigation', self.directory.navigation_revision if self.directory else None, tuple(ordered_ids(state)), *self.chat_scope(state))
+        dependencies = ((*self.root_navigation_dependencies(state), *self.workspace_dependencies(state))
+                        if self.directory is not None else ())
+        key = ('pinned-navigation', *dependencies, tuple(ordered_ids(state)),
+               *self.navigation_page_scope(state, section='pinned'))
         return self.get(key, lambda: self._pinned_navigation(state))
 
     def _pinned_navigation(self, state):

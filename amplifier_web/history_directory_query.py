@@ -28,9 +28,17 @@ def _registry(state, archive=None):
     return rows, by_path
 
 
-def _base(directory, state, *, archive=None, public_ids=None):
-    sql, params = directory.effective(state, public_ids=public_ids)
+def _base(directory, state, *, archive=None, public_ids=None, root_workspace=False):
     rows, by_path = _registry(state, archive)
+    native_workspace = None
+    if root_workspace and public_ids is None:
+        available_ids = {row['id'] for row in rows}
+        selected = state.get('selectedWorkspaceId')
+        selected = selected if selected in available_ids else None
+        native_workspace = (selected, [path for path, row in by_path.items() if row['id'] == selected])
+        directory.db.create_function('directory_known_workspace', 1,
+                                     lambda identity: int(identity in available_ids), deterministic=True)
+    sql, params = directory.effective(state, public_ids=public_ids, native_root_workspace=native_workspace)
     directory.db.create_function('directory_lower', 1, lambda text: str(text or '').lower(), deterministic=True)
     directory.db.create_function('directory_match', 7,
         lambda query, *fields: int(_matches(fields, query)), deterministic=True)
@@ -87,7 +95,8 @@ def _chat_query(directory, state, section, *, activity_counts=True):
     # Exact public IDs preserve canonical overlays and suppression. Larger pin
     # sets keep the original globally ordered query rather than page per batch.
     public_ids = pins if section == 'pinned' and len(pins) <= PUBLIC_ID_BATCH else None
-    sql, params, workspaces = _base(directory, state, public_ids=public_ids)
+    sql, params, workspaces = _base(directory, state, public_ids=public_ids,
+                                   root_workspace=state.get('view', {}).get('navChatScope') != 'all')
     view = state.get('view', {})
     by_id = {row['id']: row for row in workspaces}
     selected = by_id.get(state.get('selectedWorkspaceId'))
