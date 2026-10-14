@@ -9,6 +9,7 @@ import hashlib
 import json
 from collections import OrderedDict
 from copy import deepcopy
+from .performance_diagnostics import measured
 
 
 def detail_facts(row):
@@ -25,6 +26,8 @@ def detail_facts(row):
               if key not in {'recentActivityAt', 'navigationActivityAt'}}
     fields.update({key: row.get(key) for key in
                    ('error', 'completion', 'manualUnread', 'approvals', 'questions', 'ownership', 'unreadCompletion')})
+    from .session_activity import activity_flags
+    fields['activityFlags'] = activity_flags(row)
     fields['navigationActivity'] = navigation_activity(row)
     fields['agentCreated'] = is_agent_created(row)
     fields['notifications'] = notifications(row)
@@ -32,7 +35,8 @@ def detail_facts(row):
 
 
 class StateProjections:
-    def __init__(self, resolver=None):
+    def __init__(self, resolver=None, *, service=None):
+        self.service = service
         self.resolver = resolver
         self.values = {}
         self.previous_navigation = None
@@ -127,6 +131,7 @@ class StateProjections:
         from .browser_state import SessionIndex
         return self.get(('session-index',), lambda: SessionIndex(state))
 
+    @measured('browser.detail', session=True)
     def detail(self, row):
         """Reuse only unchanged bounded bodies; current scalar facts stay live.
 
@@ -236,6 +241,7 @@ class StateProjections:
         navigation_state = self.get(key, lambda: navigation(scoped, chats=self.chats, index=self.sessions(state)))
         return {**navigation_state, 'attention': attention, 'workspaceExplorer': self.workspaces(scoped)}
 
+    @measured('navigation.catalog.key')
     def shell_key(self, state):
         """Invalidate shell queries for their data, not unrelated host telemetry.
 

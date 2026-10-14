@@ -21,6 +21,7 @@ from .execution import ensure_turn, ingest as ingest_execution, finish as finish
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
+from .performance_diagnostics import PerformanceDiagnostics, measured, TimedLock
 
 
 def settle_stream(session):
@@ -490,7 +491,7 @@ class AppService:
         self.workspace_setup_tasks = set()
         self.smart_tool_tasks = set()
         self.smart_tool_requests = {}
-        self.lock = asyncio.Lock()
+        self.lock = TimedLock(self, 'state.lock.wait')
         self._creation_locks = WeakValueDictionary()
         # RuntimeManager.close() is terminal.  Every host-continuing operation
         # that retires it therefore shares this exclusion and installs a fresh
@@ -499,6 +500,7 @@ class AppService:
         self._runtime_lifecycle_tasks = set()
         self._runtime_alias = None
         self.closed = False
+        self.performance_diagnostics = PerformanceDiagnostics()
         from .session_warmup import SessionWarmup
         self.warmup = SessionWarmup(self)
         row = self.db.execute("SELECT value FROM state WHERE id=1").fetchone()
@@ -737,7 +739,7 @@ class AppService:
     def projections(self):
         from .state_projections import StateProjections
         if getattr(self, '_projections', None) is None:
-            self._projections = StateProjections()
+            self._projections = StateProjections(service=self)
         return self._projections
 
     def state_context(self):
@@ -757,6 +759,7 @@ class AppService:
         # Explicit full reads remain compatible; browser hot paths use pages.
         return copy.deepcopy(self.state_context())
 
+    @measured('browser.snapshot')
     def browser_state(self, session_id=None):
         self._refresh_shared_preferences()
         client_id = self.clients.current.get()
@@ -813,6 +816,7 @@ class AppService:
     def get_actions(self):
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
 
+    @measured('state.save')
     def _save(self, *, session_ids=None, record_only=False):
         if session_ids is None:
             session_ids = getattr(self, '_publish_save_scope', None)
@@ -865,11 +869,12 @@ class AppService:
         # Private client acknowledgements and SQLite overlays become current
         # only after commit. A failed transaction retains all retry scopes.
         try:
-            normalize_state(normalized, self.db, undo=normalization_undo)
-            saved = persist(self.data_dir, self._state, pending_views,
-                            session_ids=session_ids, by_id=index.by_id if index else None,
-                            references=pending_references, scoped_result=record_only,
-                            undo=view_undo, db=self.db)
+            with self.performance_diagnostics.measure('state.serialize', synchronous=True):
+                normalize_state(normalized, self.db, undo=normalization_undo)
+                saved = persist(self.data_dir, self._state, pending_views,
+                                session_ids=session_ids, by_id=index.by_id if index else None,
+                                references=pending_references, scoped_result=record_only,
+                                undo=view_undo, db=self.db)
             pending_clients = self.clients.save(defer_ack=True)
             if record_only:
                 # Persist sanitized global presentation just as full checkpoints
@@ -1019,6 +1024,7 @@ class AppService:
         self._publish(session_ids=set(sessions), global_keys=set(globals),
                       record_only=True, detail_only=detail_only)
 
+    @measured('state.publish')
     def _publish(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
         # A mixed publication commits the union, never just the newer writer's
         # scope. Unknown writers retain the conservative complete-save path.
@@ -1062,6 +1068,10 @@ class AppService:
             self._publish_detail_only = False
             self._publish_record_only = False
             self._publish_global_keys = set()
+        # The save guard compares all shared navigation facts. A requested
+        # detail publication must broaden when status/attention actually changed.
+        if record_only:
+            detail_only = self._publish_client_narrow
         published = {}
         affected_detail = self._affected_detail(session_ids) if session_ids is not None else set()
         if detail_only and session_ids is not None:
@@ -1236,6 +1246,10 @@ class AppService:
     def _new_session(self, args):
         from .shared_settings import read_settings
         workspace = self._session_destination(args)
+        try:
+            self.worktrees.require_available_path(workspace)
+        except ValueError as exc:
+            raise AppError(str(exc), 409) from None
         self._require_workspace_scaffold(workspace)
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
@@ -1370,11 +1384,29 @@ class AppService:
         # Directory preparation yields outside the service lock. Keep concurrent
         # retries on the same creation command behind its durable receipt, so a
         # conflicting retry cannot create a second folder during that interval.
-        if action in {'session.create', 'coordination.create'} and command_id:
-            lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
-            async with lock:
-                return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
-        return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+        reservation = None
+        if action == 'session.create':
+            from .managed_chats import is_managed
+            if not (command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
+                try:
+                    paths = [] if is_managed(args) else [self._session_destination(args or {})]
+                    from .collaboration import CREATION
+                    creation = CREATION.get()
+                    if creation and creation[:2] == (caller_session_id, hashlib.sha256(
+                            json.dumps(args or {}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
+                        paths.append(creation[4]['workingDirectory'])
+                    if paths:
+                        reservation = self.worktrees.reserve_creation(*paths)
+                except (ValueError, OSError) as exc:
+                    raise AppError(str(exc), 409) from None
+        try:
+            if action in {'session.create', 'coordination.create'} and command_id:
+                lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
+                async with lock:
+                    return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+            return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+        finally:
+            self.worktrees.release_creation(reservation)
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
@@ -1806,7 +1838,7 @@ class AppService:
                 except (ValueError, OSError) as exc:
                     raise AppError(str(exc), 409) from None
             else:
-                prepared_workspace = str(await asyncio.to_thread(_create_workspace_folder, args['workspace']))
+                prepared_workspace = str(await self.worktrees.finish_thread(_create_workspace_folder, args['workspace']))
         prepared_health = None
         if action == 'session.inspect':
             from .session_health import inspect_session
@@ -1817,6 +1849,7 @@ class AppService:
             prepared_health['capturedAt'] = captured_at
             prepared_health['host'] = {**getattr(self.update_manager, 'running_identity', {}), 'hostInstanceId': self.instance_id}
             prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
+            prepared_health['performance'] = self.performance_diagnostics.snapshot()
             prepared_health['capture']['limitations'].append('Request timings cover handler execution, not time before the server accepts a connection.')
         if action == 'session.plans':
             if args.get('includeItems') and len(args['ids']) != 1:
@@ -2274,6 +2307,7 @@ class AppService:
                             apply(self, session, creation[3])
                             session["collaboration"] = copy.deepcopy(creation[4])
                             session['workingDirectory'] = creation[4]['workingDirectory']
+                        self.worktrees.require_available_path(session.get('workingDirectory') or session['workspace'])
                         from .new_chat import initial_model
                         initial = initial_model(self.state, args, session['workspace'], session['bundle'])
                         if initial:
@@ -3542,7 +3576,8 @@ class AppService:
                 data=legacy(directory);data['naming_completed_inputs']=payload.get('completedInputs',[])
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
-                ingest_execution(session,payload)
+                with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
+                    ingest_execution(session,payload)
                 if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
                     # Auxiliary preparation failures stay on their call. The
                     # manager's terminal generation.failed event owns whether
@@ -3793,12 +3828,12 @@ class AppService:
             observe_steering(self, session, kind, payload)
             if progress:
                 self._publish_progress(session_ids={session['id']},
-                                       detail_only=kind == 'assistant.delta', record_only=True)
+                                       detail_only=kind in {'assistant.delta', 'execution.event'}, record_only=True)
             elif kind == 'execution.event':
                 # Terminal call evidence must commit immediately, but changes
-                # only this session. Keep normal navigation invalidation while
-                # avoiding a checkpoint of every unrelated session and setting.
-                self._publish(session_ids={session['id']}, record_only=True)
+                # only this session. Reuse the catalog when the save guard
+                # proves navigation/attention unchanged; widen when it changes.
+                self._publish(session_ids={session['id']}, record_only=True, detail_only=True)
             else:
                 # Lifecycle may update an originating schedule or a peer's
                 # saved receipt reference on another chat.
@@ -4278,6 +4313,7 @@ class AppService:
             return
         self.closed = True
         self.collaboration.close()
+        await self.performance_diagnostics.close()
         if getattr(self, "profiling_host", None):
             await self.profiling_host.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks

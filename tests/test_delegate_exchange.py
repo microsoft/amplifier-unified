@@ -123,6 +123,51 @@ def test_multiple_persistent_reports_survive_with_partial_flags_and_no_false_pai
     assert reports[0]['exchange']['partial'] and not reports[1]['exchange']['partial']
 
 
+def test_old_deliveries_cannot_displace_latest_work_from_bounded_pages():
+    from amplifier_web.browser_detail import project
+    tool = {'id': 'd', 'kind': 'tool', 'sessionId': 'root', 'toolCallId': 'call',
+            'label': 'delegate', 'turnId': 'old', 'startedAt': 1, 'endedAt': 2}
+    worker = {'id': 'w', 'kind': 'worker', 'sessionId': 'child', 'parentId': 'd',
+              'turnId': 'old', 'runId': 'run', 'startedAt': 2, 'endedAt': 500}
+    reports = [service_message(f'report-{i}', 'amplifier-child',
+               {'callId': 'call', 'sessionId': 'child', 'runId': 'run',
+                'reportId': str(i), 'report': 'Saved reply'}, at=i+3) for i in range(120)]
+    # Imported observations can have a fallback creation time. Their explicit
+    # transcript position remains authoritative when clocks are unavailable.
+    reports[-1].update(createdAt=99999, timestampKnown=False)
+    session = {'id': 'root', 'messages': [*reports,
+        {'id': 'latest-question', 'role': 'user', 'text': 'Next', 'createdAt': 600},
+        {'id': 'latest-answer', 'role': 'assistant', 'text': 'Done', 'createdAt': 602}],
+        'execution': {'nodes': [tool, worker,
+            {'id': 'latest-model', 'kind': 'llm', 'turnId': 'latest',
+             'anchorMessageId': 'latest-question', 'startedAt': 600, 'endedAt': 601}],
+            'turns': [{'id': 'old', 'phase': 'completed', 'startedAt': 1, 'endedAt': 500},
+                      {'id': 'latest', 'phase': 'completed', 'startedAt': 600, 'endedAt': 602}]}}
+    latest = project(session)['execution']['segments']
+    assert len(latest) == 100
+    assert latest[-1]['anchorMessageId'] == 'latest-question'
+    assert latest[-1]['nodeCounts']['models'] == 1
+    seen = []; before = None
+    while True:
+        result = page(session, 'groups', before)
+        seen[:0] = result['items']; before = result['before']
+        if before is None:
+            break
+    assert len(seen) == len({row['id'] for row in seen}) == 122
+    report = next(row for row in seen if row['anchorMessageId'] == 'report-119')
+    assert report['startedAt'] is None and report['endedAt'] is None
+    known = next(row for row in seen if row['anchorMessageId'] == 'report-118')
+    assert known['startedAt'] == known['endedAt'] == 121
+    assert known['phase'] == report['phase'] == 'completed'
+    detail = page(session, 'nodes', group=report['id'])
+    assert detail['items'][0]['exchange']['delegateResponse'] == 'Saved reply'
+    session['execution']['turns'][0]['phase'] = 'failed'
+    from amplifier_web.browser_detail import work_segments
+    groups = work_segments(session)[1]
+    assert next(row for row in groups if row['id'] == 'old@start')['phase'] == 'failed'
+    assert next(row for row in groups if row['id'] == report['id'])['phase'] == 'completed'
+
+
 def test_resumed_tool_ownership_rebuilds_from_exact_metadata_not_timestamps(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
     session = {'id': 'root', 'workspace': str(tmp_path / 'project'), 'messages': [], 'workers': []}

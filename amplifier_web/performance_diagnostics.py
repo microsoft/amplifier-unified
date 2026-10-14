@@ -1,0 +1,133 @@
+"""Bounded process-local timings, never conversation content or persisted state.
+
+Operation timings are inclusive and can overlap. Event-loop delay includes host
+suspension and CPU scheduling; it is evidence of delay, not a cause attribution.
+Stack sampling remains the separate opt-in profiling facility.
+"""
+import asyncio
+from collections import deque
+from contextlib import contextmanager, nullcontext
+from functools import wraps
+import inspect
+import threading
+import time
+
+
+class PerformanceDiagnostics:
+    def __init__(self):
+        self.operations = {}
+        self.counters = {}
+        self.slow = deque(maxlen=60)
+        self.lag = deque(maxlen=60)
+        self.lock = threading.Lock()
+        self.task = None
+        self.started = time.time()
+
+    @contextmanager
+    def measure(self, name, *, synchronous=False, session_id=None):
+        started, wall = time.monotonic(), time.time()
+        cpu = time.thread_time() if synchronous else None
+        try:
+            yield
+        finally:
+            elapsed = (time.monotonic() - started) * 1000
+            row = {'operation': name, 'at': wall, 'elapsedMs': round(elapsed, 2)}
+            if cpu is not None:
+                row['threadCpuMs'] = round((time.thread_time() - cpu) * 1000, 2)
+            if isinstance(session_id, str):
+                row['sessionId'] = session_id[:200]
+            with self.lock:
+                if name in self.operations or len(self.operations) < 32:
+                    summary = self.operations.setdefault(name, {'count': 0, 'totalMs': 0, 'maxMs': 0})
+                    summary['count'] += 1
+                    summary['totalMs'] += elapsed
+                    summary['maxMs'] = max(summary['maxMs'], elapsed)
+                if elapsed >= 100:
+                    self.slow.append(row)
+
+    def increment(self, name, amount=1):
+        with self.lock:
+            if name in self.counters or len(self.counters) < 32:
+                self.counters[name] = self.counters.get(name, 0) + amount
+
+    def record_lag(self, delay):
+        if delay >= 0.1:
+            with self.lock:
+                self.lag.append({'at': time.time(), 'delayMs': round(delay * 1000, 2)})
+
+    async def _heartbeat(self):
+        while True:
+            started = time.monotonic()
+            await asyncio.sleep(0.2)
+            self.record_lag(max(0, time.monotonic() - started - 0.2))
+
+    def start(self):
+        if self.task is None:
+            self.task = asyncio.create_task(self._heartbeat())
+
+    async def close(self):
+        if self.task is not None:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+            self.task = None
+
+    def snapshot(self):
+        with self.lock:
+            return {'schemaVersion': 1, 'startedAt': self.started,
+                    'counters': dict(self.counters),
+                    'operations': {name: {key: round(value, 2) if key != 'count' else value
+                                         for key, value in values.items()}
+                                   for name, values in self.operations.items()},
+                    'slowOperations': [dict(row) for row in self.slow],
+                    'eventLoopDelays': [dict(row) for row in self.lag],
+                    'limitations': ['Inclusive operations overlap; do not add their durations.',
+                                    'Loop delays include host suspension and scheduling; they do not identify the cause.',
+                                    'No request bodies, prompts, credentials, paths or stack locals are collected.']}
+
+
+def measured(name, *, session=False):
+    """Labels are call-site constants. Optional identity is an existing chat ID."""
+    def decorate(function):
+        asynchronous = inspect.iscoroutinefunction(function)
+        def measurement(owner, args):
+            service = getattr(owner, 'service', owner)
+            diagnostics = getattr(service, 'performance_diagnostics', None)
+            identity = args[0] if session and args else None
+            if isinstance(identity, dict):
+                identity = identity.get('id')
+            return (diagnostics.measure(name, synchronous=not asynchronous, session_id=identity)
+                    if diagnostics is not None else nullcontext())
+        if asynchronous:
+            @wraps(function)
+            async def wrapped(self, *args, **kwargs):
+                with measurement(self, args):
+                    return await function(self, *args, **kwargs)
+        else:
+            @wraps(function)
+            def wrapped(self, *args, **kwargs):
+                with measurement(self, args):
+                    return function(self, *args, **kwargs)
+        return wrapped
+    return decorate
+
+
+def measure(service, name, **kwargs):
+    diagnostics = getattr(service, 'performance_diagnostics', None)
+    return diagnostics.measure(name, **kwargs) if diagnostics is not None else nullcontext()
+
+
+def count(service, name, amount=1):
+    diagnostics = getattr(service, 'performance_diagnostics', None)
+    if diagnostics is not None:
+        diagnostics.increment(name, amount)
+
+
+class TimedLock(asyncio.Lock):
+    """Same cancellation/fairness behavior, with inclusive acquisition latency."""
+    def __init__(self, service, name):
+        super().__init__()
+        self.service, self.name = service, name
+
+    async def acquire(self):
+        with measure(self.service, self.name):
+            return await super().acquire()

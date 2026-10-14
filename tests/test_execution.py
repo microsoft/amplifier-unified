@@ -149,3 +149,30 @@ def test_tool_output_updates_do_not_rescan_model_usage_but_reparenting_does():
     ingest(session, {'id': 'tool', 'kind': 'tool', 'parentId': 'other'})
     assert reads
     assert session['execution']['nodes'][1]['aggregateUsage'] == before
+
+
+def test_new_leaf_tools_avoid_usage_rebuild_but_late_parents_reconcile(monkeypatch):
+    import copy
+    import amplifier_web.execution as execution
+    session = {'execution': {'currentTurnId': 'turn', 'turns': [{'id': 'turn'}], 'nodes': [
+        {'id': f'call-{n}', 'kind': 'llm', 'turnId': 'turn',
+         'usage': {'inputTokens': n, 'outputTokens': 2}} for n in range(1000)]}}
+    execution.refresh_usage(session['execution'])
+    original = execution.refresh_usage
+    rebuilds = []
+    def refresh(tree):
+        rebuilds.append(True)
+        original(tree)
+    monkeypatch.setattr(execution, 'refresh_usage', refresh)
+    for n in range(20):
+        execution.ingest(session, {'id': f'tool-{n}', 'kind': 'tool', 'turnId': 'turn'})
+    assert rebuilds == []
+    expected = copy.deepcopy(session['execution'])
+    original(expected)
+    assert session['execution'] == expected
+    # A child can arrive before its worker: this must rebuild all ancestry.
+    execution.ingest(session, {'id': 'call-0', 'parentId': 'late-worker'})
+    rebuilds.clear()
+    execution.ingest(session, {'id': 'late-worker', 'kind': 'worker', 'turnId': 'turn'})
+    assert rebuilds
+    assert session['execution']['nodes'][-1]['aggregateUsage']['calls'] == 1

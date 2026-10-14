@@ -38,6 +38,9 @@ class Worktrees:
         self.receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.jobs = set()
         self.mutations = asyncio.Lock()
+        self._creation_paths = {}
+        self._moving_paths = ()
+        self._uncertain_paths = ()
         for path in self.receipt_dir.glob('*.json'):
             record = json.loads(path.read_text())
             session = next((s for s in service.state['sessions'] if s['id'] == record['sessionId']), {})
@@ -103,6 +106,82 @@ class Worktrees:
         if record.get('sessionId') != sid: raise ValueError('This checkout belongs to another task')
         return record
 
+    def require_available_path(self, path):
+        """Fence admission without scanning dormant histories or Git records."""
+        roots = (*self._moving_paths, *self._uncertain_paths)
+        if roots:
+            resolved = Path(path).expanduser().resolve()
+            if any(resolved.is_relative_to(root) for root in roots):
+                raise ValueError('This checkout is being moved or its move is unresolved; inspect it before starting a chat')
+
+    def reserve_creation(self, *paths):
+        for path in paths:
+            self.require_available_path(path)
+        token = object()
+        self._creation_paths[token] = tuple(Path(path).expanduser().resolve() for path in paths)
+        return token
+
+    def release_creation(self, token):
+        self._creation_paths.pop(token, None)
+
+    @staticmethod
+    def _occupied(paths, roots):
+        return any(Path(path).expanduser().resolve().is_relative_to(root)
+                   for path in set(paths) for root in roots)
+
+    @staticmethod
+    async def finish_thread(function, *args, **kwargs):
+        """Keep path reservations until a filesystem effect actually finishes."""
+        task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+        cancelled = None
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as exc:
+                # Cancelling the waiter cannot stop its filesystem thread.
+                cancelled = exc
+        if cancelled is not None:
+            task.exception()
+            raise cancelled
+        return task.result()
+
+    def _refresh_uncertain_paths(self, records):
+        self._uncertain_paths = tuple(Path(path).resolve() for record in records
+            for operation in record.get('archiveOperations', {}).values()
+            if operation['status'] in {'pending', 'unknown'}
+            for path in (operation['source'], operation['target']))
+
+    async def retire(self, action, record, args, identity):
+        roots = [Path(record['path']).resolve()]
+        if action != 'worktree.remove':
+            roots.append((self.git.directory / ('checkouts' if action == 'worktree.restore' else 'archives') / record['id']).resolve())
+        async with self.app.lock:
+            if any(path.is_relative_to(root) for paths in self._creation_paths.values() for path in paths for root in roots):
+                raise ValueError('A chat is being created in this checkout; wait for it to finish')
+            # Claim before yielding. Session creation claims its path before
+            # directory preparation and checks this fence again at admission.
+            self._moving_paths = tuple(roots)
+            sessions = self.app.state['sessions']
+            occupied = [path for s in sessions for path in (s.get('workingDirectory'), s.get('workspace')) if path]
+            handoffs = [path for s in sessions for r in s.get('worktreeHandoffs', [])
+                        if r['phase'] in {'pending', 'unknown'} for path in (r['source'], r['target'])]
+        try:
+            # Resolve aliases off the event loop; this examines only placement
+            # metadata, never the sessions' messages or event logs.
+            if await asyncio.to_thread(self._occupied, occupied, roots):
+                raise ValueError('A task still uses this checkout; hand it back first')
+            if await asyncio.to_thread(self._occupied, handoffs, roots):
+                raise ValueError('An unresolved handoff still refers to this checkout')
+            if action == 'worktree.remove':
+                return await self.finish_thread(self.git.remove, args['id'], args['expectedRevision'], identity)
+            return await self.finish_thread(self.git.relocate, args['id'], args['expectedRevision'], identity,
+                                            restore=action == 'worktree.restore')
+        finally:
+            # Retain a durable uncertainty fence across request cancellation,
+            # failures and restart; inspection can reconcile it without replay.
+            self._refresh_uncertain_paths(self.git.records())
+            self._moving_paths = ()
+
     def repository_path(self, session, value=None, *, attaching=False):
         execution = Path(session.get('workingDirectory') or session['workspace']).resolve()
         if value is None:
@@ -128,6 +207,7 @@ class Worktrees:
 
     def sync(self):
         records = self.git.records()
+        self._refresh_uncertain_paths(records)
         handoffs = [json.loads(path.read_text()) for path in sorted(self.receipt_dir.glob('*.json'))]
         by_session, by_handoff, unresolved = {}, {}, set()
         for record in records:
@@ -205,12 +285,7 @@ class Worktrees:
         elif action in {'worktree.remove', 'worktree.archive', 'worktree.restore'}:
             record = self.record(sid, args['id'])
             self.check_host(record)
-            if any((s.get('workingDirectory') or s['workspace']) == record['path'] for s in self.app.state['sessions']): raise ValueError('A task still uses this checkout; hand it back first')
-            if any(r['phase'] in {'pending', 'unknown'} and record['path'] in {r['source'], r['target']} for s in self.app.state['sessions'] for r in self.receipts(s['id'])): raise ValueError('An unresolved handoff still refers to this checkout')
-            if action == 'worktree.remove':
-                result = await asyncio.to_thread(self.git.remove, args['id'], args['expectedRevision'], identity)
-            else:
-                result = await asyncio.to_thread(self.git.relocate, args['id'], args['expectedRevision'], identity, restore=action == 'worktree.restore')
+            result = await self.retire(action, record, args, identity)
         else: raise ValueError('Unknown worktree action')
         async with self.app.lock: self.changed()
         return result

@@ -130,6 +130,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service.worktrees.start()
     service.history.start()
     service.event_log_view.start()
+    service.performance_diagnostics.start()
     if preload_providers:
         service.management.background(service.management.command("providers.list", {}))
     from .updates import UpdateManager
@@ -354,6 +355,13 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             response["runtime"] = dict(service.state["runtime"])
         return web.json_response(response)
 
+    async def performance_diagnostics(request):
+        # Authentication is the same as the existing diagnostic reads. No
+        # capture is started, app snapshot built, or state publication made.
+        return web.json_response({'hostInstanceId': service.instance_id,
+            'version': __version__, **service.performance_diagnostics.snapshot(),
+            'recentRequests': list(getattr(service, 'request_timings', []))})
+
     async def certificate(request):
         certificate = ca_bytes(data_dir)
         if certificate is None:
@@ -575,6 +583,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/outputs/{identity}/media", output_media_bytes)
     app.router.add_get("/api/outputs/{identity}/image", output_image)
     app.router.add_get("/api/health", health)
+    app.router.add_get("/api/diagnostics/performance", performance_diagnostics)
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
     app.router.add_get("/api/conversation/detail", conversation_detail)

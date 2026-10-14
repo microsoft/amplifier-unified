@@ -173,10 +173,10 @@ try{
  await received(sharedRetryAccepted);await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);
  assert.equal(chat().messages.at(-1).text,sharedRetryText);assert.equal(state.sessions.length,1);assert.equal(calls.filter(c=>c.action==='message.edit').length,0);
  const lostRejection=await send('Rejection reply lost');await lostRejection.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).click();
- const rejectionCheck=await next();assert.equal(rejectionCheck.body.action,'conversation.delivery');assert.equal(rejectionCheck.body.args.inputId,lostRejection.body.id);await rejectionCheck.route.fulfill({json:{accepted:true,result:{delivery:'not_saved',message:'No saved copy; choose Send again.'},state}});
+ const rejectionCheck=await next();assert.equal(rejectionCheck.body.action,'conversation.delivery');assert.equal(rejectionCheck.body.args.inputId,lostRejection.body.id);await rejectionCheck.route.fulfill({json:{accepted:true,result:{delivery:'not_saved',message:'No saved copy; retry the original submission.'},state}});
  assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,1,'Check never resends');
- await page.getByRole('button',{name:'Send again',exact:true}).click();await page.getByRole('button',{name:'Send this message again',exact:true}).click();
- const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.id,lostRejection.body.id);await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state}});
+ await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
+ const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state}});
  await page.getByRole('button',{name:'Retry',exact:true}).click();const rejectedRetry=await next();assert.notEqual(rejectedRetry.body.id,lostRejection.body.id);await received(rejectedRetry);
  const delayed=await send('Acknowledgement delayed');chat().status='working';chat().messages.push({id:'delayed',inputId:delayed.body.id,role:'user',text:delayed.body.args.text,delivery:{status:'sending'}});await emit();
  await composer().fill('Keep this next draft');await until(()=>state.view.draft==='Keep this next draft','Draft saves while acknowledgement waits');

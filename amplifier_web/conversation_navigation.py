@@ -92,7 +92,8 @@ def query(session, *, message_id=None, window=False, _raw_window=False):
     messages = selected if _raw_window else [
         compact(annotate(annotation_source,row),session['id'],'messages',TEXT_LIMIT) for row in selected]
     anchors={row['id'] for row in messages}
-    _,segments=work_segments(with_window(session, selected))
+    _,segments=work_segments(with_window(session, selected),
+        select_groups=lambda rows: [row for row in rows if row.get('anchorMessageId') in anchors])
     segments=[{**row, 'windowMessageId': message_id} for row in segments if row.get('anchorMessageId') in anchors]
     turn_ids={row['turnId'] for row in segments}
     return {'revision':revision,'messages':messages,'offset':start,'sourceOffset':facts[start][3],'total':len(facts),

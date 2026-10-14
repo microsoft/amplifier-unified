@@ -155,3 +155,73 @@ for browsers that do not include WebSocket schemes in CSP `self`.
 Reconnect uses bounded backoff and a fresh snapshot, preserving private drafts
 and mounted Canvas state. SSE is a compatibility path for hosts that do not
 advertise WebSocket support, not an automatic response to a broken socket.
+
+### Recent history and scoped execution updates
+
+The normal working set is the few actively viewed or running chats, not the
+entire saved catalog. Historical existence does not authorize background history
+loading, worker startup, prefetch or execution reconstruction. Catalog metadata
+and explicit search/paging remain separate from conversation payloads. A test
+with 23,128 catalog entries verifies that repeated demand selection visits only
+subscriptions and running work after the catalog index is built.
+
+Completed model/tool events still commit before acknowledgment. When a scoped
+save proves shared navigation and attention facts unchanged, it retains the
+catalog and unrelated client snapshots. Preparation/loading facts participate
+in that comparison; a changed status, attention fact or global scope broadens
+publication. This is a semantic guard, not a time-based cache.
+
+Work-group membership remains metadata over the loaded execution view. Expensive
+usage summaries and nested detail fingerprints are evaluated after selecting the
+requested group page or explicitly opened group/window. Older tool bodies are
+not examined to construct the newest hundred summaries. The current native
+reader still reconstructs loaded execution metadata; this change does not claim
+fully disk-paged execution reconstruction.
+
+When a requested native index exceeds the 64 MiB RAM working-set budget or is
+evicted, a disposable checkpoint under `cache/event-index-v1` preserves parsed
+descriptors and byte references. A later read validates canonical file identity,
+size, timestamps and the indexed tail before resuming at the saved byte offset.
+Checkpoints are created by requested reads, never by sweeping dormant histories.
+Raw provider request/response bodies remain solely in their existing recordings;
+exact detail access still checks the referenced bytes against their digest.
+Descriptors may contain existing bounded tool previews; prompts contribute only
+association fingerprints. Cache files have private permissions and use JSON,
+not executable serialization.
+
+Checkpoint limits are 64 MiB decoded, 16 MiB compressed per file, 256 MiB and
+1,024 files in total, retired oldest first. The count allows referenced child
+logs of a few active root chats; it is not a preload target. Missing, invalid,
+incompatible or unwritable caches fall back to canonical reads without losing
+history or replaying work. Source replacement/truncation rebuilds the index.
+The first uncached read and reconstruction of metadata for the requested chat
+can still be proportional to that chat's retained events; recent-page summaries
+do not claim that remaining cost has been removed.
+
+### Bounded performance diagnostics
+
+Authenticated clients may read `GET /api/diagnostics/performance`. It returns
+schema version 1, host instance and application version, inclusive operation
+counts/total/max milliseconds, bounded counters, the last 60 slow operations,
+last 60 event-loop delays and recent request timing metadata. It does not build
+an application snapshot, publish state, start workers or start a profile.
+`session.inspect` includes the same process-local performance snapshot in its
+health diagnostics so Copy diagnostics can carry this evidence.
+
+Operation labels are fixed in code; there are at most 32 timing and counter
+labels each. Slow spans record wall time, and synchronous spans also record
+thread CPU time. Asynchronous lock/reader spans include waiting and scheduling.
+Event-index counters include bytes read from canonical logs, checkpoint hits
+and misses, RAM hits, evictions, and unchanged projection reuse.
+The 200 ms event-loop heartbeat records excess delays of at least 100 ms.
+No prompts, request bodies, credentials, query strings, filesystem paths or
+stack locals are collected. Records expire by count and disappear on restart.
+Optional stack capture remains owned by the existing opt-in profiling facility.
+
+`Server-Timing: app` and `X-Amplifier-Request-Id` now cover `/build.json` as well
+as API responses; request records include handler start and completion times.
+The handler timer does not include time before the event loop admitted the
+request, nor static-body transfer. A short handler time does not exonerate the
+server: compare it with the loop-delay samples and client TTFB. Host sleep and
+CPU scheduling can also create loop delay, so a delay alone is not attribution.
+Inclusive nested operations overlap and their durations must not be summed.

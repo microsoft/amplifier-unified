@@ -353,3 +353,26 @@ def test_delegate_owner_survives_message_boundary_paging_and_sync(monkeypatch):
     assert result['revision'] != old_revision
     assert 'delegate' not in session['execution']['nodes'][1]
     assert next(x for x in work_segments(session)[1] if x['id']=='turn@paused')['nodeCounts']=={'tools':1,'models':1}
+
+
+def test_summary_paging_does_not_visit_old_tool_payloads():
+    from amplifier_web.browser_detail import page
+    class DormantBody(dict):
+        def items(self):
+            raise AssertionError('Old payload visited before its detail page was requested')
+    session = {'id': 'chat', 'messages': [], 'execution': {'turns': [], 'nodes': []}}
+    for n in range(1000):
+        session['messages'].append({'id': str(n), 'role': 'user', 'createdAt': n * 10})
+        session['execution']['turns'].append({'id': str(n), 'anchorMessageId': str(n)})
+        session['execution']['nodes'].append({'id': f'call-{n}', 'kind': 'tool', 'turnId': str(n),
+            'startedAt': n * 10 + 1, 'endedAt': n * 10 + 2,
+            'input': DormantBody(secret='old') if n < 900 else 'recent'})
+    result = page(session, 'groups')
+    assert result['total'] == 1000 and result['offset'] == 900
+    assert result['items'][0]['id'] == '900@900'
+    assert result['items'][-1]['id'] == '999@999'
+    # Historical metadata is still pageable, but loading its payload is explicit.
+    for row in session['execution']['nodes'][:900]:
+        row['input'] = 'requested old body'
+    older = page(session, 'groups', before=result['before'])
+    assert older['offset'] == 800 and older['items'][-1]['id'] == '899@899'

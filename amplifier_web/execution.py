@@ -136,6 +136,11 @@ def ingest(session,event):
         if (prior_topology == topology and node.get('aggregateUsage') is not None
                 and all(row.get('turnId') for row in tree['nodes'])):
             return
+        if (prior_topology is None and node.get('turnId')
+                and all(row.get('turnId') and row.get('parentId') != identity
+                        for row in tree['nodes'])):
+            node['aggregateUsage'] = rollup([])
+            return
     refresh_usage(tree)
 
 

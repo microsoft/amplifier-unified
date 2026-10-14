@@ -1,0 +1,85 @@
+import asyncio
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from amplifier_web.performance_diagnostics import PerformanceDiagnostics, TimedLock, measured
+from amplifier_web.server import create_app
+from test_service import Runtime
+
+
+def test_bounded_detached_timings_on_errors(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.time.monotonic', lambda: clock[0])
+    diagnostics = PerformanceDiagnostics()
+    for i in range(100):
+        with pytest.raises(ValueError):
+            with diagnostics.measure('operation', synchronous=True, session_id='chat'):
+                clock[0] += 0.2
+                raise ValueError('private contents are not captured')
+        diagnostics.record_lag(0.25)
+        diagnostics.increment('cache.hit')
+    snapshot = diagnostics.snapshot()
+    assert snapshot['operations']['operation']['count'] == 100
+    assert len(snapshot['slowOperations']) == len(snapshot['eventLoopDelays']) == 60
+    assert snapshot['counters']['cache.hit'] == 100
+    assert 'private contents' not in json.dumps(snapshot)
+    snapshot['slowOperations'][0]['operation'] = 'tampered'
+    assert diagnostics.snapshot()['slowOperations'][0]['operation'] == 'operation'
+    for i in range(100):
+        with diagnostics.measure(str(i)):
+            pass
+        diagnostics.increment(str(i))
+    assert len(diagnostics.operations) == len(diagnostics.counters) == 32
+
+
+async def test_wait_cancellation_and_monitor_cleanup():
+    diagnostics = PerformanceDiagnostics()
+    service = SimpleNamespace(performance_diagnostics=diagnostics)
+    lock = TimedLock(service, 'lock.wait')
+    async with lock:
+        waiter = asyncio.create_task(lock.acquire())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+    async with lock:
+        pass
+    assert diagnostics.snapshot()['operations']['lock.wait']['count'] == 3
+    diagnostics.start()
+    task = diagnostics.task
+    diagnostics.start()
+    assert diagnostics.task is task
+    await diagnostics.close()
+    assert task.done() and diagnostics.task is None
+
+
+async def test_endpoint_is_authenticated_and_does_not_project_or_publish(tmp_path, authenticated_client, monkeypatch):
+    app = await create_app(tmp_path, workspace=tmp_path, runtime=Runtime(), voice=False,
+                           preload_providers=False, background_updates=False)
+    service = app['service']
+    for owner in (service.diagnostics, service.history, service.event_log_view,
+                  service.schedules, service.observations):
+        await owner.close()
+    client = await authenticated_client(app)
+    client.session.headers.pop('Authorization')
+    assert (await client.get('/api/diagnostics/performance')).status in {401, 403}
+    client.session.headers['Authorization'] = 'Bearer ' + app['control_token']
+    def unexpected(*args, **kwargs):
+        pytest.fail('Diagnostics must not build or persist application state')
+    with monkeypatch.context() as patch:
+        patch.setattr(service, '_save', unexpected)
+        patch.setattr(service, '_publish', unexpected)
+        patch.setattr(service, 'browser_state', unexpected)
+        response = await client.get('/api/diagnostics/performance?private=not-recorded')
+        assert response.status == 200
+        body = await response.json()
+        assert body['hostInstanceId'] == service.instance_id
+        assert body['schemaVersion'] == 1
+        assert 'private' not in json.dumps(body)
+    response = await client.get('/build.json')
+    await response.read()
+    assert response.status == 200
+    assert 'app;dur=' in response.headers['Server-Timing']
+    assert any(row['route'] == '/build.json' for row in service.request_timings)
