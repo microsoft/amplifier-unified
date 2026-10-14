@@ -314,6 +314,8 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
             "target": {key: args[key] for key in ("id", "name", "repository", "ref", "path", "sessionId", "uri", "names", "query") if key in args},
             "status": "running", "createdAt": time.time(), "updatedAt": time.time(),
         }
+        if args.get('_viewOperation'):
+            operation['viewBinding'] = copy.deepcopy(args.pop('_viewOperation'))
         if action in {"smartTools.call", "smartTools.resources", "smartTools.readResource"}:
             if action == "smartTools.call":
                 operation["arguments"] = self._redact(copy.deepcopy(args.get("arguments", {})))

@@ -72,11 +72,29 @@ export function artifactViewCanvas(body,view){
 }
 
 export function requireArtifactBody(body){
- if(!body||typeof body.kind!=='string'||!body.id||
-  (body.kind==='canvas-app'?!body.app:
-   body.kind==='mcp-app'?!body.mcp:
-   body.kind==='browser'?!body.url:
-   body.kind==='a2ui'?!body.surface?.components?.some(row=>row.id===body.surface.root):typeof body.content!=='string')){
+ const object=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
+ const text=value=>typeof value==='string'&&value.length>0;
+ const exact=body&&text(body.viewId)&&text(body.resourceRevision)&&
+  Number.isSafeInteger(body.generation)&&body.generation>=0;
+ const pointer=body?.contentResource;
+ const deferred=exact&&['html','babylon','pdf'].includes(body.kind)&&object(pointer)&&
+  /^[a-f0-9]{64}$/.test(pointer.$resource)&&Number.isSafeInteger(pointer.bytes)&&pointer.bytes>0;
+ const reference=body?.mediaReference,item=reference?.item;
+ const media=object(reference)&&text(reference.messageId)&&reference.messageId.length<=200&&object(item)&&
+  text(item.id)&&item.id.length<=100&&item.sessionId===body.sessionId&&
+  Number.isSafeInteger(item.version)&&item.version>0&&/^[a-f0-9]{64}$/.test(item.sha256)&&
+  typeof item.title==='string'&&text(item.filename)&&object(item.media)&&
+  item.media.mimeType===(body.kind==='mp4'?'video/mp4':'image/gif')&&
+  (body.kind!=='gif'||item.media.loopCount===null||Number.isSafeInteger(item.media.loopCount)&&item.media.loopCount>=0&&item.media.loopCount<=65535);
+ const valid=body&&(body.kind==='canvas-app'?object(body.app)&&object(body.app.manifest)&&
+    Number.isSafeInteger(body.app.revision)&&body.app.revision>0:
+   body.kind==='mcp-app'?object(body.mcp)&&text(body.mcp.serverId)&&text(body.mcp.configuration):
+   body.kind==='browser'?text(body.url):
+   body.kind==='a2ui'?object(body.surface)&&Array.isArray(body.surface.components)&&
+    body.surface.components.some(row=>row.id===body.surface.root&&object(row.component)):
+   mediaKinds.has(body.kind)?media:
+   nativeKinds.has(body.kind)&&(deferred||typeof body.content==='string'&&pointer===undefined));
+ if(!body||!text(body.id)||!valid){
   throw Error('Saved artifact source is unavailable. Retry the preview or open it in Canvas.');
  }
  return body;

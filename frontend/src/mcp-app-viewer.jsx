@@ -7,6 +7,7 @@ import {request} from './api';
 import {useMcpAppTheme} from './mcp-app-theme';
 import {MCP_VISIBILITY,useMcpAppVisibility} from './mcp-app-lifecycle';
 import {createMcpReadGate} from './mcp-app-reads';
+import {inlineOwnership} from './conversation-navigation';
 
 // The iframe can call tools only through its saved server binding. No host
 // credentials, app_control handle, or server selector crosses postMessage.
@@ -63,6 +64,24 @@ export function McpAppViewer({canvas,act,connectionKey}){
  const connection=useRef(null),booted=useRef(false),[recovery,setRecovery]=useState(null),[recovering,setRecovering]=useState(false);
  const renderReport=useRef(null),resetCatalog=useRef(null),refreshConnection=useRef(null),lastConnection=useRef(null);
  const lifetime=useRef(null),reconnectCommand=useRef(null);
+ const root=useRef(null),transition=useRef(null),[resetConfirmation,setResetConfirmation]=useState(null),[transitioning,setTransitioning]=useState(false);
+ useEffect(()=>inlineOwnership.registerRenderer(viewTarget(canvas),{
+  prepare:id=>{
+   if(transition.current||!frame.current)throw Error('This tool view is already changing versions.');
+   const hold={id,target:viewTarget(canvas)};transition.current=hold;
+   // MCP has no private-input/quiescence handshake. Freeze the iframe before
+   // asking for intentional reset; never interpret a missing handler as clean.
+   frame.current.inert=true;frame.current.tabIndex=-1;root.current?.focus();setTransitioning(true);
+   return new Promise((resolve,reject)=>{hold.resolve=resolve;hold.reject=reject;setResetConfirmation(hold)});
+  },
+  validate:(id,proof)=>transition.current?.id===id&&proof?.token===id&&proof.confirmed===true&&
+   JSON.stringify(proof.target)===JSON.stringify(viewTarget(canvas))&&frame.current?.inert===true,
+  release:id=>{
+   if(transition.current?.id!==id)return;
+   transition.current=null;setResetConfirmation(null);setTransitioning(false);
+   if(frame.current){frame.current.inert=false;frame.current.tabIndex=0}
+  }
+ }),[canvas.id,canvas.viewId,canvas.resourceRevision,canvas.generation]);
  const rememberConnection=value=>{connection.current=value;setRecovery(value)};
  const theme=useHostTheme(useMcpAppTheme());
  const visible=useMcpAppVisibility(canvas.open!==false&&!canvas.visibilityPending),visibleRef=useRef(visible);
@@ -78,7 +97,7 @@ export function McpAppViewer({canvas,act,connectionKey}){
  useEffect(()=>{
   const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='',availabilityRevision=0,latestAvailability;
   const lease={controller};lifetime.current=lease;
-  const assertLive=()=>{if(!live||controller.signal.aborted)throw Error('This saved view generation closed. Inspect the current view before interacting.');};
+  const assertLive=()=>{if(!live||controller.signal.aborted)throw Error('This saved view generation closed. Inspect the current view before interacting.');if(transition.current)throw Error('Tool view input is disabled during a version change. No new work was accepted.');};
   const reads=createMcpReadGate({isVisible:()=>visibleRef.current});
   let catalog;
   const clearCatalog=()=>{catalog=undefined};resetCatalog.current=clearCatalog;
@@ -180,7 +199,7 @@ export function McpAppViewer({canvas,act,connectionKey}){
  },[connectionKey,visible,canvas.id,canvas.viewId,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
  const reconnect=async reviewedContract=>{
   const lease=lifetime.current;
-  if(!lease||canvas.readOnlyVersion)return;
+  if(!lease||canvas.readOnlyVersion||transition.current)return;
   const stillLive=()=>lifetime.current===lease&&!lease.controller.signal.aborted;
   setRecovering(true);
   try{
@@ -203,7 +222,13 @@ export function McpAppViewer({canvas,act,connectionKey}){
   }
   finally{if(stillLive())setRecovering(false)}
  };
- return <div className="a-mcp-app-viewer" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
+ return <div ref={root} tabIndex={-1} className="a-mcp-app-viewer" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
+  {resetConfirmation&&<div role="alertdialog" aria-label="Switching versions resets tool input" aria-modal="true">
+   <p>Switching versions resets this tool view’s unfinished local input. This tool cannot confirm whether that input is saved. Existing tool work is not cancelled or replayed.</p>
+   <button type="button" autoFocus onClick={()=>{const hold=resetConfirmation;setResetConfirmation(null);hold.resolve({token:hold.id,target:hold.target,confirmed:true})}}>Reset local input and switch version</button>
+   <button type="button" onClick={()=>resetConfirmation.reject(Error('Version change cancelled. The same tool view and its local input were kept.'))}>Keep this tool view</button>
+  </div>}
+  {transitioning&&!resetConfirmation&&<p role="status">Tool view input disabled while the version change is reconciled. New typing is not accepted; existing tool work has not been cancelled.</p>}
   <CanvasControl inline={status.phase==='error'}><div data-phase={status.phase} className={`a-mcp-status a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">
    {status.phase==='error'?<AlertCircle/>:status.phase==='ready'?<Check/>:<Loader className="a-progress-spinner"/>}<span>{status.text}</span>
    <button type="button" className="a-icon" aria-label="Reconnect tool view" data-action="smartTools.reconnectView" disabled={canvas.readOnlyVersion||recovering||recovery?.canReconnect===false} onClick={()=>reconnect()}><RefreshCw/></button>
