@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import './coordination.css';
 import {WorkspaceAwareness} from './workspace-awareness.jsx';
 import {AssignmentControls} from './assignment-controls.jsx';
+import {CoordinationObservations} from './coordination-observations.jsx';
 
 const keyOf=target=>JSON.stringify([target.sessionId,target.workerId||null]);
 const labels={idle:'Ready for follow-up',working:'Working',running:'Working',starting:'Starting',queued:'Queued',stopping:'Interruption requested',completed:'Completed',interrupted:'Outcome unknown',error:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
@@ -98,11 +99,12 @@ export function RelatedWork({dispatch,sessionId}){
  };
  return <section className="a-coordination-related" aria-label="Related work">
   <h3>Related work</h3>
-  <AssignmentControls key={sessionId} dispatch={dispatch} sessionId={sessionId}/>
+  <AssignmentControls key={'assignment:'+sessionId} dispatch={dispatch} sessionId={sessionId}/>
   <p className="a-caption">Related tasks and exact results. Inspecting evidence keeps your current conversation and draft. A sealed result still needs independent artifact verification.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh related work</button>
-  <WorkspaceAwareness key={sessionId} dispatch={dispatch} sessionId={sessionId} context={context} refresh={refresh}/>
+  <CoordinationObservations key={'observations:'+sessionId} dispatch={dispatch} sessionId={sessionId}/>
+  <WorkspaceAwareness key={'workspace:'+sessionId} dispatch={dispatch} sessionId={sessionId} context={context} refresh={refresh}/>
   {original&&<article aria-label="Original message"><strong>{original.role} · {original.sessionId}</strong><p style={{whiteSpace:'pre-wrap'}}>{original.text}</p>{original.truncated&&<small>Bounded excerpt; original retained.</small>}<button className="a-link" onClick={()=>setOriginal(null)}>Close original message</button></article>}
   {items.map(row=><div key={row.target.sessionId}>{row.title} · {labels[row.status]||row.status}{row.collaboration&&<> · created by {row.collaboration.creatorTitle||'Source conversation'}</>}<details><summary>Task identity</summary><code>{row.target.sessionId}{row.collaboration&&<> · creator {row.collaboration.creatorSessionId}</>}</code></details></div>)}
   {context.requests.map(row=>{const result=inspected[row.requestId],receipt=result?.receipt||row,response=[receipt.response,receipt.terminalOutcome].filter(Boolean).sort((a,b)=>(b.outcomeRevision||0)-(a.outcomeRevision||0))[0];return <article key={row.requestId} data-request-id={row.requestId}>

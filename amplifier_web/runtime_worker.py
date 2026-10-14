@@ -391,6 +391,9 @@ class Worker:
         async def admit_questions(question_ids):
             return await self.bridge("questions.admit", {"questionIds": question_ids})
         coordinator.register_capability("questions.admit", admit_questions)
+        async def admit_integration(identity, command):
+            return await self.bridge('integration.admit', {'id': identity, 'command': command})
+        coordinator.register_capability('integration.admit', admit_integration)
         def public_stream():
             from amplifier_web.execution_events import CALL_PURPOSE
             return not CALL_PURPOSE.get()
@@ -979,7 +982,15 @@ class Worker:
                     self.shutdown.set()
                 return
             elif op == "dependencies":
-                if data.get('provenance') is True:
+                if data.get('resourceAccess') is True:
+                    from amplifier_web.resource_access import observe
+                    inspected_session = self.session
+                    result = await observe(inspected_session, data.get('paths', []))
+                    if self.session is not inspected_session:
+                        result = {'status': 'unknown', 'paths': {}}
+                elif data.get('integrationValidation') is True:
+                    result = {'integrationValidation': 'admission-v1' if self.controls is not None else None}
+                elif data.get('provenance') is True:
                     from amplifier_web.loaded_provenance import observe
                     inspected_session = self.session
                     result = await observe(inspected_session, data.get('modules', []), mounted=getattr(self, 'provenance_mount', None))
@@ -989,7 +1000,7 @@ class Worker:
                     from .artifact_runtime import discover
                 else:
                     from artifact_runtime import discover
-                if data.get('provenance') is not True:
+                if data.get('provenance') is not True and data.get('resourceAccess') is not True and data.get('integrationValidation') is not True:
                     result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif op == "desktop.readiness":
                 if not self.controls:

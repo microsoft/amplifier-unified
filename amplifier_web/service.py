@@ -3993,6 +3993,9 @@ class AppService:
                 for question_id in values:
                     self.questions.answer_for_dependency(session_id, question_id)
                 return {"admitted": True, "questionIds": values}
+        if operation == 'integration.admit':
+            from .integration_validation import admit
+            return await admit(self, session_id, args.get('id'), args.get('command'))
         if operation == "operations.observe":
             return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
         if operation == "computer.visual.read":
@@ -4111,7 +4114,7 @@ class AppService:
                 action_args.setdefault('id', session_id)
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
-                action_args.setdefault('nativeProject', native_project(self._session(session_id, hydrate=args['action'] != 'workspace.resources.managed')))
+                action_args.setdefault('nativeProject', native_project(self._session(session_id, hydrate=args['action'] not in {'workspace.resources.managed', 'workspace.resources.read', 'coordination.recap', 'coordination.diagnostics'})))
             if args['action'] == 'canvas.views.command' and action_args.get('action') == 'canvas.reference':
                 if action_args.get('args', {}).get('sessionId') != session_id:
                     raise AppError('References must target the calling conversation.', 409)

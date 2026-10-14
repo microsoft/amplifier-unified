@@ -262,6 +262,42 @@ the total inspection duration are bounded; deadline/cancellation cannot create
 a late candidate receipt. A replacement worker makes prior loaded-state
 continuity unknown even when current source still matches.
 
+### Explicit integration validation — 2026-10-14
+
+Combining an assignment's outputs requires an explicitly named integration
+responsible member. The commissioning owner may assign or clear that duty with
+the current assignment revision; it never enrolls an independent conversation.
+Independent conversations can validate their own candidates without creating an
+assignment. Responsibility records coordination, not wider file/tool authority.
+
+An explicit validation names a retained candidate, one of its repositories and
+the exact command and timeout. It checks the complete candidate before
+submitting through the existing Operations shell policy/approval owner, then
+rechecks admission after approval. The current worker must positively confirm
+support; replacement or older adapters refuse before submission. Stop, responsibility and execution changes
+invalidate delayed admission. This is an observation boundary, not a filesystem
+lock against external writers. Stable command identities retain uncertain
+admission without repeating commands after lost acknowledgment or restart.
+If no parent validation or collection receipt committed, retrying takes fresh
+internal source observations. Completed parent retries return their retained
+receipt without repeating observations or command execution.
+
+Explicit collection reads that operation's native terminal evidence and checks
+the candidate again. Command exit, output completeness, source/dependency match
+and retained artifacts remain separate facts. A zero exit and matching candidate
+permit a successful validation receipt only for that named command/repository;
+they do not prove the command was a meaningful test, that every repository was
+integrated, or that anything was published. Missing terminal evidence remains
+unknown. Resulting repository commits/snapshots and supported exact file
+references use existing command and output owners. Collection preserves earlier
+receipts, including partial failures and changed candidates.
+
+Per-repository publication status defaults to unknown. Explicit reports carry
+their author and references, distinguished from any existing authoritative
+publication evidence. Recording a status never merges, publishes or deploys.
+Passive read/list and progressively disclosed user controls share the agent
+actions and do not execute validation or collect mutable source automatically.
+
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.
 
 ### Configuration authority addition — 2026-10-14
@@ -436,11 +472,43 @@ agents may inspect only their host-bound task, while users may select a workspac
 task. Cooperative reservations remain separately labelled, with no inferred link
 between a user-chosen key and a physical resource.
 
-Dedicated scratch folders, test databases, dynamic application preview listeners
-and browser profiles remain unallocated by this workspace adapter. A documented
-working-files namespace is not provisioned isolation. Unknown operation cwd,
+The initial managed inventory did not allocate dedicated scratch folders,
+databases or browser profiles; the owned-storage addition below supplies those
+specific local bytes. Dynamic application preview listeners remain undiscovered.
+A documented working-files namespace alone is not provisioned isolation. Unknown operation cwd,
 remote publishing state or resources outside these owners must remain explicit
 coverage limits, never reported absent or safely isolated.
+
+### Owned task storage — 2026-10-14 candidate addition
+
+The workspace resource owner may explicitly provision a private task-owned scratch
+directory, browser-profile directory or local SQLite database outside borrowed
+source repositories. It retains allocation intent before filesystem effects,
+binds ownership to the authenticated root, bounds outstanding allocations and
+records directory/file identity. Stable retries return the same allocation;
+interrupted or replaced resources remain inspectable and are never recreated
+from an uncertain receipt. Stop or changed placement before admission suppresses
+unperformed effects; already-admitted local filesystem work may finish. Retirement
+preserves contents and does not assert that external users of the files stopped.
+
+Allocation does not change file-access settings or executable mount plans.
+Inspection reports the current supported mounted file/patch policy for the
+allocated path without warming a worker. Existing applicable access remains
+usable; absent access follows the ordinary explicit file-access authorization
+route. Unknown or custom tools never become an inferred grant. A browser-profile
+directory is not a launched or confined browser, and a SQLite file is not a
+provisioned database server. User and agent controls share ownership, receipts
+and revision checks; peer workspace membership confers no allocation control.
+
+The first supported allocation locations are opaque, app-owned paths. The caller
+does not supply a destination inside a borrowed repository. At most 32 nonretired
+allocations belong to one root and 512 to one app home; these are allocation-count
+limits, not disk quotas. A stopped allocation owner is reconciled to unknown only
+after its physical owner lock is free. Retirement releases a count slot but never
+reclaims bytes. No automatic garbage collection or deletion action is supplied.
+Read pages contain at most 32 records and do not hydrate conversation history.
+The ready-worker policy check observes supported reference filesystem and patch
+tools only; it does not certify custom tools, shell, browser or database access.
 
 ### Notification display provenance — 2026-10-14
 
@@ -452,3 +520,36 @@ current qualification, permission or successful dependency completion. Same-root
 preparation updates require the same exact system claim; arbitrary self-messages
 and imported or prose-only attribution remain unverified. Reads use only the
 requested page's bounded command identities and never open the producing chat.
+
+### Return recaps and portable phase observations — 2026-10-14
+
+Explicit recap and diagnostic reads reuse existing request, reply, observation,
+resource and native runtime records. They do not load peer transcripts, call a
+model, admit work, replay effects or establish execution/configuration authority.
+Agents inspect their bound root; users may inspect a selected root. Workspace
+and actor scope is rechecked after detached owner reads. Reads remain bounded
+and indexed even when many dormant conversations exist.
+
+A recap compares an optional caller-held cursor with current bounded facts.
+The cursor stores only version signatures and scope, not text or drafts. It is
+untrusted presentation state, never evidence of completion or authorization.
+Missing, malformed, foreign or obsolete cursors reset explicitly. Reports use
+existing names and declared/observed outcomes; reported success is distinguished
+from terminal qualification. Page gaps remain explicit. Only displayed changes
+advance the returned cursor; further changes stay available on the next read.
+Browser cursors are private to their tab and conversation and advance only after
+the returned view is visible. Hidden, cancelled and stale responses must not mark
+changes seen. Other clients may maintain independent cursors through the same API.
+
+Portable diagnostics distinguish admission queue timing, retained preparation,
+reply/claim phases, observed native provider/bridge timing and sampled host loop
+delay. Correlation uses hashed actor and operation identities; arbitrary content,
+paths, titles, tool arguments, credentials and private drafts are excluded.
+Browser action/request timing is attached locally, never synchronized as shared
+conversation state. Inclusive measurements may overlap and must not be summed.
+The browser may also attach a bounded, numeric recap timing sample from dispatch
+response delivery to the component through its React layout effect after DOM
+mutations commit. This monotonic-clock observation is local to that recap mount;
+it excludes network delivery, physical paint and global application rendering.
+Unavailable samples and unmeasured paint remain explicit; a recorded
+phase or timing is not proof of correctness, live liveness or external effects.

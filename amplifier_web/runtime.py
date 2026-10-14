@@ -787,6 +787,9 @@ class RuntimeManager:
         row = self.workers.get(sid)
         if not row or row["process"].returncode is not None:
             raise RuntimeError("Session is not running")
+        if (op == 'control' and args.get('arguments', {}).get('integrationId') is not None
+                and row.get('integrationValidation') != 'admission-v1'):
+            raise RuntimeError('The current worker has not confirmed integration admission support.')
         if row.get('preparation_error') and op in {'send', 'retry', 'resume', 'control'}:
             raise row['preparation_error']
         identity = str(uuid.uuid4())
@@ -1057,6 +1060,22 @@ class RuntimeManager:
     async def control(self, session_id, operation, arguments=None):
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
 
+    async def integration_validation_supported(self, session_id):
+        """Require a positive current-worker capability; older adapters refuse."""
+        row = self.workers.get(session_id)
+        if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled() or row['ready'].exception() is not None:
+            return False
+        try:
+            async with asyncio.timeout(10):
+                value = await self._request(session_id, 'dependencies', integrationValidation=True)
+            supported = (self.workers.get(session_id) is row and row['process'].returncode is None
+                         and value.get('integrationValidation') == 'admission-v1')
+            if supported:
+                row['integrationValidation'] = 'admission-v1'
+            return supported
+        except (RuntimeError, TimeoutError, AttributeError):
+            return False
+
     async def dependencies(self, session_id, *, verify=False):
         """Inspect an existing worker without warming or acquiring its session."""
         row = self.workers.get(session_id)
@@ -1084,6 +1103,23 @@ class RuntimeManager:
             return {**result, 'sessionId': session_id, 'workerInstance': f"{row['process'].pid}:{row['started_at']}"}
         except (RuntimeError, TimeoutError):
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Loaded-source inspection did not return. No work was started.'}
+
+    async def resource_access(self, session_id, paths):
+        """Read a ready worker's current file policy without mounting anything."""
+        row = self.workers.get(session_id)
+        unknown = {'status': 'unknown', 'paths': {}}
+        if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
+            return unknown
+        if row['ready'].exception() is not None:
+            return unknown
+        try:
+            async with asyncio.timeout(10):
+                result = await self._request(session_id, 'dependencies', resourceAccess=True, paths=paths)
+            if self.workers.get(session_id) is not row or row['process'].returncode is not None:
+                return unknown
+            return result
+        except (RuntimeError, TimeoutError):
+            return unknown
 
     async def desktop_readiness(self, session_id):
         """Inspect only the mounted worker; do not revive retired conversations."""

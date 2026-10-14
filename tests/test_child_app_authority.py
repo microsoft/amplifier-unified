@@ -86,7 +86,8 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize('mode', ['finite', 'resumed', 'persistent', 'nested', 'recipe'])
-async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize('effect', ['configuration', 'task-storage'])
+async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeypatch, mode, effect):
     from amplifier_foundation.bundle import Bundle, BundleModuleResolver
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_web.app_guidance import install_app_access
@@ -129,12 +130,15 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
     await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
     registry = await install_children(parent, prepared, Runtime('root'), SessionStore(tmp_path/'children'), approvals)
     observed = []
+    workspace = next(row for row in app.state['workspaces'] if row['path']==root['workspace'])
+    action, action_args = ('permissions.save', {'scope':'global', 'allowed':[], 'denied':[]}) if effect=='configuration' else (
+        'workspace.resources.provision', {'workspaceId':workspace['id'], 'sessionId':root['id'], 'kind':'scratch-directory'})
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         result = await tools['app_control'].execute({'operation':'dispatch', 'args':{
-            'action':'permissions.save', 'args':{'scope':'global', 'allowed':[], 'denied':[]},
+            'action':action, 'id':'child-forged-storage', 'args':action_args,
             '_runtimeSessionId':'root', '_generationId':'generation'}})
         assert not result.success
-        assert 'child cannot borrow' in str(result.error)
+        assert ('child cannot borrow' if effect=='configuration' else 'host-bound root owner') in str(result.error)
         observed.append(coordinator.session_id)
         if mode == 'nested' and coordinator.session_id == 'child':
             await registry.spawn('worker', 'nested', registry.sessions['child'], sub_session_id='grandchild')
@@ -148,11 +152,17 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
         assert len(observed) == (2 if mode in {'resumed','nested'} else 1)
         assert app.configuration_authority.snapshot(root)['grants'][0]['usable']
         result = await parent.coordinator.get('tools')['app_control'].execute({'operation':'dispatch','args':{
-            'action':'permissions.save','id':'native-root-admin','args':{'scope':'global','allowed':[],'denied':[]}}})
+            'action':action,'id':'native-root-admin','args':action_args}})
         assert result.success, result.error
-        from test_coordination_generation import until
-        await until(lambda: 'native-root-admin' in app.state.get('managementResults', {}))
-        assert app.state['managementResults']['native-root-admin']['phase']=='ready'
+        if effect=='configuration':
+            from test_coordination_generation import until
+            await until(lambda: 'native-root-admin' in app.state.get('managementResults', {}))
+            assert app.state['managementResults']['native-root-admin']['phase']=='ready'
+        else:
+            from amplifier_web.task_resources import read
+            rows = read(app.data_dir, root['id'], {})['items']
+            assert len(rows)==1 and rows[0]['status']=='ready'
+            assert Path(rows[0]['path']).is_dir()
     finally:
         _PERSISTENT.reset(token)
         await parent.cleanup()
