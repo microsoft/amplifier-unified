@@ -1,4 +1,9 @@
 /* Theme-controlled surfaces; screen edges and responsive behavior stay host-owned. */
+/* Applied after saved skins: recovery layout must update without rewriting the theme. */
+#amp-one.a-approachable-shell .a-alert{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px;overflow-wrap:anywhere;flex-shrink:0;max-height:20vh;overflow:auto}
+#amp-one.a-approachable-shell .a-alert>span{flex:1 1 18rem;min-width:0}
+#amp-one.a-approachable-shell .a-alert>button{flex:none;max-width:100%;white-space:normal}
+@media(max-width:600px){#amp-one.a-approachable-shell .a-alert>span{flex-basis:100%}#amp-one.a-approachable-shell .a-alert{max-height:min(40dvh,20rem)}}
 #amp-one.a-approachable-shell{padding:0;--a-reading-width:760px}
 #amp-one.a-approachable-shell .a-layout{gap:clamp(0px,var(--a-panel-gap,0px),16px);padding-top:clamp(0px,var(--a-panel-gap,0px),16px)}
 #amp-one.a-approachable-shell .a-work-header{min-height:52px;padding:7px 16px;border-bottom:1px solid var(--a-line);gap:14px}
