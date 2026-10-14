@@ -57,6 +57,17 @@ union. Wildcard/filter queries can inspect matching scalar rows in SQLite, but
 only their requested result page becomes Python session metadata. Canonical
 parent links resolve the matching project and any durable app alias.
 
+Visible-summary reads use batches of at most 128 exact public IDs. Indexed source
+probes include the local and live owners of candidate native rows before applying
+canonical overrides, suppression and the final exact-ID filter. Reading a native
+alias therefore cannot resurrect an overlaid owner or resolve an ambiguous raw
+ID as an exact public ID. Final rows retain directory order across batches and
+only requested results are decoded. Child-history pages similarly probe indexed
+parent candidates and then apply the existing canonical parent predicate; they
+do not scan unrelated rows to count a selected parent's children. Explicit app
+parent links, scoped native aliases and existing saved-parent fallback remain
+unchanged. Both scopes use the same pinned connection for snapshot readers.
+
 `state_records` keeps durable membership independent of the working set. Routine
 saves update admitted keys and explicit global fields; an omitted owner is not a
 deletion. Local pointers, directory projections and explicit deletions commit in
@@ -132,6 +143,13 @@ across selection and text updates; native/local generations, exact query inputs
 and database versions retain invalidation. Mutable transactions bypass reuse,
 while read snapshots keep their pinned view. Counts and first-page filtering can
 still inspect scalar directory rows; these are not constant-work queries.
+Dedicated exact-summary and child-scope tests compare 270 and 27,000 native rows
+with local overlays, and separately 27,000 local owners. SQL instruction budgets
+and poisoned unrelated payloads verify that small requested sets do not traverse
+the unrelated catalog. The bounds depend on the requested IDs, relevant parent
+membership and admitted owners; they do not make a parent's own large child
+history or explicit all-library search constant work. The parent indexes are an
+additive one-time scalar schema update and require no session-body migration.
 
 Other focused cases cover scoped duplicate IDs, canonical rename precedence and
 parentage, local overrides, first migration, rollback, dormant save/restart/GC,

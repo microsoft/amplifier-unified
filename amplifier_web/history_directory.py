@@ -7,6 +7,7 @@ never start a runtime, acquire a writer, or make eviction a deletion operation.
 from __future__ import annotations
 
 import copy
+import heapq
 import json
 import sqlite3
 import uuid
@@ -36,6 +37,7 @@ FIELDS = {
     'error', 'errorAt', 'approvals', 'questions', 'collaboration', 'coordinationReference',
     '_catalogId', '_catalogRecentAt', '_deleting',
 }
+PUBLIC_ID_BATCH = 128
 
 
 def initialize(db):
@@ -50,6 +52,8 @@ def initialize(db):
     db.execute('CREATE INDEX IF NOT EXISTS history_local_native ON history_local_rows(native_project,native_id)')
     db.execute('CREATE INDEX IF NOT EXISTS history_local_identity ON history_local_rows(native_id)')
     db.execute('CREATE INDEX IF NOT EXISTS history_local_alias ON history_local_rows(alias_id)')
+    db.execute('CREATE INDEX IF NOT EXISTS history_local_parent ON history_local_rows(parent_id)')
+    db.execute('CREATE INDEX IF NOT EXISTS history_local_native_parent ON history_local_rows(native_parent_id)')
     db.execute('CREATE INDEX IF NOT EXISTS history_local_workspace ON history_local_rows(workspace_id,session_kind,recent)')
     db.execute('CREATE INDEX IF NOT EXISTS history_local_startup ON history_local_rows(startup)')
     db.execute('CREATE INDEX IF NOT EXISTS history_local_notices ON history_local_rows(notice_count)')
@@ -138,6 +142,49 @@ def _scalars(row, state, ordinal, *, dormant_task_active=None):
                    or row.get('naming', {}).get('status') == 'working'
                    or row.get('bundleChange', {}).get('phase') == 'working')
     return values, int(pending)
+
+
+def _child_candidates(parent, namespace):
+    """Indexed source candidates; canonical child membership is checked later."""
+    aliases = sorted({parent.get(key) for key in ('id', 'nativeIdentity', 'runtimeSessionId')} - {None})
+    prefix = '''child_input AS MATERIALIZED (SELECT json_extract(value,'$.id') id,
+        json_extract(value,'$.project') project,json_extract(value,'$.workspace') workspace,
+        json_extract(value,'$.aliases') aliases FROM (SELECT ? value)),'''
+    params = [json.dumps({'id': parent.get('id'), 'project': parent.get('nativeProject'),
+                         'workspace': parent.get('workspace'), 'aliases': aliases}, separators=(',', ':'))]
+    direct = 'parent_id=(SELECT id FROM child_input)'
+    alias = 'native_parent_id IN (SELECT value FROM json_each((SELECT aliases FROM child_input)))'
+    live_lookup = f'{direct} OR {alias}'
+    owners = ''
+    if namespace is not None:
+        # Parent app aliases can be outside the requested child page, and the
+        # passed metadata can lag the current native identity. Probe those
+        # exact parent owners, rather than scanning all parent mappings.
+        prefix += '''child_parent_keys AS (
+            SELECT native_project project,native_id identity FROM live_rows WHERE id=(SELECT id FROM child_input) UNION
+            SELECT native_project,native_id FROM history_local_rows WHERE id=(SELECT id FROM child_input)
+                UNION
+            SELECT project,identity FROM history_native.native_rows WHERE namespace=? AND identity=(SELECT id FROM child_input) UNION
+            SELECT project,identity FROM history_native.native_rows INDEXED BY native_rows_public
+                WHERE namespace=? AND public_id=(SELECT id FROM child_input)),'''
+        params += [namespace, namespace]
+        scope = ('project=(SELECT project FROM child_input)' if parent.get('nativeProject') is not None
+                 else 'workspace_path=(SELECT workspace FROM child_input)')
+        prefix += f'''native_candidates AS MATERIALIZED (
+            SELECT rowid,project,identity FROM history_native.native_rows
+                WHERE namespace=? AND parent_id=(SELECT id FROM child_input) UNION
+            SELECT n.rowid,n.project,n.identity FROM child_parent_keys p CROSS JOIN history_native.native_rows n
+                WHERE n.namespace=? AND n.project=p.project AND n.parent_id=p.identity UNION
+            SELECT rowid,project,identity FROM history_native.native_rows
+                WHERE namespace=? AND {scope} AND parent_id IN (SELECT value FROM json_each((SELECT aliases FROM child_input)))),'''
+        params += [namespace, namespace, namespace]
+        live_lookup += ' OR EXISTS(SELECT 1 FROM native_candidates n WHERE n.project=native_project AND n.identity=native_id)'
+        owners = ''' UNION SELECT l.rowid FROM native_candidates n
+            CROSS JOIN history_local_rows l INDEXED BY history_local_native
+            WHERE l.native_project=n.project AND l.native_id=n.identity'''
+    prefix += f'''local_candidates AS (SELECT rowid FROM history_local_rows WHERE {direct} UNION
+        SELECT rowid FROM history_local_rows WHERE {alias}{owners}),'''
+    return prefix, params, live_lookup, 'l.rowid IN (SELECT rowid FROM local_candidates)'
 
 
 class HistoryDirectory:
@@ -362,8 +409,12 @@ class HistoryDirectory:
         self._live_notices = [notice for row in state.get('sessions', ()) for notice in notices(row, state)]
         self._live_revision += 1
 
-    def effective(self, state=None, *, identity=None):
-        """Return a WITH clause ending in directory_rows and its bound parameters."""
+    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None):
+        """Return effective rows with optional alias, exact-ID or child scope."""
+        if sum(value is not None for value in (identity, public_ids, children_of)) > 1:
+            raise ValueError('Use one directory source scope per query.')
+        if public_ids is not None and len(public_ids) > PUBLIC_ID_BATCH:
+            raise ValueError('Public-ID candidates require one bounded batch.')
         state = self._frozen_state if self.snapshot else state if state is not None else self.service._state
         self._sync_live(state)
         columns = ','.join(COLUMNS)
@@ -371,16 +422,46 @@ class HistoryDirectory:
         # Only the bounded admitted working set is encoded in this parameter.
         live_columns = ','.join(f"json_extract(value,'$[{index}]') AS {name}" for index, name in enumerate(COLUMNS))
         lookup = "(id=(SELECT requested FROM lookup_input) OR native_id=(SELECT requested FROM lookup_input) OR alias_id=(SELECT requested FROM lookup_input))"
-        local = ("lookup_input AS (SELECT ? AS requested)," if identity is not None else '') + f'''live_rows AS (SELECT {live_columns} FROM json_each(?)), stored_local_rows AS (
-            SELECT {columns} FROM live_rows {'WHERE ' + lookup if identity is not None else ''} UNION ALL
+        prefix = "lookup_input AS (SELECT ? AS requested)," if identity is not None else ''
+        scope_params = [identity] if identity is not None else []
+        live_lookup = stored_lookup = lookup if identity is not None else None
+        if public_ids is not None:
+            # Candidate pruning is distinct from alias resolution. Exact
+            # public IDs are matched only after canonical overlays below.
+            prefix = 'requested_ids AS (SELECT value id FROM json_each(?)),'
+            scope_params = [json.dumps(public_ids, separators=(',', ':'))]
+            live_lookup = 'id IN (SELECT id FROM requested_ids)'
+            owners = ''
+            if self._native_path:
+                prefix += '''native_candidates AS MATERIALIZED (
+                    SELECT rowid,project,identity FROM history_native.native_rows
+                    WHERE namespace=? AND identity IN (SELECT id FROM requested_ids) UNION
+                    SELECT rowid,project,identity FROM history_native.native_rows
+                    WHERE namespace=? AND public_id IN (SELECT id FROM requested_ids)),'''
+                scope_params += [self._native_namespace, self._native_namespace]
+                # Include owners even when their app ID differs from a requested
+                # native alias. Otherwise filtering locals first resurrects the
+                # suppressed native row. All live rows still shadow saved IDs.
+                live_lookup += ' OR EXISTS(SELECT 1 FROM native_candidates n WHERE n.project=native_project AND n.identity=native_id)'
+                owners = ''' UNION SELECT l.rowid FROM native_candidates n
+                    CROSS JOIN history_local_rows l INDEXED BY history_local_native
+                    WHERE l.native_project=n.project AND l.native_id=n.identity'''
+            prefix += f'''local_candidates AS (SELECT rowid FROM history_local_rows
+                WHERE id IN (SELECT id FROM requested_ids){owners}),'''
+            stored_lookup = 'l.rowid IN (SELECT rowid FROM local_candidates)'
+        elif children_of is not None:
+            prefix, scope_params, live_lookup, stored_lookup = _child_candidates(children_of, self._native_namespace)
+        scoped = identity is not None or public_ids is not None or children_of is not None
+        local = prefix + f'''live_rows AS (SELECT {live_columns} FROM json_each(?)), stored_local_rows AS (
+            SELECT {columns} FROM live_rows {'WHERE ' + live_lookup if scoped else ''} UNION ALL
             SELECT {columns} FROM history_local_rows l
-            WHERE {lookup + ' AND ' if identity is not None else ''}l.id NOT IN (SELECT id FROM live_rows)),
+            WHERE {'(' + stored_lookup + ') AND ' if scoped else ''}l.id NOT IN (SELECT id FROM live_rows)),
             directory_notices AS (
                 SELECT json_extract(value,'$[0]') owner,json_extract(value,'$[2]') key,
                        json_extract(value,'$[3]') fingerprint,json_extract(value,'$[4]') is_error
                 FROM json_each(?) UNION ALL
                 SELECT owner,key,fingerprint,is_error FROM history_directory_notices n
-                WHERE {'n.owner IN (SELECT id FROM stored_local_rows) AND ' if identity is not None else ''}n.owner NOT IN (SELECT id FROM live_rows)),
+                WHERE {'n.owner IN (SELECT id FROM stored_local_rows) AND ' if scoped else ''}n.owner NOT IN (SELECT id FROM live_rows)),
             notice_status AS (SELECT owner,MAX(COALESCE(r.value != n.fingerprint,1)) AS unread,
                 MAX(n.is_error AND r.value=n.fingerprint) AS error_reviewed
                 FROM directory_notices n LEFT JOIN json_each(?) r ON r.key=n.key GROUP BY owner)'''
@@ -423,7 +504,7 @@ class HistoryDirectory:
                 f"CASE WHEN {quiet} THEN CASE WHEN ns.unread THEN 'New response' ELSE 'Idle' END ELSE l.base_activity_label END" if name == 'activity_label' else f'l.{name}')
             expressions.append(expression + ' AS ' + name)
         local += ', local_rows AS (SELECT ' + ','.join(expressions) + ' FROM raw_local_rows l LEFT JOIN notice_status ns ON ns.owner=l.id)'
-        parameters = ([identity] if identity is not None else []) + [json.dumps(list(self._live_values.values()), separators=(',', ':')),
+        parameters = scope_params + [json.dumps(list(self._live_values.values()), separators=(',', ':')),
                       json.dumps(self._live_notices, separators=(',', ':')),
                       json.dumps(state.get('attentionRead', {}), separators=(',', ':'))]
         if self._native_path:
@@ -453,6 +534,10 @@ class HistoryDirectory:
                     'SELECT rowid FROM history_native.native_rows WHERE namespace=? AND identity=? UNION '
                     'SELECT rowid FROM history_native.native_rows WHERE namespace=? AND public_id=?)')
                 parameters.extend((self._native_namespace, identity, self._native_namespace, identity))
+            elif public_ids is not None or children_of is not None:
+                native = native.replace('FROM history_native.native_rows n WHERE n.namespace=?',
+                    'FROM history_native.native_rows n NOT INDEXED WHERE n.namespace=? '
+                    'AND n.rowid IN (SELECT rowid FROM native_candidates)')
         else:
             native = f'native_rows AS (SELECT {columns} FROM local_rows WHERE 0)'
         # Suppression is keyed, independent of residency. Receipts remain the
@@ -461,7 +546,16 @@ class HistoryDirectory:
         hidden_workspaces = state.get('hiddenNativeWorkspaces', [])
         from .managed_deletion import tombstones
         deleted = tombstones(self.db)
-        filters = []
+        filters = ['r.id IN (SELECT id FROM requested_ids)'] if public_ids is not None else []
+        if children_of is not None:
+            # This is the same effective-parent predicate used by child pages:
+            # explicit app parents win, otherwise native aliases stay scoped.
+            filters.append("""r.session_kind!='root' AND r.id!=(SELECT id FROM child_input) AND (
+                r.parent_id=(SELECT id FROM child_input) OR
+                (r.native_parent_id IN (SELECT value FROM json_each((SELECT aliases FROM child_input))) AND
+                 CASE WHEN r.native_project IS NOT NULL AND (SELECT project FROM child_input) IS NOT NULL
+                    THEN r.native_project=(SELECT project FROM child_input)
+                    ELSE r.workspace=(SELECT workspace FROM child_input) END))""")
         for column, values in (('hidden_id', hidden), ('workspace_id', hidden_workspaces),
                                ('native_project', [row['project'] for row in deleted]),
                                ('id', [sid for row in deleted for sid in row.get('ids', ())])):
@@ -520,11 +614,14 @@ class HistoryDirectory:
             row['location'] = {'kind': 'managed'}
         return row
 
-    def select(self, where='1', params=(), *, limit=100, offset=0, order='ordinal', state=None, identity=None):
-        sql, base = self.effective(state, identity=identity)
-        cursor = self.db.execute(sql + f' SELECT {",".join(COLUMNS)} FROM directory_rows WHERE {where} '
+    def _select_rows(self, where='1', params=(), *, limit=100, offset=0, order='ordinal', state=None, identity=None, public_ids=None):
+        sql, base = self.effective(state, identity=identity, public_ids=public_ids)
+        return self.db.execute(sql + f' SELECT {",".join(COLUMNS)} FROM directory_rows WHERE {where} '
             + f'ORDER BY {order} LIMIT ? OFFSET ?', (*base, *params, limit, offset))
-        return [self.decode(row) for row in cursor]
+
+    def select(self, where='1', params=(), *, limit=100, offset=0, order='ordinal', state=None, identity=None, public_ids=None):
+        return [self.decode(row) for row in self._select_rows(where, params, limit=limit, offset=offset,
+            order=order, state=state, identity=identity, public_ids=public_ids)]
 
     def resolve(self, identity, native_project=None, *, include_hidden_workspaces=False):
         if not isinstance(identity, str):
@@ -550,8 +647,16 @@ class HistoryDirectory:
         ids = sorted({identity for identity in identities if isinstance(identity, str)})
         if not ids:
             return []
-        return self.select('id IN (SELECT value FROM json_each(?))', (json.dumps(ids),),
-                           limit=len(ids), state=state)
+        def candidates():
+            for start in range(0, len(ids), PUBLIC_ID_BATCH):
+                batch = ids[start:start + PUBLIC_ID_BATCH]
+                yield from self._select_rows(limit=len(ids), state=state, public_ids=batch)
+        # Preserve the complete query's ordinal ordering and result bound even
+        # for callers requesting more than one source batch. Decode final rows
+        # only; the temporary heap is bounded by the caller's requested IDs.
+        ordinal = COLUMNS.index('ordinal')
+        rows = heapq.nsmallest(len(ids), candidates(), key=lambda row: row[ordinal])
+        return [self.decode(row) for row in rows]
 
     def read_snapshot(self, state):
         self._sync_live(state)
