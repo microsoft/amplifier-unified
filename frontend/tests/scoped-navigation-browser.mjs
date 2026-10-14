@@ -100,7 +100,8 @@ try{
  await expect(recent.locator('[data-session-id]')).toHaveCount(20);
  const beforeRecent={bootstrapCount,subscriptionCount};
  await recent.getByRole('button',{name:'Load older chats',exact:true}).click();
- await expect.poll(async()=>(await shell()).snapshots.chats.recentNavigation.scope.limit).toBe(40);
+ // A changed query omits its old page while the exact replacement is pending.
+ await expect.poll(async()=>(await shell())?.snapshots?.chats?.recentNavigation?.scope?.limit).toBe(40);
  await expect.poll(()=>recent.locator('[data-session-id]').count()).toBeGreaterThan(20);
  await expect(recent.getByRole('alert')).toHaveCount(0);assert.deepEqual({bootstrapCount,subscriptionCount},beforeRecent);
  checks.push({recentReceiptWaitsForStream:true,noRecentReadAfterCommand:true});
