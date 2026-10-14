@@ -401,7 +401,7 @@ an application snapshot, publish state, start workers or start a profile.
 `session.inspect` includes the same process-local performance snapshot in its
 health diagnostics so Copy diagnostics can carry this evidence.
 
-Operation labels are fixed in code; there are at most 32 timing and counter
+Operation labels are fixed in code; there are at most 64 timing and counter
 labels each. Slow spans record wall time, and synchronous spans also record
 thread CPU time. Asynchronous lock/reader spans include waiting and scheduling.
 Event-index counters include bytes read from canonical logs, checkpoint hits
@@ -410,6 +410,18 @@ The 200 ms event-loop heartbeat records excess delays of at least 100 ms.
 No prompts, request bodies, credentials, query strings, filesystem paths or
 stack locals are collected. Records expire by count and disappear on restart.
 Optional stack capture remains owned by the existing opt-in profiling facility.
+
+`shellResourceRebuilds` separately counts builtin navigation page rebuild attempts and
+fixed invalidation reasons, retaining the last 60 decisions. Each decision names
+the resource and builtin package, changed key components (initial, bootstrap,
+native/local/overlay navigation, attention, global, workspace, selection, scope
+or query), and changed global owner names. It never includes key values, query
+text, selected identities or page contents. A reason is evidence that a cache
+dependency changed, not proof that the resulting page differed or that the
+dependency was necessary. Attempts are recorded before building, including failures;
+`initial` means no prior key, including new demand or an instance generation reset.
+Unchanged pages add no records. These counters do not
+consume the generic counter-label budget and also disappear on restart.
 
 `Server-Timing: app` and `X-Amplifier-Request-Id` now cover `/build.json` as well
 as API responses; request records include handler start and completion times.
