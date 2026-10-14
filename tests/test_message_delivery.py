@@ -720,7 +720,7 @@ def recovery_args(app):
 async def test_check_is_passive_and_explains_uncertainty(recovery):
     app, runtime, _ = recovery
     for _ in range(2):
-        result = await app.dispatch('conversation.delivery', recovery_args(app), origin='agent')
+        result = await app.dispatch('conversation.delivery', recovery_args(app), origin='agent', caller_session_id=app._session()['id'])
         assert result['result']['delivery'] == 'unknown'
         assert 'does not resend' in result['result']['message']
     assert runtime.sent == [] and runtime.retries == [] and runtime.started == []

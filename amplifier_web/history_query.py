@@ -8,11 +8,13 @@ import copy
 from collections import Counter
 
 from jsonschema import validate
+from .owned_history import includes, selected as selected_scope, require
 
 
 SCHEMA = {"type": "object", "properties": {
     "action": {"enum": ["list", "search", "read"]},
     "scope": {"enum": ["workspace", "all"]},
+    "workspace": {"type": "string", "maxLength": 4000},
     "include_children": {"type": "boolean"},
     "include_internal": {"type": "boolean"},
     "query": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -77,6 +79,7 @@ async def query_history(service, args, caller_id):
     attribution = getattr(service, 'peer_attribution', None)
     resolver = attribution.resolve if attribution is not None else None
     action = args["action"]
+    scope = selected_scope(args)
     query = args.get("query", "").casefold().strip()
     if action == "search" and not query:
         raise ValueError("search requires a nonempty query")
@@ -85,9 +88,12 @@ async def query_history(service, args, caller_id):
     await service.history.refresh()
     async with service.lock:
         caller = service._session(caller_id)
+        if args.get('workspace') and scope != 'all' and args['workspace'] != caller.get('workspace'):
+            raise ValueError('Workspace is outside the requested history scope. Use explicit scope=all for registered own-history.')
         from .session_identity import project as native_project
         sessions = [copy.deepcopy(row) for row in service.state.get("sessions", [])
-                    if (args.get("scope", "workspace") == "all" or row.get("workspace") == caller.get("workspace"))
+                    if includes(caller, row, scope)
+                    and (not args.get('workspace') or row.get('workspace') == args['workspace'])
                     and (not args.get("nativeProject") or native_project(row) == args["nativeProject"])
                     and (args.get("include_internal", False) or row.get("sessionKind") != "internal")
                     and (args.get("include_children", False) or row.get("sessionKind", "root") != "worker")]
@@ -103,6 +109,7 @@ async def query_history(service, args, caller_id):
         if session is None:
             raise ValueError("Session is not in the requested history scope")
         messages, revision = await asyncio.to_thread(_rows, session)
+        require(service, caller_id, session['id'], scope)
         start, size = args.get("text_offset", 0), args.get("text_limit", 2000)
         values = []
         # Bound total returned text even when a caller asks for fifty messages.
@@ -129,6 +136,12 @@ async def query_history(service, args, caller_id):
             except (OSError, ValueError):
                 errors.append({"session_id": session["id"], "reason": "History unavailable or changing; retry this session."})
                 rows, revision = [], None
+            from .service import AppError
+            try:
+                require(service, caller_id, session['id'], scope)
+            except AppError:
+                errors.append({'session_id':session['id'],'reason':'History scope changed during the read; refresh the catalog.'})
+                continue
             matches = []
             for i, row in enumerate(rows):
                 text = row.get("text", "")

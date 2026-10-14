@@ -17,10 +17,16 @@ HOLDING = {'held', 'uncertain'}
 
 
 def definitions(schema, string):
+    from .task_resources import definitions as task_definitions
     scope = {'workspaceId': string(100)}
     change = {**scope, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1},
               'evidence': {**string(4000), 'minLength': 1}}
     return {
+        **task_definitions(schema, string),
+        'workspace.resources.managed': ('Read one task’s bounded publishing, recorded processes and owned task storage. Does not allocate, replay or stop anything. Agents inspect only their bound task. Storage is not a browser/process sandbox or dynamic preview discovery.', schema({**scope,
+            'sessionId': string(200), 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+            'operationsBefore': string(200),
+            'publishingBefore': {'type': 'array', 'items': string(200), 'minItems': 2, 'maxItems': 2}}, ['workspaceId', 'sessionId'])),
         'workspace.resources.reservations': ('List cooperative resource reservations without loading chats. Matching keys share one admission domain across this app data home; separate installations and aliases are not covered.', schema({**scope,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
             'includeReleased': {'type': 'boolean'}}, ['workspaceId'])),
@@ -128,26 +134,74 @@ async def dispatch_reservation(app, action, args, origin, command_id, caller):
     from .collaboration import PRINCIPAL
     from .service import AppError
     workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
+    if action in {'workspace.resources.provision', 'workspace.resources.read', 'workspace.resources.retire'}:
+        from .task_resources import dispatch
+        return await dispatch(app, action, args, origin, command_id, caller)
+    if action == 'workspace.resources.managed':
+        return await managed(app, workspace, args, origin, caller)
     # Retained claims can be reconciled even after a registration is removed.
     # Only acquiring new claims requires a currently registered workspace.
     user = origin in {'ui', 'user'}
     actor = {'kind': 'user'}
+    read_binding = None
     if not user or action == 'workspace.resources.reserve':
         sid = args.get('sessionId') if user else caller
         if not sid or not user and args.get('sessionId', sid) != sid:
             raise AppError('Choose the calling conversation as resource owner.', 403)
-        session = app._session(sid)
+        session = app._session(sid, hydrate=False)
         if session.get('sessionKind', 'root') != 'root':
             raise AppError('Resource owners require their host-bound root conversation.', 403)
         if action not in {'workspace.resources.release', 'workspace.resources.uncertain'} and (workspace is None or session.get('workspace') != workspace['path']):
             raise AppError('Resource reservations belong to the calling conversation\'s workspace.', 403)
         native = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         actor = {'kind': 'agent', 'sessionId': sid, 'principal': native if user else PRINCIPAL.get() or native}
+        if action == 'workspace.resources.reservations':
+            read_binding = (sid, session.get('workspace'))
     try:
         result = await asyncio.to_thread(reservation_command, app.data_dir, args['workspaceId'], action, args, actor, command_id)
     except (ValueError, OSError, sqlite3.Error) as exc:
         raise AppError(str(exc), 409) from None
+    if read_binding and app._session(read_binding[0], hydrate=False).get('workspace') != read_binding[1]:
+        raise AppError('The conversation moved; inspect reservations from its current workspace.', 409)
     return {'accepted': True, 'result': result}
+
+
+async def managed(app, workspace, args, origin, caller):
+    """Select explicit task scope without hydrating history or warming runtime."""
+    from .service import AppError
+    sid = args['sessionId']
+    if origin not in {'ui', 'user'} and sid != caller:
+        raise AppError('Inspect resources through the calling conversation.', 403)
+    session = app._session(sid, hydrate=False)
+    if (workspace is None or session.get('workspace') != workspace['path']
+            or session.get('sessionKind', 'root') != 'root'):
+        raise AppError('Choose a root conversation in this workspace.', 403)
+    # Capture identity before yielding; these owners bind every read to sid.
+    binding = (session.get('workspace'), session.get('sessionKind', 'root'))
+    limit = args.get('limit', 25)
+    try:
+        from .task_resources import read, access
+        publishing, operations, storage = await asyncio.gather(
+            asyncio.to_thread(app.publishing.store.resources, sid, limit, args.get('publishingBefore')),
+            asyncio.to_thread(app.operations.journal.resources, sid, limit, args.get('operationsBefore')),
+            asyncio.to_thread(read, app.data_dir, sid, {'limit': min(limit, 32)}),
+        )
+        storage['items'] = await access(app, sid, storage['items'])
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        raise AppError(str(exc), 409) from None
+    current = app._session(sid, hydrate=False)
+    if binding != (current.get('workspace'), current.get('sessionKind', 'root')):
+        raise AppError('The conversation moved; inspect its current workspace.', 409)
+    return {'accepted': True, 'result': {
+        'workspaceId': workspace['id'], 'sessionId': sid, 'publishing': publishing, 'operations': operations,
+        'storage': storage,
+        'isolation': [{'kind': kind, 'status': 'inspect-storage-records',
+                       'enforcement': 'separate-storage-only'}
+                      for kind in ('scratch-directory', 'sqlite-database', 'browser-profile')],
+        'coverage': {'publishing': 'local-static-listeners', 'operations': 'recorded-native-lifecycle',
+                     'dynamicPreviewDiscovery': 'unsupported', 'remotePublishing': 'not-inspected',
+                     'operationWorkingDirectory': 'unavailable', 'externalProcesses': 'not-inspected'},
+    }}
 
 
 def command(home, workspace_id, action, args, command_id=None):

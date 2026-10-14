@@ -241,6 +241,7 @@ async def main(home):
                        "workspace": row["workspace"], "bundle": row["bundle"], "collaboration": row["collaboration"]}
                       for row in service.state["sessions"] if row.get("collaboration")],
             "workspace": selected["workspace"], "bundle": selected["bundle"],
+            "managementResults": service.state.get("managementResults", {}),
             "artifact": runtime.read_artifact(),
             "coordination": service.collaboration.current(selected["id"]),
             "humanMessages": [row for row in selected["messages"] if row.get("inputOrigin") in {"ui", "user", "voice"}],

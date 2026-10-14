@@ -30,6 +30,10 @@ class NoModel:
         self.sends += 1
         raise AssertionError("Receiving fixture cannot send to a model")
 
+    async def collaboration_input(self, *args):
+        self.sends += 1
+        raise AssertionError("Receiving fixture cannot admit a notification")
+
     async def close(self):
         pass
 
@@ -108,12 +112,21 @@ async def main():
             "historic-revoked-grant", "fixture-historical",
             json.dumps({"accepted": True, "commandAction": "coordination.grant",
                         "result": {"id": "historic-revoked-grant", "revoked": True}})))
+        # A real host-generated watch return stays queued behind a deliberately
+        # busy fixture root; no provider or runtime work is admitted.
+        recipient['status'] = 'working'
+        await generation(service, recipient, 'fixture-observer-generation', ['fixture-observer-input'])
+        watch = await agent_action(service, recipient, 'coordination.watch', {
+            'sessionId': recipient['id'], 'targetSessionId': sender['id'],
+            'condition': 'status_changed', 'expiresInSeconds': 60}, 'visible-watch')
+        await service.on_runtime_event('runtime.status', {'sessionId': sender['id'], 'status': 'idle'})
+        notification = service.collaboration.receipt(watch['subscription']['continuationId'])
         service._publish()
 
         async def facts(request):
             return web.json_response({"starts": runtime.starts, "sends": runtime.sends, "probeAttempts": probe_attempts,
                 "agent": agent["messageId"], "human": human["messageId"], "older": older["messageId"],
-                "quote": quoted["id"], "forged": forged["id"],
+                "quote": quoted["id"], "forged": forged["id"], "notification": notification['messageId'],
                 "installedStatic": INSTALLED, "backendFile": str(Path(server.__file__).resolve())})
         app.router.add_get("/api/fixture/peerFacts", facts)
         runner = web.AppRunner(app)

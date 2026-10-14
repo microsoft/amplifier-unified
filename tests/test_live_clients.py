@@ -631,3 +631,80 @@ async def test_uncertain_send_restart_never_replays_input(tmp_path):
         assert duplicate['delivery']=='unknown' and duplicate['duplicate']
         assert restored.runtime.sent==[]
     finally:await restored.close()
+
+
+async def test_session_commands_share_one_shot_watch_retry_scope_and_private_state(authenticated_client, tmp_path):
+    runtime = Runtime()
+    async def admit(*args):
+        raise AssertionError('A passive pending watch must not run the target')
+    runtime.collaboration_input = admit
+    app = await create_app(tmp_path/'app', workspace=tmp_path, runtime=runtime,
+        voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(app)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Requester'})
+    owner = service._session()['id']
+    await service.dispatch('session.create', {'title': 'Observed'})
+    target = service._session()['id']
+    await client.post('/api/clients/attach', json={'clientId': 'watch-terminal', 'kind': 'tui'})
+    headers = {'X-Amplifier-Client': 'watch-terminal'}
+    endpoint = f'/api/sessions/{owner}/commands'
+    args = {'targetSessionId': target, 'condition': 'status_changed', 'expiresInSeconds': 60}
+    async def action(name, args, identity):
+        return await client.post(endpoint, json={'id': identity, 'action': name, 'args': args}, headers=headers)
+    response = await action('coordination.watch', args, 'watch-command')
+    assert response.status == 200
+    assert (await response.json())['watch']['status'] == 'waiting'
+    assert (await (await action('coordination.watch', args, 'watch-command')).json())['duplicate']
+    assert (await action('coordination.watch', {**args, 'sessionId': target}, 'wrong-scope')).status == 400
+    read = await action('coordination.watch.read', {'watchId': 'watch-command'}, 'read')
+    assert (await read.json())['result']['watch']['status'] == 'waiting'
+    cancelled = await action('coordination.watch.cancel', {'watchId': 'watch-command'}, 'cancel')
+    assert (await cancelled.json())['result']['status'] == 'cancelled'
+    assert service.state['selectedSessionId'] == target
+
+
+@pytest.mark.parametrize('action', ['coordination.recap', 'coordination.diagnostics'])
+async def test_observation_reads_share_session_http_scope_without_moving_clients(authenticated_client, tmp_path, action):
+    app = await create_app(tmp_path/'app', workspace=tmp_path, runtime=Runtime(),
+        voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(app)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Owner'})
+    owner = service._session()['id']
+    await service.dispatch('session.create', {'title': 'Other selected chat'})
+    other = service._session()['id']
+    await client.post('/api/clients/attach', json={'clientId': 'observation-reader', 'kind': 'tui'})
+    headers = {'X-Amplifier-Client': 'observation-reader'}
+    endpoint = f'/api/sessions/{owner}/commands'
+    response = await client.post(endpoint, headers=headers, json={'id': 'passive-read', 'action': action, 'args': {}})
+    assert response.status == 200, await response.text()
+    assert (await response.json())['result']
+    mismatch = await client.post(endpoint, headers=headers, json={'id': 'wrong-root', 'action': action, 'args': {'sessionId': other}})
+    assert mismatch.status == 400
+    assert service.state['selectedSessionId'] == other and not service.runtime.sent
+
+
+async def test_configuration_grant_actions_share_session_http_scope(authenticated_client,tmp_path,monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_HOME',str(tmp_path/'native'))
+    app=await create_app(tmp_path/'app',workspace=tmp_path,runtime=Runtime(),voice=False,background_updates=False)
+    transport=await authenticated_client(app)
+    await transport.post('/api/clients/attach',json={'clientId':'capability-tui','kind':'tui','protocolVersion':1})
+    headers={'X-Amplifier-Client':'capability-tui'}
+    service=app['service']
+    for title in ('Owner','Peer'):
+        await service.dispatch('session.create',{'title':title})
+    owner,peer=service.state['sessions']
+    body={'id':'http-grant','action':'capability.grant','args':{'effects':['file_access'],'scopes':['local'],'reason':'Explicit HTTP user setup'}}
+    response=await transport.post(f"/api/sessions/{owner['id']}/commands",headers=headers,json=body)
+    assert response.status==200,await response.text()
+    grant=(await response.json())['result']
+    response=await transport.post(f"/api/sessions/{owner['id']}/commands",headers=headers,json=body)
+    assert (await response.json())['duplicate']
+    response=await transport.post(f"/api/sessions/{peer['id']}/commands",headers=headers,json={'id':'foreign-revoke','action':'capability.revoke',
+        'args':{'id':grant['id'],'expectedRevision':grant['revision']}})
+    assert response.status==403
+    response=await transport.post(f"/api/sessions/{owner['id']}/commands",headers=headers,json={'id':'http-revoke','action':'capability.revoke',
+        'args':{'id':grant['id'],'expectedRevision':grant['revision']}})
+    assert response.status==200,await response.text()
+    assert (await response.json())['result']['status']=='revoked'

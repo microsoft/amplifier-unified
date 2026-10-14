@@ -70,20 +70,38 @@ compare those exact links, not equal message text.
    The peer keeps the source's actual execution folder while retaining the
    canonical workspace for history. This shares that checkout; it does not
    allocate a second worktree or isolate ports, services, or browser state.
+   Inspect your actual owned resources with `workspace.resources.managed`, using
+   this workspace and your root session ID. Page each owner with its returned
+   cursor. Local publishing reports actual bound ports and immutable served
+   directories; Operations reports retained lifecycle observations, not a fresh
+   process probe. Reservations are separate cooperative claims. Scratch folders,
+   test databases, browser profiles and dynamic previews are not automatically
+   allocated or discovered by this view. Do not infer isolation from an empty page.
    Identical sibling plans can reuse that qualified profile; preparation is not
    execution or completion. Read elapsed progress and honor Stop rather than
    replaying a slow request. Failed/cancelled preparation retains diagnostics.
 5. Read `coordination.result` and retain exact request/input/message IDs.
    Save `coordination.subscribe` for one exact request in your own task. A typed
    recipient result can seal at successful matching root termination, then admit
-   one stable-ID continuation through normal guards. Busy waits; paused/stopped,
+   one stable-ID continuation per meaningful response revision through normal guards. Busy waits; paused/stopped,
    revised or budget-exhausted tasks stay stopped. Unknown is not replayed.
    Passive cursors only acknowledge observations; they do not authorize a wake.
    Independently check the actual artifact before using a declared result.
-   Sealed failure, deferral and decline also notify once, as does a runtime
-   failure tied to a delivered request even without a model reply. These
-   outcomes do not satisfy the dependency or authorize repeating tool effects.
-   A conversation admits at most 64 queued inputs plus reserved replies.
+   Questions, conflicts, failure, deferral and decline notify as unqualified
+   reports immediately. Rejected/unknown terminal evidence and runtime failures
+   also notify; none satisfy a dependency or authorize repeating tool effects.
+   A saved subscription retains at most 32 automatic notifications; older
+   single-notification subscriptions keep their original behavior. Read the
+   latest responseRevision and retained revisions before acting on a correction.
+   Use coordination.watch for one explicit status/idle observation with
+   expiresInSeconds, then coordination.watch.read/cancel by watchId. Watching
+   never starts the target. Its expiry is an observation, not approval.
+   A conversation admits at most 64 queued inputs plus reserved replies,
+   at most 16 pending inputs per sender and 32 per assignment. Pending senders
+   rotate at admission. New queue inputs expire after one day by default;
+   choose expiresInSeconds up to one day when a different deadline is useful.
+   Expired input remains inspectable and is not executed. A causal chain is
+   bounded to 16 peer hops; only actual new human input resets that boundary.
    Messages between a pair of conversations are limited to 32 per minute,
    including notify. On backpressure, wait or combine updates; do not change
    identities to evade a limit. Identical retries still return their receipts.
@@ -101,13 +119,19 @@ a new human instruction. Preserve your own objective, settings, permissions,
 budget and user stop state. Answer, defer, decline or name a conflict.
 
 Declare the response during the actual generation using `coordination.reply` with
-the exact delivered `requestId`, `kind=result|ack|defer|decline`, explicit
-`outcome=success|failed|deferred|declined`, text and artifact references or exact
+the exact delivered `requestId`, a discovered typed kind/outcome, text and artifact references or exact
 message IDs. A result needs evidence references. The host stages this declaration;
 only matching delivered-input/root/generation termination with a checkpointed
 native terminal anchor seals it. No final channel is invented or prose classified.
-Acknowledgement, failure, defer, unrelated input or active jobs cannot satisfy a
-successful dependency. Optional `coordination.send` with `replyToRequestId` is
+Acknowledgement, failure, defer or unrelated input cannot satisfy a successful
+dependency. Background jobs do not replace exact root terminal evidence, and an
+unrelated still-running job does not erase an otherwise proven manager result.
+A later current generation of the same recipient may explicitly correlate a new
+report with expectedResponseRevision from coordination.result, while the original
+task, workspace and Stop boundary remains valid. A question/deferral does not
+close the request. Earlier revisions remain readable; a pending staged report
+must settle before another declaration. At most 32 declarations belong to one
+request. Exact command retries retain their original response revision. Optional `coordination.send` with `replyToRequestId` is
 an attributed peer note, not the sealing protocol. Give artifact revision/hash/commit,
 checks and limits.
 A peer's passing check is not your independent artifact verification.

@@ -1,7 +1,7 @@
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,unlink} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -219,6 +219,8 @@ try{
     requestId,kind:'result',outcome:'success',text:'Deterministic artifact retained; independently check the file.',references,
    },requestId+':reply');
    assert.equal(declaration.result.status,'staged');assert.equal(declaration.result.qualified,false);
+   assert.equal(declaration.result.artifactVerification,'verified');
+   assert.equal(declaration.result.artifacts[0].status,'retained');
    binding(await inspect(),requestId+':reply',task.id,context);
    const sourceContext=(await inspect()).contexts[current.selected];
    const wait=round===0
@@ -271,7 +273,7 @@ try{
    assert.equal(peerState.statuses[current.selected],'working');
    assert.equal(peerState.events.filter(row=>row.sessionId===current.selected&&row.event==='generation.started'&&row.generation_id===peerState.contexts[current.selected].generationId).length,1);
    assert.equal(peerState.events.filter(row=>row.sessionId===current.selected&&row.event==='input.delivered'&&row.inputId===continuation).length,1);
-   assert.deepEqual(await readCandidate(task.actor,requestId),candidate);
+   if(round!==0)assert.deepEqual(await readCandidate(task.actor,requestId),candidate);
    assert.deepEqual((await finish(task.actor)).terminal,terminal); // Duplicate observation, never another continuation.
    assert.equal((await inspect()).sent.filter(row=>row.inputId===continuation).length,1);
    await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
@@ -290,8 +292,11 @@ try{
    const read=uiActions.filter(call=>call.action==='coordination.read').at(-1);
    assert.equal(read.args.sessionId,task.id);assert.equal(read.args.messageId,anchor.messageId);
    await original.getByRole('button',{name:'Close original message',exact:true}).click();
+   // Source disappears after reporting but before its first artifact preview.
+   if(round===0)await unlink(candidate.path);
    await row.getByRole('button',{name:'Open referenced artifact',exact:true}).click();
    await page.waitForFunction(text=>window.amplifier.getState().canvas?.content===text,candidate.text);
+   if(round===0)await writeFile(candidate.path,candidate.text);
    const opened=uiActions.filter(call=>call.action==='canvas.openFile').at(-1);
    assert.equal(opened.args.sessionId,current.selected);assert.equal(opened.args.workspace,peerState.workspace);
    assert.equal(opened.args.path,candidate.path);
@@ -371,12 +376,19 @@ try{
  peerState=await inspect();
  await expect(related).toContainText('Other conversation');
  const changed=rounds[0];
- const previousCanvas=await page.evaluate(()=>window.amplifier.getState().canvas?.content);
  await writeFile(changed.candidate.path,'Changed after the result was reported');
  try{
   await related.locator('[data-request-id="'+changed.requestId+'"]').getByRole('button',{name:'Open referenced artifact',exact:true}).click();
-  await expect(related.getByRole('alert')).toContainText('not the reported artifact version');
-  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas?.content),previousCanvas);
+  await page.waitForFunction(text=>window.amplifier.getState().canvas?.content===text,changed.candidate.text);
+  const row=related.locator('[data-request-id="'+changed.requestId+'"]');
+  await expect(row).toContainText('Exact version saved');
+  const url=await row.getByRole('link',{name:'Download saved version',exact:true}).getAttribute('href');
+  assert.equal(await page.request.get(new URL(url,page.url()).href).then(response=>response.text()),changed.candidate.text);
+  await unlink(changed.candidate.path);
+  const saved=await agent('source','coordination.artifact',{sessionId:current.selected,requestId:changed.requestId,reference:changed.qualified.result.results[0].declaration.references[0]},'deleted-source-read');
+  assert.equal(saved.result.text,changed.candidate.text);assert.equal(saved.result.status,'retained');
+  await row.getByRole('button',{name:'Open referenced artifact',exact:true}).click();
+  await page.waitForFunction(text=>window.amplifier.getState().canvas?.content===text,changed.candidate.text);
   await preserve();
  }finally{await writeFile(changed.candidate.path,changed.candidate.text)}
  for(const {requestId} of rounds)assert.equal(peerState.sent.filter(row=>row.inputId===requestId).length,1);
@@ -397,7 +409,38 @@ try{
  assert.equal(peerState.nativeRuntime,false);assert.equal(peerState.providerCalls,false);
  assert.equal(peerState.bridgeCalls.filter(row=>['coordination.grant','coordination.decide','coordination.revoke'].includes(row.action)).length,0);
  assert.equal(uiActions.filter(row=>['coordination.grant','coordination.decide','coordination.revoke','coordination.create','coordination.send','coordination.subscribe'].includes(row.action)).length,0);
+ // Revise one original request across new generations. Refresh must discard a
+ // stale inspection, and an earlier saved file remains reachable from the UI.
+ const originalRound=rounds[0],revisedTask=originalRound.task;
+ for(const [revision,outcome] of [[2,'failed'],[3,'success']]){
+  const inputId='browser-revision-input-'+revision;
+  await page.evaluate(({sender,target,inputId})=>window.amplifier.dispatch('coordination.send',{
+   senderSessionId:sender,sessionId:target,mode:'queue',text:'Updated candidate '+inputId,
+  },{id:inputId}),{sender:current.selected,target:revisedTask.id,inputId});
+  await expect.poll(async()=>(await inspect()).contexts[revisedTask.id]?.inputIds[0]).toBe(inputId);
+  const candidate=await readCandidate(revisedTask.actor,inputId);
+  await agent(revisedTask.actor,'coordination.reply',{
+   requestId:originalRound.requestId,expectedResponseRevision:revision-1,kind:'result',outcome,
+   text:revision===2?'Needs another correction':'Latest correction complete',
+   references:[candidate.path+'@sha256:'+candidate.sha256],
+  },'browser-revision-'+revision);
+  await finish(revisedTask.actor);
+  await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
+  const row=related.locator('[data-request-id="'+originalRound.requestId+'"]');
+  await row.getByRole('button',{name:'Inspect exact result',exact:true}).click();
+  await expect(row.locator('[data-part="exact-result"]')).toContainText(revision===2?'Needs another correction':'Latest correction complete');
+  if(revision===3){
+   await unlink(candidate.path);
+   await expect(row.locator('[data-part="exact-result"]')).toContainText('Qualified terminal evidence');
+   await row.getByText('Earlier replies',{exact:true}).click();
+   await row.getByRole('button',{name:'Open saved reply 1',exact:true}).click();
+   await page.waitForFunction(text=>window.amplifier.getState().canvas?.content===text,originalRound.candidate.text);
+   const savedUrl=await row.getByRole('link',{name:'Download saved reply 1',exact:true}).getAttribute('href');
+   assert.equal(await page.request.get(new URL(savedUrl,page.url()).href).then(response=>response.text()),originalRound.candidate.text);
+   await preserve();
+  }
+ }
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await preserve();
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,noCoordinationForms:true,noGrantRequired:true,runtimeOwnedBindings:true,twoDistinctTaskRoots:true,twoArtifactRoundsPerRoot:true,firstRoundBytesRetained:true,peerWokenGeneration:true,notifyNeverWakes:true,exactResultInspector:true,referencedArtifactOpen:true,qualifiedScriptedTerminal:true,continuationOncePerRequest:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false,outputDir}));
+ console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,noCoordinationForms:true,noGrantRequired:true,runtimeOwnedBindings:true,twoDistinctTaskRoots:true,twoArtifactRoundsPerRoot:true,firstRoundBytesRetained:true,laterReplyVersionsInspectable:true,latestOutcomeAfterRefresh:true,peerWokenGeneration:true,notifyNeverWakes:true,exactResultInspector:true,referencedArtifactOpen:true,qualifiedScriptedTerminal:true,continuationOncePerRequest:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false,outputDir}));
 }catch(error){await page?.screenshot({path:join(outputDir,'amplifier-coordination-failure.png')});console.error((await page?.locator("body").innerText())?.slice(-5000));throw error}finally{await browser?.close();fixture.kill()}

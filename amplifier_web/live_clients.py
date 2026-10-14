@@ -109,8 +109,20 @@ def setup_routes(app, streams):
             "session.takeover": "id", "session.history": "id", "session.rename": "id",
             "session.warm": "id", "session.naming": "id",
             **{name: "sessionId" for name in ("worktree.inspect", "worktree.list", "worktree.status", "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile")},
+            "coordination.artifact": "sessionId",
+            "coordination.recap": "sessionId", "coordination.diagnostics": "sessionId",
+            "capability.read": "sessionId", "capability.request": "sessionId",
+            "capability.grant": "sessionId", "capability.revoke": "sessionId",
+            "runtime.provenance": "sessionId", "integration.capture": "sessionId",
+            "integration.check": "sessionId", "integration.read": "sessionId",
+            "integration.list": "sessionId",
+            **{name: 'sessionId' for name in ('workspace.resources.managed', 'workspace.resources.provision',
+                'workspace.resources.read', 'workspace.resources.retire')},
+            "integration.validate": "sessionId", "integration.collect": "sessionId",
             "assignment.read": "sessionId", "assignment.start": "sessionId",
             "assignment.set": "sessionId", "assignment.stop": "sessionId", "assignment.detach": "sessionId",
+            "assignment.integration": "sessionId",
+            "coordination.watch": "sessionId", "coordination.watch.read": "sessionId", "coordination.watch.cancel": "sessionId",
         }.get(action)
         if key is None:
             raise AppError("This action is not a session command.")

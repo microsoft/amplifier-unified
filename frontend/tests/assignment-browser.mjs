@@ -21,6 +21,10 @@ try{
  const panel=page.locator('.a-assignment');await panel.getByText('Commissioned assignment',{exact:true}).click();
  await panel.getByRole('button',{name:'Start assignment',exact:true}).click();
  await expect(panel).toContainText('Assignment active');
+ await panel.getByText('Integration responsibility',{exact:true}).click();
+ await panel.getByLabel('Responsible conversation',{exact:true}).selectOption(current.selected);
+ await panel.getByRole('button',{name:'Save integration responsibility',exact:true}).click();
+ await expect(panel).toContainText('Integration responsibility: This conversation');
  await panel.getByText('Assignment limits',{exact:true}).click();
  await panel.getByLabel('Total token limit',{exact:true}).fill('10000');
  await panel.getByLabel('Token allowance per call',{exact:true}).fill('1000');
