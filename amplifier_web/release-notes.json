@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.141",
+      "title": "Keep observations responsive and deliver retained collaboration results",
+      "changes": [
+        "Shared client observations resolve relevant pins and read receipts directly, and page without first counting the complete chat library.",
+        "Opening Search chats while a chat selection is still finishing now keeps your newer navigation choice and unfinished draft.",
+        "Native ownership queries avoid a costly query plan on older SQLite versions. Cold work-history loading reuses turn and message indexes instead of repeatedly searching the same records.",
+        "Collaboration retains result files, revised replies and watches, with explicit configuration grants and runtime provenance.",
+        "Task storage allocation, integration validation and collection, return summaries and diagnostics are now included."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.140",
       "title": "Keep chat and worker lookups scoped to the requested records",
       "changes": [

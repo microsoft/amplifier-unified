@@ -1,10 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createConversationNavigation} from '../src/conversation-navigation.js';
+import {createConversationNavigation,isNavigationAction} from '../src/conversation-navigation.js';
+import {createSettingsActionQueue} from '../src/settings-action-queue.js';
+import {createPendingView} from '../src/pending-view.js';
 
 function state(id,revision=1){return {revision,client:{hostInstanceId:'host'},selectedSessionId:id,selectedWorkspaceId:'space',
  sessions:['a','b','c'].map(key=>({id:key,workspaceId:'space',title:key,draft:key+' draft',messages:key===id?[{id:key+'-message',text:key+' history'}]:[]})),
  view:{draft:id+' draft'},canvas:{id:id+'-canvas',open:true},canvasWorkspace:{views:[]},canvasArtifacts:[]}}
+
+test('newer browsing paints immediately but commits after a delayed chat selection',async()=>{
+ const navigation=createConversationNavigation(),pending=createPendingView(),enqueue=createSettingsActionQueue();
+ const queues={navigation:{current:Promise.resolve()},commands:{current:Promise.resolve()}};
+ let server=state('a'),release;const blocked=new Promise(resolve=>release=resolve),calls=[];
+ const route=(action,args,execute)=>enqueue(isNavigationAction(action,args)?queues.navigation:queues.commands,execute);
+ const token=navigation.begin(server,'a');
+ const first=route('shell.command',{action:'session.select',args:{id:'a'}},async()=>{await blocked;server={...server,view:{...server.view,workSurface:'chat'}};calls.push('select');navigation.settle(token)});
+ const patch={workSurface:'chats',workWorkspaceId:null},viewToken=pending.add(patch);
+ const browse=route('view.update',{patch},async()=>{server={...server,view:{...server.view,...patch}};calls.push('browse');pending.settle(viewToken)});
+ assert.equal(pending.apply(navigation.apply(server)).view.workSurface,'chats');
+ await route('view.update',{patch:{navFilter:'Beta 002'}},async()=>calls.push('filter'));
+ assert.deepEqual(calls,['filter']);
+ release();await Promise.all([first,browse]);
+ assert.deepEqual(calls,['filter','select','browse']);
+ assert.equal(pending.apply(navigation.apply(server)).view.workSurface,'chats');
+ for(const [action,args] of [['session.select',{id:'b'}],['session.draft',{}],['workspace.select',{id:'space'}],['view.update',{patch:{workWorkspaceId:'space'}}]])assert.equal(isNavigationAction(action,args),true);
+ for(const action of ['conversation.send','providers.models','shell.view.update'])assert.equal(isNavigationAction(action,{patch:{workSurface:'chats'}}),false);
+});
 
 for(const target of ['a','b'])test('opening '+target+' from a workspace paints the chat before the server responds',()=>{
  const nav=createConversationNavigation(),workspace=state('a');

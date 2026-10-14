@@ -52,13 +52,32 @@ try{
  await search.focus();await search.press('Escape');await expect(search).toHaveValue('');
  await search.press('Escape');await expect(search).toBeFocused();await expect(area).toBeVisible();await expect(draft).toBeHidden();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
- // Explicitly choose the same retained chat; selection must not be a no-op.
- await page.locator('[data-sidebar-section=pinned] [data-session-id="'+selected+'"] .a-nav-chat-select').click();
- await expect(draft).toHaveDraft('Keep this unfinished draft.');await expect(draft).toBeVisible();
- await page.getByRole('button',{name:'Search chats',exact:true}).click();await search.fill('Beta 002');await expect(results).toHaveCount(1);await search.press('ArrowDown');await results.first().press('Enter');await expect(area).toHaveCount(0);
+ // A newer browse intent must survive an older, still pending same-chat
+ // selection. Optimistic composer visibility is not its server receipt.
+ let releaseSelection,selectionHeld=false;
+ const selectionGate=new Promise(resolve=>releaseSelection=resolve);
+ const holdSelection=async route=>{
+  const body=route.request().postDataJSON(),command=body.action==='shell.command'?body.args:body;
+  if(!selectionHeld&&command.action==='session.select'&&command.args?.id===selected){selectionHeld=true;await selectionGate}
+  await route.continue();
+ };
+ await page.route('**/api/actions',holdSelection);
+ try{
+  await page.locator('[data-sidebar-section=pinned] [data-session-id="'+selected+'"] .a-nav-chat-select').click();
+  await expect.poll(()=>selectionHeld).toBe(true);
+  await expect(draft).toHaveDraft('Keep this unfinished draft.');await expect(draft).toBeVisible();
+  await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect(area).toBeVisible();await search.fill('Beta 002');
+  // This unrelated filter receipt drains the command queue without releasing
+  // selection. Older code accepted browse on that queue before this barrier.
+  await action('view.update',{patch:{navFilter:'Beta 002'}});
+  releaseSelection();
+  await expect.poll(()=>page.evaluate(()=>Boolean(window.amplifier.getState().navigationPending))).toBe(false);
+  await expect(results).toHaveCount(1);
+ }finally{releaseSelection();await page.unroute('**/api/actions',holdSelection)}
+ await search.press('ArrowDown');await results.first().press('Enter');await expect(area).toHaveCount(0);
  assert.notEqual(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
  const info=await (await page.request.get(`http://127.0.0.1:${port}/api/fixture/info`)).json();assert.deepEqual(info.runtimeSends,[]);
  assert.deepEqual(errors,[]);
- console.log('Search passed: focused top field, pinned matches, wildcard search, paging reset, archive and sort, no implicit Back/Escape return, explicit same-chat selection, retained draft, compact light/dark and narrow layouts; no model sends.');
+ console.log('Search passed: focused top field, pinned matches, wildcard search, paging reset, archive and sort, no implicit Back/Escape return, delayed same-chat selection followed by newer search, retained draft, compact light/dark and narrow layouts; no model sends.');
 }catch(error){await page?.screenshot({path:'/tmp/unified-search-failure.png'}).catch(()=>{});throw error}
 finally{await browser?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}}

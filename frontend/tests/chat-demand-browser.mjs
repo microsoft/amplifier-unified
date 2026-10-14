@@ -9,7 +9,9 @@ import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url)),measureOnly=process.argv.includes('--measure-only');
 const expectedTransport=process.argv.includes('--transport=sse')?'sse':'websocket';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/chat_demand_server.py'],{stdio:['ignore','pipe','pipe']});
-let browser,peerBrowser,log='';fixture.stderr.on('data',x=>log+=x);
+let browser,peerBrowser,page,primaryError,log='';const transportFailures=[];
+fixture.stderr.on('data',x=>{log=(log+x).slice(-16384)});
+const noteFailure=value=>{transportFailures.push(value);if(transportFailures.length>20)transportFailures.shift()};
 const evidence={measureOnly,expectedTransport};
 try{
  const meta=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),60000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
@@ -23,7 +25,9 @@ try{
   const ES=EventSource;window.EventSource=class extends ES{constructor(...args){super(...args);if(String(args[0]).includes('/api/events')){record(this,'sse',args[0]);for(const name of ['state','state-delta'])this.addEventListener(name,e=>demandFrames.push({...this.demandIdentity,name,revision:JSON.parse(e.data).revision,bytes:new TextEncoder().encode(e.data).length}))}}};
   const WS=WebSocket;window.WebSocket=class extends WS{constructor(...args){super(...args);if(String(args[0]).includes('/api/events')){record(this,'websocket',args[0]);this.addEventListener('message',e=>{const frame=JSON.parse(e.data);if(['state','state-delta'].includes(frame.event))demandFrames.push({...this.demandIdentity,name:frame.event,revision:frame.data?.revision,bytes:new TextEncoder().encode(e.data).length})})}}};
  });
- const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ page.on('requestfailed',r=>noteFailure({path:new URL(r.url()).pathname,error:r.failure()?.errorText}));
+ page.on('response',r=>{if(r.status()>=400)noteFailure({path:new URL(r.url()).pathname,status:r.status()})});
  const pending=new Set();let lastRequest=performance.now();
  page.on('request',r=>{if(r.url().includes('/api/')&&!r.url().includes('/api/events')){pending.add(r);lastRequest=performance.now()}});
  const finished=r=>{if(pending.delete(r))lastRequest=performance.now()};
@@ -126,7 +130,41 @@ try{
  await settle();const final=await api('/fixture/demand');assert.deepEqual(final.runtimeCalls,[]);assert.equal(final.workersUnchanged,true);assert.deepEqual(errors,[]);
  evidence.controls={olderRecovery:true,focusedRecovery:true,savedResult:true,terminalPrecedenceBothOrders:true,desktopPicker:true,accountIsolation:true,privateDrafts:true,reconnect:true,mobilePicker:true,workerEvidenceUnchanged:true};evidence.pageErrors=errors;
  console.log(JSON.stringify(evidence,null,2));
+}catch(error){
+ primaryError=error;
+ evidence.failure={name:error.name,message:String(error.message).slice(0,4000),stack:String(error.stack).slice(0,6000),transportFailures};
+ if(page){
+  let timer;
+  try{evidence.failure.browser=await Promise.race([page.evaluate(()=>{
+   const state=window.amplifier?.getState?.();
+   return {url:location.pathname,readyState:document.readyState,clientId:state?.client?.id,
+    revision:state?.revision,selectedSessionId:state?.selectedSessionId,
+    visibleSessions:state?.sessions?.length,body:document.body?.innerText.slice(0,3000)};
+  }),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Browser diagnostic timeout')),2000)})])}
+  catch(diagnosticError){evidence.failure.browserError=String(diagnosticError.message).slice(0,1000)}
+  finally{clearTimeout(timer)}
+ }
+ throw error;
 }finally{
- await peerBrowser?.close();await browser?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await Promise.race([once(fixture,'exit'),new Promise((_,reject)=>setTimeout(()=>reject(Error('Fixture teardown timeout')),10000))])}
- evidence.fixtureExit=fixture.exitCode;if(process.env.AMPLIFIER_PERF_EVIDENCE)await writeFile(process.env.AMPLIFIER_PERF_EVIDENCE,JSON.stringify(evidence,null,2)+'\n');
+ const cleanupErrors=[];
+ for(const owned of [peerBrowser,browser])try{await owned?.close()}catch(error){cleanupErrors.push(String(error.message).slice(0,1000))}
+ if(fixture.exitCode===null){
+  let timer;
+  try{fixture.kill('SIGTERM');await Promise.race([once(fixture,'exit'),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture teardown timeout')),10000)})])}
+  catch(error){
+   cleanupErrors.push(String(error.message).slice(0,1000));
+   // The fixture is this test's child. Reap it even when graceful teardown fails.
+   if(fixture.exitCode===null&&fixture.signalCode===null){
+    clearTimeout(timer);
+    try{const stopped=once(fixture,'exit');fixture.kill('SIGKILL');await Promise.race([stopped,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture forced teardown timeout')),2000)})])}
+    catch(forcedError){cleanupErrors.push(String(forcedError.message).slice(0,1000))}
+   }
+  }
+  finally{clearTimeout(timer)}
+ }
+ evidence.fixtureExit=fixture.exitCode;
+ if(primaryError){evidence.failure.fixtureStderr=log;evidence.failure.cleanupErrors=cleanupErrors}
+ if(process.env.AMPLIFIER_PERF_EVIDENCE)try{await writeFile(process.env.AMPLIFIER_PERF_EVIDENCE,JSON.stringify(evidence,null,2)+'\n')}catch(error){cleanupErrors.push(String(error.message).slice(0,1000))}
+ if(primaryError)console.error(JSON.stringify({chatDemandFailure:evidence.failure}));
+ if(cleanupErrors.length&&!primaryError)throw Error('Chat demand cleanup failed: '+cleanupErrors.join('; '));
 }
