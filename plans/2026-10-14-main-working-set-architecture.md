@@ -40,13 +40,13 @@ considering a Rust implementation behind the same interface.
 
 ## Implementation progress, October 14
 
-Releases .142/.143 bound the requested navigation pages and remove duplicate
-ordinary-state projections. Live .143 measurement reduced shell response size and
+Release .143 includes the bounded requested navigation pages and removal of
+duplicate ordinary-state projections; .142 was not published. Live .143 measurement reduced shell response size and
 cost, but did not stop repeated reads: its broad `shellDataKey` changed with no
 selection, status, model, Canvas or shell-token change. Selected Work reconstruction
 also remains slow on large histories; these are separate outstanding costs.
 
-The .144 candidate replaces that refresh fan-in with the
+The .144 change, merged in PR #680 with publication pending, replaces that refresh fan-in with the
 [existing-stream shell resource contract](../docs/browser-state-transport.md#shell-bootstrap-and-active-resources).
 Descriptors load once per host/composition generation. Explicit demand selects
 pages, canonical committed changes invalidate their semantic dependencies, and
@@ -55,6 +55,14 @@ Independent component snapshots retain their SDK contract. Bounded diagnostics
 record reasons and timings without conversation content. Qualification and live
 adoption are separate evidence; this entry does not claim the candidate is
 published or that selected-history performance has been solved.
+
+A separate selected-history follow-up preserves exact-object size charges during
+one retention pass, avoiding repeated traversal when an earlier index evicts a
+later index still held by that read. Its two-file implementation passed 139
+focused tests. A paired synthetic three-log probe reduced stable size traversals
+from three to one while preserving output and remeasuring newly restored objects.
+The follow-up is not published, and this mechanism proof does not establish a live
+latency improvement. Live .144 measurements determine the next history priority.
 
 ## Ownership and data flow
 
