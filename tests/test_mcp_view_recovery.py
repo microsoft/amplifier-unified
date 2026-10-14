@@ -591,6 +591,10 @@ async def test_http_reconnect_receipt_returns_progress_only_then_rebinds_only_or
 
 async def test_legacy_primary_transient_context_does_not_override_canonical_or_inline_binding(view_http):
     _, service, identity, one, _, connection = view_http
+    from amplifier_web.state_storage import resource
+    row = next(row for row in service.state['canvasArtifacts'] if row['id'] == identity)
+    original_reference = deepcopy(row['mcpState'])
+    original_binding = deepcopy(resource(service.db, original_reference['$resource']))
     with service.clients.bind('one'):
         await service.dispatch('canvas.select', {'id': identity})
         await service.dispatch('smartTools.context', {**exact_target(one), 'canvasId': identity, 'context': {'inline': 'private'}})
@@ -611,7 +615,39 @@ async def test_legacy_primary_transient_context_does_not_override_canonical_or_i
         historical = service.canvas_views.canvas('primary')
         assert historical['mcp'].get('context', {}) != {'primary': 'legacy'}
         assert 'lastOperationId' not in historical['mcp']
+    assert row['mcpState'] == original_reference
+    assert resource(service.db, original_reference['$resource']) == original_binding
     assert connection.requests == [('call_tool', ('change', {'amount': 9}))]
+
+
+@pytest.mark.parametrize('missing_live_binding', [False, True])
+async def test_passive_mcp_save_preserves_canonical_binding_reference_without_reading_it(
+        view_http, monkeypatch, missing_live_binding):
+    from amplifier_web import canvas_library, resource_files
+    from amplifier_web.state_storage import resource
+    _, service, identity, _, _, _ = view_http
+    with service.clients.bind('one'):
+        await service.dispatch('canvas.select', {'id': identity})
+        row = next(row for row in service.state['canvasArtifacts'] if row['id'] == identity)
+        original = deepcopy(row['mcpState'])
+        binding = deepcopy(resource(service.db, original['$resource']))
+        canvas = service.state['canvas']
+        if missing_live_binding:
+            canvas.pop('mcp')
+        else:
+            canvas['mcp'].update(context={'private': 'do not share'}, lastOperationId='local-only',
+                                 configuration='not-canonical-authority')
+        real_put = resource_files.put
+
+        def body_only(db, value):
+            assert not isinstance(value, dict) or 'serverId' not in value, 'Passive save rewrote MCP binding'
+            return real_put(db, value)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(resource_files, 'put', body_only)
+            canvas_library.remember(service.state, service.db)
+        assert row['mcpState'] == original
+        assert resource(service.db, original['$resource']) == binding
 
 
 def legacy_launch_definition(service, identity):

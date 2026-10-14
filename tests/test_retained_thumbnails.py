@@ -286,7 +286,7 @@ async def test_http_retained_bytes_still_enforce_canonical_integrity_and_png_bou
 async def test_http_legacy_qualification_is_read_only_with_unrelated_latest_open(
         retained, monkeypatch, case):
     _, service, client, sid, mid, records, document = retained
-    from amplifier_web import resource_files, canvas_library, state_storage
+    from amplifier_web import resource_files, state_storage
     response = await client.post('/api/actions', json={
         'action': 'canvas.select', 'args': {'id': document['id']}})
     assert response.status == 200
@@ -326,7 +326,6 @@ async def test_http_legacy_qualification_is_read_only_with_unrelated_latest_open
         patch.setattr(service.cold_display, 'hydrate', forbidden)
         patch.setattr(service, '_save', forbidden)
         patch.setattr(resource_files, 'put', forbidden)
-        patch.setattr(canvas_library, 'put', forbidden)
         patch.setattr(state_storage, 'resource', forbidden)
         for attempt in range(2):
             response = await client.post('/api/actions', json={

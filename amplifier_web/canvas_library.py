@@ -84,7 +84,13 @@ def remember(state, db, *, message=_CURRENT_MESSAGE):
             return
 
     record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','workspacePath','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView','contentResource','presentationKey','outputBinding','imageRequestId') if key in canvas}
-    if 'mcp' in canvas:
+    if previous and previous.get('kind') == 'mcp-app' and not canvas.get('_versionWrite'):
+        # Passive persistence owns neither reconnect authority nor another
+        # view's transient context. Explicit open and reconnect update this
+        # canonical reference themselves; never merge a live preference here.
+        if 'mcpState' in previous:
+            record['mcpState'] = copy.deepcopy(previous['mcpState'])
+    elif 'mcp' in canvas:
         from .resource_files import put
         record['mcpState'] = put(db, canvas['mcp'])
     if previous:
