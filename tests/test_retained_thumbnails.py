@@ -77,6 +77,15 @@ def tuple_query(sid, mid, record, **changes):
             'messageId': mid, 'sha256': record['sha256'], **changes}
 
 
+def make_true_legacy(service, record):
+    row = artifact(service, record)
+    row['publications'][0].pop('outputId')
+    row['publications'][0].pop('imageGeneration')
+    for saved in [row, *row['versions']]:
+        saved.pop('outputBinding', None)
+    return row
+
+
 @pytest.fixture
 async def retained(authenticated_client, tmp_path):
     app, sid, mid, records, document = await saved_host(tmp_path)
@@ -110,7 +119,7 @@ async def test_exact_retained_http_and_legacy_output_image_do_not_hydrate_histor
     assert response.headers['X-Amplifier-Image-SHA256'] == record['sha256']
     assert response.headers['Cache-Control'] == 'no-store'
     assert response.headers['Content-Type'] == 'image/png'
-    assert calls == [(sid, False)]
+    assert calls == [(sid, False), (sid, False)], 'Authority is fresh after the detached worker'
     # Missing optional projected hash is allowed only with canonical binding.
     query = tuple_query(sid, mid, record)
     query.pop('sha256')
@@ -139,7 +148,7 @@ async def test_exact_retained_http_and_legacy_output_image_do_not_hydrate_histor
 ])
 async def test_rejected_http_tuple_never_opens_bytes_or_falls_back(retained, monkeypatch, case):
     _, service, client, sid, mid, records, _ = retained
-    from amplifier_web import artifact_presentation
+    from amplifier_web import outputs
     record = records[0]
     row = artifact(service, record)
     path, query = image_path(record), tuple_query(sid, mid, record)
@@ -187,10 +196,15 @@ async def test_rejected_http_tuple_never_opens_bytes_or_falls_back(retained, mon
         row['versions'][0]['outputBinding']['sha256'] = '0' * 64
     elif case == 'wrong-client-scope':
         service.clients.records['thumbnail-client']['selectedSessionId'] = None
-    monkeypatch.setattr(artifact_presentation, 'output_bytes',
+    monkeypatch.setattr(outputs, 'thumbnail_bytes',
                         lambda *args: pytest.fail('Rejected tuple opened the body'))
-    monkeypatch.setattr(service.outputs, 'image',
-                        lambda *args: pytest.fail('Scoped rejection fell back to the raw image URL'))
+    original_read = service.outputs.retained_thumbnail
+
+    async def scoped_only(identity, values=None):
+        assert values is not None, 'Scoped rejection fell back to the raw image URL'
+        return await original_read(identity, values)
+
+    monkeypatch.setattr(service.outputs, 'retained_thumbnail', scoped_only)
     response = await client.get(path, params=query)
     assert response.status in {404, 409}
     assert response.headers['Content-Type'].startswith('application/json')
@@ -209,20 +223,20 @@ async def test_http_auth_and_cross_origin_precede_saved_tuple_guard(retained, mo
 
 async def test_legacy_canonical_join_qualifies_exact_old_version_not_current_body(retained, monkeypatch):
     _, service, client, sid, mid, records, _ = retained
-    from amplifier_web import artifact_presentation
+    from amplifier_web import outputs
     record, row = records[0], artifact(service, records[0])
     row['versions'][0].pop('outputBinding')
     row['versions'].append({'version': 2, 'kind': 'image', 'title': 'Later unrelated body',
                             'body': {'$resource': 'later-body'}})
     row.update(revision=2, body={'$resource': 'later-body'})
-    original = artifact_presentation.output_bytes
+    original = outputs.thumbnail_bytes
     opened = []
 
-    def exact_bytes(db, saved):
+    def exact_bytes(source, saved):
         opened.append(saved['id'])
-        return original(db, saved)
+        return original(source, saved)
 
-    monkeypatch.setattr(artifact_presentation, 'output_bytes', exact_bytes)
+    monkeypatch.setattr(outputs, 'thumbnail_bytes', exact_bytes)
     response = await client.get(image_path(record), params=tuple_query(sid, mid, record))
     assert response.status == 200 and await response.read() == png(100, 60)
     assert opened == [record['id']]
@@ -287,6 +301,254 @@ async def test_ten_retained_reads_allocate_zero_views_and_release_is_not_revocat
         assert any(view['viewId'] == ordinary['viewId'] for view in service.canvas_views.project()['views'])
 
 
+async def test_two_true_legacy_variants_restart_job_pruning_and_unchanged_evidence(
+        authenticated_client, tmp_path, monkeypatch):
+    from amplifier_web import artifact_presentation
+    app, sid, mid, records, _ = await saved_host(tmp_path)
+    service = app['service']
+    for record in records:
+        make_true_legacy(service, record)
+    service._session(sid)['execution']['imageGeneration'] = []
+    original = copy.deepcopy(service._state['canvasArtifacts'])
+    evidence = [service.outputs.store.read(record['id']) for record in records]
+    service._save()
+    await service.close()
+    reopened = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=NoModel(),
+                                voice=False, preload_providers=False, background_updates=False)
+    service = reopened['service']
+    service.clients.attach('legacy-tab')
+    client = await authenticated_client(reopened)
+    client.session.headers['X-Amplifier-Client'] = 'legacy-tab'
+    monkeypatch.setattr(artifact_presentation, 'output_bytes',
+                        lambda *args: pytest.fail('Metadata qualification opened a body'))
+    for index, record in enumerate(records):
+        response = await client.post('/api/actions', json={'action': 'canvas.versions.inspect', 'args': {
+            'sessionId': sid, 'id': record['canvasId'], 'version': 1,
+            'messageId': mid, 'qualifyLegacyGeneration': True}})
+        assert response.status == 200
+        qualified = (await response.json())['result']['legacyGeneration']
+        assert qualified['status'] == 'generated'
+        assert (qualified['outputId'], qualified['outputVersion'], qualified['sha256']) == (
+            record['id'], record['version'], record['sha256'])
+        response = await client.get(image_path(record), params=tuple_query(sid, mid, record))
+        assert response.status == 200 and await response.read() == png(100 + index, 60)
+    assert service._state['canvasArtifacts'] == original
+    assert [service.outputs.store.read(record['id']) for record in records] == evidence
+    assert service.clients.records['legacy-tab'].get('canvasViews', {}).get('inline', {}) == {}
+    # Unlink uses the known canonical Canvas identity, with no saved-body rewrite.
+    record = records[0]
+    response = await client.post('/api/actions', json={'action': 'outputs.unlink', 'args': {
+        'sessionId': sid, 'id': record['id'], 'expectedRevision': record['revision']}})
+    assert response.status == 200
+    row = artifact(service, record)
+    assert row['publications'][0]['chat'] == 'none'
+    assert 'outputId' not in row['publications'][0] and 'imageGeneration' not in row['publications'][0]
+    assert row['versions'] == original[0]['versions']
+    assert (await client.get(image_path(record), params=tuple_query(sid, mid, record))).status == 409
+    assert (await client.get(image_path(record))).status == 200, 'Library access survives unlink'
+    updated = service.outputs.store.read(record['id'])
+    await client.post('/api/actions', json={'action': 'outputs.relink', 'args': {
+        'sessionId': sid, 'id': record['id'], 'expectedRevision': updated['revision']}})
+    assert row['publications'][0]['chat'] == 'none', 'Relink does not replay publication'
+
+
+@pytest.mark.parametrize('field,value', [
+    ('outputId', None), ('outputId', 'forged'), ('imageGeneration', None),
+    ('imageGeneration', {}), ('imageGeneration', {'verified': True}),
+])
+async def test_explicit_partial_legacy_fields_never_downgrade(retained, monkeypatch, field, value):
+    from amplifier_web import outputs
+    _, service, client, sid, mid, records, _ = retained
+    row = make_true_legacy(service, records[0])
+    row['publications'][0][field] = value
+    monkeypatch.setattr(outputs, 'thumbnail_bytes',
+                        lambda *args: pytest.fail('Malformed publication opened bytes'))
+    assert (await client.get(image_path(records[0]), params=tuple_query(sid, mid, records[0]))).status == 409
+    response = await client.post('/api/actions', json={'action': 'canvas.versions.inspect', 'args': {
+        'sessionId': sid, 'id': row['id'], 'version': 1, 'messageId': mid, 'qualifyLegacyGeneration': True}})
+    assert response.status == 409
+
+
+@pytest.mark.parametrize('change', ['session', 'workspace', 'publication', 'body', 'generation', 'output-version',
+                                  'origin', 'unlinked', 'ambiguous', 'index', 'unrelated', 'preview'])
+async def test_detached_worker_thread_and_fresh_post_await_authority(retained, monkeypatch, change):
+    import threading
+    from amplifier_web import outputs
+    _, service, client, sid, mid, records, _ = retained
+    record = records[0]
+    row = make_true_legacy(service, record)
+    entered, finish = threading.Event(), threading.Event()
+    owner = threading.get_ident()
+    original = outputs.thumbnail_bytes
+
+    def held(source, copied):
+        assert threading.get_ident() != owner
+        assert not service.lock.locked(), 'PNG work retained the owner lock'
+        assert not hasattr(source, 'execute') and not hasattr(copied, 'execute')
+        entered.set()
+        assert finish.wait(10), 'Test did not release the detached worker'
+        return original(source, copied)
+
+    monkeypatch.setattr(outputs, 'thumbnail_bytes', held)
+    pending = asyncio.create_task(client.get(image_path(record), params=tuple_query(sid, mid, record)))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        async with service.lock:
+            if change in {'session', 'workspace'}:
+                service.clients.records['thumbnail-client']['selected' + change.title() + 'Id'] = 'foreign'
+            elif change == 'publication':
+                row['publications'][0]['chat'] = 'none'
+            elif change == 'body':
+                row['versions'][0]['body'] = {'$resource': '0' * 64}
+            elif change in {'generation', 'origin', 'unlinked', 'output-version'}:
+                value = service.outputs.store.read(record['id'])
+                if change == 'generation':
+                    value['imageGeneration']['requestId'] = 'changed'
+                elif change == 'origin':
+                    value['origin']['messageId'] = 'changed'
+                elif change == 'output-version':
+                    value['version'] += 1
+                else:
+                    value['linked'] = False
+                service.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(value), value['id']))
+            elif change == 'ambiguous':
+                duplicate = {k: v for k, v in service.outputs.store.read(record['id']).items()
+                             if k not in {'id', 'sessionId', 'version', 'revision', 'createdAt'}}
+                service.outputs.store.create(sid, duplicate)
+            elif change == 'index':
+                service.db.execute('DELETE FROM state_resources WHERE id=?', (record['body']['$resource'],))
+            elif change == 'unrelated':
+                service._state['revision'] += 1
+                service._session(sid, hydrate=False)['title'] = 'Unrelated title change'
+            else:
+                service.clients.records['thumbnail-client']['canvasViews'] = {}
+        finish.set()
+        response = await pending
+        assert response.status == (200 if change in {'unrelated', 'preview'} else 409)
+        if response.status == 200:
+            assert await response.read() == png(100, 60)
+    finally:
+        finish.set()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_worker_cancellation_settles_before_releasing_admission(retained, monkeypatch):
+    import threading
+    from amplifier_web import outputs
+    _, service, _, sid, mid, records, _ = retained
+    entered, finish = threading.Event(), threading.Event()
+    original = outputs.thumbnail_bytes
+
+    def held(source, record):
+        entered.set()
+        assert finish.wait(10)
+        return original(source, record)
+
+    monkeypatch.setattr(outputs, 'thumbnail_bytes', held)
+    with service.clients.bind('thumbnail-client'):
+        task = asyncio.create_task(service.outputs.retained_thumbnail(records[0]['id'], tuple_query(sid, mid, records[0])))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert service.outputs.thumbnail_workers._value == 1
+        assert not service.lock.locked()
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert service.outputs.thumbnail_workers._value == 2
+    finally:
+        finish.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize('damage', ['json-envelope', 'decoded-limit', 'symlink', 'resource-hash'])
+async def test_worker_preserves_separate_envelope_and_regular_file_integrity_limits(retained, damage):
+    import base64
+    from amplifier_web.outputs import MAX_FILE, MAX_IMAGE_ENVELOPE
+    from amplifier_web.resource_files import put, root
+    _, service, client, sid, mid, records, _ = retained
+    record = service.outputs.store.read(records[0]['id'])
+    row = make_true_legacy(service, record)
+    data = b'x' * (MAX_FILE + 1) if damage == 'decoded-limit' else png(100, 60)
+    body = {'content': 'data:image/png;base64,' + base64.b64encode(data).decode()}
+    if damage == 'json-envelope':
+        body['padding'] = 'x' * (MAX_IMAGE_ENVELOPE + 1)
+    record.update(body=put(service.db, body), bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+    for saved in [row, row['versions'][0]]:
+        saved.update(body=record['body'], contentResource=record['body'])
+    service.db.execute('UPDATE output_records SET value=? WHERE id=?', (json.dumps(record), record['id']))
+    path = root(service.db) / (record['body']['$resource'] + '.json')
+    if damage == 'symlink':
+        target = path.with_suffix('.original')
+        path.rename(target)
+        path.symlink_to(target)
+    elif damage == 'resource-hash':
+        path.write_text(json.dumps({'content': body['content'], 'forged': True}))
+    assert (await client.get(image_path(record), params=tuple_query(sid, mid, record))).status == 409
+
+
+async def test_existing_legacy_admission_helper_keeps_its_byte_validation(retained, monkeypatch):
+    from amplifier_web import artifact_presentation
+    _, service, _, _, _, records, _ = retained
+    row = make_true_legacy(service, records[0])
+    opened = []
+    original = artifact_presentation.output_bytes
+
+    def validate(db, record):
+        opened.append(record['id'])
+        return original(db, record)
+
+    monkeypatch.setattr(artifact_presentation, 'output_bytes', validate)
+    assert artifact_presentation.legacy_generation_metadata(service, row, 1)['id'] == records[0]['id']
+    assert opened == []
+    assert artifact_presentation.legacy_generation_output(service, row, 1)['id'] == records[0]['id']
+    assert opened == [records[0]['id']]
+
+
+async def test_three_http_reads_share_two_detached_worker_admissions(retained, monkeypatch):
+    import threading
+    from amplifier_web import outputs
+    _, service, client, sid, mid, records, _ = retained
+    finish, entered = threading.Event(), threading.Event()
+    guard = threading.Lock()
+    active = peak = total = 0
+    original = outputs.thumbnail_bytes
+
+    def held(source, record):
+        nonlocal active, peak, total
+        with guard:
+            active += 1
+            total += 1
+            peak = max(peak, active)
+            if total == 2:
+                entered.set()
+        try:
+            assert finish.wait(10)
+            return original(source, record)
+        finally:
+            with guard:
+                active -= 1
+
+    monkeypatch.setattr(outputs, 'thumbnail_bytes', held)
+    tasks = [asyncio.create_task(client.get(image_path(records[index % 2]),
+             params=tuple_query(sid, mid, records[index % 2]))) for index in range(3)]
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        assert total == 2 and peak == 2
+        assert not service.lock.locked()
+        finish.set()
+        responses = await asyncio.gather(*tasks)
+        assert all(response.status == 200 for response in responses)
+        bodies = [await response.read() for response in responses]
+        assert all(body.startswith(b'\x89PNG') for body in bodies)
+        assert total == 3 and peak == 2
+    finally:
+        finish.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def browser_fixture():
     """Real host + saved outputs for a separately executed browser check."""
     import os
@@ -305,6 +567,17 @@ async def browser_fixture():
         seed_connection(root / 'native')
         auth.authenticate_pam = lambda user, password: (user, password) == ('thumbnail-fixture', 'fixture-password')
         app, sid, mid, records, document = await saved_host(root, 10)
+        legacy = '--legacy-thumbnails' in sys.argv
+        if legacy:
+            service = app['service']
+            for record in records:
+                make_true_legacy(service, record)
+            service._session(sid)['execution']['imageGeneration'] = []
+            service._save()
+            await service.close()
+            # Cold host restart before the browser sees either legacy variant.
+            app = await create_app(root / 'app', workspace=root, runtime=NoModel(),
+                                   voice=False, preload_providers=False, background_updates=False)
         app['control_token'] = 'fixture-retained-thumbnails'
         runner = web.AppRunner(app)
         await runner.setup()
@@ -313,7 +586,7 @@ async def browser_fixture():
         port = site._server.sockets[0].getsockname()[1]
         app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
         print(json.dumps({'url': f'http://127.0.0.1:{port}', 'sessionId': sid, 'messageId': mid,
-                          'records': records, 'document': document,
+                          'records': records, 'document': document, 'legacy': legacy,
                           'package': str(Path(sys.modules['amplifier_web.server'].__file__).resolve())}), flush=True)
         stopped = asyncio.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):

@@ -14,7 +14,42 @@ from amplifier_outputs import OutputRegistry
 from amplifier_outputs.git_review import anchors, snapshot as git_snapshot
 
 MAX_FILE = 8*1024*1024
+MAX_IMAGE_ENVELOPE = ((MAX_FILE + 2) // 3) * 4 + 1024
 VARIANTS = ['standard','document','email','chat_message','social_post']
+
+
+def thumbnail_bytes(source, record):
+    """Worker-only bounded read/decode: no service, SQLite or live cursor."""
+    from .resource_files import read_detached
+    from .voice_visual_image import validate_png
+    value = read_detached(source, max_bytes=MAX_IMAGE_ENVELOPE)
+    if not isinstance(value, dict):
+        raise ValueError('Saved image envelope is unavailable.')
+    if record.get('bodyFormat') == 'canvas-image-v1':
+        content = value.get('content')
+        prefix = 'data:image/png;base64,'
+        if not isinstance(content, str) or not content.startswith(prefix):
+            raise ValueError('Saved image source is unavailable.')
+        encoded = content[len(prefix):]
+    elif value.get('encoding') == 'base64':
+        encoded = value.get('data')
+    else:
+        encoded = None
+    if encoded is not None:
+        if not isinstance(encoded, str) or len(encoded) > ((MAX_FILE + 2) // 3) * 4:
+            raise ValueError('Saved image exceeds the encoded PNG limit.')
+        data = base64.b64decode(encoded, validate=True)
+    elif record.get('bodyFormat') == 'canvas-image-v1':
+        raise ValueError('Saved image source is unavailable.')
+    else:
+        if not isinstance(value.get('data'), str):
+            raise ValueError('Saved image source is unavailable.')
+        data = value['data'].encode()
+    if (len(data) > MAX_FILE or len(data) != record.get('bytes')
+            or hashlib.sha256(data).hexdigest() != record.get('sha256')):
+        raise ValueError('Saved output content no longer matches its evidence.')
+    validate_png(data, max_bytes=MAX_FILE, max_dimension=4096)
+    return data
 
 
 def definitions(schema,string):
@@ -69,6 +104,7 @@ class Outputs:
     def __init__(self,app):
         self.app=app
         self.store=OutputRegistry(app.db)
+        self.thumbnail_workers = asyncio.Semaphore(2)
         from .output_media import Media
         self.media=Media(self)
 
@@ -105,11 +141,10 @@ class Outputs:
             'mimeType':'image/png','bytes':len(data),'evidence':'immutable-output-snapshot','untrustedData':True,
             'imageUrl':'/api/outputs/'+identity+'/image','_image':base64.b64encode(data).decode()}
 
-    def retained_thumbnail(self, identity, values):
-        """Exact published generation read; no view admission or history lookup."""
-        from .artifact_presentation import check_output, generation_binding, output_bytes
+    def thumbnail_metadata(self, identity, values):
+        """Requalify exact current publication/output facts on the owner thread."""
+        from .artifact_presentation import check_output, generation_binding, legacy_generation_metadata
         from .canvas_versions import definition
-        from .voice_visual_image import validate_png
         sid, aid, mid = (values.get(key) for key in ('sessionId', 'artifactId', 'messageId'))
         if any(not isinstance(value, str) or not value or len(value) > limit
                for value, limit in ((sid, 200), (aid, 100), (mid, 200))):
@@ -136,35 +171,71 @@ class Outputs:
         links = [link for link in row.get('publications', [])
                  if link.get('messageId') == mid and type(link.get('version')) is int
                  and link['version'] == version]
-        if (len(links) != 1 or links[0].get('outputId') != identity
-                or links[0].get('chat', 'inline') != 'inline'):
+        if len(links) != 1 or links[0].get('chat', 'inline') != 'inline':
             raise ValueError('This exact output version is not published in the image gallery.')
-        record = self.record(sid, identity)
+        link = links[0]
+        legacy = 'outputId' not in link and 'imageGeneration' not in link
+        if legacy:
+            record = legacy_generation_metadata(self.app, row, version)
+            if record is None or record['id'] != identity:
+                raise ValueError('The canonical saved image relationship is unavailable.')
+        else:
+            # Null, forged or partial explicit fields never downgrade to legacy.
+            if link.get('outputId') != identity or 'imageGeneration' not in link:
+                raise ValueError('The exact image-generation publication is malformed.')
+            record = self.record(sid, identity)
         marker = generation_binding(record, row, version)
         if (not record.get('linked') or record.get('kind') != 'file' or marker is None
+                or type(record.get('version')) is not int or record['version'] < 1
+                or not isinstance(record.get('sha256'), str)
+                or len(record['sha256']) != 64
+                or any(char not in '0123456789abcdef' for char in record['sha256'])
                 or record.get('origin', {}).get('messageId') != mid
-                or ('imageGeneration' in links[0] and links[0]['imageGeneration'] != marker)):
+                or (not legacy and link['imageGeneration'] != marker)):
             raise ValueError('The canonical saved image-generation relationship is unavailable.')
         if 'outputBinding' in saved:
             check_output(saved['outputBinding'], record, sid)
-        else:
-            # Pre-adapter definitions have no outputBinding. Qualify the
-            # canonical join, including ambiguity, without reading other bodies.
-            candidates = self.app.db.execute(
-                "SELECT value FROM output_records WHERE session_id=? "
-                "AND json_extract(value,'$.canvasId')=? "
-                "AND json_extract(value,'$.bodyFormat')='canvas-image-v1'",
-                (sid, aid)).fetchall()
-            matched = [candidate for value, in candidates
-                       if generation_binding(candidate := json.loads(value), row, version)]
-            if len(matched) != 1 or matched[0]['id'] != identity:
+        elif not legacy:
+            candidate = legacy_generation_metadata(self.app, row, version)
+            if candidate is None or candidate['id'] != identity:
                 raise ValueError('The canonical saved image relationship is ambiguous or unavailable.')
         if 'sha256' in values and values['sha256'] != record.get('sha256'):
             raise ValueError('The thumbnail hash differs from its exact saved output.')
-        # Only this requested byte boundary opens the existing canonical body.
-        data = output_bytes(self.app.db, record)
-        validate_png(data, max_bytes=MAX_FILE, max_dimension=4096)
-        return data, record['sha256']
+        return copy.deepcopy({
+            'record': record, 'publication': link, 'imageGeneration': marker,
+            'version': version, 'artifactId': aid, 'imageRequestId': row.get('imageRequestId'),
+            'definition': {key: saved[key] for key in ('kind', 'body', 'contentResource', 'outputBinding') if key in saved},
+            'client': (client_id, client.get('selectedSessionId'), client.get('selectedWorkspaceId'))
+                      if client_id is not None else None})
+
+    def thumbnail_snapshot(self, identity, values):
+        from .resource_files import detach
+        if values is not None:
+            facts = self.thumbnail_metadata(identity, values)
+        else:
+            # General/library image reads keep their existing linked/unlinked policy.
+            record = self.store.read(identity)
+            self.app._session(record['sessionId'], hydrate=False)
+            if record.get('kind') not in {'file', 'dataset'} or not record.get('body'):
+                raise ValueError('Choose the exact saved file snapshot and content hash.')
+            client_id = self.app.clients.current.get()
+            client = self.app.clients.records[client_id] if client_id is not None else {}
+            facts = copy.deepcopy({'record': record, 'client': (
+                client_id, client.get('selectedSessionId'), client.get('selectedWorkspaceId'))})
+        return facts, detach(self.app.db, facts['record']['body']['$resource'])
+
+    async def retained_thumbnail(self, identity, values=None):
+        """Detached pixels, settled cancellation, then fresh owner-lock authority."""
+        from .resource_files import settle_worker
+        async with self.thumbnail_workers:
+            async with self.app.lock:
+                before = self.thumbnail_snapshot(identity, values)
+            facts, source = before
+            data = await settle_worker(thumbnail_bytes, source, facts['record'])
+            async with self.app.lock:
+                if self.thumbnail_snapshot(identity, values) != before:
+                    raise ValueError('Saved image source authority changed during read.')
+                return data, facts['record']['sha256']
 
     def images(self,sid,identities):
         if (not isinstance(identities,list) or len(identities)!=2 or
@@ -637,8 +708,25 @@ class Outputs:
                     linked_record = self.record(session['id'],args['id'])
                     if linked_record.get('kind') == 'media':
                         self.media.authority(current, origin)
+                    legacy_links = []
+                    if action == 'outputs.unlink' and linked_record.get('canvasId'):
+                        from .artifact_presentation import legacy_generation_metadata
+                        # The mutation knows its canonical Canvas ID. Never scan
+                        # the output library on a render/state projection path.
+                        canvas = next((row for row in self.app.state.get('canvasArtifacts', [])
+                                       if row['id'] == linked_record['canvasId']
+                                       and row.get('sessionId') == session['id']), None)
+                        for publication in canvas.get('publications', []) if canvas else []:
+                            if ('outputId' in publication or 'imageGeneration' in publication
+                                    or publication.get('messageId') != linked_record.get('origin', {}).get('messageId')):
+                                continue
+                            canonical = legacy_generation_metadata(self.app, canvas, publication['version'])
+                            if canonical and canonical['id'] == linked_record['id']:
+                                legacy_links.append(publication)
                     result=self.store.link(args['id'],args['expectedRevision'],action=='outputs.relink')
                     if action == 'outputs.unlink':
+                        for publication in legacy_links:
+                            publication['chat'] = 'none'
                         for canvas in self.app.state.get('canvasArtifacts', []):
                             if canvas.get('sessionId') == session['id']:
                                 for publication in canvas.get('publications', []):

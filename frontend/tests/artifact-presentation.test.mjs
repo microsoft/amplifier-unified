@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {createHash,webcrypto} from 'node:crypto';
-import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,publicationOutputIds,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,retainedThumbnailTuple} from '../src/artifact-presentation.js';
+import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,publicationOutputIds,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,retainedThumbnailTuple,legacyGenerationCandidate,qualifiedLegacyGeneration} from '../src/artifact-presentation.js';
 import {imageGalleryEntries,imageGallerySelection} from '../src/image-generation.js';
 import {createArtifactOverrides,createInlineOwnership,inlineEditNotice} from '../src/conversation-navigation.js';
 
@@ -575,7 +575,7 @@ test('legacy thumbnail has no invented hash; partial or mismatched new bindings 
 // deliberately does not claim browser decoding or authenticated-host acceptance.
 function thumbnailHarness(decode=async()=> 'SMALL_PIXELS'){
  const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
- const start=source.indexOf('function Thumbnail('),end=source.indexOf(' return <span',start);
+ const start=source.indexOf('function Thumbnail('),end=source.indexOf(' return <div ref={root} className="a-gallery-choice"',start);
  const slots=[],effects=[],writes=[],fetches=[];let index=0;
  const button={getAttribute:()=> 'Image 1: Concept',setAttribute(){},addEventListener(){},removeEventListener(){}};
  const hooks={
@@ -677,10 +677,10 @@ test('actual thumbnail slot pool bounds whole decode lifetimes and removes cance
 
 test('actual retained pixel boundary checks bytes/hash/PNG before decode and closes full-size intermediates',async()=>{
  const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
- const start=source.indexOf('async function thumbnailPixels('),end=source.indexOf('function Thumbnail(',start);
+ const start=source.indexOf('async function thumbnailResponseBytes('),end=source.indexOf('function Thumbnail(',start);
  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==','base64');
  const sha256=createHash('sha256').update(png).digest('hex');
- for(const damage of [null,'hash','tuple-hash','not-png','dimension','byte-limit','length','content-type','late-decode']){
+ for(const damage of [null,'absent-length','hash','absent-hash','bad-hash','tuple-hash','not-png','dimension','byte-limit','length','malformed-length','content-type','late-decode']){
   const data=Uint8Array.from(png);
   if(damage==='dimension')new DataView(data.buffer).setUint32(16,4097);
   if(damage==='not-png')data[0]=0;
@@ -693,9 +693,13 @@ test('actual retained pixel boundary checks bytes/hash/PNG before decode and clo
    fetch:async(path,args)=>{requestPath=path;options=args;return {
     ok:true,headers:new Map([
      ['Content-Type',damage==='content-type'?'text/html':'image/png'],
-     ['Content-Length',String(damage==='byte-limit'?8*1024*1024+1:damage==='length'?data.length+1:data.length)],
-     ['X-Amplifier-Image-SHA256',damage==='hash'?'0'.repeat(64):hash]]),
-    arrayBuffer:async()=>{bodyReads++;return data.buffer}
+     ['Content-Length',damage==='absent-length'?null:damage==='malformed-length'?'1e2':String(damage==='byte-limit'?8*1024*1024+1:damage==='length'?data.length+1:data.length)],
+     ['X-Amplifier-Image-SHA256',damage==='hash'?'0'.repeat(64):damage==='absent-hash'?null:damage==='bad-hash'?'invalid':hash]]),
+    arrayBuffer:async()=>assert.fail('Unbounded arrayBuffer must not be used'),
+    body:{cancel:async()=>{},getReader(){bodyReads++;let done=false;return {
+     read:async()=>{if(done)return {done:true};done=true;return {done:false,value:data}},
+     cancel:async()=>{},releaseLock(){}
+    }}}
    }},
    createImageBitmap:async()=>{
     decoded++;if(damage==='late-decode')controller.abort();
@@ -704,17 +708,146 @@ test('actual retained pixel boundary checks bytes/hash/PNG before decode and clo
   });
   const tuple={url:'/api/outputs/output/image?sessionId=conversation',
    sha256:damage==='tuple-hash'?'f'.repeat(64):damage==='dimension'||damage==='not-png'?hash:sha256};
-  if(damage===null){
+  if(damage===null||damage==='absent-length'){
    assert.equal(await pixelRead(tuple,controller.signal),'DERIVED_SMALL_DATA_URI');
    assert.equal(decoded,1);assert.equal(closed,1);assert.equal(bodyReads,1);
   }else{
    await assert.rejects(pixelRead(tuple,controller.signal));
    assert.equal(decoded,damage==='late-decode'?1:0);
    assert.equal(closed,decoded);
-   if(['byte-limit','content-type'].includes(damage))assert.equal(bodyReads,0);
+   if(['byte-limit','content-type','absent-hash','bad-hash','malformed-length','tuple-hash'].includes(damage))assert.equal(bodyReads,0);
   }
   assert.equal(canvas.width,0);assert.equal(canvas.height,0);
   assert.ok(requestPath.endsWith('&clientId=attached'));
   assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
+ }
+});
+
+function trueLegacyItem(id='legacy'){
+ const value=thumbnailItem();
+ value.row.id=id;value.row.imageRequestId='candidate-hint';
+ delete value.publication.outputId;delete value.publication.imageGeneration;
+ delete value.row.versions[0].outputBinding;
+ return value;
+}
+function legacyResult(item,scope){
+ const candidate=legacyGenerationCandidate(item,'turn',scope);
+ return {identity:candidate.identity,value:{status:'generated',sessionId:item.row.sessionId,
+  artifactId:item.row.id,messageId:'turn',version:item.version,outputId:'canonical-'+item.row.id,
+  outputVersion:3,sha256:'c'.repeat(64),body:candidate.saved.body,contentResource:candidate.saved.contentResource??null,
+  imageGeneration:{verified:true,requestId:'verified-receipt',operation:'generate',parentId:null}}};
+}
+
+test('true legacy absence consumes only exact host metadata without changing saved publication/body evidence',()=>{
+ const value=trueLegacyItem(),scope=thumbnailState(),before=structuredClone(value);
+ assert.equal(retainedThumbnailTuple(value,'turn',scope),null,'The hint is not read or classification authority');
+ const qualified={...value,legacyGeneration:legacyResult(value,scope)},tuple=retainedThumbnailTuple(qualified,'turn',scope);
+ assert.ok(tuple);assert.equal(tuple.sha256,'c'.repeat(64));
+ assert.equal(new URL(tuple.url,'https://fixture.invalid').pathname,'/api/outputs/canonical-legacy/image');
+ assert.deepEqual(value,before);
+ assert.equal(retainedThumbnailTuple(qualified,'turn',{...scope,revision:100}).identity,tuple.identity);
+ for(const patch of [{selectedWorkspaceId:null},{selectedSessionId:'foreign'},{client:{...scope.client,id:'foreign'}}])
+  assert.equal(retainedThumbnailTuple(qualified,'turn',{...scope,...patch}),null);
+ for(const field of ['outputId','imageGeneration']){
+  for(const explicit of [null,undefined,{},'forged']){
+   const malformed={...value,publication:{...value.publication,[field]:explicit},legacyGeneration:qualified.legacyGeneration};
+   assert.equal(legacyGenerationCandidate(malformed,'turn',scope),null);
+   assert.equal(retainedThumbnailTuple(malformed,'turn',scope),null);
+  }
+ }
+ const managed={...qualified,row:{...qualified.row,workspaceId:null}};
+ const managedScope={...scope,selectedWorkspaceId:null};
+ managed.legacyGeneration=legacyResult(managed,managedScope);
+ assert.ok(retainedThumbnailTuple(managed,'turn',managedScope));
+ assert.equal(retainedThumbnailTuple(managed,'turn',scope),null,'Host and client must both use null managed workspace');
+ for(const field of ['outputVersion','sha256','body','version','artifactId','messageId','imageGeneration']){
+  const wrong=structuredClone(qualified);
+  wrong.legacyGeneration.value[field]=null;
+  assert.equal(retainedThumbnailTuple(wrong,'turn',scope),null);
+ }
+});
+
+function legacyHarness(dispatch){
+ const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('function useLegacyGenerations('),end=source.indexOf('export function ArtifactLinks(',start);
+ const slots=[],effects=[],writes=[];let index=0;
+ const hooks={
+  useRef(value){const at=index++;slots[at]??={current:value};return slots[at]},
+  useState(value){const at=index++;slots[at]??={value};return [slots[at].value,next=>{
+   slots[at].value=typeof next==='function'?next(slots[at].value):next;writes.push(at);
+  }]},
+  useEffect(fn,deps){const at=index++,old=slots[at];if(!old||deps.some((value,n)=>!Object.is(value,old.deps[n]))){
+   const entry={deps,cleanup:old?.cleanup};slots[at]=entry;effects.push(()=>{entry.cleanup?.();entry.cleanup=fn()});
+  }}
+ };
+ const invoke=runInNewContext(source.slice(start,end)+'useLegacyGenerations',{
+  ...hooks,AbortController,legacyGenerationCandidate,qualifiedLegacyGeneration,imageGalleryEntries,
+  thumbnailWork:(signal,work)=>signal.aborted?Promise.reject(new DOMException('cancelled','AbortError')):Promise.resolve().then(work)
+ });
+ return {writes,render(items=[trueLegacyItem()],scope=thumbnailState()){
+  index=0;const result=invoke(items,'turn',scope,dispatch);while(effects.length)effects.shift()();return result;
+ },dispose(){for(const slot of slots)slot?.cleanup?.()}};
+}
+
+test('displayed legacy consumer has visible pending/error, explicit retry and no unrelated-state requery',async()=>{
+ const value=trueLegacyItem(),scope=thumbnailState(),calls=[];let fail=true;
+ const harness=legacyHarness(async(action,args)=>{
+  calls.push({action,args});if(fail)throw Error('Qualification temporarily unavailable');
+  return {accepted:true,result:{legacyGeneration:legacyResult(value,scope).value}};
+ });
+ assert.equal(harness.render([value],scope).pending.length,1);await settle();
+ let result=harness.render([value],scope);
+ assert.match(result.pending[0].error,/temporarily unavailable/);
+ harness.render([value],{...scope,revision:99});await settle();assert.equal(calls.length,1);
+ fail=false;result.retry(result.pending[0].identity);harness.render([value],scope);await settle();
+ result=harness.render([value],scope);assert.equal(result.pending.length,0);
+ assert.ok(retainedThumbnailTuple(result.rows[0],'turn',scope));
+ harness.render([structuredClone(value)],{...scope,revision:100});await settle();
+ assert.equal(calls.length,2,'Equal source facts and unrelated state do not requery');
+ assert.ok(calls.every(call=>call.action==='canvas.versions.inspect'&&call.args.qualifyLegacyGeneration===true&&!call.args.includeSource));
+ harness.dispose();
+});
+
+test('late legacy qualification after scope/source/unlink/suppression changes is discarded mount-locally',async()=>{
+ for(const change of ['host','client','session','workspace','body','publication','unlink','unmount']){
+  const value=trueLegacyItem(),scope=thumbnailState();let finish;
+  const harness=legacyHarness(()=>new Promise(resolve=>{finish=resolve}));
+  harness.render([value],scope);await settle();
+  const modified=structuredClone(value),next=structuredClone(scope);
+  if(change==='host')next.client.hostInstanceId='other';
+  if(change==='client')next.client.id='other';
+  if(change==='session')next.selectedSessionId='other';
+  if(change==='workspace')next.selectedWorkspaceId='other';
+  if(change==='body')modified.row.versions[0].body={$resource:'different'};
+  if(change==='publication')modified.publication.chat='none';
+  if(change==='unmount')harness.dispose();
+  else harness.render(change==='unlink'?[]:[modified],next);
+  const writes=harness.writes.length;
+  finish({accepted:true,result:{legacyGeneration:legacyResult(value,scope).value}});await settle();
+  assert.equal(harness.writes.length,writes,'Stale inspection cannot revive gallery metadata');
+  harness.dispose();
+ }
+});
+
+test('streaming reader cancels overflow/abort and enforces safe optional length without arrayBuffer',async()=>{
+ const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('async function thumbnailResponseBytes('),end=source.indexOf('async function thumbnailPixels(',start);
+ const read=runInNewContext(source.slice(start,end)+'thumbnailResponseBytes',{Uint8Array,DOMException});
+ for(const mode of ['absent','valid','malformed','unsafe','lying-short','truncated','overflow','abort']){
+  const controller=new AbortController();let reads=0,cancelled=0,released=0;
+  const chunks=mode==='overflow'?[new Uint8Array(8*1024*1024),new Uint8Array(1),new Uint8Array(100)]:
+   [new Uint8Array(30),new Uint8Array(30)];
+  const length={valid:'60',malformed:'60garbage',unsafe:'9007199254740992','lying-short':'45',truncated:'61'}[mode]??null;
+  const response={headers:new Map([['Content-Length',length]]),arrayBuffer:()=>assert.fail('Unbounded read'),
+   body:{getReader:()=>({read:async()=>{
+    reads++;if(mode==='abort'&&reads===1)controller.abort();
+    return chunks.length?{done:false,value:chunks.shift()}:{done:true};
+   },cancel:async()=>{cancelled++},releaseLock(){released++}})}};
+  if(['absent','valid'].includes(mode))assert.equal((await read(response,controller.signal)).byteLength,60);
+  else await assert.rejects(read(response,controller.signal));
+  if(['malformed','unsafe'].includes(mode)){assert.equal(reads,0);assert.equal(released,0)}
+  else assert.equal(released,1);
+  if(['overflow','abort','lying-short'].includes(mode))assert.ok(cancelled>0);
+  if(mode==='overflow')assert.equal(reads,2,'Overflow cancels before another chunk is consumed');
  }
 });

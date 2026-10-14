@@ -134,8 +134,8 @@ def generation_binding(record, row, version):
             'operation': receipt['operation'], 'parentId': record.get('parentId')}
 
 
-def legacy_generation_output(service, row, version):
-    """Qualify the pre-adapter canonical join without changing saved versions."""
+def legacy_generation_metadata(service, row, version):
+    """Unique canonical metadata join; no body read or history hydration."""
     candidates = service.db.execute(
         "SELECT value FROM output_records WHERE session_id=? "
         "AND json_extract(value,'$.canvasId')=? "
@@ -145,9 +145,15 @@ def legacy_generation_output(service, row, version):
                if generation_binding(record := json.loads(saved), row, version)]
     if len(matched) > 1:
         raise ValueError('The canonical saved image relationship is ambiguous.')
-    if matched:
-        output_bytes(service.db, matched[0])
     return matched[0] if matched else None
+
+
+def legacy_generation_output(service, row, version):
+    """Keep byte-validating admission behavior for existing callers."""
+    record = legacy_generation_metadata(service, row, version)
+    if record:
+        output_bytes(service.db, record)
+    return record
 
 
 def admission(service, sid, mid):

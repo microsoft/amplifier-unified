@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {imageJobs,imageJobLabel,imageGalleryEntries,imageGallerySelection} from '../src/image-generation.js';
+import {legacyGenerationCandidate,retainedThumbnailTuple} from '../src/artifact-presentation.js';
 
 test('saved results replace only matching image work in the same chat and turn',()=>{
  const jobs=[{id:'a',messageId:'origin',requestId:'a',phase:'running',operation:'generate'},
@@ -165,4 +166,37 @@ test('bare forgery, mismatched owner/output/publication version and ordinary new
  }
  assert.equal(imageGalleryEntries({...state,sessions:[{id:'s'}]},'origin',[{row:{...valid.row},version:1}]).length,0);
  assert.equal(imageGalleryEntries(state,'origin',[valid])[0].item,valid);
+});
+
+test('two true legacy variants with jobs empty retain distinct selection only after exact metadata qualification',()=>{
+ const state={selectedSessionId:'s',selectedWorkspaceId:null,client:{hostInstanceId:'host',id:'tab'},sessions:[{id:'s',execution:{imageGeneration:[]}}]};
+ const legacy=id=>({row:{id,kind:'image',sessionId:'s',workspaceId:null,imageRequestId:'same-request',revision:2,
+  versions:[{version:1,kind:'image',body:{$resource:'original-'+id}},{version:2,kind:'image',body:{$resource:'ordinary-'+id}}]},
+  version:1,publication:{messageId:'origin',version:1}});
+ const originals=[legacy('a'),legacy('b')],before=structuredClone(originals);
+ assert.deepEqual(imageGalleryEntries(state,'origin',originals),[],'First-version hint without jobs is never authority');
+ const qualify=(item,scope)=>({...item,legacyGeneration:{identity:legacyGenerationCandidate(item,'origin',scope).identity,value:{
+  status:'generated',sessionId:'s',artifactId:item.row.id,messageId:'origin',version:1,outputId:'out-'+item.row.id,
+  outputVersion:1,sha256:'a'.repeat(64),body:item.row.versions[0].body,contentResource:null,
+  imageGeneration:{verified:true,requestId:'same-request',operation:'generate',parentId:null}
+ }}});
+ const items=originals.map(item=>qualify(item,state)),entries=imageGalleryEntries(state,'origin',items);
+ assert.equal(entries.length,2);assert.equal(new Set(entries.map(entry=>entry.id)).size,2);
+ const selected=entries[1].id;
+ assert.equal(imageGallerySelection(imageGalleryEntries(state,'origin',items.slice(1)),selected).item.row.id,'b');
+ const reloaded=JSON.parse(JSON.stringify(state)),newMount=originals.map(item=>qualify(item,reloaded));
+ assert.deepEqual(imageGalleryEntries(reloaded,'origin',newMount).map(entry=>entry.id),entries.map(entry=>entry.id));
+ assert.ok(newMount.every(item=>retainedThumbnailTuple(item,'origin',reloaded)));
+ assert.deepEqual(originals,before,'Qualification does not rewrite immutable IDs/body/version or publication');
+ const negative={...items[0],legacyGeneration:{...items[0].legacyGeneration,value:{status:'not-generated'}}};
+ const rememberedJob={...state,sessions:[{id:'s',execution:{imageGeneration:[{requestId:'same-request',messageId:'origin'}]}}]};
+ assert.equal(imageGalleryEntries(rememberedJob,'origin',[negative]).filter(entry=>entry.item).length,0,
+  'A canonical negative cannot be overridden by the first-version candidate hint/recent job');
+ const later={...items[1],version:2,publication:{messageId:'origin',version:2}};
+ assert.equal(imageGalleryEntries(state,'origin',[later]).length,0);
+ for(const field of ['outputId','imageGeneration'])for(const value of [null,undefined,{},'forged']){
+  const partial={...items[0],publication:{...items[0].publication,[field]:value}};
+  const jobs={...state,sessions:[{id:'s',execution:{imageGeneration:[{requestId:'same-request',messageId:'origin'}]}}]};
+  assert.equal(imageGalleryEntries(jobs,'origin',[partial]).filter(entry=>entry.item).length,0,'Explicit malformed fields never use job or legacy fallback');
+ }
 });

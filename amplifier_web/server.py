@@ -301,7 +301,6 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                             content_type=record['media']['mimeType'], headers=headers)
 
     async def output_image(request):
-        import base64
         fields = ('sessionId', 'artifactId', 'version', 'messageId', 'sha256')
         scoped = any(key in request.query for key in fields)
         # Preserve the raw route's existing lookup/error behavior.
@@ -310,18 +309,16 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             if scoped:
                 if any(len(request.query.getall(key, [])) != 1 for key in fields[:4]) or len(request.query.getall('sha256', [])) > 1:
                     raise ValueError('Supply one complete saved thumbnail tuple; partial reads never fall back.')
-                async with service.lock:
-                    data, digest = service.outputs.retained_thumbnail(
-                        request.match_info['identity'], {key: request.query[key] for key in fields if key in request.query})
+                data, digest = await service.outputs.retained_thumbnail(
+                    request.match_info['identity'], {key: request.query[key] for key in fields if key in request.query})
                 headers = {'X-Amplifier-Image-SHA256': digest}
             else:
                 # Existing general outputs.image URLs keep their host-owner policy.
-                value=service.outputs.image(record['sessionId'],record['id'],record.get('sha256'))
-                data=base64.b64decode(value['_image'])
+                data, _digest = await service.outputs.retained_thumbnail(record['id'])
                 headers = {}
         except ValueError as exc:
             raise AppError(str(exc),409) from None
-        except (KeyError, TypeError) as exc:
+        except (KeyError, TypeError, OSError) as exc:
             if not scoped:
                 raise
             raise AppError(str(exc),409) from None

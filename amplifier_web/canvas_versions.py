@@ -127,7 +127,8 @@ def definitions(schema, string):
     identity = {'id': string(100), 'sessionId': string(200), 'clientId': string(100)}
     return {
         'canvas.versions.inspect': ('Inspect saved artifact definitions and exact revision links without selecting or executing them.',
-            schema({**identity, 'includeSource': {'type': 'boolean'}, 'version': {'type': 'integer', 'minimum': 1}}, ['id'])),
+            schema({**identity, 'includeSource': {'type': 'boolean'}, 'version': {'type': 'integer', 'minimum': 1},
+                    'qualifyLegacyGeneration': {'type': 'boolean'}, 'messageId': string(200)}, ['id'])),
         'canvas.versions.revise': ('Save a new document definition in the same tab. Inspect first and supply its expectedRevision; never rewrites earlier versions. Use canvas.apps.revise for interactive surfaces.',
             schema({**identity, 'expectedRevision': {'type': 'integer', 'minimum': 1}, 'content': string(7000000), 'surface': {'type': 'object'}, 'title': string(200)}, ['id', 'expectedRevision'])),
         'canvas.versions.restore': ('Copy a saved document definition to a new latest revision. Does not rewrite history, files or execute tool work. Use canvas.apps.restore for interactive surfaces.',
@@ -145,11 +146,43 @@ def command(service, action, args, origin):
     if row is None:
         raise AppError('This artifact is unavailable in the calling conversation.', 404)
     if action == 'canvas.versions.inspect':
-        selected = definition(row, args.get('version'), service.db)
+        qualify = args.get('qualifyLegacyGeneration') is True
+        if qualify and (args.get('includeSource') or type(args.get('version')) is not int
+                        or args['version'] < 1 or not args.get('messageId')):
+            raise AppError('Legacy qualification needs exact version/message and no source read.', 409)
+        selected = definition(row, args.get('version'), None if qualify else service.db)
         result = {'id': row['id'], 'title': selected['title'], 'revision': latest(row), 'reference': reference(row, args.get('version')),
                   'versions': [{k: v.get(k) for k in ('version', 'title', 'createdAt', 'messageId')} for v in entries(row)]}
         if args.get('includeSource'):
             result['source'] = resource(service.db, selected['body']['$resource'])
+        if qualify:
+            from .artifact_presentation import legacy_generation_metadata
+            client_id = service.clients.current.get()
+            if client_id is not None:
+                client = service.clients.records[client_id]
+                if (client.get('selectedSessionId') != sid
+                        or client.get('selectedWorkspaceId') != row.get('workspaceId')):
+                    raise AppError('Open the artifact owning conversation/workspace in this client.', 409)
+            links = [link for link in row.get('publications', [])
+                     if link.get('messageId') == args['messageId']
+                     and type(link.get('version')) is int and link['version'] == args['version']]
+            if (len(links) != 1 or links[0].get('chat', 'inline') != 'inline'
+                    or 'outputId' in links[0] or 'imageGeneration' in links[0]):
+                raise AppError('Only absent explicit publication fields qualify as legacy.', 409)
+            record = legacy_generation_metadata(service, row, args['version'])
+            qualified = {'status': 'not-generated'}
+            if record is not None:
+                # Same metadata guard as the byte boundary; inspection is not a grant.
+                facts = service.outputs.thumbnail_metadata(record['id'], {
+                    'sessionId': sid, 'artifactId': row['id'],
+                    'messageId': args['messageId'], 'version': str(args['version'])})
+                qualified = {'status': 'generated', 'sessionId': sid, 'artifactId': row['id'],
+                             'messageId': args['messageId'], 'version': args['version'],
+                             'outputId': record['id'], 'outputVersion': record['version'],
+                             'sha256': record['sha256'], 'imageGeneration': facts['imageGeneration'],
+                             'body': copy.deepcopy(selected.get('body')),
+                             'contentResource': copy.deepcopy(selected.get('contentResource'))}
+            result['legacyGeneration'] = qualified
         return result
     if owner.get('historyReadOnlyReason') or owner.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
         raise AppError('This conversation is read-only here.', 409)

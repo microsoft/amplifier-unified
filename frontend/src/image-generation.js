@@ -1,9 +1,9 @@
-import {artifactPublications,publicationMode,publicationImageGeneration} from './artifact-presentation.js';
+import {artifactPublications,publicationMode,publicationImageGeneration,qualifiedLegacyGeneration,legacyGenerationCandidate} from './artifact-presentation.js';
 
 export function imageJobs(state,messageId){
  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
  const images=artifactPublications(state.canvasArtifacts||[],messageId);
- const saved=new Set(images.map(item=>generationBinding(item,messageId,session?.id,session?.execution?.imageGeneration||[])?.requestId).filter(Boolean));
+ const saved=new Set(images.map(item=>generationBinding(item,messageId,session?.id,session?.execution?.imageGeneration||[],state)?.requestId).filter(Boolean));
  return (session?.execution?.imageGeneration||[]).filter(row=>row.messageId===messageId&&!saved.has(row.requestId));
 }
 
@@ -15,13 +15,17 @@ export function imageJobLabel(job){
  return 'Image generation stopped; check activity for its outcome';
 }
 
-function generationBinding(item,messageId,sessionId,jobs){
+function generationBinding(item,messageId,sessionId,jobs,state){
  const binding=publicationImageGeneration(item,messageId,sessionId);
  if(binding)return binding;
+ const legacy=qualifiedLegacyGeneration(item,messageId,state);
+ if(legacy)return legacy.imageGeneration;
+ if(item.legacyGeneration?.value?.status==='not-generated'&&
+  item.legacyGeneration.identity===legacyGenerationCandidate(item,messageId,state)?.identity)return null;
  // Older hosts expose only an initial-version marker and recent work. Do not
  // inherit that row marker into ordinary later versions, or repair a malformed
  // explicit binding with weaker evidence.
- if(item.publication?.imageGeneration!==undefined||item.version!==1||
+ if(item.publication&&('imageGeneration' in item.publication||'outputId' in item.publication)||item.version!==1||
   item.row.kind!=='image'||item.row.sessionId!==sessionId||
   item.publication?.version!==undefined&&item.publication.version!==item.version||
   item.publication?.messageId&&item.publication.messageId!==messageId)return null;
@@ -33,7 +37,7 @@ function generationBinding(item,messageId,sessionId,jobs){
 export function imageGalleryEntries(state,messageId,images){
  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
  const jobs=(session?.execution?.imageGeneration||[]).filter(job=>job.messageId===messageId);
- const bindings=new Map(images.map(item=>[item,generationBinding(item,messageId,session?.id,jobs)]));
+ const bindings=new Map(images.map(item=>[item,generationBinding(item,messageId,session?.id,jobs,state)]));
  const verified=images.filter(item=>bindings.get(item));
  const visible=verified.filter(item=>publicationMode(item)==='inline');
  const remaining=new Set(visible),entries=[],requests=new Map();
