@@ -1,5 +1,6 @@
 """Real Core/Foundation mounting must not lend a child its root's identity."""
 import importlib.util
+import asyncio
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -154,5 +155,93 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
         assert app.state['managementResults']['native-root-admin']['phase']=='ready'
     finally:
         _PERSISTENT.reset(token)
+        await parent.cleanup()
+        await app.close()
+
+
+@pytest.mark.parametrize('decision', ['allow', 'deny', 'revoke', 'cancel', 'immediate'])
+async def test_native_configuration_request_waits_for_human_without_replaying_effects(tmp_path, monkeypatch, decision):
+    from amplifier_foundation.bundle import Bundle, BundleModuleResolver
+    from amplifier_web.app_guidance import install_app_access
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.host.approvals import Approvals
+    from amplifier_web.service import AppService
+    from amplifier_web.management import Management
+    from test_configuration_authority import Runtime
+    from test_coordination_generation import until
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path/'native'))
+    spec = importlib.util.spec_from_file_location('approval_wait_fixture', Path(__file__).parent/'fixtures/standalone_children_probe.py')
+    fixture = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, fixture)
+    spec.loader.exec_module(fixture)
+    plan = {'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}}
+    paths = {name: Path(importlib.util.find_spec('amplifier_module_'+name.replace('-', '_')).origin).parent
+             for name in ('loop-live', 'context-simple')}
+    prepared = fixture.ProbePrepared(plan, BundleModuleResolver(paths), Bundle(name='fixture', session=plan['session']))
+    parent = await prepared.create_session(session_id='root', approval_system=Approvals(None, AsyncMock(return_value='deny')))
+    worker = Worker()
+    worker.session = parent
+    worker.runtime = SimpleNamespace(generation={'id':'generation'})
+    worker.context_inputs = ['input']
+    events = []
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', events.append)
+    class NativeApprovalRuntime(Runtime):
+        async def approval(self, sid, identity, response):
+            await worker._command_serial({'id':'native-decision','op':'approval','approval_id':identity,'decision':response})
+    app = AppService(tmp_path/'app', NativeApprovalRuntime(), workspace=tmp_path)
+    app.management = Management(app)
+    root = app._new_session({'title':'Root'})
+    root.update(runtimeSessionId='root', collaborationGeneration={'id':'generation','inputIds':['input'],'terminal':False})
+    app.state['sessions'] = [root]
+    app.state['selectedSessionId'] = root['id']
+    app._publish()
+    async def bridge(operation, args):
+        result = await app.app_bridge(operation, args, root['id'])
+        if decision == 'immediate' and args.get('action') == 'capability.request':
+            await app.dispatch('approval.respond', {'sessionId':root['id'],'id':result['result']['id'],'decision':'allow'})
+            await asyncio.sleep(0)  # Decision can arrive before bridge response.
+        return result
+    worker.bridge = bridge
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    control = parent.coordinator.get('tools')['app_control']
+    task = asyncio.create_task(control.execute({'operation':'dispatch','args':{'action':'capability.request','id':'native-request',
+        'args':{'sessionId':root['id'],'effects':['file_access'],'scopes':['global'],'reason':'User requested setup'}}}))
+    try:
+        await until(lambda: bool(root['approvals']))
+        row = app.configuration_authority.rows(root['id'])[0]
+        assert row['nativeWait']
+        if decision != 'immediate':
+            assert not task.done() and row['id'] in worker.approvals
+            if decision == 'cancel':
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert not worker.approvals
+                # A later decision stores the grant; no old tool/turn starts.
+                await app.dispatch('approval.respond', {'sessionId':root['id'],'id':row['id'],'decision':'allow'})
+                assert not app.state.get('managementResults')
+                return
+            if decision == 'revoke':
+                await app.dispatch('capability.revoke', {'sessionId':root['id'],'id':row['id'],'expectedRevision':row['revision']})
+            else:
+                await app.dispatch('approval.respond', {'sessionId':root['id'],'id':row['id'],'decision':decision}, command_id='human-decision')
+                await app.dispatch('approval.respond', {'sessionId':root['id'],'id':row['id'],'decision':decision}, command_id='human-decision')
+        response = await asyncio.wait_for(task, 2)
+        assert response.success, response.error
+        assert response.output['waitCompleted']
+        assert response.output['result']['usable'] == (decision in {'allow','immediate'})
+        assert not app.state.get('managementResults'), 'Approval must not replay a privileged effect'
+        assert not worker.approvals
+        result = await control.execute({'operation':'dispatch','args':{'action':'permissions.save','id':'explicit-next-action',
+            'args':{'scope':'global','allowed':[],'denied':[]}}})
+        assert result.success == (decision in {'allow','immediate'})
+        if result.success:
+            await until(lambda: 'explicit-next-action' in app.state.get('managementResults', {}))
+            assert app.state['managementResults']['explicit-next-action']['phase']=='ready'
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await parent.cleanup()
         await app.close()

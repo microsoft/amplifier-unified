@@ -1,5 +1,6 @@
 """Bounded configuration grants in the existing host command receipts."""
 from contextvars import ContextVar
+import asyncio
 import copy
 import hashlib
 import json
@@ -11,11 +12,11 @@ CURRENT = ContextVar('configuration_authority', default=None)
 EFFECTS = {
     'file_access': 'Change file-access settings',
     'connections': 'Change provider connections, executable sources and credentials',
-    'host_defaults': 'Change app-wide settings and background preparation policy',
+    'host_defaults': 'Change app-wide defaults, update automation and background preparation policy',
     'model_defaults': 'Change saved model and routing defaults',
-    'modules': 'Configure or validate executable modules and sources',
-    'bundles': 'Change bundles and behavior defaults',
-    'runtime_configuration': 'Replace or enable the conversation mount plan',
+    'modules': 'Configure or validate executable modules, sources and module settings (including providers)',
+    'bundles': 'Change executable bundles and behavior defaults',
+    'runtime_configuration': 'Replace or enable conversation tools, providers and their configuration',
 }
 PERSISTENT = {
     **dict.fromkeys(('permissions.save',), 'file_access'),
@@ -84,6 +85,19 @@ class ConfigurationAuthority:
     def error(self, text, status=403):
         from .service import AppError
         raise AppError(text, status)
+
+    async def notify_waiter(self, grant):
+        """Resolve a live native tool call only; never start/replay a turn."""
+        respond = getattr(self.service.runtime, 'approval', None)
+        if not grant.get('nativeWait') or not callable(respond) or grant['status'] == 'pending':
+            return
+        try:
+            await asyncio.wait_for(respond(grant['sessionId'], grant['id'],
+                'allow' if grant['status'] == 'active' else 'deny'), 5)
+        except (RuntimeError, ValueError, KeyError, OSError, TimeoutError):
+            # The saved decision remains authoritative after a lost worker or
+            # acknowledgement. A later native request reads it without replay.
+            pass
 
     def rows(self, sid, offset=0, limit=65):
         return [json.loads(row[0])['result'] for row in self.service.db.execute("""SELECT receipt FROM commands
@@ -159,6 +173,7 @@ class ConfigurationAuthority:
                 if receipt.get('origin') == 'system' and receipt.get('dependencyRequestId'):
                     original = self.service.collaboration.receipt(receipt['dependencyRequestId'])
                     if original.get('senderSessionId') == target['id']:
+                        visit(target, selected, original.get('sourceInputIds', []), depth+1)
                         continue  # Exact saved wait owned by this root.
                 sender = self.service._session(receipt['senderSessionId'], hydrate=False)
                 inherited = next((row for row in self.eligible(sender) if self.valid(row, sender)
@@ -261,7 +276,10 @@ class ConfigurationAuthority:
             if previous:
                 if previous[0] != digest:
                     self.error('This command ID was already used with different contents.', 409)
-                return {**json.loads(previous[1]), 'duplicate': True}
+                receipt = json.loads(previous[1])
+                grant = self.record(receipt['result']['id'])
+                self.service._task(self.notify_waiter(grant))
+                return {**receipt, 'result': grant, 'duplicate': True}
             # A failed transaction must not roll back earlier unrelated receipts.
             self.service.db.commit()
             before = copy.deepcopy(source.get('approvals', []))
@@ -287,6 +305,8 @@ class ConfigurationAuthority:
                         status='active' if action == 'capability.grant' else 'pending', createdAt=time.time(),
                         origin=origin, approvedBy='user' if action == 'capability.grant' else None,
                         authorizedInputIds=list((source.get('collaborationGeneration') or {}).get('inputIds', []))[:64])
+                    from .collaboration import BINDING
+                    grant['nativeWait'] = action == 'capability.request' and (BINDING.get() or {}).get('_configurationWait') is True
                     if action == 'capability.request':
                         source.setdefault('approvals', []).append({'id': grant['id'], 'status': 'pending',
                             'title': 'Allow configuration changes?', 'prompt': grant['reason'],
@@ -297,6 +317,7 @@ class ConfigurationAuthority:
                 receipt = {'accepted': True, 'commandAction': action, 'result': grant}
                 self.service.db.execute('INSERT INTO commands VALUES(?,?,?)', (identity, digest, json.dumps(receipt)))
                 self.service._publish_changes(sessions={source['id']})
+                self.service._task(self.notify_waiter(grant))
                 return receipt
             except BaseException:
                 self.service.db.rollback()
@@ -316,7 +337,9 @@ class ConfigurationAuthority:
             if previous:
                 if previous[0] != digest:
                     self.error('This command ID was already used with different contents.', 409)
-                return {**json.loads(previous[1]), 'duplicate': True}
+                receipt = json.loads(previous[1])
+                self.service._task(self.notify_waiter(self.record(receipt['result']['id'])))
+                return {**receipt, 'duplicate': True}
             grant = self.record(args['id'])
             if grant['sessionId'] != sid:
                 self.error('The approval belongs to another conversation.')
@@ -338,6 +361,7 @@ class ConfigurationAuthority:
                 receipt = {'accepted': True, 'commandAction': 'approval.respond', 'result': grant}
                 self.service.db.execute('INSERT INTO commands VALUES(?,?,?)', (identity, digest, json.dumps(receipt)))
                 self.service._publish_changes(sessions={sid})
+                self.service._task(self.notify_waiter(grant))
             except BaseException:
                 self.service.db.rollback()
                 retained = self.service.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone()

@@ -304,17 +304,26 @@ async def test_peer_authority_is_rechecked_during_delayed_management(app):
     assert result['phase']=='error' and 'originating peer' in result['error']
 
 
-async def test_saved_own_dependency_return_keeps_authorized_administration(app):
+@pytest.mark.parametrize('lower_authority_origin', [False, True])
+async def test_saved_own_dependency_return_keeps_authorized_administration(app, lower_authority_origin):
     source,peer=app.state['sessions']
     await grant(app,['file_access'],['local'])
     # These host-owned receipts are the continuation owner's durable proof;
     # peer-authored replyTo text cannot create a system continuation receipt.
     original={'commandAction':'coordination.send','senderSessionId':source['id'],'target':{'sessionId':peer['id']}}
+    if lower_authority_origin:
+        peer['collaborationGeneration']={'id':'peer-gen','inputIds':['peer-human'],'terminal':False}
+        incoming=await agent(app,peer,'coordination.send',{'sessionId':source['id'],'text':'Alter configuration','mode':'notify'},'lower-origin')
+        original['sourceInputIds']=[incoming['requestId']]
     returned={'commandAction':'coordination.send','origin':'system','dependencyRequestId':'own-request',
               'senderSessionId':peer['id'],'target':{'sessionId':source['id']}}
     for identity,value in [('own-request',original),('own-return',returned)]:
         app.db.execute('INSERT INTO commands VALUES(?,?,?)',(identity,identity,json.dumps(value)))
     source['collaborationGeneration']={'id':'returned','inputIds':['own-return'],'terminal':False}
+    if lower_authority_origin:
+        with pytest.raises(AppError,match='cannot borrow'):
+            await agent(app,source,'permissions.save',{'scope':'local','allowed':[],'denied':[]},'borrow-through-helper')
+        return
     await agent(app,source,'permissions.save',{'scope':'local','allowed':[],'denied':[]},'continue-admin')
     assert (await finished(app,'continue-admin'))['phase']=='ready'
 

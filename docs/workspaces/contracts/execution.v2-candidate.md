@@ -258,6 +258,13 @@ mounting it. User actions use the same domain checks and do not require an agent
 grant. No grant permits a peer mutation, grants user approval to an agent, or
 adds OS protection around arbitrary shell programs or external modules.
 
+Native root `app_control` requests park the current tool call in the existing
+worker approval map before the host publishes the approval. The durable user
+decision resolves that waiter; the agent then chooses its next action, which
+still checks current authority. No privileged effect is stored for replay.
+Raw API requests return a pending receipt without parking an agent. A decision
+after worker loss saves authority but never starts or replays the lost turn.
+
 ## Assignment control addition — 2026-10-14
 
 New commissioned roots share an explicit host-owned assignment with their

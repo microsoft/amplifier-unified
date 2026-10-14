@@ -168,7 +168,7 @@ class Worker:
             ids = self.context_inputs if assigned is None else assigned
             # Neither approval nor generation identity is model-supplied.
             args = {key: value for key, value in args.items()
-                    if key not in {"_coordinationApproval", "_generationId"}}
+                    if key not in {"_coordinationApproval", "_generationId", "_configurationWait"}}
             if assigned is None:
                 runtime = getattr(self, "runtime", None)
                 generation = getattr(runtime, "generation", None) or {}
@@ -186,6 +186,38 @@ class Worker:
                         bindings = [{'clientId': 'detached-worker', 'targets': []}]
                 args = {**args, '_contextInputs': ids,
                         '_contextBindings': bindings}
+            if assigned is None and operation == 'dispatch' and args.get('action') == 'capability.request':
+                # Register before publishing the host-owned card: an immediate
+                # human decision must not race a yet-unregistered native wait.
+                command = args.get('id') or str(uuid.uuid4())
+                identity = 'capability:' + str(uuid.uuid5(uuid.NAMESPACE_URL, command))
+                if identity in self.approvals:
+                    raise ValueError('This configuration request is already waiting for a decision.')
+                future = asyncio.get_running_loop().create_future()
+                self.approvals[identity] = (future, ['allow', 'deny'])
+                try:
+                    result = await self.bridge(operation, {**args, 'id': command, '_configurationWait': True})
+                    grant = result.get('result', {})
+                    if grant.get('status') == 'pending':
+                        expiry = grant.get('expiresAt')
+                        try:
+                            if expiry is None:
+                                await future
+                            else:
+                                await asyncio.wait_for(future, max(0, expiry-time.time()))
+                        except TimeoutError:
+                            pass
+                        # A decision is a wakeup, not authority. Revocation can
+                        # overtake it; return the current canonical record.
+                        current = await self.bridge('dispatch', {**args, 'action': 'capability.read',
+                            'args': {'sessionId': grant['sessionId']}})
+                        selected = next((row for row in current.get('result', {}).get('grants', []) if row['id'] == identity), None)
+                        return {**result, 'result': selected or {**grant, 'usable': False}, 'waitCompleted': True}
+                    return result
+                finally:
+                    self.approvals.pop(identity, None)
+                    if not future.done():
+                        future.cancel()
             return await self.bridge(operation, args)
         register = getattr(coordinator, "register_capability", None)
         if callable(register):
