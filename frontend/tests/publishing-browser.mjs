@@ -3,7 +3,17 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect as playwrightExpect} from '@playwright/test';
 const expect=playwrightExpect.configure({timeout:15000});
-import {openSettingsPage} from './browser-settings.mjs';
+// Publishing is a chat-owned Canvas destination, not a global Settings page.
+async function openPublishing(page){
+ await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
+ const canvas=page.locator('#workspace-canvas');
+ if(!await canvas.isVisible())await page.getByRole('button',{name:'Open canvas',exact:true}).click();
+ const overview=canvas.getByRole('button',{name:'Chat overview',exact:true});
+ if(await overview.getAttribute('aria-pressed')!=='true')await overview.click();
+ const delivery=canvas.locator('[data-canvas-delivery="publishing"]');
+ if(!await delivery.evaluate(el=>el.open))await delivery.locator(':scope > summary').click();
+ await expect(canvas.getByRole('region',{name:'Managed publishing'})).toBeVisible();
+}
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/publishing_ui_server.py'],{stdio:['ignore','pipe','inherit']});
@@ -13,7 +23,7 @@ try{
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.goto(ready.url);await openSettingsPage(page,'publishing');
+ await page.goto(ready.url);await openPublishing(page);
  const panel=page.getByRole('region',{name:'Managed publishing'}),release=panel.getByLabel('Selected release',{exact:true}),status=panel.getByLabel('Site status',{exact:true});
  const capture=panel.getByRole('button',{name:'Capture release',exact:true});
  const list=(target)=>page.request.get(ready.url+'/fixture'+(target?'?target='+encodeURIComponent(target):'')).then(response=>response.json());
@@ -32,7 +42,7 @@ try{
  await panel.getByRole('button',{name:'Deploy reviewed release'}).click();const pending=panel.getByLabel('Unconfirmed publishing request');await expect(pending).toContainText('Request outcome unconfirmed');await expect(capture).toBeDisabled();
  const afterLost=await list(),pendingRequest=afterLost.calls.filter(row=>row.action==='publishing.deploy').at(-1).args;
  assert.equal(afterLost.publishing.sites[0].status,'running');
- await page.getByRole('button',{name:'Close panel',exact:true}).click();await openSettingsPage(page,'publishing');
+ await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await openPublishing(page);
  // On reopen only a read runs. An explicit retry keeps the submitted identity.
  await expect(pending).toBeVisible();await pending.getByRole('button',{name:'Retry exact request'}).click();await expect(pending).toHaveCount(0);await expect(status).toContainText('running');
  snapshot=await list();const deploys=snapshot.calls.filter(row=>row.action==='publishing.deploy');assert.equal(deploys.length,2);assert.deepEqual(deploys[1].args,pendingRequest);assert.equal(snapshot.publishing.sites[0].revision,afterLost.publishing.sites[0].revision);
@@ -68,17 +78,17 @@ try{
  await panel.getByRole('button',{name:'Stop site',exact:true}).click();await expect(status).toContainText('stopped');
  await panel.getByRole('button',{name:'Deploy reviewed release'}).click();await expect(status).toContainText('running');
  if(process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS)await page.screenshot({path:process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS+'-desktop.png',animations:'disabled'});
- await page.setViewportSize({width:390,height:844});await status.scrollIntoViewIfNeeded();assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth));
+ await page.setViewportSize({width:390,height:844});await status.scrollIntoViewIfNeeded();assert.ok(await page.locator('#workspace-canvas').evaluate(el=>el.scrollWidth<=el.clientWidth));
  if(process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS)await page.screenshot({path:process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS+'-mobile.png',animations:'disabled'});
  await panel.getByRole('button',{name:'Stop site',exact:true}).click();await expect(status).toContainText('stopped');await expect(panel.getByRole('link',{name:'Open deployed site'})).toHaveCount(0);
  await panel.getByRole('button',{name:'Remove site',exact:true}).click();await expect(status).toContainText('removed');
- await page.reload();await page.locator('.a-settings-experience[data-settings-page="publishing"]').waitFor();await expect(panel.getByRole('button',{name:/fixture-site.*removed/})).toBeVisible();
+ await page.reload();await page.getByRole('region',{name:'Managed publishing'}).waitFor();await expect(panel.getByRole('button',{name:/fixture-site.*removed/})).toBeVisible();
  snapshot=await list();assert.equal(snapshot.publishing.releases.length,2);assert.equal(snapshot.publishing.sites[0].status,'removed');assert.ok(snapshot.publishing.receipts.length>=10);assert.equal(snapshot.selected,ready.sessionId);assert.equal(snapshot.draft,'Keep publishing draft');assert.deepEqual(snapshot.sent,[]);assert.deepEqual(errors,[]);
  // Configure an existing service through shared app controls. The fixture's
  // PATH-scoped fake SSH executes the real socket request CLI locally; it does
  // not establish a production SSH connection or provision a host.
  await page.setViewportSize({width:1280,height:950});
- await panel.getByText('Publishing targets for this task',{exact:true}).click();
+ if(!await panel.locator('.a-publishing-targets').evaluate(el=>el.open))await panel.getByText('Publishing targets for this task',{exact:true}).click();
  const targetFields={targetId:'Target ID',label:'Target label',hostname:'SSH hostname',python:'Remote Python path',socketPath:'Remote service socket',expectedBind:'Expected bind address'};
  for(const [key,label] of Object.entries(targetFields))await panel.getByLabel(label,{exact:true}).fill(ready.remoteConfig[key]);
  const beforeSave=await list('loopback');let targetSaveDropped=false;
@@ -114,15 +124,15 @@ try{
  // Another client may change the task selection. This pending retry remains
  // bound to the originally submitted target and exact request identity.
  await page.request.post(ready.url+'/api/actions',{data:{action:'publishing.target.select',args:{sessionId:ready.sessionId,targetId:'loopback',expectedRevision:0}}});
- await page.getByRole('button',{name:'Close panel',exact:true}).click();await openSettingsPage(page,'publishing');await expect(pending).toContainText('private-fixture');
+ await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await openPublishing(page);await expect(pending).toContainText('private-fixture');
  await pending.getByRole('button',{name:'Retry exact request'}).click();await expect(pending).toHaveCount(0);await expect(status).toContainText('running');
  snapshot=await list('private-fixture');const remoteDeploys=snapshot.calls.filter(row=>row.action==='publishing.deploy'&&row.args.targetId==='private-fixture');assert.equal(remoteDeploys.length,2);assert.deepEqual(remoteDeploys[1].args,remoteRequest);assert.equal(snapshot.publishing.sites[0].revision,remoteLost.publishing.sites[0].revision);
  await page.unroute('**/api/actions*');siteUrl=await panel.getByRole('link',{name:'Open deployed site'}).getAttribute('href');assert.match(await content(siteUrl),/Second release/);
- await panel.getByText('Publishing targets for this task',{exact:true}).click();await remoteTarget.getByRole('button',{name:'Select target',exact:true}).click();
+ if(!await panel.locator('.a-publishing-targets').evaluate(el=>el.open))await panel.getByText('Publishing targets for this task',{exact:true}).click();await remoteTarget.getByRole('button',{name:'Select target',exact:true}).click();
  await page.request.post(ready.url+'/fixture/remote-change');await panel.getByLabel('Site ID',{exact:true}).fill('remote-fixture');await panel.getByLabel('Built output folder').fill('dist');await capture.click();await expect(release).not.toContainText(remoteFirst.id);await reviewed('Reviewed the imported update.');const remoteSecond=(await list('private-fixture')).publishing.releases.find(row=>row.id!==remoteFirst.id);await panel.getByRole('button',{name:'Deploy reviewed release'}).click();await expect(status).toContainText('Deployed release'+remoteSecond.id);siteUrl=await panel.getByRole('link',{name:'Open deployed site'}).getAttribute('href');assert.match(await content(siteUrl),/Third release/);
  await panel.getByRole('button',{name:'Roll back to previous release'}).click();await expect(status).toContainText('Deployed release'+remoteFirst.id);siteUrl=await panel.getByRole('link',{name:'Open deployed site'}).getAttribute('href');assert.match(await content(siteUrl),/Second release/);
  await panel.getByRole('button',{name:'Read site logs'}).click();await expect(panel.getByLabel('Publishing inspection')).toBeVisible();
- if(process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS){await remoteTarget.scrollIntoViewIfNeeded();await page.screenshot({path:process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS+'-remote-target-desktop.png',animations:'disabled'});await page.setViewportSize({width:390,height:844});await remoteTarget.scrollIntoViewIfNeeded();assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth));await page.screenshot({path:process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS+'-remote-target-mobile.png',animations:'disabled'})}
+ if(process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS){await remoteTarget.scrollIntoViewIfNeeded();await page.screenshot({path:process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS+'-remote-target-desktop.png',animations:'disabled'});await page.setViewportSize({width:390,height:844});await remoteTarget.scrollIntoViewIfNeeded();assert.ok(await page.locator('#workspace-canvas').evaluate(el=>el.scrollWidth<=el.clientWidth));await page.screenshot({path:process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS+'-remote-target-mobile.png',animations:'disabled'})}
  await panel.getByRole('button',{name:'Stop site',exact:true}).click();await expect(status).toContainText('stopped');await panel.getByRole('button',{name:'Remove site',exact:true}).click();await expect(status).toContainText('removed');
  snapshot=await list('private-fixture');assert.equal(snapshot.publishing.releases.length,2);assert.equal(snapshot.publishing.sites[0].status,'removed');assert.ok(snapshot.sshCalls.some(row=>row.method==='import'));assert.ok(snapshot.sshCalls.every(row=>row.argv.includes('BatchMode=yes')&&row.argv.includes('StrictHostKeyChecking=yes')));
  await localTarget.getByRole('button',{name:'Select target',exact:true}).click();await expect(panel.getByLabel('Publishing target',{exact:true})).toContainText('loopback');await remoteTarget.getByRole('button',{name:'Remove target configuration',exact:true}).click();await expect(panel.getByRole('alert')).toContainText(/retained|audit|in use/i);await expect(remoteTarget).toBeVisible();
