@@ -24,6 +24,7 @@ class Management:
         self.global_setup_manager=None
         self.workspace_setup_managers={}
         self.pending_config_tasks={}
+        self.draft_default_tasks={}
         self.after_publication=[]
         pending_refresh=[session['id'] for session in service.state.get('sessions',[]) if session.get('configurationPending')]
         if pending_refresh:
@@ -557,18 +558,33 @@ class Management:
                 raise ValueError('Choose a workspace or a chat without a workspace.')
             key=json.dumps(['' if managed else workspace,args.get('bundle') or '']+(['managed'] if managed else []),separators=(',',':'),ensure_ascii=False)
             revision = self.service.state.get('configurationRevision', 0)
-            try:
-                result=await resolve_defaults(self.service.data_dir,workspace,args.get('bundle'),self.service.state['settings'].get('appBundle'),**({'global_only':True} if managed else {}))
-                result['phase']='ready'
-            except Exception:
-                result={'phase':'error','error':'Could not resolve this bundle’s model. Open model settings to choose a provider, or check the bundle configuration.'}
-            async with self.service.lock:
-                if revision != self.service.state.get('configurationRevision', 0):
-                    return
-                entries=self.service.state.setdefault('draftDefaults',{})
-                entries[key]=result
-                while len(entries)>32:entries.pop(next(iter(entries)))
-                self.service._publish_changes(globals={'draftDefaults'})
+            identity=(key,revision)
+            task=self.draft_default_tasks.get(identity)
+            if task is None:
+                async def load():
+                    try:
+                        result=await resolve_defaults(self.service.data_dir,workspace,args.get('bundle'),self.service.state['settings'].get('appBundle'),**({'global_only':True} if managed else {}))
+                        result['phase']='ready'
+                    except Exception:
+                        result={'phase':'error','error':'Could not resolve this bundle’s model. Retry model settings or choose a provider.'}
+                    async with self.service.lock:
+                        if revision != self.service.state.get('configurationRevision', 0):
+                            return
+                        entries=self.service.state.setdefault('draftDefaults',{})
+                        entries[key]=result
+                        while len(entries)>32:entries.pop(next(iter(entries)))
+                        self.service._publish_changes(globals={'draftDefaults'})
+                # Multiple clients/retries share an in-flight probe, but never
+                # share across workspace, bundle, location or settings revision.
+                task=asyncio.create_task(load())
+                self.draft_default_tasks[identity]=task
+                self.service.tasks.add(task)
+                def finished(done):
+                    self.service.tasks.discard(done)
+                    if self.draft_default_tasks.get(identity) is done:
+                        self.draft_default_tasks.pop(identity,None)
+                task.add_done_callback(finished)
+            await asyncio.shield(task)
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
             from .managed_chats import is_managed

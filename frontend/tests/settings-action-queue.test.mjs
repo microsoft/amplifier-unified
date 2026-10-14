@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead} from '../src/settings-action-queue.js';
+import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraftDefaultsRead} from '../src/settings-action-queue.js';
 
 const gate=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return {promise,resolve,reject}};
 const draft=model=>({patch:{providerEditor:{id:'provider',model}}});
@@ -61,4 +61,10 @@ test('catalog lookups observe earlier writes without holding up later saves',asy
  for(const action of ['providers.list','providers.models','providers.schema'])assert.equal(isProviderCatalogRead(action),true);
  for(const action of ['providers.save','runtime.control','bundle.switch','providers.credentials'])assert.equal(isProviderCatalogRead(action),false);
  assert.equal(isProviderCatalogRead('providers.list',{expectedRevision:1}),false,'Revision-conditional actions retain normal ordering');
+});
+
+test('draft defaults are independent reads but retain revision-conditional ordering',()=>{
+ assert.equal(isDraftDefaultsRead('configuration.defaults'),true);
+ assert.equal(isDraftDefaultsRead('configuration.defaults',{expectedRevision:0}),false);
+ assert.equal(isDraftDefaultsRead('session.create'),false);
 });

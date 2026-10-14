@@ -133,3 +133,45 @@ async def test_composed_catalog_shares_connection_models_across_workspaces(tmp_p
     assert second['effective']['effort']=='high' and calls==[1]
     assert 'never-export' not in str(first)
     assert not (tmp_path/'one').exists() and not (tmp_path/'two').exists()
+
+async def test_duplicate_draft_reads_share_probe_but_new_revision_does_not(tmp_path, monkeypatch):
+    import json
+    from amplifier_web.server import create_app
+    from amplifier_web import draft_defaults
+    from unittest.mock import AsyncMock
+    started, finish = asyncio.Event(), asyncio.Event()
+    calls = []
+    async def resolve(*args, **kwargs):
+        calls.append(args)
+        started.set()
+        await finish.wait()
+        return {'effective': {'model': 'resolved'}}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    app = await create_app(tmp_path / 'app', workspace=str(tmp_path), voice=False, background_updates=False)
+    service = app['service']
+    monkeypatch.setattr(service.management, 'warm_providers', AsyncMock())
+    args = {'workspace': str(tmp_path)}
+    first = asyncio.create_task(service.management.perform('configuration.defaults', args))
+    others = []
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        others = [asyncio.create_task(service.management.perform('configuration.defaults', args)) for _ in range(3)]
+        await asyncio.sleep(0)
+        assert len(calls) == 1
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        assert len(service.management.draft_default_tasks) == 1, 'One cancelled reader must not cancel other readers'
+        await service.management.invalidate_configuration()
+        started.clear()
+        others.append(asyncio.create_task(service.management.perform('configuration.defaults', args)))
+        await asyncio.wait_for(started.wait(), 2)
+        assert len(calls) == 2
+        finish.set()
+        await asyncio.gather(*others)
+        assert service.state['draftDefaults'][json.dumps([str(tmp_path), ''], separators=(',', ':'))]['phase'] == 'ready'
+        assert not service.management.draft_default_tasks
+    finally:
+        finish.set()
+        await asyncio.gather(first, *others, return_exceptions=True)
+        await service.runtime.close()
+        for task in list(service.tasks): task.cancel()
