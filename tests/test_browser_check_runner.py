@@ -236,3 +236,28 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     readiness = (workflows / 'public-readiness.yml').read_text()
     files = re.findall(r'tests/test_\w+\.py', readiness)
     assert len(files) == len(set(files)) == 98
+
+
+def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
+    workflows = ROOT / '.github/workflows'
+    readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
+    steps = readiness['jobs']['critical']['steps']
+    commands = [(index, line.strip()) for index, step in enumerate(steps)
+                for line in step.get('run', '').splitlines()]
+    readiness_scripts = {match.group(1) for _, line in commands
+                         if (match := re.search(r'node (tests/[^ ]+-browser\.mjs)', line))}
+    plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
+    extended_scripts = {row['command'][1] for row in plan['scenarios']}
+    source_only = {f'tests/{name}-browser.mjs' for name in (
+        'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
+        'conversation-navigation')}
+    assert source_only <= extended_scripts
+    assert not source_only & readiness_scripts
+    installed_overlap = {f'tests/{name}-browser.mjs' for name in (
+        'feedback', 'message-outbox', 'canonical-work')}
+    assert readiness_scripts & extended_scripts == installed_overlap
+    install = next(index for index, line in commands if 'uv pip install' in line and '--reinstall .' in line)
+    for script in installed_overlap:
+        assert any(index > install and f'node {script}' in line for index, line in commands)
+    # All 108 original tests-directory browser scripts still have a background lane.
+    assert len(readiness_scripts | extended_scripts) == 108
