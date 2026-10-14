@@ -496,3 +496,40 @@ def test_durable_host_restart_rebuilds_missing_projection_inputs(source, tmp_pat
         assert len(session['execution']['nodes']) == 6
     finally:
         second.close()
+
+
+async def test_real_process_host_publication_and_passive_receipt(source, tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from amplifier_web.history_projection_process import ProcessProjector
+    session, path = source
+    class Owner(dict):
+        pass
+    session = Owner(session)
+    child = family(session, path, 4)
+    notices = []
+    service = SimpleNamespace(_session=lambda _: session, lock=asyncio.Lock(), closed=False)
+    view = EventLogView(service)
+    def publish(**kwargs):
+        notices.append(kwargs)
+        view.invalidate(kwargs.get('session_ids'))
+    service._publish = publish
+    view.projector = ProcessProjector(tmp_path / 'process-cache')
+    try:
+        await view.refresh('app', passive=True)
+        assert session['workProjection'] == {'status': 'ready'}
+        expected = EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
+        assert session['execution'] == expected
+        assert len(notices) == 2
+        before = copy.deepcopy(session['execution'])
+        original = view.projection_input
+        monkeypatch.setattr(view, 'projection_input', lambda _: pytest.fail('unchanged passive receipt reconstructed inputs'))
+        await view.refresh('app', passive=True)
+        assert session['execution'] == before and len(notices) == 2
+        monkeypatch.setattr(view, 'projection_input', original)
+        append(child, 'tool:post', {'session_id': 'child-0', 'tool_call_id': 'leaf', 'result': 'complete'}, 90)
+        await view.refresh('app', passive=True)
+        assert len(notices) == 3
+        assert session['execution'] == EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
+    finally:
+        await view.close()

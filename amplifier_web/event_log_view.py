@@ -686,9 +686,11 @@ class EventLogView:
                 fence[0] = True
         if session_ids is None:
             self._clean_inputs.clear()
+            self._retry_at.clear()
         else:
             for identity in session_ids:
                 self._clean_inputs.pop(identity, None)
+                self._retry_at.pop(identity, None)
 
     @staticmethod
     def _input_identity(session):
@@ -1398,8 +1400,9 @@ class EventLogView:
                 reason = reason if reason in REASONS else 'worker_failed'
                 count(self.service, 'events.process.retry.' + reason)
                 async with self.service.lock:
-                    if (not fence[0] and not self.service.closed and self.service._session(identity) is owner
-                            and self._set_work_status(owner, 'retrying', reason)):
+                    if fence[0] or self.service.closed or self.service._session(identity) is not owner:
+                        return
+                    if self._set_work_status(owner, 'retrying', reason):
                         self.service._publish(session_ids={identity}, record_only=True, detail_only=True)
                 self._retry_at[identity] = time.monotonic() + (30 if reason in {'input_limit', 'output_limit', 'memory_limit'} else 3)
                 self._retry_at.move_to_end(identity)
