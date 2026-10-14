@@ -6,6 +6,7 @@ import {CanvasViewer,GifCanvasViewer,MediaCanvasViewer} from './canvas-viewer';
 import {BrowserPreview} from './canvas-library';
 import {McpAppViewer} from './mcp-app-viewer';
 import {A2UISurface} from './a2ui';
+import {mcpConnectionKey} from './mcp-app-lifecycle';
 import {inlineOwnership} from './conversation-navigation';
 import './canvas-workspace.css';
 
@@ -15,7 +16,7 @@ const builtins=Object.fromEntries(['markdown','text','code','json','jsonl','imag
 // Native retained references are not new contributed-renderer SDK kinds.
 builtins['builtin.canvas.gif']=GifCanvasViewer;
 builtins['builtin.canvas.mp4']=MediaCanvasViewer;
-Object.assign(builtins,{'builtin.canvas.settings':({canvas,dispatch})=><button type="button" className="a-soft" onClick={()=>dispatch('canvas.select',{id:canvas.id})}>Open Settings in Canvas</button>,'builtin.canvas.browser':BrowserPreview,'builtin.canvas.mcp-app':McpAppViewer,'builtin.canvas.a2ui':Surface});
+Object.assign(builtins,{'builtin.canvas.settings':({canvas,dispatch})=><button type="button" className="a-soft" onClick={()=>dispatch('canvas.select',{id:canvas.id})}>Open Settings in Canvas</button>,'builtin.canvas.canvas-app':CanvasAppViewer,'builtin.canvas.browser':BrowserPreview,'builtin.canvas.mcp-app':McpAppViewer,'builtin.canvas.a2ui':Surface});
 const targetOf=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
 const factoryCache=new Map();
 async function loadRenderer(url){
@@ -78,15 +79,14 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
  const Builtin=builtins[selected],Component=external;
  return <>
   {(error||!choice||recovery)&&<div role="status" className="a-renderer-notice">{recovery?'Recovery mode uses standard viewers.':error?`This renderer needs attention: ${error}`:'The saved renderer is unavailable. Showing the standard viewer; your artifact is retained.'}<button type="button" className="a-link" onClick={()=>dispatch('canvas.views.recover',target)}>Use standard viewer</button></div>}
-  {Builtin?<><Builtin canvas={canvas} act={act} dispatch={dispatch} reportStatus={reportMounted} connectionKey={connectionKey}/>{!['gif','mp4'].includes(canvas.kind)&&<Mounted report={reportMounted}/>}</>:Component?<RendererBoundary onError={fail} fallback={fallback}><Component host={host}/><Mounted report={reportMounted}/></RendererBoundary>:error?fallback:<p role="status">Loading viewer…</p>}
+  {Builtin?<><Builtin canvas={canvas} act={act} dispatch={dispatch} reportStatus={reportMounted} connectionKey={connectionKey}/>{!['gif','mp4','canvas-app','mcp-app','browser'].includes(canvas.kind)&&<Mounted report={reportMounted}/>}</>:Component?<RendererBoundary onError={fail} fallback={fallback}><Component host={host}/><Mounted report={reportMounted}/></RendererBoundary>:error?fallback:<p role="status">Loading viewer…</p>}
  </>;
 }
 
 function ResourceView({view,state,dispatch,recovery}){
  const [error,setError]=useState('');
  const canvas=useMemo(()=>state.canvas?{...state.canvas,...(view.app?{app:view.app}:{}),...targetOf(view),view:view.view||state.canvas.view,renderReports:view.renderReports}:null,[state.canvas,view]);
- const server=state.smartTools?.servers?.find(row=>row.id===canvas?.mcp?.serverId);
- const connectionKey=JSON.stringify([server?.status,server?.catalogState,server?.catalogRevision,server?.account,server?.accountBinding,canvas?.mcp?.catalogRevision]);
+ const connectionKey=mcpConnectionKey(canvas,state.smartTools);
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
  return <CanvasViewControls label="Artifact controls"><section className="a-resource-view" data-canvas-view={view.viewId} aria-label="Artifact view">
   <CanvasControl><div className="a-resource-view-controls a-canvas-toolbar">
@@ -102,7 +102,7 @@ function ResourceView({view,state,dispatch,recovery}){
   </div></CanvasControl>
   {view.selectedVersion!=null&&<p role="status" className="a-renderer-notice">{canvas?.kind==='browser'?'Saved address · Website is live':'Saved version · Read only'}</p>}
   {error&&<p role="alert" className="a-renderer-notice">{error}</p>}
-  <div className="a-resource-renderer">{canvas?.app?<CanvasAppViewer key={view.resourceId+':'+(view.selectedVersion??'latest')} canvas={canvas} dispatch={dispatch}/>:canvas?<Renderer key={view.resourceId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery} connectionKey={connectionKey}/>:<p role="status">Loading saved artifact…</p>}</div>
+  <div className="a-resource-renderer">{canvas?<Renderer key={canvas.app?view.resourceId+':'+(view.selectedVersion??'latest'):view.resourceId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery} connectionKey={connectionKey}/>:<p role="status">Loading saved artifact…</p>}</div>
  </section></CanvasViewControls>;
 }
 
