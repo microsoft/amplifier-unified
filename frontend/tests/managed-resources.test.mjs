@@ -30,7 +30,7 @@ for(const transition of ['selected task','inactive workspace','closed panel'])fo
    const visible=JSON.stringify(root.toJSON());
    assert.doesNotMatch(visible,/STALE/);
    if(transition==='selected task'){
-    assert.match(visible,/Owner B/);assert.match(visible,/outcome unknown/);assert.match(visible,/Isolation not allocated/);
+    assert.match(visible,/Owner B/);assert.match(visible,/outcome unknown/);assert.match(visible,/Task storage/);
    }
    assert.ok(calls.every(row=>row.action==='workspace.resources.managed'));
   }finally{await act(async()=>root.unmount())}

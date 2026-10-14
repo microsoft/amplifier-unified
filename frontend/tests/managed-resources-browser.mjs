@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile,stat} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
@@ -29,13 +29,55 @@ try{
  await expect(panel.getByText('Bound port: '+preview.port,{exact:true})).toBeVisible();
  await expect(panel.getByText('Served directory: '+preview.releaseDirectory,{exact:true})).toBeVisible();
  const fetched=await page.request.get(preview.url);assert.match(await fetched.text(),/First release/);
- await expect(panel.getByText('Isolation not allocated',{exact:true})).toBeVisible();
+ await expect(panel.getByRole('heading',{name:'Task storage',exact:true})).toBeVisible();
+ const storage=panel.getByRole('region',{name:'Task storage',exact:true});
+ await storage.getByLabel('Storage label (optional)',{exact:true}).fill('Keep resource draft');
+ await page.reload();await page.getByText('Managed resources',{exact:true}).click();
+ await expect(storage.getByLabel('Storage label (optional)',{exact:true})).toHaveValue('Keep resource draft');
+ const commands=[];let loseResponse=true;
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='workspace.resources.provision'){
+   commands.push(body);
+   if(loseResponse){loseResponse=false;await route.fetch();await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Fixture lost response after allocation'})});return}
+  }
+  await route.continue();
+ });
+ await storage.getByRole('button',{name:'Create task storage',exact:true}).click();
+ await expect(storage.getByRole('button',{name:'Check the same storage change',exact:true})).toBeVisible();
+ await page.reload();await page.getByText('Managed resources',{exact:true}).click();
+ await storage.getByRole('button',{name:'Check the same storage change',exact:true}).click();
+ await expect(storage.getByText('Keep resource draft · ready',{exact:true})).toBeVisible();
+ assert.equal(commands.length,2);assert.deepEqual(commands[0],commands[1]);
+ for(const [kind,label] of [['browser-profile','Profile bytes'],['sqlite-database','Local database']]){
+  await storage.getByLabel('Storage type',{exact:true}).selectOption(kind);
+  await storage.getByLabel('Storage label (optional)',{exact:true}).fill(label);
+  await storage.getByRole('button',{name:'Create task storage',exact:true}).click();
+  await expect(storage.getByText(label+' · ready',{exact:true})).toBeVisible();
+ }
+ const allocations=(await action('workspace.resources.read',{workspaceId:workspace.id,sessionId:sid})).result.items;
+ assert.equal(allocations.length,3);assert.equal(new Set(allocations.map(row=>row.path)).size,3);
+ assert.ok(allocations.every(row=>!row.path.startsWith(workspace.path+'/')&&!row.fileAccessChanged));
+ for(const row of allocations){assert.ok((await stat(row.path)).isDirectory()||row.kind==='sqlite-database');assert.equal(row.access.status,'unknown')}
+ const scratch=allocations.find(row=>row.kind==='scratch-directory');
+ await writeFile(scratch.path+'/retained.txt','Preserve unknown user content');
+ const ownRow=storage.locator('[data-task-resource="'+scratch.id+'"]');
+ await ownRow.getByText('Ownership and access details',{exact:true}).click();
+ await expect(storage.getByRole('heading',{name:'Task storage',exact:true})).toBeVisible();
+ await ownRow.getByRole('button',{name:'Retire and retain files',exact:true}).click();
+ await expect(storage.getByText('Keep resource draft · retired',{exact:true})).toBeVisible();
+ assert.equal(await readFile(scratch.path+'/retained.txt','utf8'),'Preserve unknown user content');
  await page.screenshot({path:output+'/desktop.png'});
  const peer=await action('session.create',{workspace:workspace.path,title:'Unallocated peer',select:false});
  const latest=await page.evaluate(()=>window.amplifier.getState());
  const peerId=latest.sessions.find(row=>row.title==='Unallocated peer').id;
  await panel.getByLabel('Resources for chat',{exact:true}).selectOption(peerId);
  await expect(panel.getByText('No local publishing listeners on this page.',{exact:true})).toBeVisible();
+ await expect(storage.getByText('No task storage on this page.',{exact:true})).toBeVisible();
+ await storage.getByRole('button',{name:'Create task storage',exact:true}).click();
+ await expect(storage.getByText('Scratch folder · ready',{exact:true})).toBeVisible();
+ const peerStorage=(await action('workspace.resources.read',{workspaceId:workspace.id,sessionId:peerId})).result.items;
+ assert.equal(peerStorage.length,1);assert.ok(!allocations.some(row=>row.path===peerStorage[0].path));
  await panel.getByLabel('Resources for chat',{exact:true}).selectOption(sid);
  await expect(panel.getByText('Static preview · running',{exact:true})).toBeVisible();
  await action('publishing.stop',{sessionId:sid,siteId:'managed-resources-fixture',expectedRevision:0,requestId:'managed-stop'});
@@ -47,7 +89,7 @@ try{
  await page.screenshot({path:output+'/mobile.png'});
  const inspection=await page.request.get(ready.url+'/fixture').then(response=>response.json());
  assert.equal(inspection.sent.length,0);assert.deepEqual(errors,[]);
- const report={status:'passed',scenarios:7,evidence:'Real local publisher and HTTP listener; scripted conversation runtime; no model input.'};
+ const report={status:'passed',scenarios:15,evidence:'Real local publisher, HTTP listener and task scratch/profile/SQLite allocation; same-command lost-response recovery, retained draft/files and distinct task owners; scripted conversation runtime; no model input.'};
  await writeFile(output+'/report.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }catch(error){await page?.screenshot({path:output+'/failure.png'}).catch(()=>{});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}

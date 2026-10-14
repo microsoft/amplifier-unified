@@ -819,9 +819,47 @@ re-probing process IDs or exposing commands/output. Stopped and unknown outcomes
 remain visible. Existing reservations are presented alongside these observations
 without inventing a claim-to-process mapping or automatic cleanup.
 
-This is read-only provenance, not generic resource allocation. Scratch/database/
-browser-profile isolation, arbitrary dynamic preview ports, operation cwd missing
-from its owner, remote targets and external processes remain explicit limits.
+The projection is read-only. The owned-storage actions below add specific local
+allocations; arbitrary dynamic preview ports, operation cwd missing from its
+owner, remote targets and external processes remain explicit limits.
+
+## Owned task storage — 2026-10-14
+
+The existing workspace-resource ledger now owns explicit scratch directories,
+browser-profile directories and initialized local SQLite files. The shared
+`workspace.resources.provision/read/retire` actions serve the browser, an
+authenticated session HTTP client and the actual native root `app_control` tool.
+Allocation paths are private app-owned locations outside source repositories.
+No caller-supplied destination, background browser launch or database server is
+part of this implementation.
+
+The owner saves intent before effects, serializes the physical allocation,
+records directory/file identities, bounds outstanding allocations and pages
+reads. Exact retries retain the same identity and files. Stop, generation and
+placement changes before admission suppress effects; a canceled wait lets an
+already-admitted filesystem owner finish. Missing/replaced paths never trigger
+recreation. A departed allocating owner becomes unknown after its lock is free.
+Retirement preserves all contents, including unknown effects, and releases only
+the allocation-count slot. There is no deletion action, byte quota or automatic
+garbage collection. Native children and peer roots cannot borrow ownership.
+
+Allocation never changes file access. A ready worker can passively report its
+actual supported reference filesystem/patch policy; absent workers, custom tools
+and changed mounts remain unknown. Broad existing access needs no extra approval.
+Missing access uses the existing explicit `file_access` capability and scoped
+permissions route. The observation does not certify shell/browser/database policy
+or bypass current file-tool hooks. A profile directory is not an isolated running
+browser; a SQLite file is not a network database.
+
+Local slice evidence: 120 native-runtime tests passed across allocation,
+reservations, managed owners, actual mounted tool policies, HTTP binding,
+finite/resumed/persistent/nested/recipe-compatible child authority and configuration
+grant races. All 699 frontend tests and the production build passed.
+An isolated browser fixture passed 15 resource/preview scenarios, including real
+storage, lost-response retry, draft reload, peer separation and retained user
+files. Its conversation runtime was scripted; this is not provider, publication
+or deployed-host acceptance. The parent integration must qualify the combined
+source and regenerate its own assets.
 
 ## Return recaps and portable work diagnostics — 2026-10-14
 

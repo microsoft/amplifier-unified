@@ -1085,6 +1085,23 @@ class RuntimeManager:
         except (RuntimeError, TimeoutError):
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Loaded-source inspection did not return. No work was started.'}
 
+    async def resource_access(self, session_id, paths):
+        """Read a ready worker's current file policy without mounting anything."""
+        row = self.workers.get(session_id)
+        unknown = {'status': 'unknown', 'paths': {}}
+        if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
+            return unknown
+        if row['ready'].exception() is not None:
+            return unknown
+        try:
+            async with asyncio.timeout(10):
+                result = await self._request(session_id, 'dependencies', resourceAccess=True, paths=paths)
+            if self.workers.get(session_id) is not row or row['process'].returncode is not None:
+                return unknown
+            return result
+        except (RuntimeError, TimeoutError):
+            return unknown
+
     async def desktop_readiness(self, session_id):
         """Inspect only the mounted worker; do not revive retired conversations."""
         row = self.workers.get(session_id)

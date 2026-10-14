@@ -7,7 +7,7 @@ export function WorkspaceResources({state,act,workspaceId,readOnly=false}){
  useEffect(()=>setVisibleId(currentId),[currentId]);
  const workspace=state.workspaces?.find(row=>row.id===currentId);
  if(workspace)visited.current.set(workspace.id,workspace);
- return <>{[...visited.current.values()].map(row=><div key={row.id} hidden={row.id!==visibleId}><ResourceEditor workspace={row} act={act} readOnly={readOnly}/><ManagedResources workspace={row} state={state} act={act} active={row.id===visibleId}/><ResourceReservations workspace={row} state={state} act={act} readOnly={readOnly} active={row.id===visibleId}/></div>)}</>;
+ return <>{[...visited.current.values()].map(row=><div key={row.id} hidden={row.id!==visibleId}><ResourceEditor workspace={row} act={act} readOnly={readOnly}/><ManagedResources workspace={row} state={state} act={act} active={row.id===visibleId} readOnly={readOnly}/><ResourceReservations workspace={row} state={state} act={act} readOnly={readOnly} active={row.id===visibleId}/></div>)}</>;
 }
 function ResourceEditor({workspace,act,readOnly}){
  const [inventory,setInventory]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[adding,setAdding]=useState(false),[draft,setDraft]=useState({kind:'',resourceId:'',owner:'',note:''}),[updating,setUpdating]=useState(null),[evidence,setEvidence]=useState(''),[status,setStatus]=useState('observed_absent');

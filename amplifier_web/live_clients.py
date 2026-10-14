@@ -116,6 +116,8 @@ def setup_routes(app, streams):
             "runtime.provenance": "sessionId", "integration.capture": "sessionId",
             "integration.check": "sessionId", "integration.read": "sessionId",
             "integration.list": "sessionId",
+            **{name: 'sessionId' for name in ('workspace.resources.managed', 'workspace.resources.provision',
+                'workspace.resources.read', 'workspace.resources.retire')},
             "assignment.read": "sessionId", "assignment.start": "sessionId",
             "assignment.set": "sessionId", "assignment.stop": "sessionId", "assignment.detach": "sessionId",
             "coordination.watch": "sessionId", "coordination.watch.read": "sessionId", "coordination.watch.cancel": "sessionId",

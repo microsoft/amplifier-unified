@@ -436,11 +436,43 @@ agents may inspect only their host-bound task, while users may select a workspac
 task. Cooperative reservations remain separately labelled, with no inferred link
 between a user-chosen key and a physical resource.
 
-Dedicated scratch folders, test databases, dynamic application preview listeners
-and browser profiles remain unallocated by this workspace adapter. A documented
-working-files namespace is not provisioned isolation. Unknown operation cwd,
+The initial managed inventory did not allocate dedicated scratch folders,
+databases or browser profiles; the owned-storage addition below supplies those
+specific local bytes. Dynamic application preview listeners remain undiscovered.
+A documented working-files namespace alone is not provisioned isolation. Unknown operation cwd,
 remote publishing state or resources outside these owners must remain explicit
 coverage limits, never reported absent or safely isolated.
+
+### Owned task storage — 2026-10-14 candidate addition
+
+The workspace resource owner may explicitly provision a private task-owned scratch
+directory, browser-profile directory or local SQLite database outside borrowed
+source repositories. It retains allocation intent before filesystem effects,
+binds ownership to the authenticated root, bounds outstanding allocations and
+records directory/file identity. Stable retries return the same allocation;
+interrupted or replaced resources remain inspectable and are never recreated
+from an uncertain receipt. Stop or changed placement before admission suppresses
+unperformed effects; already-admitted local filesystem work may finish. Retirement
+preserves contents and does not assert that external users of the files stopped.
+
+Allocation does not change file-access settings or executable mount plans.
+Inspection reports the current supported mounted file/patch policy for the
+allocated path without warming a worker. Existing applicable access remains
+usable; absent access follows the ordinary explicit file-access authorization
+route. Unknown or custom tools never become an inferred grant. A browser-profile
+directory is not a launched or confined browser, and a SQLite file is not a
+provisioned database server. User and agent controls share ownership, receipts
+and revision checks; peer workspace membership confers no allocation control.
+
+The first supported allocation locations are opaque, app-owned paths. The caller
+does not supply a destination inside a borrowed repository. At most 32 nonretired
+allocations belong to one root and 512 to one app home; these are allocation-count
+limits, not disk quotas. A stopped allocation owner is reconciled to unknown only
+after its physical owner lock is free. Retirement releases a count slot but never
+reclaims bytes. No automatic garbage collection or deletion action is supplied.
+Read pages contain at most 32 records and do not hydrate conversation history.
+The ready-worker policy check observes supported reference filesystem and patch
+tools only; it does not certify custom tools, shell, browser or database access.
 
 ### Notification display provenance — 2026-10-14
 

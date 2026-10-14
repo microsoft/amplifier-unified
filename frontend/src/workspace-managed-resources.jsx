@@ -1,6 +1,7 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
+import {TaskStorage} from './workspace-task-storage';
 
-export function ManagedResources({workspace,state,act,active}){
+export function ManagedResources({workspace,state,act,active,readOnly}){
  const selectId=useId(),visit=useRef(0);
  const [opened,setOpened]=useState(false),[selected,setSelected]=useState(''),[page,setPage]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const [cursors,setCursors]=useState({});
@@ -22,7 +23,7 @@ export function ManagedResources({workspace,state,act,active}){
   return()=>{visit.current++};
  },[active,opened,workspace.id,sid]);
  const owner=chats.find(row=>row.id===sid)?.title||'Conversation';
- return <details className="a-workspace-setup" onToggle={event=>setOpened(event.currentTarget.open)}>
+ return <details className="a-workspace-setup" onToggle={event=>{if(!event.target||event.target===event.currentTarget)setOpened(event.currentTarget.open)}}>
   <summary>Managed resources</summary>
   <section aria-label="Managed resources">
    <p>Inspect resources recorded for one chat. Refreshing observes their owners; it does not start, stop or reserve anything.</p>
@@ -49,8 +50,8 @@ export function ManagedResources({workspace,state,act,active}){
      <p>Operation: {row.id}{row.pid!=null&&' · PID '+row.pid}{row.returncode!=null&&' · Exit '+row.returncode}</p>
     </li>)}</ul>
     {page.operations.nextCursor&&<button className="a-soft" type="button" disabled={busy} onClick={()=>refresh({...cursors,operationsBefore:page.operations.nextCursor})}>More recorded operations</button>}
-    <h4>Isolation not allocated</h4>
-    <p>This workspace adapter has not provisioned dedicated scratch folders, test databases or browser profiles. Dynamic application preview ports, remote publishing targets and external processes are not inspected here. Cooperative reservations below do not establish that isolation.</p>
+    <TaskStorage key={sid} workspaceId={workspace.id} sessionId={sid} initial={page.storage} act={act} active={active&&opened} readOnly={readOnly}/>
+    <p>Dynamic application preview ports, remote publishing targets and external processes are not inspected here. Cooperative reservations below do not establish physical isolation.</p>
    </>}
   </section>
  </details>;

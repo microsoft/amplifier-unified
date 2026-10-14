@@ -979,7 +979,13 @@ class Worker:
                     self.shutdown.set()
                 return
             elif op == "dependencies":
-                if data.get('provenance') is True:
+                if data.get('resourceAccess') is True:
+                    from amplifier_web.resource_access import observe
+                    inspected_session = self.session
+                    result = await observe(inspected_session, data.get('paths', []))
+                    if self.session is not inspected_session:
+                        result = {'status': 'unknown', 'paths': {}}
+                elif data.get('provenance') is True:
                     from amplifier_web.loaded_provenance import observe
                     inspected_session = self.session
                     result = await observe(inspected_session, data.get('modules', []), mounted=getattr(self, 'provenance_mount', None))
@@ -989,7 +995,7 @@ class Worker:
                     from .artifact_runtime import discover
                 else:
                     from artifact_runtime import discover
-                if data.get('provenance') is not True:
+                if data.get('provenance') is not True and data.get('resourceAccess') is not True:
                     result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif op == "desktop.readiness":
                 if not self.controls:

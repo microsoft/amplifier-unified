@@ -92,7 +92,8 @@ async def test_shared_action_uses_host_bound_task_without_history_or_model_input
     browser = await app.dispatch('workspace.resources.managed', args)
     agent = await agent_action(app, source, 'workspace.resources.managed', args, 'resource-read')
     assert browser['result'] == agent['result']
-    assert all(row['status'] == 'unallocated' for row in agent['result']['isolation'])
+    assert all(row['status'] == 'inspect-storage-records' for row in agent['result']['isolation'])
+    assert agent['result']['storage']['items'] == []
     assert agent['result']['coverage']['dynamicPreviewDiscovery'] == 'unsupported'
     assert app.runtime.inputs == []
     with pytest.raises(AppError):
