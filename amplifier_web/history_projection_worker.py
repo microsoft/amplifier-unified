@@ -20,6 +20,8 @@ INPUT_LIMIT = 32 * 1024 * 1024
 OUTPUT_LIMIT = 64 * 1024 * 1024
 MEMORY_LIMIT = 768 * 1024 * 1024
 DESCRIPTOR_LIMIT = 4096
+RECEIPT_LIMIT = 256 * 1024
+RECEIPT_PATHS = 2048
 IDENTITY = re.compile(r'[0-9a-f]{32}\Z')
 
 
@@ -91,6 +93,32 @@ def write_json(path, value, limit):
         raise
 
 
+def source_receipt(value):
+    """Small display-generation receipt only; never retain the rejected tree."""
+    revisions = value.get('revisions')
+    paths = value.get('paths')
+    if paths is None and isinstance(revisions, (list, tuple)) and len(revisions) <= RECEIPT_PATHS:
+        paths = [row[0] if isinstance(row, (list, tuple)) and len(row) == 2 else None for row in revisions]
+    if (not isinstance(paths, (list, tuple)) or not isinstance(revisions, (list, tuple))
+            or len(paths) != len(revisions) or len(paths) > RECEIPT_PATHS):
+        return None
+    for path, revision in zip(paths, revisions):
+        if (not isinstance(path, str) or not path or len(path) > 4096
+                or not isinstance(revision, (list, tuple)) or len(revision) != 2
+                or revision[0] != path):
+            return None
+        stamp = revision[1]
+        if stamp is not None and (not isinstance(stamp, (list, tuple)) or len(stamp) != 4
+                or not isinstance(stamp[0], (list, tuple)) or len(stamp[0]) != 2
+                or any(type(item) is not int for item in (*stamp[0], *stamp[1:]))):
+            return None
+    receipt = {'status': 'retry', 'reason': 'output_limit', 'revisions': revisions}
+    if len(json.dumps(receipt, ensure_ascii=False, allow_nan=False,
+                      separators=(',', ':')).encode('utf-8')) > RECEIPT_LIMIT:
+        return None
+    return receipt
+
+
 def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
     spool, cache_home = Path(spool).resolve(), Path(cache_home).resolve()
     work = queue.Queue(maxsize=1)
@@ -140,7 +168,13 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 result = model.project(inputs, check_budget=check_budget)
                 del inputs
                 check_budget()
-                size, digest = write_json(target, result, OUTPUT_LIMIT)
+                try:
+                    size, digest = write_json(target, result, OUTPUT_LIMIT)
+                except OverflowError:
+                    receipt = source_receipt(result) if result.get('status') == 'complete' else None
+                    if receipt is None:
+                        raise
+                    size, digest = write_json(target, receipt, min(OUTPUT_LIMIT, RECEIPT_LIMIT))
                 del result
                 check_budget()
                 reply({'type': 'result', 'id': identity, 'bytes': size, 'digest': digest})

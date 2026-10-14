@@ -34,7 +34,7 @@ class FakeModel:
             return {'status': 'retry', 'reason': inputs['retry']}
         return {'status': 'complete', 'tree': {'value': inputs.get('value'),
                 'payload': 'x' * inputs.get('output', 0)},
-                'paths': [], 'revisions': [], 'diagnostics': {'pid': os.getpid()},
+                'paths': inputs.get('paths', []), 'revisions': inputs.get('revisions', []), 'diagnostics': {'pid': os.getpid()},
                 'delta': inputs.get('delta')}
 
 
@@ -247,9 +247,43 @@ async def test_encoding_and_decoding_are_off_loop_and_retries_are_bounded(tmp_pa
         await owner.close()
 
 
-if __name__ == '__main__' and sys.argv[1:2] == ['worker']:
+
+async def test_output_overflow_preserves_only_bounded_source_receipt_and_retires(tmp_path):
+    owner = ProcessProjector(tmp_path, _command=(sys.executable, str(Path(__file__).resolve()), 'worker-small-output'))
+    revisions = [['source', [[1, 2], 3, 4, 5]], ['missing', None]]
+    try:
+        result = await owner.project({'output': 2048, 'paths': ['source', 'missing'], 'revisions': revisions}, key='large')
+        assert result == {'status': 'retry', 'reason': 'output_limit', 'revisions': revisions}
+        assert owner._process is None
+        assert not list(owner._root.rglob('*.output'))
+        assert not list(owner._root.rglob('*.writing'))
+        assert (await owner.project({'value': 'small'}, key='recovered'))['status'] == 'complete'
+        assert len({row['pid'] for row in await called(tmp_path, 2)}) == 2
+    finally:
+        await owner.close()
+
+
+@pytest.mark.parametrize('references', [
+    {'paths': ['source'], 'revisions': [['different', None]]},
+    {'paths': ['source'], 'revisions': [['source', 'not-a-stamp']]},
+    {'paths': ['source'] * 2049, 'revisions': [['source', None]] * 2049},
+    {'paths': ['x' * 4096] * 100, 'revisions': [['x' * 4096, None]] * 100},
+])
+async def test_output_overflow_rejects_invalid_or_oversized_receipt(tmp_path, references):
+    owner = ProcessProjector(tmp_path, _command=(sys.executable, str(Path(__file__).resolve()), 'worker-small-output'))
+    try:
+        assert await owner.project({'output': 2048, **references}, key='large') == {'status': 'retry', 'reason': 'output_limit'}
+        assert owner._process is None
+        assert not list(owner._root.rglob('*.writing'))
+    finally:
+        await owner.close()
+
+if __name__ == '__main__' and sys.argv[1:2] in (['worker'], ['worker-small-output']):
     import argparse
     from amplifier_web.history_projection_worker import run
+    if sys.argv[1] == 'worker-small-output':
+        import amplifier_web.history_projection_worker as worker
+        worker.OUTPUT_LIMIT = 1024
     parser = argparse.ArgumentParser()
     parser.add_argument('--spool', required=True)
     parser.add_argument('--cache-home', required=True)

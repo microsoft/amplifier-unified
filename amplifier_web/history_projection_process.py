@@ -18,7 +18,7 @@ import threading
 import uuid
 
 from .history_projection_worker import (
-    DESCRIPTOR_LIMIT, INPUT_LIMIT, MEMORY_LIMIT, OUTPUT_LIMIT,
+    DESCRIPTOR_LIMIT, INPUT_LIMIT, MEMORY_LIMIT, OUTPUT_LIMIT, source_receipt,
 )
 
 REASONS = frozenset({'queue_full', 'input_limit', 'output_limit', 'spool_limit',
@@ -260,7 +260,11 @@ class ProcessProjector:
         result = json.loads(data)
         if not isinstance(result, dict) or result.get('status') not in {'complete', 'retry'}:
             raise ValueError('Invalid projection outcome')
-        return retry(result.get('reason')) if result['status'] == 'retry' else result
+        if result['status'] == 'retry':
+            if result.get('reason') == 'output_limit':
+                return source_receipt(result) or retry('output_limit')
+            return retry(result.get('reason'))
+        return result
 
     async def _retire(self):
         process, self._process = self._process, None
