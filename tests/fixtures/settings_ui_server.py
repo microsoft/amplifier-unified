@@ -68,6 +68,14 @@ async def main(home):
   result=await service.app_bridge('dispatch',{'action':'view.update','args':{'clientId':payload['clientId'],'patch':payload['patch']}},service._session()['id'])
   return web.json_response(result)
  app.router.add_post('/fixture/agent-view',agent_view)
+ async def tool_observations(request):
+  # Read-only synthetic evidence: compact frames deliberately omit retained
+  # tool operation collections and connection definitions.
+  if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+   raise web.HTTPForbidden()
+  async with service.lock:
+   return web.json_response({key:service.smart_tools.state[key] for key in ('operations','servers')})
+ app.router.add_get('/fixture/settings-tool-observations',tool_observations)
  service.state['updates']['items']=group_sources([{'id':str(i),'label':f'fixture-source-{i}','status':'current'} for i in range(86)]+[{'id':'copy-'+str(i),'label':'github.com/example/amplifier-bundle-computer-use','kind':'bundle / module','ref':'main','current':'123456789','latest':'abcdefghi','status':'update'} for i in range(2)])
  service.state['updates']['available']=1
  return app
