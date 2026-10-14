@@ -32,7 +32,8 @@ try {
  // The edit deliberately lives only in React state, exercising the public dirty contract.
  const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");return React.createElement("label",null,"Unsaved renderer edit",React.createElement("input",{value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
  const digest=(await action('shell.packages.stage',{manifest,source})).result.digest;
- assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
+ const validation=(await action('shell.packages.validate',{digest})).result;
+ assert.equal(validation.status,'passed',JSON.stringify(validation));
  // Primary edits block all transitions that would replace the primary mount.
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const primary=page.locator('[data-canvas-view="primary"]').getByLabel('Unsaved renderer edit');

@@ -48,7 +48,13 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
      host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn());
     }
    }
-  }).catch(e=>{if(transportFailure(e)&&latest.current.data&&latest.current.connection.onError)latest.current.connection.onError(e);else setError(e.message)}).finally(()=>{inflight.current=null;if(again.current){again.current=false;return refresh()}});
+  }).catch(e=>{if(transportFailure(e)&&latest.current.data&&latest.current.connection.onError)latest.current.connection.onError(e);else setError(e.message)}).finally(()=>{
+   inflight.current=null;
+   // A waiter owns this request, not every later invalidation. Live updates
+   // can keep arriving indefinitely; continue refreshing without extending
+   // an already completed request's promise or its caller's command queue.
+   if(again.current){again.current=false;void refresh()}
+  });
   return inflight.current;
  },[clientId]);
  // The conversation and navigation share one selection, including pending
@@ -90,7 +96,12 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
       const result=await (immediate||latest.current.dispatch(action,{...args,generation}));
       if(action==='shell.command'&&args.action==='session.select'&&!latest.current.state?.view?.navPinned)await latest.current.dispatch('view.update',{patch:{navExpanded:false}});
       return {accepted:result.accepted,result:result.result};
-     }finally{if(pending)record.pending=record.pending.filter(item=>item!==pending);await refresh()}
+     }finally{
+      if(pending)record.pending=record.pending.filter(item=>item!==pending);
+      // Selection has already received authoritative state. Refresh derived
+      // navigation in the background so a slow shell cannot block another chat.
+      if(navigation)void refresh();else await refresh();
+     }
     };
     const promise=queue.then(execute,execute);queue=promise.catch(()=>{});return promise;
    };

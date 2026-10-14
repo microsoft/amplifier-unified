@@ -5,7 +5,7 @@ import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(root+'/.venv/bin/python',[root+'/tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,release;
+let browser,release,releaseShell;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timeout=setTimeout(()=>reject(Error('startup')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timeout);resolve(row.url)}}catch{}})});
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS?['--no-sandbox','--single-process','--disable-dev-shm-usage']:[]});
@@ -82,5 +82,25 @@ try{
  releaseRapid();
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id&&!window.amplifier.getState().navigationPending,third);
  await expect(page.getByText('Third history',{exact:true})).toBeVisible();
- console.log(JSON.stringify({passed:true,cachedSwitchPaintMs:painted.milliseconds,paintedBeforeServer:true,draftsPreserved:true,failedSelectionRestored:true,rapidSelectionPreserved:true}));
-}finally{release?.();await browser?.close();fixture.kill()}
+ await page.unroute('**/api/actions');
+ // A derived navigation refresh must not own the command queue. Keep the
+ // shell request pending while two real selections commit through the host.
+ const shellGate=new Promise(resolve=>releaseShell=resolve);let shellHeld=false;
+ await page.route('**/api/shell?**',async route=>{shellHeld=true;await shellGate;await route.continue()});
+ const accepted=[];
+ page.on('response',response=>{
+  const request=response.request();if(!request.url().endsWith('/api/actions')||request.method()!=='POST')return;
+  const body=request.postDataJSON();
+  if(response.ok()&&body.action==='shell.command'&&body.args.action==='session.select')accepted.push(body.args.args.id);
+ });
+ await page.getByRole('button',{name:'First chat',exact:true}).first().click();
+ await expect.poll(()=>accepted.includes(first)).toBe(true);
+ await expect.poll(()=>shellHeld).toBe(true);
+ await page.getByRole('button',{name:'Second chat',exact:true}).first().click();
+ await expect.poll(()=>accepted.includes(second),{timeout:3000}).toBe(true);
+ await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id&&!window.amplifier.getState().navigationPending,second);
+ await expect(page.getByText('Second history',{exact:true})).toBeVisible();
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Typed while selection was pending');
+ releaseShell();
+ console.log(JSON.stringify({passed:true,cachedSwitchPaintMs:painted.milliseconds,paintedBeforeServer:true,draftsPreserved:true,failedSelectionRestored:true,rapidSelectionPreserved:true,selectionIndependentOfShellRefresh:true}));
+}finally{release?.();releaseShell?.();await browser?.close();fixture.kill()}
