@@ -169,7 +169,7 @@ test('actual execute prepares only at execution, validates immediately before PO
  const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
  const start=source.indexOf('  const execute=async()=>{'),end=source.indexOf('  // Reviewing exact item',start);
  assert.ok(start>=0&&end>start);
- for(const outcome of ['dirty','stale','known-refusal','unknown','accepted']){
+ for(const outcome of ['dirty','stale','known-refusal','unknown','http408','http500','http503','non-json','accepted']){
   const edits=createInlineOwnership(),initial={...target,publishedVersion:2,selectedVersion:2,followLatest:false};
   const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
   const latest={current:scope},posts=[];let frozen=false,prepared=0;
@@ -183,6 +183,8 @@ test('actual execute prepares only at execution, validates immediately before PO
     posts.push(options.body);
     if(outcome==='known-refusal')throw Object.assign(Error('Host refused'),{status:409});
     if(outcome==='unknown')throw Object.assign(Error('Disconnected'),{unconfirmed:true});
+    if(outcome.startsWith('http'))throw Object.assign(Error('Unknown execution'),{status:Number(outcome.slice(4))});
+    if(outcome==='non-json')throw Error('The server returned an unexpected response (200).');
     const next={...initial,generation:2,followLatest:true,selectedVersion:null};
     return {accepted:true,result:next,state:{...scope,canvasWorkspace:{views:[next]}}};
    },
@@ -196,8 +198,82 @@ test('actual execute prepares only at execution, validates immediately before PO
   }else await assert.rejects(execute());
   assert.equal(posts.length,['dirty','stale'].includes(outcome)?0:1);
   if(['dirty','stale','known-refusal'].includes(outcome))assert.equal(frozen,false);
-  if(outcome==='unknown'){assert.equal(frozen,true);assert.equal(edits.transition(target).id,meta.id)}
+  if(['unknown','http408','http500','http503','non-json'].includes(outcome)){assert.equal(frozen,true);assert.equal(edits.transition(target).id,meta.id)}
  }
+});
+
+test('confirmed receipt adopts the current monotonic successor, even when receipt generation was never observed',async()=>{
+ for(const sawSecond of [false,true]){
+  const edits=createInlineOwnership(),initial={...target,publishedVersion:2,followLatest:false,selectedVersion:2};
+  const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
+  let frozen=false;
+  edits.register(scope,initial,owner);
+  edits.registerRenderer(initial,{prepare:async()=>{frozen=true;return {}},validate:()=>true,release:()=>{frozen=false}});
+  const hold=await edits.prepareTransition(initial,'original-id',true,scope);hold.sent=true;
+  const second={...initial,generation:2,resourceRevision:'r2',followLatest:true,selectedVersion:null};
+  const third={...second,generation:3,resourceRevision:'r3'};
+  if(sawSecond)edits.reconcile({...scope,canvasWorkspace:{views:[second]}});
+  const current={...scope,canvasWorkspace:{views:[third]}};
+  edits.reconcile(current);
+  assert.equal(hold.reconciled,false,'State alone is never a receipt');assert.equal(frozen,true);
+  const receipt={accepted:true,result:second};
+  await edits.completeTransition(hold,receipt,current);
+  assert.equal(hold.receipt,receipt);assert.equal(hold.id,'original-id');assert.equal(frozen,true);
+  assert.deepEqual(edits.adoptTransition(initial,hold.id,current),third);
+  assert.equal(frozen,false);assert.equal(receipt.result,second);
+ }
+});
+
+test('receipt plus wrong scope, view, publication, intent or older generation cannot authorize adoption',async()=>{
+ const initial={...target,publishedVersion:2,followLatest:false,selectedVersion:2};
+ const next={...initial,generation:2,resourceRevision:'r2',followLatest:true,selectedVersion:null};
+ const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
+ for(const patch of [
+  {client:{id:'other',hostInstanceId:'host'}},{client:{id:'tab',hostInstanceId:'other'}},{selectedSessionId:'b'},
+  ...[{viewId:'other'},{resourceId:'other'},{publishedVersion:1},{followLatest:false},{selectedVersion:2},{generation:1},{resourceRevision:'wrong-at-same-generation'}]
+   .map(change=>({canvasWorkspace:{views:[{...next,...change}]}}))
+ ]){
+  const edits=createInlineOwnership();let frozen=false;
+  edits.register(scope,initial,owner);
+  edits.registerRenderer(initial,{prepare:async()=>{frozen=true;return {}},validate:()=>true,release:()=>{frozen=false}});
+  const hold=await edits.prepareTransition(initial,'original-id',true,scope);hold.sent=true;
+  await edits.completeTransition(hold,{accepted:true,result:next},{...scope,canvasWorkspace:{views:[next]}});
+  assert.equal(edits.adoptTransition(initial,hold.id,{...scope,...patch}),undefined);
+  assert.equal(frozen,true);assert.equal(hold.id,'original-id');
+  edits.refuseTransition(hold);
+ }
+});
+
+test('JSON loss after host success reconciles only the original command and current newer view',async()=>{
+ const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('  const execute=async()=>{'),end=source.indexOf('  // Reviewing exact item',start);
+ const edits=createInlineOwnership(),initial={...target,publishedVersion:2,followLatest:false,selectedVersion:2};
+ const next={...initial,resourceRevision:'r2',generation:2,followLatest:true,selectedVersion:null};
+ const newer={...next,resourceRevision:'r3',generation:3};
+ const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
+ const latest={current:scope},posts=[],meta={id:'original-json-command'},args={...target,followLatest:true};
+ let frozen=false,prepared=0;
+ edits.register(scope,initial,owner);
+ edits.registerRenderer(initial,{prepare:async()=>{prepared++;frozen=true;return {}},validate:()=>true,release:()=>{frozen=false}});
+ const receipt={accepted:true,result:next};
+ const execute=runInNewContext(source.slice(start,end)+'execute',{
+  meta,command:{action:'canvas.views.follow',args},action:'canvas.views.follow',args,navigation:false,
+  dirtyBarrier:null,inlineOwnership:edits,inlineEditNotice,latest,dirtyTickets:[],DOMException,crypto:{randomUUID:()=>{throw Error('Must retain original ID')}},
+  request:async(_path,options)=>{
+   posts.push(options.body);
+   if(posts.length===1){
+    latest.current={...scope,canvasWorkspace:{views:[newer]}};edits.reconcile(latest.current);
+    throw Error('The server returned an unexpected response (200).');
+   }
+   return receipt;
+  },acceptState(){},awaitState:async()=>{}
+ });
+ await assert.rejects(execute(),error=>error.unconfirmed===true);
+ assert.equal(frozen,true);assert.equal(edits.transition(target).id,meta.id);assert.equal(prepared,1);
+ await execute();
+ assert.deepEqual(posts[0],posts[1]);assert.equal(prepared,1);assert.equal(frozen,true);
+ assert.deepEqual(edits.adoptTransition(target,meta.id,latest.current),newer);
+ assert.equal(frozen,false);assert.equal(receipt.result,next);
 });
 
 test('Settings leave checks normalize wrapped commands and separate publication from one-time opening',()=>{

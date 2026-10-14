@@ -116,6 +116,56 @@ try{
  await expect(toggle).not.toBeChecked();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(group).toHaveCount(0);
+ // Real completion timing with an actual inline native editor. Focus is
+ // deliberately OUTSIDE the pane: reading/focus deferral cannot hide a remount.
+ await control({op:'interim-start'});
+ await openSettingsPage(page,'appearance');await toggle.check();
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ const nativeId=await page.evaluate(async()=>{
+  const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===state.selectedSessionId);
+  const message=session.messages.find(row=>row.text==='Checking the first detail.');
+  const created=await window.amplifier.dispatch('canvas.apps.create',{
+   title:'Interim private editor',
+   manifest:{version:1,theme:'inherit',stateSchema:{type:'object',properties:{},additionalProperties:false}},
+   initialState:{},
+   content:'<!doctype html><h1>Interim editor</h1><input aria-label="Private interim input"><button id="clean">Mark clean</button><script>document.querySelector("#clean").onclick=()=>canvasApp.setDirty(false);</script>'
+  });
+  const id=created.result.id;
+  await window.amplifier.dispatch('canvas.present',{id,sessionId:session.id,version:1,messageId:message.id,presentation:{chat:'inline',canvas:'unchanged'}});
+  return id;
+ });
+ const native=page.locator(`.a-general-artifact[data-artifact-id="${nativeId}"]`);
+ const editor=()=>native.frameLocator('iframe').frameLocator('iframe').getByRole('textbox',{name:'Private interim input'});
+ await native.scrollIntoViewIfNeeded();
+ await native.getByRole('button',{name:'Go to Latest',exact:true}).click();
+ await expect(editor()).toBeEditable();await editor().fill('Retain this exact unsaved input');
+ const nativeInput=await editor().elementHandle(),nativeOuter=await native.locator('iframe').elementHandle();
+ await expect(native).toContainText('Unsaved input');
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ await control({op:'interim-finish'});
+ await expect(page.getByText('The final next step.',{exact:true})).toBeVisible();
+ await expect(group).toHaveCount(0);
+ assert.equal(await editor().evaluate((node,old)=>node===old,nativeInput),true);
+ assert.equal(await native.locator('iframe').evaluate((node,old)=>node===old,nativeOuter),true);
+ await expect(editor()).toHaveValue('Retain this exact unsaved input');
+ // A clean receipt permits the normal fold. Once collapsed, a clean editor
+ // may remount; dirty disclosure changes must again keep its current location.
+ await native.frameLocator('iframe').frameLocator('iframe').getByRole('button',{name:'Mark clean'}).click();
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ await expect(group).toHaveCount(1);await expect(header).toHaveAttribute('aria-expanded','false');
+ await native.scrollIntoViewIfNeeded();
+ await native.getByRole('button',{name:'Go to Latest',exact:true}).click();
+ await editor().fill('Do not move on disclosure');
+ const collapsedInput=await editor().elementHandle();
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+ await header.click();
+ await expect(header).toHaveAttribute('aria-expanded','false');
+ assert.equal(await editor().evaluate((node,old)=>node===old,collapsedInput),true);
+ await expect(editor()).toHaveValue('Do not move on disclosure');
+ await native.frameLocator('iframe').frameLocator('iframe').getByRole('button',{name:'Mark clean'}).click();
+ await expect(header).toHaveAttribute('aria-expanded','true');
  const finalState=await control({op:'patch'});
  assert.equal(finalState.runtimeSends,0,'presentation never sends model input');
  assert.deepEqual(errors,[]);

@@ -612,3 +612,122 @@ async def test_legacy_primary_transient_context_does_not_override_canonical_or_i
         assert historical['mcp'].get('context', {}) != {'primary': 'legacy'}
         assert 'lastOperationId' not in historical['mcp']
     assert connection.requests == [('call_tool', ('change', {'amount': 9}))]
+
+
+def legacy_launch_definition(service, identity):
+    from amplifier_web.resource_files import put
+    from amplifier_web.state_storage import resource
+    row = next(row for row in service.state['canvasArtifacts'] if row['id'] == identity)
+    binding = resource(service.db, row['mcpState']['$resource'])
+    binding.pop('savedResult')
+    reference = put(service.db, binding)
+    row['mcpState'] = reference
+    for version in row['versions']:
+        if version['version'] == 1:
+            version['mcpState'] = deepcopy(reference)
+    return row, binding
+
+
+async def test_http_legacy_launch_result_uses_saved_boundary_for_live_and_numbered_views(view_http):
+    client, service, identity, _, _, connection = view_http
+    row, binding = legacy_launch_definition(service, identity)
+    live = await mount_view(service, identity, 'legacy-live')
+    historical = await mount_view(service, identity, 'legacy-numbered', follow=False)
+    unrelated = deepcopy(service.smart_tools.operation('original-call'))
+    unrelated.update(id='later-unrelated', result={'content': [{'type': 'text', 'text': 'Wrong result'}]})
+    service.smart_tools.persist_operation(unrelated)
+    original = deepcopy(service.smart_tools.operation(binding['operationId']))
+    saved_row = deepcopy(row)
+    for view in (live, historical):
+        response = await client.get(f'/api/canvas/{identity}/result', params=query(view))
+        assert response.status == 200
+        assert (await response.json())['result'] == original['result']
+        # No weakening of ordinary view-qualified operation polling.
+        assert (await client.get('/api/smart-tools/operations/original-call', params=query(view))).status == 409
+    assert connection.requests == [] and row == saved_row
+    with service.clients.bind('one'):
+        await service.dispatch('canvas.views.release', exact_target(live))
+    assert (await client.get(f'/api/canvas/{identity}/result', params=query(live))).status in {404, 409}
+    assert (await client.get(f'/api/canvas/{identity}/result', params=query(historical))).status == 200
+    assert connection.requests == []
+
+
+@pytest.mark.parametrize('change', ['missing', 'server', 'session', 'configuration', 'tool', 'input', 'unfinished'])
+async def test_legacy_saved_launch_result_rejects_mismatched_retained_evidence(view_http, change):
+    client, service, identity, _, _, connection = view_http
+    _, binding = legacy_launch_definition(service, identity)
+    original = deepcopy(service.smart_tools.operation(binding['operationId']))
+    if change == 'missing':
+        # The binding still names its original ID; a later same-input call is
+        # not evidence for that missing launch.
+        service.smart_tools.operation = lambda identity: None
+    else:
+        damaged = deepcopy(original)
+        if change == 'server':
+            damaged['target']['id'] = 'other-server'
+        elif change == 'session':
+            damaged['target']['sessionId'] = 'other-session'
+        elif change == 'configuration':
+            damaged['configuration'] = 'other-configuration'
+        elif change == 'tool':
+            damaged['target']['name'] = 'change'
+        elif change == 'input':
+            damaged['arguments'] = {'saved': 'different'}
+        else:
+            damaged['status'] = 'running'
+        service.smart_tools.persist_operation(damaged)
+    view = await mount_view(service, identity, 'legacy-evidence')
+    response = await client.get(f'/api/canvas/{identity}/result', params=query(view))
+    assert response.status == 404
+    assert 'unavailable' in (await response.text()).lower()
+    assert connection.requests == []
+
+
+async def test_numbered_legacy_result_never_inherits_latest_result_or_transient_operation(view_http):
+    from amplifier_web.resource_files import put
+    client, service, identity, _, _, connection = view_http
+    row, legacy = legacy_launch_definition(service, identity)
+    prior = deepcopy(service.smart_tools.operation(legacy['operationId']))
+    latest_result = {'content': [{'type': 'text', 'text': 'Later saved version'}]}
+    newer = deepcopy(legacy)
+    newer.update(operationId='later-operation', savedResult=put(service.db, latest_result))
+    row.update(revision=2, mcpState=put(service.db, newer))
+    row['versions'].append({**deepcopy(row['versions'][0]), 'version': 2, 'mcpState': row['mcpState']})
+    historical = await mount_view(service, identity, 'numbered-legacy', follow=False)
+    live = await mount_view(service, identity, 'current-result')
+    old_response = await client.get(f'/api/canvas/{identity}/result', params=query(historical, operationId='later-operation'))
+    assert old_response.status == 200 and (await old_response.json())['result'] == prior['result']
+    new_response = await client.get(f'/api/canvas/{identity}/result', params=query(live))
+    assert new_response.status == 200 and (await new_response.json())['result'] == latest_result
+    with service.clients.bind('one'):
+        await service.dispatch('canvas.views.release', exact_target(historical))
+    assert (await client.get(f'/api/canvas/{identity}/result', params=query(historical))).status in {404, 409}
+    assert connection.requests == []
+
+
+async def test_actual_view_detachment_during_post_call_update_preserves_completed_result(view_http):
+    _, service, identity, one, _, connection = view_http
+    original = service.smart_canvas.local_update
+    updates = []
+    def detach_before_update(args, canvas, update):
+        updates.append(deepcopy(update))
+        service.canvas_views.record()['inline'].pop(one['viewId'])
+        # Exercise the real exact-target resolver's AppError after the durable
+        # tool effect, not a second tool call or a fabricated completed receipt.
+        return original(args, canvas, update)
+    service.smart_canvas.local_update = detach_before_update
+    try:
+        with service.clients.bind('one'):
+            receipt = await service.dispatch('smartTools.appCall', {**exact_target(one),
+                'canvasId': identity, 'name': 'change', 'arguments': {'amount': 8}},
+                command_id='detach-after-effect')
+            await service.wait_smart_tool(receipt['operationId'])
+            operation = service.smart_tools.operation(receipt['operationId'])
+            assert operation['status'] == 'completed'
+            assert operation['result']['structuredContent']['amount'] == 8
+            assert len(updates) == 1
+            with pytest.raises(AppError):
+                service.canvas_views.target(exact_target(one))
+        assert connection.requests == [('call_tool', ('change', {'amount': 8}))]
+    finally:
+        service.smart_canvas.local_update = original

@@ -128,6 +128,54 @@ async def test_resources_use_saved_binding_and_reject_detach_during_read(service
         await service.smart_canvas.resource(cid,'read',uri='counter://media/one')
 
 
+async def test_unbound_legacy_context_and_completed_call_keep_transient_result_without_primary(service):
+    assert service.clients.current.get() is None
+    await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
+    identity = service.state['canvas']['id']
+    # Actual unbound legacy context, not a fabricated mounted client.
+    await service.dispatch('smartTools.context', {'canvasId': identity, 'context': {'selection': 'legacy'}})
+    assert service.smart_canvas.binding(identity)[0]['mcp']['context'] == {'selection': 'legacy'}
+    calls = []
+    original = service.smart_tools.command
+    async def counted(*args, **kwargs):
+        calls.append(args)
+        return await original(*args, **kwargs)
+    service.smart_tools.command = counted
+    args = {'canvasId': identity, 'name': 'read', 'arguments': {'amount': 1}}
+    receipt = await service.dispatch('smartTools.appCall', args, command_id='unbound-once')
+    await settled(service)
+    result = copy.deepcopy(service.smart_tools.operation(receipt['operationId']))
+    assert result['status'] == 'completed' and result['result']['structuredContent'] == {'count': 1}
+    assert service.state['canvas']['mcp']['lastOperationId'] == 'unbound-once'
+    duplicate = await service.dispatch('smartTools.appCall', args, command_id='unbound-once')
+    await settled(service)
+    assert duplicate['duplicate'] and len(calls) == 1
+    assert service.smart_tools.operation('unbound-once') == result
+
+
+async def test_post_effect_local_detachment_does_not_fail_or_repeat_completed_operation(service):
+    await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
+    identity = service.state['canvas']['id']
+    original = service.smart_canvas.local_update
+    updates = []
+    def detached(args, canvas, update):
+        updates.append(update)
+        raise AppError('The target detached after its tool completed.', 409)
+    service.smart_canvas.local_update = detached
+    args = {'canvasId': identity, 'name': 'read'}
+    try:
+        receipt = await service.dispatch('smartTools.appCall', args, command_id='completed-before-detach')
+        await settled(service)
+        operation = copy.deepcopy(service.smart_tools.operation(receipt['operationId']))
+        assert operation['status'] == 'completed' and operation['result']['structuredContent'] == {'count': 1}
+        duplicate = await service.dispatch('smartTools.appCall', args, command_id=receipt['operationId'])
+        await settled(service)
+        assert duplicate['duplicate'] and len(updates) == 1
+        assert service.smart_tools.operation(receipt['operationId']) == operation
+    finally:
+        service.smart_canvas.local_update = original
+
+
 async def test_failed_open_has_visible_terminal_operation(service):
     receipt=await service.dispatch('smartTools.open',{'id':'missing','tool':'read'})
     await settled(service)

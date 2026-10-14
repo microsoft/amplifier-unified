@@ -210,3 +210,32 @@ test('native prepare uses exact channel/token/edit version, vetoes delayed editi
   inlineOwnership.refuseTransition(hold);assert.equal(f.frameNode.inert,false);
  }finally{unregister();await f.close()}
 });
+
+test('known hold release reconciles an already changed definition; unknown and late dirty input keep the old frame',async()=>{
+ for(const lateDirty of [false,true]){
+  const target={viewId:'inline-release',resourceId:'fixture',resourceRevision:'r1',generation:1};
+  const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'session',canvasWorkspace:{views:[target]}};
+  const unregister=inlineOwnership.register(scope,target,{sessionId:'session',messageId:'turn',version:1});
+  const f=await fixture(undefined,target);
+  try{
+   const oldSrc=f.component.root.findByType('iframe').props.src,oldChannel=f.out.at(-1).channel;
+   let prepared;
+   await act(async()=>{prepared=inlineOwnership.prepareTransition(target,'release-once',true,scope)});
+   await f.send({op:'transition',token:'release-once',blocked:true,quiescent:true,editVersion:0,localPending:false,queued:0,pending:0,gestures:0,draftPending:false,uncertain:false});
+   const hold=await prepared;hold.sent=true;
+   await f.update({resourceRevision:'r2',generation:2,app:{revision:2,stateRevision:0,state:{},manifest:{},versions:[],requests:[]}});
+   assert.equal(f.component.root.findByType('iframe').props.src,oldSrc);
+   assert.equal(f.frameNode.inert,true,'Unknown delivery never releases or remounts');
+   if(lateDirty)await f.send({op:'editing',editVersion:1});
+   await act(async()=>inlineOwnership.refuseTransition(hold));
+   if(lateDirty){
+    assert.equal(f.component.root.findByType('iframe').props.src,oldSrc);
+    assert.equal(f.dirty(),true);assert.equal(f.out.at(-1).channel,oldChannel);
+   }else{
+    assert.notEqual(f.component.root.findByType('iframe').props.src,oldSrc);
+    await act(async()=>f.component.root.findByType('iframe').props.onLoad());
+    assert.notEqual(f.out.at(-1).channel,oldChannel);
+   }
+  }finally{unregister();await f.close()}
+ }
+});

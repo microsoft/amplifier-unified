@@ -215,6 +215,57 @@ try{
  assert.deepEqual(requests.filter(row=>row.action==='canvas.views.follow').at(-1),originalFollow);
  await one.getByRole('button',{name:'Go to Latest',exact:true}).click();
  await expect(appFrame(one).getByRole('heading',{name:'Native revision 3'})).toBeVisible();
+ // A successful follow's generation may already be obsolete when its HTTP
+ // receipt arrives. SSE advances once more while the original DOM is held.
+ await one.getByRole('button',{name:'Return to published version',exact:true}).click();
+ await expect(appFrame(one).getByRole('heading',{name:'Native revision 1'})).toBeVisible();
+ const advanceArgs=await cas(),oldHeldFrame=await one.locator('iframe').elementHandle();
+ let returnReceipt,followReceipt;
+ const advancingFollow=async route=>{
+  if(route.request().postDataJSON()?.action!=='canvas.views.follow')return route.continue();
+  const response=await route.fetch();assert.equal(response.status(),200);followReceipt=await response.json();
+  await new Promise(resolve=>{returnReceipt=resolve});return route.fulfill({response});
+ };
+ await page.route('**/api/actions',advancingFollow);postedBefore=followPosts();
+ await one.getByRole('button',{name:'Go to Latest',exact:true}).click();
+ await expect.poll(()=>!!followReceipt).toBe(true);
+ await expect(one.locator('iframe')).toHaveAttribute('inert','');
+ const currentClient=(await state(page)).client.id??(await state(page)).client.clientId;
+ const revised=await page.request.post(url+'/api/actions?clientId='+encodeURIComponent(currentClient),{
+  data:{id:'advance-during-follow-receipt',action:'canvas.apps.revise',args:{...advanceArgs,content:surface(4).content}}
+ });
+ assert.equal(revised.status(),200);
+ await expect.poll(async()=>(await state(page)).canvasWorkspace.views.find(row=>row.viewId===followReceipt.result.viewId)?.generation).toBeGreaterThan(followReceipt.result.generation);
+ assert.equal(await one.locator('iframe').evaluate((node,old)=>node===old,oldHeldFrame),true);
+ await expect(appFrame(one).getByRole('heading',{name:'Native revision 1'})).toBeVisible();
+ returnReceipt();
+ await expect(appFrame(one).getByRole('heading',{name:'Native revision 4'})).toBeVisible();
+ assert.equal(followPosts(),postedBefore+1,'No compensating follow or automatic retry');
+ await page.unroute('**/api/actions',advancingFollow);
+ // Lost JSON after host success and ambiguous HTTP errors must retain the
+ // exact command and disabled old DOM, just like a connection failure.
+ for(const failure of ['non-json',408,503]){
+  const heldFrame=await one.locator('iframe').elementHandle();
+  const failAfterSuccess=async route=>{
+   if(route.request().postDataJSON()?.action!=='canvas.views.follow')return route.continue();
+   const response=await route.fetch();assert.equal(response.status(),200);
+   return failure==='non-json'?route.fulfill({status:200,contentType:'text/html',body:'not-json'}):
+    route.fulfill({status:failure,json:{error:'Outcome unknown after host success'}});
+  };
+  await page.route('**/api/actions',failAfterSuccess);postedBefore=followPosts();
+  await one.getByRole('button',{name:'Return to published version',exact:true}).click();
+  await expect(one.getByRole('button',{name:'Retry version change',exact:true})).toBeEnabled();
+  await expect(one.locator('iframe')).toHaveAttribute('inert','');
+  assert.equal(await one.locator('iframe').evaluate((node,old)=>node===old,heldFrame),true);
+  const exact=requests.filter(row=>row.action==='canvas.views.follow').at(-1);
+  assert.equal(followPosts(),postedBefore+1);
+  await page.unroute('**/api/actions',failAfterSuccess);
+  await one.getByRole('button',{name:'Retry version change',exact:true}).click();
+  await expect(appFrame(one).getByRole('heading',{name:'Native revision 1'})).toBeVisible();
+  assert.deepEqual(requests.filter(row=>row.action==='canvas.views.follow').at(-1),exact);
+  await one.getByRole('button',{name:'Go to Latest',exact:true}).click();
+  await expect(appFrame(one).getByRole('heading',{name:'Native revision 4'})).toBeVisible();
+ }
  const peer=await context.newPage();await peer.goto(url);await peer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();await action(peer,'session.select',{id:sid});
  await card(peer,id,1).scrollIntoViewIfNeeded();await expect(card(peer,id,1)).toContainText('Published version 1 · Read only');
  await one.getByRole('button',{name:'Collapse Shared native counter',exact:true}).click();
