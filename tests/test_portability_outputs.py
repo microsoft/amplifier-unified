@@ -435,7 +435,7 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         assert SessionStore.for_app(target.data_dir, session['workspace']).history(sid).transcript_path.read_bytes() == raw
         # Media inspection must work with the optional worker prewarming disabled.
         target.runtime.configure_retention({**target.runtime.retention.settings,
-                                            'prewarm_on_select': False})
+                                            'max_warm_workers': 0})
         target.clients.attach('destination-media')
         with target.clients.bind('destination-media'):
             await target.dispatch('session.select', {'id': sid})

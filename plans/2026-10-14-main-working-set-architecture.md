@@ -40,7 +40,7 @@ considering a Rust implementation behind the same interface.
 
 ## Implementation progress, October 14
 
-Releases .143 through .151 are published. Release .143 introduced bounded
+Releases .143 through .152 are published. Release .143 introduced bounded
 requested navigation pages and removed duplicate ordinary-state projections;
 .142 was not published. Release .144 replaced repeated whole-shell reads with
 [resources on the existing state stream](../docs/browser-state-transport.md#shell-bootstrap-and-active-resources).
@@ -92,7 +92,7 @@ and installed-package checks passed, while its browser run stopped on a cleanup
 failure and its full Python run exposed stale runner/evidence tests. Subsequent
 releases repair those findings; the earlier run remains failed/incomplete.
 
-Release .152 is being qualified from reviewed PRs #704, #705 and #707. The
+Release .152 shipped reviewed PRs #704, #705 and #707. The
 selected-history lane adds bounded Linux process isolation and six requested
 read models, with unchanged-input reuse, supported incremental updates and exact
 reference reconstruction for broader changes. Other operating systems retain the
@@ -107,6 +107,22 @@ synthetic SQL evidence, not end-to-end latency acceptance. Cold arbitrary global
 filtered counts/order remain potentially expensive, and reconciliation still uses
 threads. The next live qualification records sustained six-chat observations and
 large selected histories separately before declaring performance exits complete.
+
+Live .152 acceptance exposed an unresolved memory-limit refusal for the large
+AHP/ACP Work history, although messages remained readable. The first six-chat
+sequence also stopped when a frozen sidebar target was temporarily unavailable;
+it is not a completed sustained qualification. A scoped root-only copy of the
+same native history completed within the existing worker limit, so the failure
+requires the full selected dependency shape and retained-worker state to be
+investigated separately. No claim of a solved memory or latency budget follows
+from the root-only pass.
+
+The next release also removes automatic runtime preparation from ordinary chat
+selection. The existing behavior started and retained a runtime merely to read
+saved messages, contrary to the read/admission boundary below. Explicit preparation
+and accepted execution remain distinct, budgeted actions. Bounded failure-stage
+and memory diagnostics support investigation without collecting conversation
+content or adding healthy-path polling.
 
 The .151 extended browser runner completed all 65 scenarios: 43 passed and 22
 failed, including one scenario that passed its assertions but left processes for

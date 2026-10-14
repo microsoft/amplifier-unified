@@ -34,6 +34,26 @@ def test_bounded_detached_timings_on_errors(monkeypatch):
     assert len(diagnostics.operations) == len(diagnostics.counters) == 64
 
 
+def test_projection_failure_evidence_is_bounded_numeric_and_detached():
+    diagnostics = PerformanceDiagnostics()
+    for number in range(40):
+        diagnostics.record_projection_failure('memory_limit', {
+            'stage': 'source_rows', 'residentBytes': number,
+            'peakResidentBytes': 100, 'virtualBytes': 200,
+            'peakVirtualBytes': 300, 'addressSpaceLimitBytes': 400,
+            'path': '/private/session/log', 'message': 'private contents'})
+    snapshot = diagnostics.snapshot()
+    rows = snapshot['historyProjectionFailures']
+    assert len(rows) == 16
+    assert rows[0]['residentBytes'] == 24 and rows[-1]['residentBytes'] == 39
+    assert rows[-1]['reason'] == 'memory_limit' and rows[-1]['stage'] == 'source_rows'
+    assert 'private' not in json.dumps(snapshot)
+    rows[-1]['residentBytes'] = 999
+    assert diagnostics.snapshot()['historyProjectionFailures'][-1]['residentBytes'] == 39
+    diagnostics.record_projection_failure('private-reason', {'stage': 'source_rows'})
+    assert len(diagnostics.snapshot()['historyProjectionFailures']) == 16
+
+
 async def test_wait_cancellation_and_monitor_cleanup():
     diagnostics = PerformanceDiagnostics()
     service = SimpleNamespace(performance_diagnostics=diagnostics)

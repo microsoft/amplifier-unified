@@ -1,4 +1,4 @@
-import './composer-test-helpers.mjs';
+import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -24,6 +24,12 @@ try{
  await action('session.create');
  const draft='Preserve this unsent draft\nwith eight\nsaved\nlines\nthat need\nroom\nto stay\nreadable';
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill(draft);
+ // Filling a contenteditable creates paragraphs; compare the canonical Markdown
+ // captured before any theme operation, while still checking every input line.
+ const savedDraft=await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'}));
+ assert.deepEqual(savedDraft.split(/\n+/),draft.split('\n'));
+ assert.equal(savedDraft,draft.replaceAll('\n','\n\n'));
+ console.log(JSON.stringify({draftBeforeTheme:savedDraft}));
  await presentation({scheme:'light'});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','light');
  await action('theme.preview',{name:'Quiet water',definition});
  await expect.poll(async()=>(await css()).color).toBe('rgb(238, 248, 246)');
@@ -68,7 +74,7 @@ try{
  await expect(page.getByRole('dialog')).toBeVisible();
  await expect.poll(()=>page.getByRole('dialog').evaluate(el=>el.contains(document.activeElement))).toBe(true);
  await page.keyboard.press('Escape');await expect(page.getByRole('dialog')).toHaveCount(0);
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(savedDraft);
  await expect.poll(()=>page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(170);
  assert.deepEqual(await css(),preview);
  await presentation({scheme:'system'});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','dark');

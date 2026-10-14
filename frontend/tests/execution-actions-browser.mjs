@@ -29,6 +29,10 @@ try{
  const malformed=await open('malformed');assert.match(await malformed.innerText(),/unknown/);assert.match(await malformed.innerText(),/Invalid task input/);
  const delegated=await open('delegate');assert.match(await delegated.innerText(),/Review the retry test/);
  assert.equal(await delegated.locator('[data-kind="worker"] > button').count(),0);
+ const activity=delegated.getByRole('button',{name:/^Worker activity/});
+ assert.equal(await activity.getAttribute('aria-expanded'),'false');
+ await activity.click();
+ assert.equal(await activity.getAttribute('aria-expanded'),'true');
  const nested=await open('nested');assert.match(await nested.innerText(),/git diff --check/);assert.match(await nested.innerText(),/No output/);
  await page.locator('[data-node-id="legacy"] > button').click();
  assert.match(await page.locator('[data-node-id="legacy"]').innerText(),/No action content is available in the event log/);assert.ok(!(await turn.innerText()).includes('Tool completed'));

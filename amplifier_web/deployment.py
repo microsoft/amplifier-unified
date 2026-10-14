@@ -111,7 +111,7 @@ def validate_server(value: dict) -> dict:
     # Validate the settings this version consumes without rejecting those it does not.
     config = copy.deepcopy(DEFAULT_SERVER)
     config.update(copy.deepcopy(value))
-    config["runtime"] = validate_retention(config["runtime"])
+    config["runtime"] = validate_retention(config["runtime"], stored=True)
     # debug is a versioned extension, not part of the serving/security schema.
     # Preserve it exactly as .38 does. The optional profiling consumer admits
     # only an explicit boolean True and fails closed for other values.

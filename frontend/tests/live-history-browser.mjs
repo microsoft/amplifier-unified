@@ -38,11 +38,23 @@ try{
  // Let the live-status/composer layout settle before measuring the reader's
  // position. Those updates are separate SSE messages from the page response.
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
- const anchor=await pane.evaluate(element=>{element.scrollTop=0;const first=element.querySelector('[data-message-id]');return {id:first.dataset.messageId,y:first.getBoundingClientRect().y}});
+ // Restoration alone must not request another page; only a real reader gesture
+ // authorizes it. Hold that page receipt to capture the post-gesture anchor.
+ await pane.evaluate(element=>element.scrollTop=60);
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.equal(pages.length,1);
+ let releasePage;const pageGate=new Promise(resolve=>releasePage=resolve);
+ const holdPage=async route=>{if(route.request().postDataJSON()?.action==='session.history')await pageGate;await route.continue()};
+ await page.route('**/api/actions',holdPage);
+ await pane.hover();await page.mouse.wheel(0,-60);
+ await expect.poll(()=>pages.length).toBe(2);
+ const anchor=await pane.evaluate(element=>{const first=element.querySelector('[data-message-id]');return {id:first.dataset.messageId,y:first.getBoundingClientRect().y}});
+ releasePage();
  await expect(page.locator('[data-message-id]')).toHaveCount(301);
  await page.waitForTimeout(100);
  const after=await page.locator(`[data-message-id="${anchor.id}"]`).boundingBox();
  assert.ok(Math.abs(after.y-anchor.y)<3,`Scroll anchor moved ${after.y-anchor.y}px`);
+ await page.unroute('**/api/actions',holdPage);
  assert.equal(pages.length,2);assert.equal(pages[1].before,105);
  const current=await control({op:'inspect'}),saved=current.state.sessions.find(row=>row.id===native.id);
  assert.equal(saved.sharedHistoryOffset,5);
