@@ -70,6 +70,118 @@ async def test_idle_refresh_skips_projection_but_detects_appends_replacements_an
     assert calls.count('read') == 4
 
 
+def test_compact_projection_preserves_completed_joins_accounting_and_legacy_history(source):
+    from amplifier_web.session_projection import ACCOUNTING_FIELDS
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'delegate', 'tool_name': 'delegate'}, 10)
+    append(path, 'delegate:agent_spawned', {'tool_call_id': 'delegate', 'sub_session_id': 'child', 'agent': 'helper'}, 11)
+    append(event_path(session, 'child'), 'tool:post',
+           {'session_id': 'child', 'tool_call_id': 'child-tool', 'tool_name': 'bash', 'result': 'done'}, 12)
+    append(path, 'provider:request', {'id': 'model-call', 'kind': 'llm', 'sessionId': 'native',
+           'provider': 'test', 'model': 'fixture', 'startedAt': 13, 'phase': 'running'}, 13)
+    session['execution'] = EventLogView(None).read(session)
+    tree = session['execution']
+    tree['turns'] = [{'id': 'host-turn', 'phase': 'failed', 'startedAt': 1, 'endedAt': 25,
+                      'anchorMessageId': 'user', 'inputId': 'input', 'error': 'Manager failed'}]
+    tree['currentTurnId'] = 'host-turn'
+    for node in tree['nodes']:
+        node['turnId'] = 'host-turn'
+        if node['kind'] == 'tool' and node.get('toolCallId') == 'delegate':
+            node.update(id='stable-delegate', phase='interrupted', endedAt=20, liveObservation=True)
+        elif node['kind'] == 'worker':
+            node.update(parentId='stable-delegate', phase='cancelled', endedAt=21,
+                        runId='worker-run', routing={'mode': 'explicit'}, parentProvider='parent-provider',
+                        provider='worker-provider', model='worker-model')
+        elif node['kind'] == 'llm':
+            node.update(sessionId='app', rootSessionId='app', liveObservation=True, producerId='worker', revision=2,
+                        phase='completed', endedAt=19, lifecycle='background', label='Session naming',
+                        usage={'inputTokens': 5, 'outputTokens': 7, 'costUsd': .25},
+                        assignmentId='assignment', assignmentRevision=3,
+                        assignmentReservation={'tokens': 12})
+            tree['retiredUsageNodes'] = [{key: copy.deepcopy(value) for key, value in node.items()
+                                         if key in ACCOUNTING_FIELDS}]
+    legacy = {'id': 'legacy-only', 'kind': 'tool', 'sessionId': 'native', 'turnId': 'host-turn',
+              'phase': 'completed', 'startedAt': 2, 'endedAt': 3,
+              'input': {'command': 'retained'}, 'output': {'old': ['saved body']},
+              'customSavedField': {'must': 'survive'}}
+    tree['nodes'].append(legacy)
+    expected = EventLogView(None).read(copy.deepcopy(session))
+    actual = EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
+    assert actual == expected
+    by_id = {row['id']: row for row in actual['nodes']}
+    assert by_id['stable-delegate']['phase'] == 'interrupted'
+    worker = next(row for row in actual['nodes'] if row['kind'] == 'worker')
+    assert worker['phase'] == 'cancelled' and worker['endedAt'] == 21
+    assert worker['routing'] == {'mode': 'explicit'} and worker['runId'] == 'worker-run'
+    assert by_id['model-call']['label'] == 'Session naming'
+    assert by_id['model-call']['usage']['costUsd'] == .25
+    assert by_id['model-call']['assignmentReservation'] == {'tokens': 12}
+    assert {key: by_id['legacy-only'][key] for key in legacy} == legacy
+    assert next(row for row in actual['turns'] if row['id'] == 'host-turn')['phase'] == 'failed'
+
+
+async def test_refresh_does_not_copy_reconstructed_payloads_but_keeps_legacy_bodies(source):
+    class DerivedBody(dict):
+        def __deepcopy__(self, memo):
+            raise AssertionError('Projection input traversed a reconstructed display body')
+    session, path = source
+    append(path, 'tool:post', {'tool_call_id': 'one', 'tool_name': 'bash', 'result': 'canonical'}, 12)
+    session['execution'] = EventLogView(None).read(session)
+    session['execution']['nodes'][0]['outputDetail'] = DerivedBody(large='display payload')
+    session['execution']['plan'] = DerivedBody(large='derived plan')
+    session['execution']['aggregateUsage'] = DerivedBody(large='derived totals')
+    legacy = {'id': 'legacy', 'kind': 'tool', 'turnId': 'old', 'sessionId': 'native',
+              'phase': 'completed', 'output': {'body': ['saved without canonical events']}}
+    session['execution']['nodes'].append(legacy)
+    service = SimpleNamespace(_session=lambda _: session, lock=__import__('asyncio').Lock(),
+                              closed=False, _publish=lambda **kwargs: None)
+    await EventLogView(service).refresh('app')
+    rows = {row['id']: row for row in session['execution']['nodes']}
+    assert rows['tool:native:one']['output'] == 'canonical'
+    assert rows['legacy']['output'] == legacy['output']
+    rows['legacy']['output']['body'].append('new')
+    assert legacy['output']['body'] == ['saved without canonical events']
+
+
+@pytest.mark.parametrize('change', ['completion', 'usage', 'legacy-body'])
+async def test_compact_projection_rejects_live_changes_during_threaded_read(source, monkeypatch, change):
+    import asyncio
+    import threading
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'}, 10)
+    session['execution'] = EventLogView(None).read(session)
+    session['execution']['nodes'].append({'id': 'legacy', 'kind': 'tool', 'turnId': 'old',
+        'sessionId': 'native', 'output': {'text': 'before'}})
+    published = []
+    service = SimpleNamespace(_session=lambda _: session, lock=asyncio.Lock(), closed=False,
+                              _publish=lambda **kwargs: published.append(True))
+    view = EventLogView(service)
+    entered, release = threading.Event(), threading.Event()
+    original = view.read
+    def delayed(detached):
+        entered.set()
+        assert release.wait(5)
+        return original(detached)
+    monkeypatch.setattr(view, 'read', delayed)
+    task = asyncio.create_task(view.refresh('app'))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        tree = session['execution']
+        if change == 'completion':
+            tree['nodes'][0].update(phase='interrupted', endedAt=20)
+        elif change == 'usage':
+            tree['nodes'][0]['usage'] = {'costUsd': .5}
+        else:
+            tree['nodes'][1]['output']['text'] = 'after'
+        release.set()
+        await task
+        assert session['execution'] is tree
+        assert not published and 'app' not in view.projected
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.parametrize('positions,expected', [
     ([0, 2, 4], 'message-1'),
     ([2, 0, 4], 'message-1'),  # Unsorted windows keep their presentation order.

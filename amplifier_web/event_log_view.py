@@ -572,7 +572,25 @@ class EventLogView:
     def projection_input(session):
         """Only canonical association/lifecycle inputs, never draft or progress."""
         result = {key: session[key] for key in ('id', 'workspace', 'nativeProject', 'nativeIdentity',
-                  'runtimeSessionId', 'status', 'execution') if key in session}
+                  'runtimeSessionId', 'status') if key in session}
+        if 'execution' in session:
+            from .session_projection import ACCOUNTING_FIELDS
+            tree = session['execution']
+            fields = ACCOUNTING_FIELDS | {'_canonicalId', 'toolCallId', 'canonicalHistory',
+                'nativeHistory', 'liveObservation', 'label', 'runId', 'routing', 'parentProvider'}
+            # Canonical payloads and derived summaries are rebuilt from events.
+            # Keep every historical join, completion and accounting identity:
+            # filtering to active rows would split old host turns on refresh.
+            result['execution'] = {key: tree[key] for key in
+                ('turns', 'currentTurnId', 'retiredUsageNodes') if key in tree}
+            if 'nodes' in tree:
+                result['execution']['nodes'] = [
+                    {key: value for key, value in row.items() if key in fields}
+                    if row.get('canonicalHistory') or row.get('nativeHistory') else row
+                    for row in tree['nodes']]
+            # App-only/legacy rows remain complete: the reader preserves them
+            # when a native log is incomplete. The caller still detaches this
+            # input and rechecks it before publishing a threaded projection.
         result['messages'] = [{key: row[key] for key in ('id', 'role', 'createdAt', 'nativeIndex', 'inputId', 'source')
                                if key in row} for row in session.get('messages', [])]
         result['workers'] = [{key: row[key] for key in ('id', 'sessionId', 'status') if key in row}
