@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chatPage,headerChatChoices,workspaceChats,visibleWorkspaces,workspaceLabel,CHAT_PAGE_SIZE,recentLimit,recentPageMatches} from '../src/chat-navigation.js';
+import {chatPage,workspaceChats,visibleWorkspaces,workspaceLabel,CHAT_PAGE_SIZE,recentLimit,recentPageMatches} from '../src/chat-navigation.js';
 const fixture=()=>({view:{},selectedWorkspaceId:'project',selectedSessionId:'chat-0',workspaces:[{id:'project',path:'/fixture',available:true},{id:'other',path:'/other',available:true}],sessions:Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved chat '+i,workspaceId:'project',workspace:'/fixture'}))});
 
 test('Recent accepts safe cumulative steps, keeps requested 120 at actual 101 exhaustion and fences every scope',()=>{
@@ -71,13 +71,6 @@ test('selection moves to its page while page controls can browse elsewhere',()=>
  state.view.navChatPage={...chatPage(state,workspace).scope,index:900000};assert.equal(chatPage(state,workspace).index,49);
 });
 
-test('header choices stay bounded and keep the selected chat available',()=>{
- const state=fixture();state.selectedSessionId='chat-4901';
- state.sessions.unshift({id:'elsewhere',title:'Other workspace chat',workspaceId:'other'});
- const choices=headerChatChoices(state);assert.equal(choices.items.length,100);assert.equal(choices.total,5000);
- assert.ok(choices.items.some(chat=>chat.id==='chat-4901'));assert.equal(choices.items.some(chat=>chat.id==='elsewhere'),false);
-});
-
 test('unresolved workspaces are scoped by ID and never group every null path',()=>{
  const workspace={id:'missing-a',path:null},sessions=[{id:'a',workspaceId:'missing-a',workspace:null},{id:'b',workspaceId:'missing-b',workspace:null},{id:'legacy',workspace:null}];
  assert.deepEqual(workspaceChats(sessions,workspace).map(row=>row.id),['a']);
@@ -97,10 +90,9 @@ test('primary chat lists exclude workers, preserve independent forks, and count 
  assert.deepEqual(workspaceChats(state.sessions,state.workspaces[0]).map(row=>row.id),expected);
  assert.deepEqual(workspaceChats(state.sessions).map(row=>row.id),expected);
  assert.equal(chatPage(state,state.workspaces[0]).total,4);
- assert.deepEqual(headerChatChoices(state).items.map(row=>row.id),expected,'selected workers must not reappear in the header');
  state.view.navFilter='Worker-only';assert.equal(chatPage(state,state.workspaces[0]).total,0);
  state.view.navFilter='Internal-only';assert.equal(chatPage(state,state.workspaces[0]).total,0);
- state.selectedSessionId='internal';assert.ok(!headerChatChoices(state).items.some(row=>row.id==='internal'));
+ state.selectedSessionId='internal';state.view.navFilter='';assert.deepEqual(chatPage(state,state.workspaces[0]).items.map(row=>row.id),expected);
  assert.equal(state.sessions.length,7,'worker and internal history stays available in app state');
 });
 
@@ -200,12 +192,6 @@ test('matching server projection wins over partial local summaries and stale sco
  assert.equal(chatPage(state).items[0].id,'chat-0');
 });
 
-test('bounded headers retain complete counts and selected choices from their own projection',()=>{
- const state=fixture(),projection={items:[{id:'selected-off-page',title:'Selected'}],total:5000};
- state.sessions=[];state.headerChatNavigation=projection;state.library={bounded:true};
- assert.equal(headerChatChoices(state),projection);
-});
-
 test('bounded navigation waits for the real page after optimistic search, scope, or page changes',()=>{
  const state=fixture(),first=chatPage(state);state.chatNavigation=first;state.library={bounded:true};state.sessions=state.sessions.slice(0,100);
  assert.equal(chatPage(state),first);
@@ -219,11 +205,11 @@ test('bounded navigation waits for the real page after optimistic search, scope,
 
 test('subagent projection keeps complete counts and waits for changed searches and pages',async()=>{
  const {subagentPage,subagentCount}=await import('../src/chat-navigation.js');
- const parent={id:'root',subagentCount:123},projection={items:[{id:'first'}],total:123,unfilteredTotal:123,index:0,pages:3,start:0,end:50,scope:{sessionId:'root',filter:''}};
- const state={library:{bounded:true},sessions:[parent],view:{},subagentNavigation:projection};
+ const parent={id:'root',subagentCount:123},projection={items:[{id:'first'}],total:123,unfilteredTotal:123,index:0,pages:3,start:0,end:50,scope:{sessionId:'root',filter:'',index:0}};
+ const state={browserResources:['selectedContext','subagentNavigation'],library:{bounded:true},sessions:[parent],view:{},subagentNavigation:projection};
  assert.equal(subagentCount(state,parent),123);assert.equal(subagentPage(state,parent),projection);
  state.view.subagentHistory={sessionId:'root',filter:'research',index:0};assert.equal(subagentPage(state,parent).pending,true);
- state.subagentNavigation={...projection,scope:{sessionId:'root',filter:'research'},total:60,unfilteredTotal:123,pages:2};
+ state.subagentNavigation={...projection,scope:{sessionId:'root',filter:'research',index:0},total:60,unfilteredTotal:123,pages:2};
  assert.equal(subagentPage(state,parent),state.subagentNavigation);assert.equal(subagentCount(state,parent),123);
  state.view.subagentHistory.index=1;assert.equal(subagentPage(state,parent).pending,true);
  const other={id:'different-root',subagentCount:5};assert.equal(subagentCount(state,other),5,'a previously browsed parent cannot hide the current parent’s workers');
@@ -259,4 +245,24 @@ test('moving pins retains every filtered or off-page pin',async()=>{
  assert.deepEqual(movePin(ids,'first','second'),['hidden','second','first','off-page']);
  assert.equal(movePin(ids,'absent','first'),ids);
  assert.equal(movePin(ids,'first','first'),ids);
+});
+
+
+test('subagent pages require exact coverage and requested scope without scanning resident chats',async()=>{
+ const {subagentPage,subagentCount}=await import('../src/chat-navigation.js');
+ const parent={id:'root',subagentCount:123},page={items:[],total:0,unfilteredTotal:123,index:0,pages:1,start:0,end:0,scope:{sessionId:'root',filter:'absent',index:9}};
+ const state={view:{subagentHistory:{sessionId:'root',filter:'absent',index:9}},subagentNavigation:page};
+ Object.defineProperty(state,'sessions',{get(){throw Error('Selected context is not a resident child catalog')}});
+ assert.equal(subagentCount(state,parent),123);
+ assert.equal(subagentCount(state,{id:'uncovered'}),0);
+ for(const coverage of [undefined,null,{},'subagentNavigation',[],['selectedContext'],['subagentNavigation']]){
+  state.browserResources=coverage;
+  const pending=subagentPage(state,parent);assert.equal(pending.pending,true);assert.deepEqual(pending.items,[]);
+ }
+ state.browserResources=['selectedContext','subagentNavigation'];
+ assert.equal(subagentPage(state,parent),page,'an explicitly covered empty page is authoritative, including clamped index');
+ state.subagentNavigation={...page,scope:{...page.scope,index:8}};
+ assert.equal(subagentPage(state,parent).pending,true,'same clamped page does not cover another requested index');
+ state.subagentNavigation={...page,scope:{...page.scope,sessionId:'other'}};
+ assert.equal(subagentPage(state,parent).pending,true);
 });
