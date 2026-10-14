@@ -3,8 +3,12 @@
   "releases": [
     {
       "version": "0.20.132",
-      "title": "Restore recent work details in long conversations",
+      "title": "Reduce historical work during live chat updates",
       "changes": [
+        "Large requested event histories keep bounded, disposable index checkpoints when released from memory. Returning to a chat or reading a new event can reuse parsed descriptors instead of repeatedly parsing old raw recordings; exact recorded requests and responses remain available on demand.",
+        "Routine tool and model updates reuse the chat catalog when navigation and attention are unchanged. New leaf tools reuse existing usage totals instead of recalculating every historical model call.",
+        "Recent work pages calculate detailed summaries only for the requested groups. History reconstruction indexes worker membership and completed-call matching instead of repeatedly scanning the entire call list.",
+        "Performance diagnostics now include bounded operation timings, lock waits, event-loop delays and history-cache counters. These are available to authenticated clients and copied chat diagnostics without recording message bodies or credentials.",
         "Recent model and tool work stays beside the latest messages when a long chat contains many older delegate reports. Work pages follow transcript position, and older details remain available through paging.",
         "Returned delegate reports no longer borrow an earlier turn\u2019s duration or failure. Reports with unknown timestamps do not display invented elapsed time.",
         "Shared filesystem and patch tools reject stale edits after another cooperating worker changes a file. Workers must reread before editing; project access remains available when permitted extra folders are configured. Stale-edit protection applies to the wrapped tools sharing one app data home; shell commands, external editors and other writers remain outside that protocol.",

@@ -51,7 +51,8 @@ async def test_event_refresh_preserves_catalog_epoch_and_updates_browser_usage(a
     await view.refresh('native' if use_native_alias else row['id'])
     assert app._history_local_revision == epoch
     assert encoded == []
-    assert all(not queue.empty() for queue in queues)
+    assert not queues[0].empty()
+    assert queues[1].empty(), 'Execution detail must not republish the unrelated chat'
     with app.clients.bind('0'):
         current = next(item for item in app.browser_state()['sessions'] if item['id'] == row['id'])
     assert current['execution']['turns'][0]['aggregateUsage']['totalTokens'] == 6

@@ -12,6 +12,7 @@ import time
 import uuid
 
 from .history_read_retry import retry_indexed_read
+from .performance_diagnostics import measured, measure, TimedLock
 from .session_files import amplifier_home, project_slug
 from .managed_chats import catalog_locations
 from amplifier_foundation.session.history import SessionHistoryStore
@@ -444,6 +445,7 @@ class AutomaticHistory:
         if workspace['id'] not in hidden:
             hidden.append(workspace['id'])
 
+    @measured('catalog.refresh')
     async def refresh(self, *, force=True):
         async with self.lock:
             try:
@@ -802,9 +804,10 @@ class AutomaticHistory:
     async def refresh_session(self, session_id):
         await self.load(session_id, only_if_changed=True)
 
+    @measured('history.load', session=True)
     async def load(self, session_id, *, before=None, limit=100, only_if_changed=False):
         paging = before is not None
-        async with self.loads.setdefault(session_id, asyncio.Lock()):
+        async with self.loads.setdefault(session_id, TimedLock(self.service, 'history.lock.wait')):
             if only_if_changed:
                 candidate = self.service.projections.sessions(self.service.state).by_id.get(session_id)
                 if candidate is None:
@@ -837,7 +840,8 @@ class AutomaticHistory:
                           if session.get('historyManaged') else None) if not paging else limit
                 self.service._publish_changes(sessions={session_id}, detail_only=True)
             try:
-                result = await asyncio.to_thread(read_transcript, source, before=before, limit=window)
+                with measure(self.service, 'history.reader.wait', session_id=session_id):
+                    result = await asyncio.to_thread(read_transcript, source, before=before, limit=window)
                 async with self.service.lock:
                     session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                     if session is None:

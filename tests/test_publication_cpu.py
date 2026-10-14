@@ -116,3 +116,27 @@ def test_attention_workspace_aggregation_matches_unread_outcomes():
     second = snapshot(state)
     assert second["workspaces"] == {"a": 1, "alias": 1, "empty": 0, "missing": 1}
     assert second["unread"] == first["unread"] - 1
+
+async def test_execution_updates_reuse_catalog_and_invalidate_real_attention(app_factory, monkeypatch):
+    app = app_factory()
+    rows = catalog(app, count=1000, workers=0, workspaces=4)
+    current = rows[0]
+    # Warm one active chat's navigation facts after the catalog reconciliation.
+    app._publish(session_ids={current['id']}, detail_only=True, record_only=True)
+    key = app.projections.shell_key(app.state)
+    index = app.projections.sessions(app.state)
+    roots = index.roots
+    class DormantRoots(list):
+        def __iter__(self):
+            raise AssertionError('A tool update visited the dormant chat catalog')
+    index.roots = DormantRoots(roots)
+    for n in range(3):
+        await app.on_runtime_event('execution.event', {
+            'sessionId': current['id'], 'id': f'leaf-{n}', 'kind': 'tool',
+            'turnId': 'current-turn', 'phase': 'completed', 'endedAt': 10 + n})
+        assert app.projections.shell_key(app.state) == key
+    index.roots = roots
+    # Preparation affects navigation even when the saved status stays idle.
+    current['preparation'] = {'status': 'preparing'}
+    app._publish(session_ids={current['id']}, detail_only=True, record_only=True)
+    assert app.projections.shell_key(app.state) != key
