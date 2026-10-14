@@ -1305,14 +1305,13 @@ class UpdateManager:
         await asyncio.sleep(10)
         if self.closed or self.awaiting_restart():
             return
-        async with self.service.runtime_lifecycle():
-            if self.closed or self.awaiting_restart():
-                return
-            try:
-                from .update_retention import reclaim
-                await self.publish(storage=await reclaim(self))
-            except Exception:
-                await self.publish(storage={'reason': 'Storage reclamation was deferred; existing files were kept.'})
+        started = time.monotonic()
+        try:
+            from .update_retention import reclaim
+            storage = await reclaim(self)
+            await self.publish(storage={**storage, 'durationMs': round((time.monotonic() - started) * 1000)})
+        except Exception:
+            await self.publish(storage={'reason': 'Storage reclamation was deferred; existing files were kept.'})
 
     async def close(self):
         self.closed=True
