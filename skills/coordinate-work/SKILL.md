@@ -123,7 +123,13 @@ budget and user stop state. Answer, defer, decline or name a conflict.
 
 Declare the response during the actual generation using `coordination.reply` with
 the exact delivered `requestId`, a discovered typed kind/outcome, text and artifact references or exact
-message IDs. A result needs evidence references. The host stages this declaration;
+message IDs. Optional `messageIds` must name your assistant output from this
+current generation. Never copy the incoming peer request's `messageId`, a user
+input, or an output from another conversation or generation into that field.
+Omit `messageIds` when you do not know a current assistant output ID;
+`requestId` already correlates the request. Keep evidence in `references`.
+An invalid message ID is refused before recording a revision; correct the
+arguments and retry during the current turn. A result needs evidence references. The host stages this declaration;
 only matching delivered-input/root/generation termination with a checkpointed
 native terminal anchor seals it. No final channel is invented or prose classified.
 Acknowledgement, failure, defer or unrelated input cannot satisfy a successful

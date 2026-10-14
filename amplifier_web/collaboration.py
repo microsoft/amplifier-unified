@@ -99,14 +99,15 @@ def definitions(schema, string):
         "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
-        "coordination.reply": ("Record a typed reply to your exact delivered request. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. At most 32 revisions per request.", schema({
+        "coordination.reply": ("Record a typed reply to your exact delivered request. Optional messageIds name your current-generation assistant output, never the incoming request messageId; omit them when unknown. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. At most 32 revisions per request.", schema({
             "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline", "question", "conflict"]},
             "expectedResponseRevision": {"type": "integer", "minimum": 0, "maximum": MAX_RESPONSE_REVISIONS},
             "outcome": {"enum": ["success", "failed", "deferred", "declined", "question", "conflict", "cancelled"]},
             "text": {**string(4000), "minLength": 1}, "references": {**references,
                 "description": REFERENCE_HELP,
                 "items": {**string(2000), "description": "Exact retained local file reference or opaque non-file citation."}},
-            "messageIds": {"type": "array", "maxItems": 16, "items": string(200)},
+            "messageIds": {"type": "array", "maxItems": 16, "items": string(200),
+                           "description": "Optional exact assistant output IDs from your current generation. Never use the incoming request's messageId, a user/peer input ID, another conversation's output, or an earlier generation. Omit messageIds if no current assistant output ID is known; requestId already correlates the request. Supply evidence in references. Invalid IDs are refused before a reply revision is recorded."},
         }, ["requestId", "kind", "outcome", "text"])),
         "coordination.subscribe": ("Subscribe to meaningful revisions of one exact request, at most 32 automatic notifications. Questions, deferrals and negative outcomes never satisfy a dependency; only qualified success does. Every continuation rechecks the saved task/Stop boundary. Cursor reads confer no authority.", schema({
             **sid, "requestId": string(200), "grantId": string(200),
@@ -420,7 +421,33 @@ class Collaboration:
             reason = self.guard(request)
             if reason:
                 self.error('The original request boundary no longer permits a later reply: ' + reason, 409)
+        self.validate_reply_message_ids(source, args.get('messageIds', []), active['id'])
         return active, request, revision, delivered
+
+    def validate_reply_message_ids(self, source, identities, generation):
+        if not identities:
+            return
+        # This preflight uses current retained metadata only. A checkpoint can
+        # name a canonical native row outside the display window; the terminal
+        # path still resolves that exact row and rejects conflicting evidence.
+        messages = {row['id']: row for row in source.get('messages', [])}
+        anchors = {row['messageId']: row for row in source.get('collaborationMessageAnchors', [])}
+        for identity in identities:
+            message, anchor = messages.get(identity), anchors.get(identity)
+            if message is not None:
+                linked_generation = message.get('generationId')
+                if (linked_generation is None and anchor
+                        and anchor.get('nativeIndex') == message.get('nativeIndex')):
+                    linked_generation = anchor.get('generationId')
+                valid = message.get('role') == 'assistant' and linked_generation == generation
+            else:
+                valid = (anchor is not None and anchor.get('generationId') == generation
+                         and type(anchor.get('nativeIndex')) is int and anchor['nativeIndex'] >= 0)
+            if not valid:
+                self.error('Invalid messageIds: each ID must name your assistant output from this current generation, '
+                           'never the incoming request messageId, a user/peer input, or another conversation or generation. '
+                           'Omit messageIds if no current assistant output ID is known; requestId already correlates the request. '
+                           'Keep any evidence in references. No reply revision was recorded; correct the arguments and retry.', 400)
 
     def require_result_reader(self, receipt, origin, caller):
         if origin in {'ui', 'user'}:

@@ -220,6 +220,15 @@ No current universal checkout fence is known in this source baseline; this is no
 
 ### Retained exact results — 2026-10-14
 
+Optional reply `messageIds` name the recipient's assistant output from the
+current generation, never the incoming request's message ID. The host checks
+retained messages and checkpoint anchors before artifact preparation and again
+before committing a declaration. Invalid or unavailable IDs return actionable
+repair without consuming a response revision; omit them when no current output
+ID is known, keeping the exact `requestId` and evidence references. This early
+check does not replace exact native-message resolution and terminal sealing.
+Previously recorded rejected revisions remain retained.
+
 A fresh response declaration snapshots supported local `path@sha256:<digest>`
 references before the reply is acknowledged. The existing output/resource owner
 retains matching bytes, their producing execution binding and the request

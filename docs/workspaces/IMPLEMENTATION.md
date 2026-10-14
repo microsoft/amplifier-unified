@@ -2,6 +2,16 @@
 
 ## Current program coverage — 2026-10-14
 
+Real-provider acceptance found a recipient citing the incoming peer message ID
+as result evidence. Reply discovery and the coordination skill now distinguish
+current-generation assistant output IDs from request correlation. Invalid IDs
+fail before artifact preparation or revision allocation, with repair guidance;
+the same checks repeat before commit. Current checkpoint anchors remain usable
+outside the display window. Exact terminal resolution and previously rejected
+revisions are preserved. Focused source tests cover immediate repair, an
+off-lock preparation race, canonical anchors, retained failure and retry paths;
+live adoption of this correction is a separate acceptance step.
+
 The integrated source implements the bounded collaboration mechanisms below.
 Independent chats remain independent even when they share a folder. The host
 owns authority, durable admission and observations; agents choose collaborators,

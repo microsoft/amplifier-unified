@@ -1556,8 +1556,7 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     app.history.ensure_loaded = AsyncMock()
     source = app.state["sessions"][0]
     request = "invalid-link"
-    target, web, anchor, continuation, transcript = await staged_message_link(
-        app, request, message_id="missing-canonical-id" if conflict == "unknown-id" else None)
+    target, web, anchor, continuation, transcript = await staged_message_link(app, request)
     canonical = anchor["messageId"]
     if conflict == "text":
         web["text"] = "Conflicting retained text"
@@ -1569,8 +1568,14 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
         app._message(target, "assistant", web["text"], nativeIndex=web["nativeIndex"],
                      generationId=web["generationId"])
     else:
-        # A model may declare an unknown ID; no native lookup may fabricate it.
+        # Older persisted declarations could contain unavailable IDs. The new
+        # preflight refuses fresh ones; terminal handling still rejects these
+        # retained records without fabricating a canonical message.
         canonical = "missing-canonical-id"
+        legacy = app.collaboration.receipt(request)
+        legacy['response']['messageIds'] = [canonical]
+        app.collaboration.save_response(legacy)
+        app.collaboration.save(request, legacy)
     if conflict == "unknown-id":
         assert app.collaboration.resolve_message(target, canonical) is None
     else:
