@@ -385,7 +385,8 @@ class AutomaticHistory:
         self.service = service
         self.naming = None
         self.index = NativeHistory(watch=True, directory=hasattr(service, 'directory'), cache_path=(
-            service.data_dir / 'native-catalog.sqlite3' if hasattr(service, 'data_dir') else None))
+            service.data_dir / 'native-catalog.sqlite3' if hasattr(service, 'data_dir') else None),
+            diagnostics=getattr(service, 'performance_diagnostics', None))
         self.lock = asyncio.Lock()
         self.loads = {}
         self.task = None
