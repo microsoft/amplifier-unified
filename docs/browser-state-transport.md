@@ -1,5 +1,37 @@
 # Browser state transport and idle work
 
+## Opt-in shell navigation resources
+
+Updated browsers may send `navigationResources` to `GET /api/shell` as a JSON
+array of resource names (at most 16 entries and 4,096 characters). The allowed
+names are `chatNavigation`, `homeNavigation`, `pinnedNavigation`,
+`recentNavigation`, `workspaceShortcuts`, `workspaceExplorer`, `sidebarSearch`,
+`sidebarWorkspace`, `sidebarRecent`, `sidebarPinned`, and `workspaceOverview`.
+The host validates the request before constructing projections. This opt-in
+applies to the built-in Chats and Workspaces snapshots; custom navigation
+packages and `shell.query` keep their complete existing snapshots. Omitting the
+parameter, including requests with only `compact=1`, retains existing behavior.
+Older hosts can ignore the parameter and return a complete snapshot.
+
+Opted-in snapshots contain `navigationResources`, the supplied resource names.
+An omitted resource was not requested; it is not an empty result. Base instance
+generation, view/controller metadata, selected registration and permitted actions
+remain available. `recentNavigation` also supplies `recentShortcuts` and
+`recentScope`; `workspaceShortcuts` supplies pinned-excluding shortcuts too.
+Sidebar page names map to the corresponding `sidebarNavigation` fields. Attention
+receipts and organization summaries cover the requested visible rows.
+
+The browser asks for sidebar pins, recent shortcuts and workspace shortcuts,
+then adds search, workspace chats or the workspace explorer when that surface
+needs it. Demand and workspace tab participate in request identity. Superseded
+responses cannot populate a newly selected surface; absent/mismatched pages show
+loading until their matching resource arrives. Retained controller/draft state
+does not require constructing a hidden workspace page. Releasing read demand
+does not cancel accepted work or replay commands. This is an additive current
+transport optimization, not an AHP adoption or a change to stream snapshots.
+
+## Existing stream and receipt behavior
+
 Browsers opt into compact action receipts with `X-Amplifier-State-Transport:
 delta-v1`. Current hosts advertise `websocket` at client attachment; browsers
 connect to `/api/events/ws?transport=delta-v1` with their attached `clientId`.

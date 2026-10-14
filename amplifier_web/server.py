@@ -607,16 +607,19 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def shell_state(request):
         from .shell_modules import IDENTITY
+        from .shell_navigation_demand import parse_navigation_resources
         from jsonschema import validate, ValidationError
         client_id = request.query.get('clientId', '')
         try:
             validate(client_id, IDENTITY)
         except ValidationError:
             raise AppError('A valid shell clientId is required.') from None
+        navigation_resources = parse_navigation_resources(request.query.get('navigationResources'))
         # inspect may initialize a client and persist appearance defaults.
         # It must not commit another operation's resource savepoints.
         async with service.lock:
-            result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1')
+            result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1',
+                                           navigation_resources=navigation_resources)
         if request.query.get('compact') == '1':
             from .shell_wire import compact
             result = compact(result)
