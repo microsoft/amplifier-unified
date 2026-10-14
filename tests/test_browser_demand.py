@@ -118,3 +118,21 @@ def test_settings_canvas_demands_same_resources_as_modal():
                           ({'kind': 'settings', 'open': True}, {'canvasDraft': {'library': True}})):
         hidden = project({**state, 'view': {'settingsExpanded': ['diagnostics'], **extra}, 'canvas': canvas})
         assert 'diagnostics' not in hidden
+
+
+async def test_chat_runtime_pages_receive_results_only_for_the_requesting_client(live):
+    service, first, second = live
+    sid = service.state['selectedSessionId']
+    receipts = {'catalog.inspect': {'tools': [{'name': 'desktop'}]},
+                'tool.invoke': {'result': {'success': True, 'output': 'doctor observation'}},
+                'budget.get': {'maxIterations': 10}, 'goals.get': {'goal': {'condition': 'saved'}}}
+    service._state.setdefault('runtimeControl', {})[sid] = deepcopy(receipts)
+    await command(service, 'browser-b', 'view.update', {'patch': {'panel': None}})
+    for panel in ('chat-models', 'chat-work', 'chat-context', 'chat-computer'):
+        await command(service, 'browser-a', 'view.update', {'patch': {'panel': panel}})
+        assert snapshot(service, 'browser-a')['runtimeControl'][sid] == receipts
+        assert snapshot(service, 'browser-b')['runtimeControl'][sid] == {}
+    for panel in (None, 'chat-advanced', 'chat-help'):
+        await command(service, 'browser-a', 'view.update', {'patch': {'panel': panel}})
+        assert snapshot(service, 'browser-a')['runtimeControl'][sid] == {}
+    assert service._state['runtimeControl'][sid] == receipts

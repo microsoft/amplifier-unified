@@ -36,3 +36,48 @@ test('a late setup result cannot restore a revoked conversation grant',async()=>
  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Earlier selected source/);
  await renderAct(async()=>root.unmount());
 });
+
+
+test('Chat Computer access mounts explicit scoped readiness beside capture controls',async()=>{
+ const {ChatPages}=await server.ssrLoadModule('/src/chat-pages.jsx');
+ const calls=[];let root;
+ const act=async(action,args)=>{calls.push({action,args});return {result:report}};
+ await renderAct(async()=>{root=create(React.createElement(ChatPages,{page:'chat-computer',state:{...state(),view:{}},session,act,computerControls:React.createElement('span',{'data-capture-controls':true},'Capture controls')}))});
+ assert.equal(root.root.findAllByProps({'data-capture-controls':true}).length,1);
+ assert.equal(calls.length,0,'opening chat controls does not inspect or start a worker');
+ await renderAct(async()=>root.root.findByProps({'data-action':'desktop.readiness'}).props.onClick());
+ assert.deepEqual(calls,[{action:'desktop.readiness',args:{sessionId:session.id}}]);
+ assert.match(JSON.stringify(root.toJSON()),/Earlier selected source/);
+ await renderAct(async()=>root.unmount());
+});
+
+test('global Settings readiness never inspects the selected conversation',async()=>{
+ const calls=[];let root;
+ const act=async(action,args)=>{calls.push({action,args});return {result:{...report,sessionId:null}}};
+ await renderAct(async()=>{root=create(React.createElement(DesktopReadiness,{state:state(),session,act,globalOnly:true}))});
+ await renderAct(async()=>root.root.findByProps({'data-action':'desktop.readiness'}).props.onClick());
+ assert.deepEqual(calls,[{action:'desktop.readiness',args:{}}]);
+ assert.doesNotMatch(JSON.stringify(root.toJSON()),/Earlier selected source|Conversation computer tools/);
+ await renderAct(async()=>root.unmount());
+});
+
+for(const [label,tool,toolArgs] of [['Open computer target setup','computer_use_unavailable','{"action":"discover"}'],['Open desktop doctor','desktop','{"action":"doctor"}']]){
+ test(`${label} opens the tool controls with an explicit prefill`,async()=>{
+  const calls=[];let root;
+  const ready={...report,worker:{...report.host,status:'available',mountedTools:[],modules:[],browserContext:{reason:'Synthetic worker'},computerControl:{status:'unavailable',doctorSupported:true}}};
+  const act=async(action,args)=>{calls.push({action,args});return {result:ready}};
+  await renderAct(async()=>{root=create(React.createElement(DesktopReadiness,{state:state(),session,act}))});
+  await renderAct(async()=>root.root.findByProps({'data-action':'desktop.readiness'}).props.onClick());
+  const button=root.root.findAllByType('button').find(row=>row.props.children===label);
+  await renderAct(async()=>button.props.onClick());
+  const patch=calls.at(-1).args.patch;
+  assert.equal(patch.panel,'chat-models');
+  assert.deepEqual(patch.runtimeDraft,{tab:'tools',tool,toolArgs});
+  await renderAct(async()=>root.unmount());
+  const {ChatPages}=await server.ssrLoadModule('/src/chat-pages.jsx');
+  await renderAct(async()=>{root=create(React.createElement(ChatPages,{page:patch.panel,state:{view:patch},session,act}))});
+  assert.equal(root.root.findAllByProps({'aria-label':'Refresh tool catalog'}).length,1);
+  assert.equal(calls.filter(row=>row.action==='runtime.control'&&row.args.operation==='tool.invoke').length,0,'opening the tool form must not invoke a tool');
+  await renderAct(async()=>root.unmount());
+ });
+}

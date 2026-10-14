@@ -862,7 +862,10 @@ class AutomaticHistory:
                 continue
             current = await asyncio.to_thread(revision, selected)
             if not selected.get('historyLoaded', True) or current != selected.get('nativeRevision'):
-                await self.load(selected['id'])
+                # Selection/reconnect may already own the reader. Recheck the
+                # canonical stamp after its load lock, so a queued catalog poll
+                # consumes that result while still observing a later append.
+                await self.load(selected['id'], only_if_changed=True)
 
     async def refresh_session(self, session_id):
         await self.load(session_id, only_if_changed=True)

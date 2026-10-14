@@ -1,5 +1,4 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {settingsPatch} from './settings-navigation';
 
 const time=value=>new Date(value*1000).toLocaleString();
 function Environment({value}){
@@ -37,7 +36,7 @@ export function DesktopReadiness({state,session,act,globalOnly=false}){
   }catch(e){if(request===sequence.current){setError(e.message);setReport(null)}}
   finally{if(request===sequence.current)setBusy(false)}
  }
- const openTools=(tool='',toolArgs='{}')=>act('view.update',{patch:{...settingsPatch('runtime'),runtimeDraft:{tab:'tools',tool,toolArgs}}});
+ const openTools=(tool='',toolArgs='{}')=>act('view.update',{patch:{panel:'chat-models',settingsCanvas:false,runtimeDraft:{tab:'tools',tool,toolArgs}}});
  return <section aria-label="Desktop and browser readiness">
   <p>Check which device and environment supply screen observation and optional computer or browser tools.</p>
   <p>Checking does not enable desktop control, capture a screen, request OS permission, start a conversation runtime or change your model.</p>

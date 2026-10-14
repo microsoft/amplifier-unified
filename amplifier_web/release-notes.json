@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.137",
+      "title": "Avoid duplicate history work when opening chats",
+      "changes": [
+        "Queued background history refreshes reuse a completed read when the saved transcript is unchanged; new appends and replacements still load.",
+        "Oversized event indexes stop memory sizing once rejection is proven, and bounded metadata remembers unchanged rejection without retaining conversation content.",
+        "Performance diagnostics distinguish which kind of saved source changed before rebuilding work records.",
+        "Chat Advanced > Computer access again includes the conversation worker readiness checks. Global device readiness remains in Settings."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.136",
       "title": "Keep initial chat reads and background cleanup responsive",
       "changes": [
