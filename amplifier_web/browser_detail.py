@@ -137,7 +137,7 @@ def work_segments(session, nodes=None):
         group=groups.setdefault(identity,{'id':identity,'anchorMessageId':anchor,'turnId':node.get('turnId'),'members':[]})
         group['members'].append(node)
         order=(at if isinstance(at,(int,float)) else float('-inf'),len(anchors))
-        if node.get('turnId') not in last_groups or order >= last_groups[node.get('turnId')][0]:
+        if node.get('kind') != 'exchange' and (node.get('turnId') not in last_groups or order >= last_groups[node.get('turnId')][0]):
             last_groups[node.get('turnId')]=(order,identity)
     result=[]
     for group in groups.values():
@@ -145,7 +145,7 @@ def work_segments(session, nodes=None):
         starts=[row['startedAt'] for row in nodes if isinstance(row.get('startedAt'),(int,float))]
         ends=[row['endedAt'] for row in nodes if isinstance(row.get('endedAt'),(int,float))]
         running=any(row.get('status',row.get('phase')) in LIVE_PHASES and not row.get('endedAt') for row in nodes)
-        last_group=last_groups[group['turnId']][1]==group['id']
+        last_group=last_groups.get(group['turnId'], (None, None))[1]==group['id']
         running=running or (last_group and (turn.get('status') or turn.get('phase')) in LIVE_PHASES and not turn.get('endedAt'))
         calls=[row for row in nodes if row.get('kind')=='llm']
         failure=None
@@ -167,7 +167,18 @@ def work_segments(session, nodes=None):
                      nodeCounts={'tools':sum(row.get('kind')=='tool' for row in nodes),'models':sum(row.get('kind')=='llm' for row in nodes)},
                      aggregateUsage=rollup(calls) if calls else None)
         group['detailRevision']=str(detail_version(nodes))
+        if all(row.get('kind') == 'exchange' for row in nodes):
+            # Returned reports keep their delivery position but do not inherit
+            # the duration or failure of an earlier manager/worker execution.
+            group.update(startedAt=min(starts) if starts else None,
+                         endedAt=max(ends) if ends else None, phase='completed')
         result.append(group)
+    # Derived report nodes are appended to the execution graph. Page by their
+    # transcript position, not that implementation order, so old deliveries
+    # cannot evict the latest model/tool work from the bounded tail.
+    positions = {row['id']: index for index, row in enumerate(messages)}
+    result.sort(key=lambda row: (positions.get(row['anchorMessageId'], -1),
+                                row['startedAt'] if isinstance(row['startedAt'], (int, float)) else float('-inf')))
     return anchors,result
 
 def page(session, part, before=None, group=None, revision=None, *, resolver=None, window_message_id=None):

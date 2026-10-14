@@ -150,9 +150,12 @@ def delivered_nodes(session, nodes):
         seen.add(key)
         reference = {'sessionId': session['id'], 'part': 'messages', 'id': message['id'],
                      'field': 'delegateResponse', 'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)}
+        # A delivery is an observation at one instant, not another execution of
+        # its worker. Imported fallback dates do not establish elapsed time.
+        at = message.get('createdAt') if message.get('timestampKnown') is not False else None
         result.append({'id': 'delegate-report:' + message['id'], 'kind': 'exchange',
                        'sessionId': worker.get('sessionId'), 'parentId': worker['id'], 'turnId': worker.get('turnId'),
-                       'anchorMessageId': message['id'], 'startedAt': message.get('createdAt'),
+                       'anchorMessageId': message['id'], 'startedAt': at, 'endedAt': at,
                        'phase': 'completed', 'exchange': {
                            'id': 'delegate-report:' + message['id'], 'toolCallId': call,
                            'delegateResponse': value[:512], 'delegateResponseDetail': reference if len(value) > 512 else None,
