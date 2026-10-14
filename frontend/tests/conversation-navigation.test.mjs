@@ -201,6 +201,28 @@ test('successful follow receipt cannot discard late dirty input or an invalidate
  }
 });
 
+test('explicit discard reconciles only a confirmed private conflict in the same current view',async()=>{
+ for(const change of ['valid','unknown','wrong-id','foreign','host-dirty','revoked']){
+  const edits=createInlineOwnership(),initial={...target,publishedVersion:2,selectedVersion:2,followLatest:false};
+  const scope={revision:10,client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
+  let releases=0;
+  edits.register(scope,initial,owner);
+  edits.registerRenderer(initial,{prepare:async()=>({}),validate:()=>true,release:()=>releases++});
+  const hold=await edits.prepareTransition(initial,'deliberate',true,scope);hold.sent=true;
+  const next={...initial,generation:2,selectedVersion:null,followLatest:true};
+  const current={...scope,revision:11,canvasWorkspace:{views:[next]}};
+  if(change!=='unknown')await edits.completeTransition(hold,{accepted:true,result:next},current);
+  edits.intent(initial,true);
+  if(change!=='unknown')assert.throws(()=>edits.adoptTransition(initial,'deliberate',current));
+  if(change==='foreign')current.selectedSessionId='foreign';
+  if(change==='host-dirty')current.canvasWorkspace.views=[{...next,dirty:true}];
+  if(change==='revoked')current.canvasWorkspace.views=[];
+  const adopted=edits.discardTransition(initial,change==='wrong-id'?'wrong':'deliberate',current);
+  if(change==='valid'){assert.deepEqual(adopted,next);assert.equal(releases,1);assert.equal(edits.dirty(),false)}
+  else{assert.equal(adopted,undefined);assert.equal(releases,0);assert.equal(edits.transition(initial),hold)}
+ }
+});
+
 test('missing preparation, explicit refusal and actual scope revocation never authorize a POST',async()=>{
  for(const missing of [true,false]){
   const edits=createInlineOwnership(),scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[target]}};

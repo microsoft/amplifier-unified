@@ -107,9 +107,22 @@ export function createInlineOwnership(){
     // A receipt confirms host execution, not permission to discard input that
     // arrived after preparation. Keep the exact mount and receipt on conflict.
     if(hold.next.dirty||matching(target).some(record=>record.dirty)||
-     !hold.adapter.validate(hold.id,hold.proof))throw Object.assign(Error(inlineEditNotice),{unconfirmed:true});
+     !hold.adapter.validate(hold.id,hold.proof)){
+     hold.privateConflict=true;
+     throw Object.assign(Error('The version changed, but newer private input was retained. Discard that input explicitly to show the confirmed version.'),{unconfirmed:true});
+    }
     const next=hold.next;releaseTransition(hold);return next;
    }
+  },
+  discardTransition(target,id,state){
+   const hold=matching(target).find(held)?.transition;
+   if(!hold||hold.id!==id||!hold.privateConflict||!hold.receipt||
+    !confirmCurrent(hold,state)||hold.next.dirty)return;
+   // Only a deliberate UI discard may retire the old private input. It does
+   // not clear another target's dirty state, invent a receipt, or call the host.
+   const next=hold.next;
+   for(const record of matching(target))record.dirty=false;
+   releaseTransition(hold);return next;
   },
   async completeTransition(hold,receipt,state){
    const next=receipt?.result;

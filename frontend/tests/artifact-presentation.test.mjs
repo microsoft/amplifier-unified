@@ -96,7 +96,7 @@ test('discovery chooses one action before sending and per-surface outcomes stay 
 
 // Exercise the actual component control/lifecycle closures, without mistaking
 // this synthetic hook harness for rendered-browser acceptance.
-function component({dispatch,request=async()=>({id:'saved-artifact',kind:'image',open:true,content:'fixture-body'}),actions=[],saved=item('image','inline'),visible=true,overrides=createArtifactOverrides(()=>storage())}){
+function component({dispatch,request=async()=>({id:'saved-artifact',kind:'image',open:true,content:'fixture-body'}),actions=[],saved=item('image','inline'),visible=true,overrides=createArtifactOverrides(()=>storage()),confirm=()=>false}){
  const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
  const start=source.indexOf('export function GeneralArtifact('),end=source.indexOf(" if(mode==='none')return null;",start);
  assert.ok(start>=0&&end>start);
@@ -113,7 +113,7 @@ function component({dispatch,request=async()=>({id:'saved-artifact',kind:'image'
   }
  };
  const render=runInNewContext(`${source.slice(start,end).replace('export ','')}
- return {mode,loaded,view,revoked,refusal,notice,override,busy,root,owned,opening,changeMode,open,follow,bodyError,setBodyAttempt};}\nGeneralArtifact`,{
+ return {mode,loaded,view,revoked,refusal,notice,override,busy,root,owned,opening,changeMode,open,follow,discardFollowInput,bodyError,setBodyAttempt};}\nGeneralArtifact`,{
   ...hooks,useLayoutEffect:hooks.useEffect,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,overrides,inlineOwnership:edits,inlineEditNotice,
   targetOf:view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]])),
   request:async(path,options)=>{
@@ -121,7 +121,7 @@ function component({dispatch,request=async()=>({id:'saved-artifact',kind:'image'
    return {...Object.fromEntries(['viewId','resourceRevision'].map(field=>[field,params.get(field)])),
     generation:Number(params.get('generation')),...body,...(body.app?{app:{manifest:{},...body.app}}:{})};
   },AbortController,URLSearchParams,crypto:{randomUUID:()=>`preview-command-${++serial}`},
-  window:{amplifier:{getActions:()=>actions}},
+  window:{amplifier:{getActions:()=>actions},confirm},
   ...(!visible?{IntersectionObserver:class{observe(){}disconnect(){}}}:{})
  });
  return {writes,edits,
@@ -265,6 +265,44 @@ test('actual explicit Latest follows the same publication view, blocks dirty cha
  assert.equal(calls.filter(row=>row.action==='canvas.views.release').length,1);
  assert.equal(calls.at(-1).args.generation,3,'Cleanup addresses only the last accepted generation');
  detach();
+});
+
+test('actual confirmed follow conflict keeps input until explicit discard and never posts a second command',async()=>{
+ const saved=item('canvas-app','inline');saved.row.presentationCapabilities={compact:true,inline:true,canvas:true};
+ const initial={...inlineView,renderer:'builtin.canvas.canvas-app',publishedVersion:2,selectedVersion:2,followLatest:false};
+ let view=initial,approved=false,confirmations=0;
+ const calls=[];
+ const harness=component({saved,confirm:()=>{confirmations++;return approved},
+  request:async()=>({id:saved.row.id,kind:'canvas-app',app:{revision:2,stateRevision:0,state:{},versions:[],requests:[]}}),
+  dispatch:async(action,args,meta)=>{
+   calls.push({action,args,meta});
+   if(action==='canvas.views.inline')return {accepted:true,result:view};
+   if(action==='canvas.views.follow'){
+    const hold=await harness.edits.prepareTransition(args,meta.id,true,{...state,revision:1,canvasWorkspace:{views:[view]}});
+    hold.sent=true;
+    view={...view,generation:2,followLatest:true,selectedVersion:null};
+    render();
+    const receipt={accepted:true,result:view};
+    await harness.edits.completeTransition(hold,receipt,{...state,revision:2,canvasWorkspace:{views:[view]}});
+    harness.edits.intent(initial,true);
+    return receipt;
+   }
+   return {accepted:true};
+  }});
+ const render=()=>harness.render({state:{...state,revision:view.generation,canvasWorkspace:{views:[view]}}});
+ render();render();await settle();render();await settle();
+ const detach=harness.edits.registerRenderer(initial,{prepare:async()=>({}),validate:()=>true,release(){}});
+ const original=render().loaded.canvas;
+ await render().follow(true);
+ assert.match(render().notice,/newer private input was retained/);
+ assert.equal(render().loaded.canvas,original);
+ await render().discardFollowInput();
+ assert.equal(confirmations,1);assert.equal(render().loaded.canvas,original);
+ approved=true;await render().discardFollowInput();render();await settle();render();await settle();
+ assert.equal(confirmations,2);assert.equal(render().view.generation,2);
+ assert.equal(calls.filter(row=>row.action==='canvas.views.follow').length,1);
+ assert.equal(harness.edits.transition(initial),undefined);
+ detach();harness.dispose();await settle();
 });
 
 test('actual live app consumes canonical view updates while primary and another client cannot retarget it',async()=>{

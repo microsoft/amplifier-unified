@@ -374,6 +374,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    const confirmed=receipt.result;
    if(confirmed?.viewId!==view.viewId||confirmed.resourceId!==row.id||confirmed.publishedVersion!==version||confirmed.followLatest!==command.args.followLatest||
     (confirmed.followLatest?confirmed.selectedVersion!==null:confirmed.selectedVersion!==version))throw Object.assign(Error('The host did not return the exact publication view binding.'),{unconfirmed:true});
+   command.receipt=receipt;
    const next=inlineOwnership.adoptTransition(command.args,command.id,latest.current);
    if(!next)throw Object.assign(Error('Waiting for the confirmed current publication view.'),{unconfirmed:true});
    followCommand.current=null;
@@ -383,6 +384,21 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    if(mounted.current){setLoaded(record);setBodyError('');setBodyAttempt(value=>value+1)}
   }catch(error){if(!error.unconfirmed){followCommand.current=null;loaded.pendingFollow=false}if(mounted.current)setNotice(error.message)}
   finally{changing.current=false;if(mounted.current)setBusy(false)}
+ }
+ async function discardFollowInput(){
+  const command=followCommand.current;
+  if(changing.current||!loaded||!sameClient||revoked||!command?.receipt)return;
+  const hold=inlineOwnership.transition(command.args);
+  if(!hold?.privateConflict)return;
+  if(!window.confirm('Discard private input in this preview and show the version change already confirmed by the host? This cannot be undone.'))return;
+  const next=inlineOwnership.discardTransition(command.args,command.id,latest.current);
+  if(!next){setNotice('The confirmed preview changed. Keep the current input and reconcile its state before discarding.');return}
+  followCommand.current=null;
+  loaded.lifecycle.unregister?.();loaded.lifecycle.view=next;
+  const record={...loaded,view:next,canvas:null,bodyBinding:null,seen:false,revoked:false,pendingFollow:false,
+   stateRevision:latest.current.revision};
+  owned.current=record;
+  if(mounted.current){setLoaded(record);setNotice('');setBodyError('');setBodyAttempt(value=>value+1)}
  }
  const changeMode=async(next,privateChoice=false)=>{
   if(changing.current)return;
@@ -437,6 +453,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    <button type="button" className="a-soft" aria-label={`Open ${titleOf(item)} in Canvas`} data-action={canvasOpenCommand(item,messageId,globalThis.window?.amplifier?.getActions?.()||[]).action} disabled={busy||!caps.canvas} aria-busy={busy||undefined} onClick={open}><Maximize2 aria-hidden="true"/><span>Open in Canvas</span></button>
    {inline?<button type="button" className="a-soft" aria-label={`Collapse ${titleOf(item)}`} disabled={busy} aria-expanded={true} onClick={()=>changeMode('compact',true)}><ChevronUp aria-hidden="true"/>Collapse</button>:caps.inline&&<button type="button" className="a-soft" aria-label={`Expand ${titleOf(item)} in chat`} disabled={busy} aria-expanded={false} onClick={()=>changeMode('inline',true)}><ChevronDown aria-hidden="true"/>{refusal?'Retry preview':'Expand'}</button>}
    {inline&&(authorized||followCommand.current)&&followsLatest(row.kind)&&<button type="button" className="a-soft" disabled={busy} onClick={()=>follow(!view.followLatest)}>{followCommand.current?'Retry version change':view.followLatest?'Return to published version':'Go to Latest'}</button>}
+   {inline&&followCommand.current?.receipt&&inlineOwnership.transition(followCommand.current.args)?.privateConflict&&<button type="button" className="a-soft" disabled={busy} onClick={discardFollowInput}>Discard private input and show confirmed version</button>}
   </div>
   {(notice||!caps.inline&&caps.reason||!caps.canvas)&&<p className="a-inline-artifact-notice" role="status">{notice||(!caps.canvas?'Canvas is unavailable for this artifact.':caps.reason)}</p>}
   {inline&&<div className="a-general-artifact-body" data-kind={row.kind}>
