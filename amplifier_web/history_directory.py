@@ -524,8 +524,16 @@ class HistoryDirectory:
                     0 AS notice_count,'idle' AS base_activity_kind,'Idle' AS base_activity_label,
                     1 AS history_managed,'native' AS title_source,n.name_source,n.auto_name,n.name_revision,n.name_policy_revision
                 FROM history_native.native_rows n WHERE n.namespace=?
-                AND NOT EXISTS(SELECT 1 FROM local_rows l WHERE l.native_project=n.project AND l.native_id=n.identity)
+                AND (n.project IS NULL OR n.identity IS NULL OR json_array(n.project,n.identity) NOT IN (
+                    SELECT json_array(CAST(native_project AS TEXT),CAST(native_id AS TEXT)) FROM stored_local_rows
+                    WHERE native_project IS NOT NULL AND native_id IS NOT NULL))
             )'''
+            # Ownership keys are unchanged by canonical metadata/notice joins.
+            # Build their set once: older SQLite planners otherwise scan the
+            # expanded local overlay separately for every native row. Use an
+            # unambiguous scalar key: tuple NOT IN still scans for NULL matches
+            # on every miss. Only the two identity scalars are encoded here.
+            # Incomplete local keys cannot suppress unrelated native history.
             native = native.replace('n.project AS native_project,n.parent_id,', 'n.project AS native_project,' + parent + ' AS parent_id,')
             parameters.append(self._native_namespace)
             if identity is not None:

@@ -96,6 +96,66 @@ class CompletedModelCalls:
                 for node in self.buckets.get(key, ()))
 
 
+class FallbackTurnLookup:
+    """Index legacy presentation order, without inferring call ownership.
+
+    User rows need not be timestamp ordered: the old fallback takes the last
+    eligible row in presentation order, then the first matching saved turn.
+    A prefix maximum over timestamp-sorted positions preserves that behavior.
+    """
+    def __init__(self, users, turns, *, native_messages):
+        self.users, self.turns, self.native_messages = users, turns, native_messages
+        dated = sorted((at, position) for position, row in enumerate(users)
+                       if isinstance(at := row.get('createdAt'), (int, float))
+                       and at == at and row.get('source') != 'native')
+        self.times, self.anchors = [], []
+        latest = -1
+        for at, position in dated:
+            latest = max(latest, position)
+            self.times.append(at)
+            self.anchors.append(users[latest])
+        self.by_anchor, self.by_input, self.indexed = {}, {}, True
+        for position, turn in enumerate(turns.values()):
+            self._index(turn, position)
+
+    def _index(self, turn, position):
+        try:
+            self.by_anchor.setdefault(turn.get('anchorMessageId'), (position, turn))
+            if turn.get('inputId'):
+                self.by_input.setdefault(turn['inputId'], (position, turn))
+        except TypeError:
+            # Preserve inspection of malformed legacy identifiers rather than
+            # making the optimization a new validation or migration boundary.
+            self.indexed = False
+
+    def anchor(self, at):
+        if isinstance(at, (int, float)) and at == at:
+            position = bisect_right(self.times, at) - 1
+            if position >= 0:
+                return self.anchors[position]
+        return self.users[0] if self.users and not self.native_messages else None
+
+    def turn(self, anchor):
+        if not anchor:
+            return None
+        if self.indexed:
+            try:
+                matches = [match for match in (self.by_anchor.get(anchor['id']),
+                           self.by_input.get(anchor.get('inputId')) if anchor.get('inputId') else None)
+                           if match is not None]
+                return min(matches, key=lambda match: match[0])[1] if matches else None
+            except TypeError:
+                pass
+        return next((turn for turn in self.turns.values() if
+                     turn.get('anchorMessageId') == anchor['id'] or
+                     turn.get('inputId') == anchor.get('inputId') and anchor.get('inputId')), None)
+
+    def ensure(self, key, turn):
+        if key not in self.turns:
+            self.turns[key] = turn
+            self._index(turn, len(self.turns) - 1)
+
+
 def merge_model_observations(rows, *, aliases=()):
     """Join host/provider display telemetry across a resumed root's log files.
 
@@ -823,6 +883,7 @@ class EventLogView:
             native_by_index.setdefault(row['nativeIndex'], row)
         native_positions = [row['nativeIndex'] for row in native_messages]
         native_ordered = all(a <= b for a, b in zip(native_positions, native_positions[1:]))
+        fallback_turns = FallbackTurnLookup(users, turns, native_messages=bool(native_messages))
 
         def preceding_native(start, stop):
             if native_ordered:
@@ -909,8 +970,8 @@ class EventLogView:
                 key = own_turn or (next(iter(matches)) if len(matches) == 1 else
                                    'native-turn:' + (anchor['id'] if anchor else str(association['turn'])))
                 node['turnId'] = key
-                turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
-                                      'canonicalHistory': True, 'phase': 'completed'})
+                fallback_turns.ensure(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
+                                           'canonicalHistory': True, 'phase': 'completed'})
                 if association['position'] is not None:
                     preceding = preceding_native(association['turn'], association['position'])
                     if preceding is not None:
@@ -920,17 +981,14 @@ class EventLogView:
                     else:
                         node['anchorMessageId'] = None
             if node.get('turnId') not in turns:
-                preceding = [row for row in users if isinstance(at, (int, float)) and isinstance(row.get('createdAt'), (int, float))
-                             and row['createdAt'] <= at and row.get('source') != 'native']
-                anchor = preceding[-1] if preceding else users[0] if users and not native_messages else None
-                turn = next((row for row in turns.values() if anchor and (row.get('anchorMessageId') == anchor['id']
-                    or row.get('inputId') == anchor.get('inputId') and anchor.get('inputId'))), None)
+                anchor = fallback_turns.anchor(at)
+                turn = fallback_turns.turn(anchor)
                 key = turn['id'] if turn else 'native-turn:' + (anchor['id'] if anchor else root)
                 node['turnId'] = key
                 if native_messages and not anchor:
                     node['anchorMessageId'] = None  # Undated, unassociated evidence stays before the page.
-                turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
-                                      'canonicalHistory': True, 'phase': 'completed'})
+                fallback_turns.ensure(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
+                                           'canonicalHistory': True, 'phase': 'completed'})
             for field in ('input', 'output', 'error', 'request', 'response', 'delegateRequest', 'delegateResponse'):
                 if node.get(field + 'Detail'):
                     node[field + 'Detail'].update(id=node['id'], sessionId=session['id'])

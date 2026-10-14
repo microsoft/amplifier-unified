@@ -163,6 +163,15 @@ async def serve(root, app):
             {'role': 'assistant', 'content': 'Synthetic child saved response.'},
         ], {'name': 'Synthetic native child', 'parent_session_id': sid})
         await service.history.refresh()
+        # Discovery is cooperative: one refresh need not have reached a newly
+        # written child. Wait for canonical directory membership before asking
+        # the ordinary owner to admit it; never manufacture a worker UI role.
+        async with asyncio.timeout(30):
+            while service.directory.resolve(child_native) is None:
+                if error := service.state.get('sharedHistory', {}).get('error'):
+                    raise AssertionError(error)
+                await service.history.refresh(force=False)
+                await asyncio.sleep(.01)
         child = service._session(child_native, hydrate=False)
         if child.get('sessionKind') != 'worker':
             raise AssertionError('Native child was not classified by production history discovery')

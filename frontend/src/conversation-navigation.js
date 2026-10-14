@@ -1,4 +1,10 @@
 // A bounded per-client display cache. Server state and execution stay authoritative.
+export function isNavigationAction(action,args={}){
+ if(action==='shell.command')return isNavigationAction(args.action,args.args);
+ return ['session.select','session.draft','workspace.select'].includes(action)
+  ||action==='view.update'&&['workSurface','workWorkspaceId'].some(key=>Object.hasOwn(args.patch||{},key));
+}
+
 export function createConversationNavigation(limit=32){
  const cache=new Map(),pending=new Map();let epoch;
  const selected=state=>state?.sessions?.find(row=>row.id===state.selectedSessionId);

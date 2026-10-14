@@ -14,6 +14,8 @@ from amplifier_web.capacity import admission
 from amplifier_web.native_catalog import NativeCatalog
 from amplifier_web.native_history import NativeHistory
 from amplifier_web.session_projection import view_path
+from amplifier_web.attention import session_item_at
+from amplifier_web.state_records import save_working
 
 
 async def main():
@@ -62,6 +64,32 @@ async def main():
             session.update(historyManaged=False, historyLoaded=True, historyLoading=False, messages=[
                 {'id': 'fixture-user-'+str(index), 'role': 'user', 'text': 'Synthetic saved question'},
                 {'id': 'fixture-answer-'+str(index), 'role': 'assistant', 'text': 'Synthetic saved reply'}])
+        # Sparse app-owned facts over the same frozen catalog, including dormant
+        # delegate notices and stale receipts. Seed durable records through the
+        # canonical storage owners without admitting their histories for polling.
+        pinned_ids = [service.directory.resolve(row['id'])['id'] for row in catalog['sessions'][:14]]
+        notice_sources = catalog['sessions'][20:100] + catalog['sessions'][4000:4020]
+        notice_rows, read = [], {}
+        for index, source in enumerate(notice_sources):
+            row = service.directory.resolve(source['id'])
+            row.update(status='idle', historyManaged=False, historyLoaded=False, historyLoading=False,
+                messages=[], workers=[], approvals=[], questions=[],
+                completion={'id': 'fixture-completion-'+str(index), 'at': 1700000000+index})
+            item = session_item_at(row, {}, 1)
+            if index < 30:
+                read[item['id']] = item['fingerprint']
+            elif index < 60:
+                read[item['id']] = 'stale-fixture-fingerprint'
+            save_working(service.db, service._state, {row['id']: row}, {row['id']}, global_keys=())
+            notice_rows.append(row)
+        read.update({'completion:unknown-fixture-'+str(index): 'stale-fixture-fingerprint'
+                     for index in range(93)})
+        service._state.update(pinnedSessionIds=pinned_ids, attentionRead=read)
+        service.directory.sync(notice_rows, service._state)
+        service.db.commit()
+        expected_notice_ids = ['completion:'+row['id'] for row in notice_rows[30:80]]
+        assert len(pinned_ids) == 14 and len(read) == 153 and len(notice_rows) == 100
+        assert len(service._state['sessions']) <= 6
         service.state.update(selectedSessionId=sessions[0]['id'], selectedWorkspaceId=sessions[0]['workspaceId'])
         service.state['view'].update(navPinned=True, navChatScope='all')
         service.state.setdefault('setup', {}).update(providersLoadedAt=time.time(), providersWorkspace=sessions[0]['workspace'])
@@ -116,8 +144,18 @@ async def main():
         async def metrics(request):
             assert len(service.state['sessions']) <= 6
             assert native.count() == 22915
+            observations = app['observations']
+            companion = service.clients.records.get('performance-companion')
             return web.json_response({'sessions': [s['id'] for s in sessions], 'ticks': ticks,
-                                      'subscriptions': len(service.queue_clients), 'runtimeCalls': runtime.calls})
+                'subscriptions': len(service.queue_clients), 'runtimeCalls': runtime.calls,
+                'companion': {'selection': None if companion is None else {
+                    key: companion.get(key) for key in ('selectedSessionId', 'selectedWorkspaceId')},
+                    'pins': pinned_ids, 'noticeIds': expected_notice_ids, 'noticeOwners': len(notice_rows),
+                    'readReceipts': len(read), 'snapshots': len(observations.snapshots),
+                    'leases': len(observations.leases), 'readers': sum(
+                        not rows.directory._closed for snapshot in observations.snapshots.values()
+                        if hasattr(rows := snapshot['rows'], 'directory'))},
+                'residents': len(service._state['sessions'])})
 
         app.router.add_post('/fixture/progress', control)
         app.router.add_post('/fixture/admit', admit)

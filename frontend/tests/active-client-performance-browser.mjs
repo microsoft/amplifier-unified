@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/active_client_performance_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
-let browser,terminal;
+let browser,terminal,stopCompanion=true,companionTask;
 const stats=values=>{const s=[...values].sort((a,b)=>a-b);return {samples:s.length,medianMs:Math.round(s[Math.floor(s.length/2)]),p95Ms:Math.round(s[Math.min(s.length-1,Math.floor(s.length*.95))]),maxMs:Math.round(s.at(-1))}};
 try{
  const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),45000);let output='';fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const r=JSON.parse(line);if(r.url){clearTimeout(timer);resolve(r.url)}}catch{}})});
@@ -31,7 +31,33 @@ try{
  const stream=await fetch(url+'/api/sessions/'+sessions[0]+'/events',{headers:{...headers,'X-Amplifier-Client':'performance-terminal'},signal:terminal.signal});assert.equal(stream.status,200);
  let terminalFrames=0;const drain=(async()=>{try{for await(const chunk of stream.body)terminalFrames+=new TextDecoder().decode(chunk).split('event: snapshot').length-1}catch(error){if(error.name!=='AbortError')throw error}})();
  assert.equal((await api('/fixture/metrics')).subscriptions,5);
+ await api('/api/clients/attach',{clientId:'performance-companion',kind:'native',protocolVersion:1});
+ const companionBefore=(await api('/fixture/metrics')).companion;
+ assert.equal(companionBefore.pins.length,14);assert.equal(companionBefore.readReceipts,153);assert.equal(companionBefore.noticeOwners,100);
+ const companionDurations=[],companionStatuses=[],companionErrors=[];
+ let companionPending=0,companionMax=0,companionEtag,lastCompanion;
+ const pollCompanion=async working=>{
+  const start=performance.now();companionPending++;companionMax=Math.max(companionMax,companionPending);
+  try{
+   const response=await fetch(url+'/api/companion',{headers:{...headers,'X-Amplifier-Client':'performance-companion',...(companionEtag?{'If-None-Match':companionEtag}:{})},signal:AbortSignal.timeout(15000)});
+   assert.ok([200,304].includes(response.status),'Companion HTTP '+response.status);
+   if(response.status===200)lastCompanion=await response.json();
+   else assert.ok(companionEtag&&lastCompanion,'Conditional response needs a prior representation');
+   companionEtag=response.headers.get('etag');assert.ok(companionEtag);
+   assert.equal(lastCompanion.workingCount,working);assert.equal(lastCompanion.attentionCount,50);
+   assert.equal(lastCompanion.sessionsTruncated,false);assert.equal(lastCompanion.itemsTruncated,false);
+   assert.deepEqual(lastCompanion.sessions.map(row=>row.id).sort(),[...companionBefore.pins].sort());
+   assert.ok(lastCompanion.sessions.every(row=>row.pinned));
+   assert.deepEqual(lastCompanion.items.map(row=>row.id).sort(),[...companionBefore.noticeIds].sort());
+   companionStatuses.push(response.status);
+   return performance.now()-start;
+  }finally{companionPending--}
+ };
  await api('/fixture/progress',{running:true});
+ // Representative one-second stress cadence, not a measured Tempo interval.
+ // A slow response delays the next poll; never queue or overlap observations.
+ stopCompanion=false;
+ companionTask=(async()=>{try{while(!stopCompanion){const start=performance.now();companionDurations.push(await pollCompanion(1));if(!stopCompanion)await new Promise(resolve=>setTimeout(resolve,Math.max(0,1000-(performance.now()-start))))}}catch(error){companionErrors.push(error.stack||String(error))}})();
  const health=[],admissions=[],actions=[];
  for(let i=0;i<12;i++){
   let start=performance.now();await api('/api/health');health.push(performance.now()-start);
@@ -39,17 +65,25 @@ try{
   start=performance.now();await pages[i%4].evaluate(n=>window.amplifier.dispatch('view.update',{patch:{navExpanded:n%2===0}}),i);actions.push(performance.now()-start);
   await new Promise(resolve=>setTimeout(resolve,100));
  }
+ stopCompanion=true;await companionTask;
+ assert.deepEqual(companionErrors,[]);assert.ok(companionDurations.length>=2,'Companion must overlap the progress workload');
  await api('/fixture/progress',{running:false});
+ const companionQuietMs=await pollCompanion(0);
  for(let i=0;i<pages.length;i++){
   await expect(pages[i].getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Retained draft '+i);
   assert.equal(await pages[i].evaluate(()=>window.amplifier.getState().selectedSessionId),sessions[i<2?0:1]);
  }
  const metrics=await api('/fixture/metrics');assert.deepEqual(metrics.runtimeCalls,[]);assert.ok(metrics.ticks>=5);assert.ok(terminalFrames>=3);assert.deepEqual(errors,[]);
+ assert.deepEqual(metrics.companion.selection,companionBefore.selection);
+ assert.equal(metrics.subscriptions,5,'Polling must not attach an SSE subscription');
+ assert.equal(metrics.companion.snapshots,0);assert.equal(metrics.companion.leases,0);assert.equal(metrics.companion.readers,0);
+ assert.equal(companionMax,1);assert.equal(companionPending,0);
  // Generous end-to-end ceilings catch seconds-long queues without fragile CPU microbenchmarks.
- const result={catalogSessions:22915,workspaces:3932,browsers:4,terminalStreams:1,health:stats(health),admission:stats(admissions),actions:stats(actions),viewMaxInFlight:viewCounts.map(r=>r.max),ticks:metrics.ticks,terminalFrames,draftsRetained:true,modelCalls:0};
+ const result={catalogSessions:22915,workspaces:3932,browsers:4,terminalStreams:1,health:stats(health),admission:stats(admissions),actions:stats(actions),viewMaxInFlight:viewCounts.map(r=>r.max),ticks:metrics.ticks,terminalFrames,draftsRetained:true,modelCalls:0,
+  companion:{clients:1,cadenceMs:1000,cadence:'representative stress workload',...stats(companionDurations),quietMs:Math.round(companionQuietMs),statuses:companionStatuses,maxInFlight:companionMax,pins:14,noticeOwners:100,readReceipts:153,selectionRetained:true,snapshots:metrics.companion.snapshots,leases:metrics.companion.leases,readers:metrics.companion.readers}};
  if(process.env.AMPLIFIER_PERF_EVIDENCE)await writeFile(process.env.AMPLIFIER_PERF_EVIDENCE,JSON.stringify(result,null,2)+'\n');
  console.log(JSON.stringify(result,null,2));
  assert.ok(result.health.p95Ms<1500,JSON.stringify(result));assert.ok(result.admission.p95Ms<1500,JSON.stringify(result));assert.ok(result.actions.p95Ms<2000,JSON.stringify(result));
  assert.ok(result.viewMaxInFlight.every(n=>n<=1),JSON.stringify(result));
  terminal.abort();await drain;
-}finally{terminal?.abort();await browser?.close();fixture.kill();}
+}finally{stopCompanion=true;await companionTask;terminal?.abort();await browser?.close();fixture.kill();}
