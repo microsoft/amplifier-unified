@@ -395,6 +395,41 @@ reads remain passive and never acquire a native writer or replay work.
 
 ## Assignment control addition — 2026-10-14
 
+### Optional shared task list
+
+An explicit assignment may keep at most 128 work items in its existing canonical
+assignment receipt. The commissioning owner creates and edits unclaimed items,
+sets dependencies, cancels unfinished items, and explicitly reassigns responsibility
+to a current bound member. Bound members can read the list and atomically claim a
+ready item for themselves. A claim records responsibility, not a running process,
+file lock, permission expansion, or instruction to start work. Independent chats
+are never enrolled by a task action. The bundled UI and authenticated agent use
+the same `assignment.tasks.*` actions.
+
+Each mutation has a stable command ID and retained receipt. Creation checks the
+assignment revision; item transitions check the item revision. Claim-holder
+release and completion also require the exact opaque claim ID. Concurrent claims
+have one winner. Exact retries return their original receipt without applying a
+transition again; a receipt is historical evidence, not renewed authority.
+
+Dependencies must be existing items in this assignment and form an acyclic graph.
+An item is ready only when its dependencies are reported complete and it has no
+explicit block. Completion requires the current holder's valid claim and records
+their report; it does not verify artifacts or automatically execute dependents.
+Completed and cancelled items cannot be edited or reopened. Their retained
+identity cannot silently change meaning underneath a completed dependency.
+
+Claims survive ordinary host restart and later turns of their still-bound holder.
+There is no expiry, automatic release, reassignment, execution, or replay. Explicit
+Stop, changed assignment membership, or an unavailable owner makes the retained
+claim stale or unavailable without freeing the item. A stopped assignment cannot
+admit new claims or completion. The holder or assignment owner can explicitly
+release a retained claim; only the owner can cancel or reassign. Reassignment
+issues a fresh claim ID and revision, fencing the former holder. Release or
+reassignment does not assert that prior external effects stopped or are safe to
+repeat. User-visible status distinguishes readiness, responsibility, stale
+authority, and reported completion.
+
 New commissioned roots share an explicit host-owned assignment with their
 commissioning root. Existing peers and historical commissioning records are
 never enrolled retroactively. Native descendants share their root's admission.
@@ -586,3 +621,15 @@ mutations commit. This monotonic-clock observation is local to that recap mount;
 it excludes network delivery, physical paint and global application rendering.
 Unavailable samples and unmeasured paint remain explicit; a recorded
 phase or timing is not proof of correctness, live liveness or external effects.
+
+
+### Chat write override reset
+
+The file-access controls described in [configuration authority](../configuration-authority.md#chat-write-overrides)
+use canonical native session settings. Save/reset share UI and agent actions,
+require the matching preview revision and existing file_access/session authority
+for agents, and retain native child ceilings. Reset removes only the session's
+filesystem write allow/deny override keys. Shared workspace settings, read policy
+and other settings are preserved. Inherited configuration changes invalidate the
+preview; saved changes reach the existing runtime refresh boundary before the
+next input, with no replay or unsolicited turn.

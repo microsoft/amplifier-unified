@@ -116,7 +116,7 @@ def prepare(service, args, origin, caller_session_id):
         from .scheduled_destinations import creation_guard
         creation_guard(service.schedules, source_id, inheritance['scheduledRunId'], identity)
     source = service._session(source_id)
-    if source.get('configurationBusy'):
+    if source.get('configurationBusy') or source.get('fileAccessPending'):
         raise ValueError('Source configuration is changing; review it again')
     config, summary = template(service, source)
     if inheritance['configurationHash'] != summary['configurationHash']:

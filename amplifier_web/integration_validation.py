@@ -40,7 +40,7 @@ def authority(app, sid, *, admission=False):
     source = app._session(sid, hydrate=False)
     assignment = app.assignments.current(source)
     if admission:
-        if source.get('status') == 'stopping' or source.get('configurationBusy'):
+        if source.get('status') == 'stopping' or source.get('configurationBusy') or source.get('fileAccessPending'):
             raise ValueError('Wait for Stop or configuration changes to settle before validating.')
         if source.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'taking-over'}:
             raise ValueError('This conversation is read-only on this host.')

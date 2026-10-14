@@ -3,19 +3,38 @@ import './coordination.css';
 import {WorkspaceAwareness} from './workspace-awareness.jsx';
 import {AssignmentControls} from './assignment-controls.jsx';
 import {CoordinationObservations} from './coordination-observations.jsx';
+import {IntegrationEvidence} from './integration-evidence.jsx';
 
 const keyOf=target=>JSON.stringify([target.sessionId,target.workerId||null]);
 const labels={idle:'Ready for follow-up',working:'Working',running:'Working',starting:'Starting',queued:'Queued',stopping:'Interruption requested',completed:'Completed',interrupted:'Outcome unknown',error:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
 const empty={selected:[],cursors:{},results:{},drafts:{}};
 
-export function CoordinationPanel({dispatch,sessionId}){
+// Selection uses the ordinary navigation owner, including private draft retention.
+// A delayed response must not close a newer panel or another chat's visit.
+export async function selectWorkspaceChat(dispatch,id,isCurrent){
+ const response=await dispatch('session.select',{id});
+ if(response?.accepted&&isCurrent(id))await dispatch('view.update',{patch:{panel:null}});
+ return response;
+}
+
+export function CoordinationPanel({dispatch,sessionId,session,onOpenChat}){
+ const [controls,setControls]=useState(false);
+ return <div className="a-coordination a-workspace-work">
+  {sessionId?<RelatedWork key={sessionId} dispatch={dispatch} sessionId={sessionId} session={session} onOpenChat={onOpenChat}/>:<p>Open a chat to inspect work in its workspace.</p>}
+  <details onToggle={event=>setControls(event.currentTarget.open)}><summary>Follow up or watch work</summary>
+   {controls&&sessionId&&<CoordinationTargets dispatch={dispatch} sessionId={sessionId}/>}
+  </details>
+ </div>;
+}
+
+function CoordinationTargets({dispatch,sessionId}){
  // Session storage is isolated by origin and tab; client IDs rotate on reload.
  const storageKey='amplifier-coordination-v1';
  const [saved,setSaved]=useState(()=>{try{return {...empty,...JSON.parse(sessionStorage.getItem(storageKey)||'null')}}catch{return empty}});
  const inflight=useRef(new Set());
  const savedRef=useRef(saved),[items,setItems]=useState([]),[error,setError]=useState(''),[waitError,setWaitError]=useState(''),[notice,setNotice]=useState(''),[working,setWorking]=useState(null),[waiting,setWaiting]=useState(false);
  const write=update=>{const next=update(savedRef.current);savedRef.current=next;setSaved(next);try{sessionStorage.setItem(storageKey,JSON.stringify(next))}catch{setNotice('This browser could not save delivery cursors. Reports may appear again after reload.')}};
- const refresh=async()=>{try{const response=await dispatch('coordination.list',{}, {feedback:false});setItems(response.result.items);if(response.result.truncated)setNotice('Showing the first 100 targets. Agents can address any known conversation directly.')}catch(error){setError(error.message)}};
+ const refresh=async()=>{try{const source=await dispatch('coordination.context',{sessionId},{feedback:false});if(!source.result.workspace)throw Error('The workspace is unavailable.');const response=await dispatch('coordination.list',{workspace:source.result.workspace,limit:100}, {feedback:false});setItems(response.result.items);if(response.result.truncated)setNotice('Showing the first 100 targets. Agents can address any known conversation directly.')}catch(error){setError(error.message)}};
  useEffect(()=>{refresh()},[]);
  useEffect(()=>{
   if(!saved.selected.length)return;
@@ -61,7 +80,6 @@ export function CoordinationPanel({dispatch,sessionId}){
   }catch(error){setError(error.message)}finally{inflight.current.delete(key);setWorking(null)}
  };
  return <div className="a-coordination">
-  {sessionId&&<RelatedWork dispatch={dispatch} sessionId={sessionId}/>}
   <p>Follow up on a conversation or its workers without switching away from your current draft. Watch up to eight targets for reports or requests for attention.</p>
   <div className="a-dialog-actions"><button className="a-soft" data-action="coordination.list" onClick={refresh}>Refresh targets</button><button className="a-link" disabled={!saved.selected.length} onClick={()=>write(previous=>({...previous,selected:[]}))}>Stop watching</button><span role="status">{waiting?'Waiting for updates…':saved.selected.length?`${saved.selected.length} targets watched`:'Choose targets to watch'}</span></div>
   {error&&<p role="alert" className="a-alert">{error}</p>}{waitError&&<p role="alert" className="a-alert">{waitError}</p>}{notice&&<p role="status">{notice}</p>}
@@ -84,38 +102,62 @@ function ResultFileStatus({response}){
  return null;
 }
 
-export function RelatedWork({dispatch,sessionId}){
- const visit=useRef(0);
+export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
+ const visit=useRef(0),openingRef=useRef(false);
+ const [opening,setOpening]=useState(null);
+ const [next,setNext]=useState(null),[recap,setRecap]=useState(false);
  const [items,setItems]=useState([]),[context,setContext]=useState({requests:[]}),[error,setError]=useState(''),[inspected,setInspected]=useState({}),[original,setOriginal]=useState(null);
  const refresh=async()=>{
-  const current=++visit.current;
-  const [state,list]=await Promise.all([dispatch('coordination.context',{sessionId},{feedback:false}),dispatch('coordination.list',{sessionId},{feedback:false})]);
-  const workspace=list.result.items.find(row=>row.target.sessionId===sessionId)?.workspace;
-  const peers=await dispatch('coordination.list',{workspace,limit:50,includeWorkers:false},{feedback:false});
+  const current=++visit.current;setError('');
+  const state=await dispatch('coordination.context',{sessionId},{feedback:false});
   if(current!==visit.current)return;
-  setContext(state.result);
-  setInspected({});
-  setItems(peers.result.items.filter(row=>row.kind==='conversation'&&row.target.sessionId!==sessionId));
+  if(!state.result.workspace)throw Error('The workspace is unavailable.');
+  const peers=await dispatch('coordination.list',{workspace:state.result.workspace,limit:20,includeWorkers:false},{feedback:false});
+  if(current!==visit.current)return;
+  setContext(state.result);setInspected({});setItems(peers.result.items);setNext(peers.result.nextOffset??null);
  };
- useEffect(()=>{setInspected({});setOriginal(null);setContext({requests:[]});setItems([]);setError('');refresh().catch(error=>setError(error.message));return()=>{visit.current++}},[sessionId]);
- const inspectResult=async requestId=>{try{const value=await dispatch('coordination.result',{requestId},{feedback:false});setInspected(previous=>({...previous,[requestId]:value.result}))}catch(error){setError(error.message)}};
- const reveal=async(sid,messageId)=>{try{const response=await dispatch('coordination.read',{sessionId:sid,messageId,textLimit:4000},{feedback:false});setOriginal(response.result.message)}catch(error){setError(error.message)}};
+ useEffect(()=>{setInspected({});setOriginal(null);setContext({requests:[]});setItems([]);setNext(null);setError('');refresh().catch(error=>{if(visit.current===current)setError(error.message)});const current=visit.current;return()=>{visit.current++}},[sessionId]);
+ const more=async()=>{const current=visit.current;try{const response=await dispatch('coordination.list',{workspace:context.workspace,offset:next,limit:20,includeWorkers:false},{feedback:false});if(current!==visit.current)return;setItems(previous=>[...new Map([...previous,...response.result.items].map(row=>[row.target.sessionId,row])).values()]);setNext(response.result.nextOffset??null)}catch(error){if(current===visit.current)setError(error.message)}};
+ const inspectResult=async requestId=>{const current=visit.current;try{const value=await dispatch('coordination.result',{requestId},{feedback:false});if(current!==visit.current)return;setInspected(previous=>({...previous,[requestId]:value.result}))}catch(error){if(current===visit.current)setError(error.message)}};
+ const reveal=async(sid,messageId)=>{const current=visit.current;try{const response=await dispatch('coordination.read',{sessionId:sid,messageId,textLimit:4000},{feedback:false});if(current!==visit.current)return;setOriginal(response.result.message)}catch(error){if(current===visit.current)setError(error.message)}};
  const openArtifact=async(requestId,reference,responseRevision)=>{
   const [path,expectedSha256]=reference.split(/@sha256:/);
   try{const value=await dispatch('canvas.openFile',{sessionId,workspace:context.workspace,path,expectedSha256,referenceRequestId:requestId,...(responseRevision?{referenceResponseRevision:responseRevision}:{})});if(value.result?.status!=='opened')setError(value.result?.message||'The referenced artifact is unavailable.')}catch(error){setError(error.message)}
  };
- return <section className="a-coordination-related" aria-label="Related work">
-  <h3>Related work</h3>
-  <AssignmentControls key={'assignment:'+sessionId} dispatch={dispatch} sessionId={sessionId}/>
-  <p className="a-caption">Related tasks and exact results. Inspecting evidence keeps your current conversation and draft. A sealed result still needs independent artifact verification.</p>
+ const openChat=async id=>{
+  if(openingRef.current||!onOpenChat)return;
+  openingRef.current=true;setOpening(id);setError('');const current=visit.current;
+  try{const response=await onOpenChat(id);if(response?.accepted!==true)throw Error(response?.error||'The chat could not be opened. Your current view was kept.')}
+  catch(error){if(current===visit.current)setError(error.message)}
+  finally{openingRef.current=false;if(current===visit.current)setOpening(null)}
+ };
+ const memberLabels=Object.fromEntries(items.map(row=>[row.target.sessionId,row.title||'Untitled chat']));
+ memberLabels[sessionId]=session?.title||memberLabels[sessionId]||'This chat';
+ const name=sid=>memberLabels[sid]||'Related chat';
+ const attention=items.filter(row=>row.attention);
+ return <section className="a-coordination-related" aria-label="Workspace work overview">
+  <p>See what is happening around this chat. Inspecting keeps your conversation and draft in place.</p>
   {error&&<p role="alert">{error}</p>}
-  <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh related work</button>
-  <CoordinationObservations key={'observations:'+sessionId} dispatch={dispatch} sessionId={sessionId}/>
+  <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh workspace work</button>
   <WorkspaceAwareness key={'workspace:'+sessionId} dispatch={dispatch} sessionId={sessionId} context={context} refresh={refresh}/>
+  <section aria-label="Attention and requests"><h3>Attention and requests</h3>
+   {attention.map(row=><p key={row.target.sessionId}><strong>{row.title||'Untitled chat'}</strong> · {labels[row.status]||row.status}{!['error','interrupted','cancelled','stopped'].includes(row.status)&&' · Needs attention'}</p>)}
+   {!attention.length&&!context.requests.length&&<p>No attention requests in the loaded workspace page or this chat’s recent requests.</p>}
+   {context.requests.slice(0,8).map(row=>{const response=[row.response,row.terminalOutcome].filter(Boolean).sort((a,b)=>(b.outcomeRevision||0)-(a.outcomeRevision||0))[0];return <p key={row.requestId}><strong>{name(row.senderSessionId===sessionId?row.target.sessionId:row.senderSessionId)}</strong> · {row.senderSessionId===sessionId?'Request sent':'Request received'} · {response?(response.outcome==='success'?(response.qualified?'Completed with terminal evidence':'Success reported; not qualified'):response.outcome?.replaceAll('_',' ')||response.status):(['accepted','applied','submitting'].includes(row.delivery)?'Awaiting a result':row.delivery)}</p>})}
+   <p className="a-caption">{context.requests.length>8?`${context.requests.length} recent requests retained; showing the latest eight. `:''}Recent requests are limited to this chat. A question or deferral keeps the request open; a failed or unknown result is not success.</p>
+  </section>
+  <AssignmentControls key={'assignment:'+sessionId} dispatch={dispatch} sessionId={sessionId} memberLabels={memberLabels}/>
+  {session&&<IntegrationEvidence key={'integration:'+sessionId} session={session} act={dispatch}/>}
+  <details onToggle={event=>setRecap(event.currentTarget.open)}><summary>Changes since your last view and diagnostics</summary>{recap&&<CoordinationObservations key={'observations:'+sessionId} dispatch={dispatch} sessionId={sessionId}/>}</details>
+  <details><summary>Workspace chat list</summary>
+   {items.map(row=><div key={row.target.sessionId} data-workspace-chat-id={row.target.sessionId}>{row.title||'Untitled chat'}{row.target.sessionId===sessionId?' (this chat)':''} · {labels[row.status]||row.status} · {row.collaboration?'Commissioned chat':'Independent chat'} <button type="button" className="a-link" data-action="session.select" aria-label={'Open chat: '+(row.title||'Untitled chat')} disabled={opening!==null||!onOpenChat} onClick={()=>openChat(row.target.sessionId)}>{opening===row.target.sessionId?'Opening…':'Open chat'}</button><details><summary>Chat identity</summary><code>{row.target.sessionId}</code></details></div>)}
+   {next!==null&&<button className="a-link" onClick={more}>Load more workspace chats</button>}
+  </details>
+  <details><summary>Exact requests, messages and saved results</summary>
+  <p className="a-caption">Inspect retained evidence explicitly. Qualification links a report to a completed turn; inspect artifacts independently.</p>
   {original&&<article aria-label="Original message"><strong>{original.role} · {original.sessionId}</strong><p style={{whiteSpace:'pre-wrap'}}>{original.text}</p>{original.truncated&&<small>Bounded excerpt; original retained.</small>}<button className="a-link" onClick={()=>setOriginal(null)}>Close original message</button></article>}
-  {items.map(row=><div key={row.target.sessionId}>{row.title} · {labels[row.status]||row.status}{row.collaboration&&<> · created by {row.collaboration.creatorTitle||'Source conversation'}</>}<details><summary>Task identity</summary><code>{row.target.sessionId}{row.collaboration&&<> · creator {row.collaboration.creatorSessionId}</>}</code></details></div>)}
   {context.requests.map(row=>{const result=inspected[row.requestId],receipt=result?.receipt||row,response=[receipt.response,receipt.terminalOutcome].filter(Boolean).sort((a,b)=>(b.outcomeRevision||0)-(a.outcomeRevision||0))[0];return <article key={row.requestId} data-request-id={row.requestId}>
-   <small>{row.senderSessionId===sessionId?'Sent':'Received'} · {row.delivery} · {row.requestId}</small>
+   <small>{row.senderSessionId===sessionId?'Sent to':'Received from'} {name(row.senderSessionId===sessionId?row.target.sessionId:row.senderSessionId)} · {row.delivery}</small><details><summary>Request identity</summary><code>{row.requestId}</code></details>
    <button className="a-link" onClick={()=>inspectResult(row.requestId)}>Inspect exact result</button>
    <button className="a-link" onClick={()=>reveal(row.target.sessionId,row.messageId)}>Open submitted message</button>
    {response&&<div data-part="exact-result"><p>Result: {response.status} · {response.outcome} · {response.qualified?'Qualified terminal evidence':'Not qualified'}</p><p>{response.text}</p>{response.detail&&<p role="alert">{response.detail}</p>}
@@ -136,5 +178,6 @@ export function RelatedWork({dispatch,sessionId}){
     </div>)}
    </details>}{result&&<p className="a-caption">{result.detail}</p>}
   </article>})}
+ </details>
  </section>;
 }

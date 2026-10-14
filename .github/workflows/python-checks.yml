@@ -49,6 +49,20 @@ jobs:
           'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main'
           'amplifier-module-loop-streaming @ git+https://github.com/microsoft/amplifier-module-loop-streaming@main'
           'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
+          'amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@main'
+          'amplifier-module-tool-apply-patch @ git+https://github.com/microsoft/amplifier-bundle-filesystem@main#subdirectory=modules/tool-apply-patch'
+      - name: Require native file-policy modules and Core entry points
+        run: |
+          uv run --no-sync python - <<'PY'
+          from importlib import import_module
+          from importlib.metadata import entry_points
+          available = {entry.name: entry for entry in entry_points(group='amplifier.modules')}
+          for name in ('loop-live', 'context-simple', 'tool-filesystem', 'tool-apply-patch'):
+              module = import_module('amplifier_module_' + name.replace('-', '_'))
+              mount = available[name].load()
+              if not callable(mount) or mount is not module.mount:
+                  raise RuntimeError('Native module entry point is not its canonical mount: ' + name)
+          PY
       - name: Run the complete Python suite
         run: |
           mkdir -p output/python-checks

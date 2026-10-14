@@ -99,13 +99,12 @@ ACTION_DEFINITIONS = {
     "session.draft": ("Open a configurable new chat without creating a session or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
     "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.plans": ("Read current plan progress and recorded trajectory for up to 50 chats without selecting them. Include items for at most one chat to inspect its todo list.", schema({"ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":True,"items":string(200)},"includeItems":{"type":"boolean"}},["ids"])),
-    "session.select": ("Select a conversation", schema({"id": string(100)})),
+    "session.select": ("Select a conversation without preparing a runtime", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
-    "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
+    "runtime.retention.update": ("Set this host's idle worker count and lifetime", schema({"patch": {
         "type": "object", "properties": {
             "max_warm_workers": {"type": "integer", "minimum": 0},
-            "idle_timeout_hours": {"type": "number", "minimum": 0},
-            "prewarm_on_select": {"type": "boolean"}}, "additionalProperties": False}}, ["patch"])),
+            "idle_timeout_hours": {"type": "number", "minimum": 0}}, "additionalProperties": False}}, ["patch"])),
     "session.takeover": ("Explicitly request execution ownership here; the current owner saves and releases automatically.", schema({"id": string(200)})),
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
     "session.naming.backfill": ("Name existing chats that still have a fallback or placeholder title and Auto naming on, without starting a conversation worker or replaying work: one naming call per chat with the default provider, at most two at a time. Manual and generated names, Auto=false, busy chats and worker/internal sessions are skipped. Omit ids to take the most recent eligible chats up to limit (default 20, max 200). Progress is each chat's naming.status; the summary (named, skipped and failed with reasons) is /namingBackfill.", schema({"ids": {"type": "array", "items": string(100), "maxItems": 200}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, [])),
@@ -188,8 +187,9 @@ ACTION_DEFINITIONS = {
     "history.importFile": ("Import a transcript as an independent conversation",schema({"content":string(1000000),"format":{"enum":["json","jsonl"]},"title":string(200),"bundle":string(2000)},["content","format"])),
     "notifications.get": ("Inspect notification delivery preferences",schema()),
     "notifications.save": ("Configure browser and ntfy notifications",schema({"patch":{"type":"object"}})),
-    "permissions.get": ("Inspect scoped file-access settings",schema({"sessionId":string(200),"scope":{"enum":["global","project","local"]}},[])),
-    "permissions.save": ("Save scoped file-access settings",schema({"sessionId":string(200),"scope":{"enum":["global","project","local"]},"allowed":{"type":"array","items":string(4000)},"denied":{"type":"array","items":string(4000)}},["allowed","denied"])),
+    "permissions.get": ("Inspect scoped write settings. scope=session requires sessionId and returns this chat’s overrides, inherited workspace defaults and a revision for save/reset; this is saved policy, not mounted access.",schema({"sessionId":string(200),"scope":{"enum":["global","project","local","session"]}},[])),
+    "permissions.save": ("Save scoped write settings. scope=session changes only this chat and requires sessionId plus expectedRevision from permissions.get. Agents require file_access authority at the selected scope.",schema({"sessionId":string(200),"scope":{"enum":["global","project","local","session"]},"expectedRevision":string(64),"allowed":{"type":"array","maxItems":256,"items":string(4000)},"denied":{"type":"array","maxItems":256,"items":string(4000)}},["allowed","denied"])),
+    "permissions.reset": ("Return this chat’s write overrides to workspace defaults. Removes only session allowed/denied write overrides, preserving read policy and shared settings. May widen access; agents need file_access/session authority. Preview with permissions.get first.",schema({"sessionId":string(200),"scope":{"enum":["session"]},"expectedRevision":string(64)},["sessionId","scope","expectedRevision"])),
     "history.list": ("Browse persisted and optionally legacy sessions",schema({"legacy":{"type":"boolean"}},[])),
     "history.refresh": ("Refresh automatically discovered CLI workspaces and chats without mounting or replaying sessions", schema()),
     "session.history": ("Refresh saved chat text, or load earlier messages before an offset. This never starts an Amplifier runtime.", schema({"id":string(200),"before":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},["id"])),
@@ -372,7 +372,7 @@ for _access, _actions in {
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
         "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
-        "call.start", "permissions.save", "providers.save", "providers.finishSetup", "providers.configureImages",
+        "call.start", "permissions.save", "permissions.reset", "providers.save", "providers.finishSetup", "providers.configureImages",
         "providers.remove", "providers.move", "providers.reorder", "providers.login",
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
@@ -1701,7 +1701,7 @@ class AppService:
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
-        if action.startswith(("smartTools.","providers.")) or action == 'updates.featureInstall':
+        if action.startswith(("smartTools.","providers.")) or action == 'updates.featureInstall' or action.startswith('permissions.') and args.get('scope') == 'session':
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
@@ -2225,6 +2225,9 @@ class AppService:
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+                if action != 'question.answer' and current.get('fileAccessPending'):
+                    from .chat_permissions import PENDING_DETAIL
+                    raise AppError(PENDING_DETAIL, 409)
             if action == 'session.pin':
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
@@ -2576,7 +2579,6 @@ class AppService:
                 self.state["view"]["draft"] = session.get('draft', '')
                 if session.get('nativeProject'):
                     pending.append((self.history.refresh_session, (session['id'],)))
-                pending.append((self.warmup.schedule, (session['id'],)))
             elif action == "session.warm":
                 session = self._session(args['id'])
                 pending.append((self.warmup.schedule, (session['id'],)))
@@ -2676,7 +2678,7 @@ class AppService:
                 text = args['text'].strip()
                 if not text:
                     raise AppError('Enter a message before regenerating.')
-                if source.get('configurationBusy'):
+                if source.get('configurationBusy') or source.get('fileAccessPending'):
                     raise AppError('Wait for configuration changes to finish.',409)
                 if not self.runtime:
                     raise AppError('The Amplifier runtime is unavailable.')
@@ -2732,7 +2734,7 @@ class AppService:
                     diagnostic_result = {**diagnostic_result, 'stale': True}
             elif action in {"session.fork", "session.recover"}:
                 source = self._session(args["id"])
-                if source.get("configurationBusy"):
+                if source.get("configurationBusy") or source.get('fileAccessPending'):
                     raise AppError("Wait for configuration changes to finish before forking.",409)
                 session = self._new_session({"title": source["title"] + (" · recovery" if action == "session.recover" else " · fork"), "workspace": source["workspace"], "bundle": source["bundle"]})
                 # loop-live checkpoints before publishing idle. Fork that full
@@ -3235,7 +3237,7 @@ class AppService:
                     receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
             if diagnostic_result is not None:receipt['result']=diagnostic_result
-            if action in {"locations.create", "notifications.save"} or action.startswith("providers.") or action.startswith("smartTools.") and action != "smartTools.context":
+            if action in {"locations.create", "notifications.save"} or action.startswith("providers.") or action.startswith("smartTools.") and action != "smartTools.context" or action.startswith('permissions.') and args.get('scope') == 'session':
                 receipt["operationId"] = command_id
             if action in {"feedback.submit", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                           "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
@@ -4088,15 +4090,16 @@ class AppService:
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""
         if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:return
-        if session.get('historyManaged') or not session.get('configurationPending') or session.get('configurationBusy') or session['status'] not in {'idle','stopped','interrupted','error'}:return
-        if any(w.get('persistent') and w.get('status') in {'idle','running','starting'} for w in session.get('workers',[])):return
+        if (session.get('historyManaged') and not session.get('fileAccessPending')) or not session.get('configurationPending') or session.get('configurationBusy') or session['status'] not in {'idle','stopped','interrupted','error'}:return
         workers=getattr(self.runtime,'workers',None)
         if self.runtime is None or isinstance(workers,dict) and session['id'] not in workers:
             # There is no mounted configuration to retire. The next start reads
             # the committed settings; no busy cycle or per-chat save is needed.
             session['configurationPending']=False
+            session.pop('fileAccessPending', None)
             session.pop('configurationRefresh',None)
             return
+        if any(w.get('persistent') and w.get('status') in {'idle','running','starting'} for w in session.get('workers',[])):return
         session['configurationBusy']=True
         revision=session.get('configurationPendingRevision',0)
         session['configurationRefresh']={'phase':'applying','revision':revision}
@@ -4121,6 +4124,7 @@ class AppService:
                 session['configurationBusy']=False
                 if succeeded and session.get('configurationPendingRevision',0)==revision:
                     session['configurationPending']=False
+                    session.pop('fileAccessPending', None)
                     session.pop('configurationRefresh',None)
                 elif session.get('configurationRefresh',{}).get('phase')!='error':
                     session['configurationRefresh']={'phase':'pending','revision':session.get('configurationPendingRevision',revision)}
@@ -4493,6 +4497,9 @@ class AppService:
             session = self._session(session_id)
             self._check_voice_owner(session['id'], transfer_id)
             if session.get("configurationBusy"):raise AppError("Applying conversation settings; retry shortly.",409)
+            if session.get('fileAccessPending'):
+                from .chat_permissions import PENDING_DETAIL
+                raise AppError(PENDING_DETAIL, 409)
             fingerprint = hashlib.sha256(json.dumps(["voice_delegate", session["id"], text]).encode()).hexdigest()
             previous = self.db.execute("SELECT fingerprint,receipt FROM commands WHERE id=?", (command_id,)).fetchone()
             if previous:

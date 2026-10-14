@@ -2,7 +2,7 @@ import {WorkspaceConfiguration} from './workspace-configuration';
 import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal} from 'lucide-react';
+import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal,Users} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
 import {useNavigationController,ChatList,NavigationEditor,ChatSearch} from './shell/navigation-components';
 import {WorkspaceCleanup} from './storage-settings';
@@ -58,7 +58,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
-   {!browsing&&session&&<><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>
+   {!browsing&&session&&<><button type="button" className="a-soft a-work-overview-entry" aria-label="Workspace work" onClick={()=>open('coordination')}><Users/><span className="a-work-overview-long">Workspace work</span><span className="a-work-overview-short" aria-hidden="true">Work</span></button><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
     <button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin'}</button>
     <button onClick={()=>open('chat-share')}><Share2/>Share or save</button>

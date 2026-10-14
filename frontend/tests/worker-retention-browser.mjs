@@ -17,11 +17,12 @@ try{
  const count=page.getByLabel('Conversations to keep ready',{exact:true}),hours=page.getByLabel('Hours to keep an idle conversation ready',{exact:true});
  await expect(count).toHaveValue('32');await expect(hours).toHaveValue('12');
  await count.fill('100');await hours.fill('336');
- await page.getByRole('checkbox',{name:'Prepare a conversation in the background when I select it'}).uncheck();
- await page.waitForFunction(()=>window.amplifier.getState().runtime.retention.prewarm_on_select===false);
+ await count.focus(); // Commit hours through its normal blur autosave.
+ await expect(page.getByRole('checkbox',{name:'Prepare a conversation in the background when I select it'})).toHaveCount(0);
+ await page.waitForFunction(()=>window.amplifier.getState().runtime.retention.idle_timeout_hours===336);
  await page.waitForFunction(()=>window.amplifier.getState().runtime.retention.max_warm_workers===100);
  const inspect=await page.request.get(url+'/fixture').then(response=>response.json());
- assert.deepEqual(inspect.retention,{max_warm_workers:100,idle_timeout_hours:336,prewarm_on_select:false,max_background_starts:2});
+ assert.deepEqual(inspect.retention,{max_warm_workers:100,idle_timeout_hours:336,max_background_starts:2});
  assert.equal(inspect.workerCount,0);
  await page.reload();await expect(count).toHaveValue('100');await expect(hours).toHaveValue('336');
  await page.screenshot({path:'/tmp/amplifier-worker-retention-desktop.png',animations:'disabled'});

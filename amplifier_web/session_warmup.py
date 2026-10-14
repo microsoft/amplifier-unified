@@ -1,4 +1,4 @@
-"""Optional preparation after selection, independent of rendering and input."""
+"""Explicit optional preparation, independent of navigation, rendering and input."""
 from __future__ import annotations
 
 import asyncio

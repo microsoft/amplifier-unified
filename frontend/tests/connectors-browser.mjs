@@ -22,7 +22,7 @@ try {
   const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
   await action('view.update',{patch:{draft:'Unsent draft stays here'}});
   const selected=(await state()).selectedSessionId;
-  await openSettingsPage(page,'smart-tools');
+  await openSettingsPage(page,'tool-connections');
   await page.getByRole('button',{name:'Add MCP connection',exact:true}).click();
   await page.getByLabel('Display name',{exact:true}).fill('Local authorization fixture');
   await page.getByLabel('Connection type',{exact:true}).selectOption('streamable-http');
@@ -109,15 +109,17 @@ try {
   await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers[0].login.phase==='cancelled');
   assert.equal((await info()).exchanges,1);
   await fetch(origin+'/fixture/package',{method:'POST',headers});
-  await page.getByRole('button',{name:'Back to Smart Tools',exact:true}).click();
+  await page.locator('.a-settings-mobile-head').getByRole('button',{name:'Back to Tool connections',exact:true}).click();
   await page.getByRole('button',{name:/Fixture package.*installed/i}).click();
+  await page.getByRole('button',{name:'Source & installation options',exact:true}).click();
   await page.getByRole('button',{name:'Uninstall package',exact:true}).click();
   await page.getByText(/Remove these connection registrations before uninstalling:/,{exact:false}).first().waitFor();
   assert.equal((await info()).packageExists,true);
-  await page.getByRole('button',{name:'Back to Smart Tools',exact:true}).click();
+  await page.locator('.a-settings-mobile-head').getByRole('button',{name:'Back to Tool connections',exact:true}).click();
   await page.getByRole('button',{name:/Package dependency.*disconnected/}).click();
   await page.getByRole('button',{name:'Remove connection',exact:true}).click();
   await page.getByRole('button',{name:/Fixture package.*installed/i}).click();
+  await page.getByRole('button',{name:'Source & installation options',exact:true}).click();
   await page.getByRole('button',{name:'Uninstall package',exact:true}).click();
   await page.waitForFunction(()=>window.amplifier.getState().smartTools.installations.length===0);
   assert.equal((await info()).packageExists,false);

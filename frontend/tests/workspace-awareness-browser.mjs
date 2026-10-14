@@ -22,7 +22,7 @@ try{
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Private composer content');
  await action('view.update',{patch:{panel:'chat-work'}});
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
- const related=page.getByRole('region',{name:'Related work'}),panel=page.getByRole('region',{name:'Working in this workspace'});
+ const related=page.getByRole('region',{name:'Workspace work overview'}),panel=page.getByRole('region',{name:'Working in this workspace'});
  await expect(panel.locator('[data-active-peer]')).toHaveCount(1);
  await expect(panel).toContainText('Independent writer');await expect(panel).toContainText('Shares your execution folder');
  await panel.getByText('Declare files for this chat',{exact:true}).click();
@@ -30,7 +30,7 @@ try{
  await input.fill('src/');await panel.getByRole('button',{name:'Save file declaration',exact:true}).click();
  await expect(panel.getByRole('status')).toContainText('File declaration saved');
  await action('coordination.intent',{sessionId:second.sessionId,expectedRevision:0,expectedExecutionRevision:0,paths:[{path:'src/shared.py',kind:'file'}]});
- await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
+ await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
  await expect(panel).toContainText('Declared files overlap');
  await panel.getByRole('button',{name:'View full declaration',exact:true}).click();
  await expect(panel.getByRole('article',{name:'Shared file declaration'})).toContainText('src/shared.py');
@@ -76,7 +76,7 @@ try{
  assert.equal(writes.length,2);assert.equal(writes[0].id,writes[1].id);assert.equal((await read()).result.revision,3);
  await page.unroute('**/api/actions');
  for(let i=0;i<9;i++){const peer=await action('session.create',{workspace:workspace.path,title:'Active peer '+i,select:false});await activity(peer.sessionId,'working')}
- await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
+ await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
  await expect(panel.getByRole('button',{name:'More active chats',exact:true})).toBeVisible();
  await panel.getByRole('button',{name:'More active chats',exact:true}).click();
  await expect(panel.getByRole('button',{name:'Previous active chats',exact:true})).toBeVisible();
@@ -86,7 +86,7 @@ try{
  await page.screenshot({path:output+'/mobile.png'});
  await input.fill('');await panel.getByRole('button',{name:'Save file declaration',exact:true}).click();
  await expect(panel.getByRole('status')).toContainText('File declaration saved');assert.deepEqual((await read()).result.paths,[]);
- await activity(second.sessionId,'idle');await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
+ await activity(second.sessionId,'idle');await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
  await expect(panel.locator('[data-active-peer="'+second.sessionId+'"]')).toHaveCount(0);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Private composer content');

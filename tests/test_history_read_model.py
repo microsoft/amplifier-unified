@@ -52,6 +52,22 @@ def test_cold_and_unchanged_equal_reference(source, model, monkeypatch):
     assert session['execution'] == expected
 
 
+def test_budget_failure_identifies_fixed_projection_stage_without_source_content(source, model):
+    session, path = source
+    family(session, path, 2)
+    current = [None]
+    class Refused(Exception):
+        pass
+    def guard():
+        if current[0] == 'source_rows':
+            raise Refused()
+    guard.stage = lambda value: current.__setitem__(0, value)
+    with pytest.raises(Refused):
+        model.project(EventLogView.projection_input(session), check_budget=guard)
+    assert current[0] == 'source_rows'
+    assert not model.models
+
+
 def test_non_work_append_does_not_reload_descendants(source, model, monkeypatch):
     session, path = source
     child = family(session, path, 40)

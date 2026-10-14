@@ -148,6 +148,9 @@ async def test_failure_retires_and_next_request_respawns(tmp_path, inputs, reaso
     owner = projector(tmp_path, _timeout=1, _close_timeout=.15)
     try:
         result = await owner.project(inputs, key='failed')
+        failure = result.pop('failure', None)
+        if reason == 'memory_limit':
+            assert failure['stage'] == 'model'
         assert result == {'status': 'retry', 'reason': reason}
         old_pid = (await called(tmp_path))[0]['pid']
         result = await owner.project({'value': 'recovered'}, key='next')

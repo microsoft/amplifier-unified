@@ -871,10 +871,10 @@ class RuntimeManager:
             row["pending"].pop(identity, None)
 
     async def prewarm(self, session, emit):
-        if self._closed or not self.retention.settings["prewarm_on_select"] or not self.retention.settings["max_warm_workers"] or not self.retention.settings["idle_timeout_hours"]:
+        if self._closed or not self.retention.settings["max_warm_workers"] or not self.retention.settings["idle_timeout_hours"]:
             return
-        # Browsing an already loaded chat neither reacquires its writer lock nor
-        # extends its idle lifetime. Actual input still validates state on wake.
+        # Repeated explicit preparation neither reacquires a loaded chat’s writer
+        # lock nor extends its idle lifetime. Actual input still validates state on wake.
         if self.workers.get(session["id"], {}).get("process") is not None:
             row = self.workers[session["id"]]
             if row["process"].returncode is None:
@@ -882,7 +882,7 @@ class RuntimeManager:
         async with self.retention.background:
             # Policy or another admission may have changed while this startup
             # waited behind other background preparations.
-            if self._closed or not self.retention.settings["prewarm_on_select"] or not self.retention.settings["max_warm_workers"] or not self.retention.settings["idle_timeout_hours"]:
+            if self._closed or not self.retention.settings["max_warm_workers"] or not self.retention.settings["idle_timeout_hours"]:
                 return
             row = self.workers.get(session["id"])
             if row and row["process"].returncode is None:

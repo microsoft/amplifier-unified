@@ -28,6 +28,8 @@ try{
  await composer.fill('Preserve this unsent draft');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
+ const expandControls=async()=>{for(const name of ['Follow up or watch work','Exact requests, messages and saved results']){const summary=page.getByText(name,{exact:true});if(await summary.locator('..').getAttribute('open')===null)await summary.click()}};
+ await expandControls();
  const first=page.getByRole('region',{name:'Worker: First worker'}),second=page.getByRole('region',{name:'Worker: Second worker'});
  await first.getByRole('checkbox').check();
  await second.getByRole('checkbox').check();
@@ -44,7 +46,7 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
  await expect(composer).toHaveDraft('Preserve this unsent draft');
  // Reconnect with retained cursors: one stable DOM report, no repeated command.
- await page.reload();
+ await page.reload();await expandControls();
  await expect(second.locator('[data-report-id="b-report-1"]')).toHaveCount(1);
  await expect(second.getByRole('checkbox')).toBeChecked();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
@@ -53,7 +55,7 @@ try{
   if(!interruptedRead&&route.request().method()==='POST'&&route.request().postDataJSON()?.action==='coordination.wait'){interruptedRead=true;await route.abort('connectionreset')}else await route.continue();
  });
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));
- await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
+ await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();await expandControls();
  await expect(page.getByText(/Waiting to reconnect:/)).toBeVisible();
  await emit({id:'worker-b',status:'idle',report:'Second worker finished its first report.',reportId:'b-report-1'});
  await emit({id:'worker-a',status:'idle',report:'First worker follow-up report.',reportId:'a-report-2'});
@@ -113,7 +115,8 @@ try{
  await composer.fill('Preserve this unsent draft');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
- const related=page.getByRole('region',{name:'Related work'});
+ await expandControls();
+ const related=page.getByRole('region',{name:'Workspace work overview'});
  const preserve=async()=>{
   assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
   await expect(composer).toHaveDraft('Preserve this unsent draft');
@@ -176,8 +179,16 @@ try{
  assert.deepEqual(notified.sourceInputIds,[tasks[0].brief]);
  peerState=await inspect();binding(peerState,'browser-notify',tasks[0].id,recipientContext);
  assert.equal(peerState.sent.length,sentBefore);assert.equal(peerState.contexts[current.other],undefined);
- await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
- for(const task of tasks)await expect(related.getByText(task.title+' · Working · created by Selected conversation')).toBeVisible();
+ await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
+ await related.getByText('Workspace chat list',{exact:true}).click();
+ for(const task of tasks){
+  // A working peer also appears in the activity overview. Assert the exact
+  // chat-list row instead of matching both legitimate representations.
+  const row=related.locator('[data-workspace-chat-id="'+task.id+'"]');
+  await expect(row).toBeVisible();
+  await expect(row).toContainText(task.title+' · Working · Commissioned chat');
+  await expect(row.getByRole('button',{name:'Open chat: '+task.title,exact:true})).toBeEnabled();
+ }
  const rounds=[],continuations=new Set();
  for(const task of tasks){
   let firstCandidate,firstGeneration;
@@ -276,9 +287,9 @@ try{
    if(round!==0)assert.deepEqual(await readCandidate(task.actor,requestId),candidate);
    assert.deepEqual((await finish(task.actor)).terminal,terminal); // Duplicate observation, never another continuation.
    assert.equal((await inspect()).sent.filter(row=>row.inputId===continuation).length,1);
-   await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
+   await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
    const row=related.locator('[data-request-id="'+requestId+'"]');
-   await expect(row).toHaveCount(1);await expect(row).toContainText('Sent · accepted');
+   await expect(row).toHaveCount(1);await expect(row).toContainText(/Sent to .* · accepted/);
    await row.getByRole('button',{name:'Inspect exact result',exact:true}).click();
    await expect(row.locator('[data-part="exact-result"]')).toContainText('Result: sealed · success · Qualified terminal evidence');
    await expect(row).toContainText('not independently verified correctness');
@@ -309,6 +320,7 @@ try{
    await preserve();
    await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));
    await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
+   await expandControls();
    rounds.push({task,requestId,candidate,qualified});
   }
  }
@@ -329,7 +341,7 @@ try{
  // Either panel can be restored. Re-observe rendered and public view state
  // within one bound if a delayed view update replaces the navigation target.
  // Only navigate from visible Work & automation; never normalize task/input state.
- const coordinationDialog=page.getByRole('dialog',{name:'Tasks and workers',exact:true});
+ const coordinationDialog=page.getByRole('dialog',{name:'Workspace work',exact:true});
  const detailsDialog=page.getByRole('dialog',{name:'Work & automation',exact:true});
  const reloadObservations=[];let reopenClicks=0;
  await expect(async()=>{
@@ -343,10 +355,11 @@ try{
    reopenClicks++;
   }
   await expect(coordinationDialog).toBeVisible({timeout:1000});
-  await expect(related.getByRole('heading',{name:'Related work',exact:true})).toBeVisible({timeout:1000});
+  await expect(related.getByRole('heading',{name:'Working here',exact:true})).toBeVisible({timeout:1000});
   assert.equal(await page.evaluate(()=>window.amplifier.getState().view.panel),'coordination');
  }).toPass({timeout:10000,intervals:[100,250,500]});
- await expect(related.getByRole('heading',{name:'Related work',exact:true})).toBeVisible();
+ await expect(related.getByRole('heading',{name:'Working here',exact:true})).toBeVisible();
+ await expandControls();
  await expect(related.locator('[data-request-id="'+rounds[0].requestId+'"]')).toBeVisible();
  console.log(JSON.stringify({kind:'coordination-reload',reloadObservations,reopenClicks,
   postReopen:{publicPanel:await page.evaluate(()=>window.amplifier.getState().view.panel),
@@ -426,7 +439,7 @@ try{
    text:replyText,references:[reference],
   },'browser-revision-'+revision);
   await finish(revisedTask.actor);
-  await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
+  await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
   const row=related.locator('[data-request-id="'+originalRound.requestId+'"]');
   await row.getByRole('button',{name:'Inspect exact result',exact:true}).click();
   await expect(row.locator('[data-part="exact-result"]')).toContainText(replyText);

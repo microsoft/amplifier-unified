@@ -1043,3 +1043,82 @@ reported rather than treated as deletion, completion or released resources.
 Provider/bridge export coverage uses recorded metadata fixtures; the production
 browser journey uses a scripted runtime without model calls. Release, installed
 worker and provider acceptance remain the integration owner's separate checks.
+
+
+## Optional assignment work items — 2026-10-14
+
+`assignment.tasks.list/read/wait/create/update/claim/release/complete/cancel/reassign`
+use the canonical assignment record and existing command receipts. A bounded
+128-item list supports owner-curated acyclic dependencies and atomic participant
+self-claims. Per-item revisions and exact claim identities fence stale holders.
+Stop and detachment retain stale responsibility; ordinary restart retains a valid
+claim. All recovery is explicit, with no claim expiry, automatic work, replay or
+file-lock promise. Reported completion is separate from artifact verification and
+integration validation. Completed and cancelled tasks are immutable.
+
+The bundled Shared task list uses these same actions and readable scoped member
+and prerequisite names. Open views wait passively on scoped versions; hidden or
+closed views cancel their wait. Read paths inspect metadata and command receipts,
+not history or assignment usage. Private form/pending request state stays in the
+browser tab and uncertain mutations retry the same command ID. Confirmed client
+rejections clear only the pending request and refresh the list, retaining drafts.
+Older observations cannot replace a newer assignment revision; mutation, closure
+and visibility boundaries invalidate outstanding task observations. Completion
+drafts retain their original claim identity and require explicit review before
+use for a replacement claim. Free-text drafts are excluded from UI observations.
+Mutation receipts retain only the changed item, not repeated copies of the board.
+
+Source checks cover concurrent claims, dependencies and cycles, old-holder fencing,
+Stop/detachment, restart with explicit later completion, delayed admission, durable
+commit failure and lost acknowledgement, shared UI/agent actions, scoped passive
+waits, and UI identity/reconnect behavior. Installed package, real-provider and
+computer-use acceptance remain separate integration checks.
+
+## Workspace work overview and combined-check controls
+
+The chat header now opens Workspace work directly while retaining the selected
+chat and composer draft. Initial inspection reads the current chat context and
+one workspace-scoped page of twenty root summaries. Active work and file-overlap
+information still come from the bounded awareness owner; paging is explicit.
+The page distinguishes independent active peers, commissioned helpers, attention
+and recent request outcomes. Shared tasks/assignment controls, follow-up watches,
+recap diagnostics and exact messages/results are disclosures. No inspection
+starts work, changes execution placement or assigns an independent chat.
+
+Combined checks now select known working copies or an explicit repository folder,
+retain inspected source versions, and choose saved validation runs per repository.
+The selected candidate survives source rechecks and provenance inspection; each
+run selection stays bound to that exact candidate. Acknowledgement loss preserves
+the original invocation identity and arguments across reload. Collection reads
+native outcomes without replaying commands. Exact identities, manual JSON/import
+expectations and reported publication remain available as advanced evidence.
+
+Focused component checks cover passive bounded reads, stale visits, duplicate
+repository names, exact source capture, candidate changes, saved-run paging and
+uncertain retries. The production frontend builds successfully. Browser scripts
+were updated for the explicit disclosures; actual browser, responsive layout and
+provider acceptance remain separate integration-owner checks.
+
+
+## Chat write settings and inherited defaults
+
+`permissions.get`/`permissions.save` support explicit session scope, and
+`permissions.reset` removes only that native session's filesystem allowed/denied
+write override keys. Chat → Advanced → Files this chat can edit previews the
+inherited workspace values before reset; the separate Project file access form
+continues to edit shared project/local settings. Both UI and authorized native
+roots use these actions. An agent requires the existing file_access/session grant
+for save and reset, including a reset that restores wider access.
+
+Foundation still owns the settings file, overlay precedence and locked mutation.
+The preview revision includes inherited configuration, current session settings
+and execution identity, and is checked again at the mutation. Exact command
+retries do not repeat writes. No-op reset preserves an absent settings file or
+existing file bytes. Reset preserves unrelated/read settings and shared files;
+it does not clean up earlier workspace-local overrides. The owning runtime
+refreshes only this chat through its existing safe-boundary mechanism. Saved
+policy previews do not claim actual mounted access, override bundle/parent
+ceilings, alter shell policy or start a turn. A pending file-access fence is
+saved before the canonical file write. Existing work may settle; new root,
+worker and voice inputs cannot bypass it, peers wait, and schedule/observation
+guards recheck it. Confirmed retirement or an absent owned mount clears it.

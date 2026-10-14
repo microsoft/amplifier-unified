@@ -2,6 +2,29 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.153",
+      "title": "Keep navigation lightweight and make workspace coordination clearer",
+      "changes": [
+        "Workspace overview brings shared tasks and claims together. Chats can choose write defaults while the server continues to enforce current permissions and accepted-work ownership.",
+        "Opening a saved chat no longer prepares a model runtime just to display its history. Explicit preparation and sending a message retain their existing admission limits.",
+        "Routing profile fields remain reachable on desktop and compact layouts. Inspected usage refreshes from compact chat updates without losing budget edits, and installed Smart Tools keep their source and removal controls accessible.",
+        "Cancelled connection discovery retains ownership of its subprocesses through cleanup. Empty-host verification also closes its owned processes after completing each journey.",
+        "History diagnostics record a bounded processing stage and memory measurements when a background Work read fails, without recording conversation content."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.152",
+      "title": "Keep chat navigation and selected Work processing bounded",
+      "changes": [
+        "Ordinary chat switches reuse unchanged sidebar pages and workspace totals. Workspace listings narrow indexed candidates before applying their existing visibility rules.",
+        "On Linux hosts, requested Work histories are rebuilt in a bounded background process. Selected read models reuse unchanged work and apply supported updates incrementally, with exact reconstruction when source changes require it. Other host operating systems retain the existing reader pending native qualification.",
+        "Unavailable Work projections show their status without making the saved conversation unreadable. Oversized unchanged histories are not retried repeatedly.",
+        "Background verification removes five duplicate source-browser runs while preserving their coverage, and chat timing checks identify the actual displayed conversation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.151",
       "title": "Keep history reads and workspace updates focused",
       "changes": [

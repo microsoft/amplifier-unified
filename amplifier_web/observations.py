@@ -103,7 +103,7 @@ class Observations:
     def reviewed(self, sid, config, args, origin):
         session, task = self.app._session(sid), self.task(sid)
         if task.get('status') != 'active': raise ValueError('The persisted task is not active')
-        if session.get('configurationBusy'): raise ValueError('The conversation has an unresolved configuration change')
+        if session.get('configurationBusy') or session.get('fileAccessPending'): raise ValueError('The conversation has an unresolved configuration change')
         from .observation_presentation import grant
         presentation = grant(self, sid, args, origin)
         binding = {**config, 'presentationGrant': presentation, 'sessionId': sid, 'taskId': task['id'], 'taskRevision': task['revision'],
@@ -127,7 +127,7 @@ class Observations:
         from .service import AppError
         try: session = self.app._session(watch['sessionId'])
         except AppError: return 'The authorizing conversation is no longer available'
-        if session.get('configurationBusy'): return 'The execution configuration is changing'
+        if session.get('configurationBusy') or session.get('fileAccessPending'): return 'The execution configuration is changing'
         for key in ('executionRevision', 'interruptionRevision'):
             if session.get(key, 0) != watch[key]: return 'The user stopped or changed the execution context'
         if (session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']) != watch['nativeSessionId']: return 'The native conversation identity changed'

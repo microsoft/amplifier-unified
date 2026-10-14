@@ -907,6 +907,8 @@ class EventLogView:
     def _read(self, session, stages):
         def stage(name):
             if guard := getattr(self, '_budget_guard', None):
+                if label := getattr(guard, 'stage', None):
+                    label('source_' + name.removeprefix('events.'))
                 guard()
             stages.close()
             stages.enter_context(measure(self.service, name, synchronous=True, session_id=session['id']))
@@ -1414,6 +1416,9 @@ class EventLogView:
                 reason = result.get('reason')
                 reason = reason if reason in REASONS else 'worker_failed'
                 count(self.service, 'events.process.retry.' + reason)
+                diagnostics = getattr(self.service, 'performance_diagnostics', None)
+                if diagnostics is not None and result.get('failure') is not None:
+                    diagnostics.record_projection_failure(reason, result['failure'])
                 refused_revisions = None
                 deterministic = reason in {'input_limit', 'output_limit'}
                 if reason == 'input_limit':
