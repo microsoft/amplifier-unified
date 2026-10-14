@@ -845,7 +845,17 @@ class Collaboration:
         if action == "coordination.context":
             if origin not in {"ui", "user"} and args["sessionId"] != caller:
                 self.error("Current coordination context belongs to the caller.")
-            return {"accepted": True, "result": self.current(args["sessionId"])}
+            result = self.current(args["sessionId"])
+            source = self.service._session(args['sessionId'])
+            workspace = next((w for w in self.service.state['workspaces'] if w['path'] == source['workspace']), None)
+            if workspace:
+                from .workspace_resources import dispatch_reservation
+                resources = await dispatch_reservation(self.service, 'workspace.resources.reservations',
+                    {'workspaceId': workspace['id'], 'limit': 16}, origin, None, caller)
+                # Explicit reads only: never load transcripts or duplicate this
+                # inventory in per-session persistent guidance.
+                result['resources'] = {**resources['result'], 'workspaceId': workspace['id']}
+            return {"accepted": True, "result": result}
         if action == "coordination.result":
             reader = self.source({}, origin, caller) if origin not in {"ui", "user"} else None
             receipt = self.receipt(args["requestId"])

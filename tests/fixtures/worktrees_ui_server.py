@@ -14,11 +14,16 @@ from amplifier_web.host_identity import local_host_identity
 async def main(home):
     app = await fixture.main(home)
     service = app['service']; session = service._session(); root = Path(session['workspace'])
-    git(root, 'init', '-b', 'main'); git(root, 'config', 'user.name', 'Fixture'); git(root, 'config', 'user.email', 'fixture@example.invalid')
-    (root/'file.txt').write_text('original\n'); git(root, 'add', '.'); git(root, 'commit', '-m', 'base')
+    repositories = [root / 'api', root / 'client'] if '--multi-repo' in sys.argv else [root]
+    for repository in repositories:
+        repository.mkdir(exist_ok=True)
+        git(repository, 'init', '-b', 'main'); git(repository, 'config', 'user.name', 'Fixture'); git(repository, 'config', 'user.email', 'fixture@example.invalid')
+        (repository/'file.txt').write_text('original\n'); git(repository, 'add', '.'); git(repository, 'commit', '-m', 'base')
+    if '--multi-repo' in sys.argv:
+        (repositories[0]/'file.txt').write_text('Retain uncommitted API work\n')
     runtime = app['runtime']
     runtime.quiesce_for_handoff = AsyncMock(return_value={'quiesced': True, 'inputsReplayed': False})
-    await service.dispatch('view.update', {'patch': {'panel':'settings','runtimeDraft':{'tab':'overview'},'draft':'Keep my worktree draft'}})
+    await service.dispatch('view.update', {'patch': {'panel':'chat-work','runtimeDraft':{'tab':'direction'},'draft':'Keep my worktree draft'}})
     async def fail_next(request):
         runtime.quiesce_for_handoff.side_effect = RuntimeError('Fixture lost release confirmation')
         return web.json_response({'ok':True})
@@ -29,7 +34,7 @@ async def main(home):
     runner=web.AppRunner(app); await runner.setup(); site=web.TCPSite(runner,'127.0.0.1',0); await site.start()
     url=f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
     app['allowed_origins']=app['allowed_origins']|{url}
-    print(json.dumps({'url':url,'sessionId':session['id'],'root':str(root),'host':local_host_identity()}),flush=True)
+    print(json.dumps({'url':url,'sessionId':session['id'],'root':str(root),'repositories':[str(path) for path in repositories],'host':local_host_identity()}),flush=True)
     try: await asyncio.Event().wait()
     finally: await runner.cleanup()
 if __name__=='__main__':

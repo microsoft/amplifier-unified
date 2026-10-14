@@ -25,6 +25,21 @@ The sidebar presents Pinned, Workspaces and Recent. All chats retains the existi
 
 ## Shared actions
 
+`worktree.inspect/create/attach` accept `repositoryPath` for a repository inside
+the task's workspace, execution folder or an already associated ready checkout.
+Relative paths use the execution folder. Inspect first and carry the returned
+absolute `repository.root` and `sourceRevision` into creation. This supports
+several child repositories beneath a non-Git workspace; each checkout retains
+its own source and Git identity. Chat → Advanced → Work & automation exposes
+the same repository selection and shows each checkout's source.
+
+Creating or attaching these checkouts preserves the current execution folder,
+history and unrelated dirty files. Use the returned paths explicitly for
+commands, imports and previews; automatic multi-repository dependency remapping
+is not provided. Existing handoff remains the separate operation for moving
+the task's default execution folder. Native children cannot mutate their root's
+worktree placement or ownership through either dispatch entry point.
+
 ## Workspace starters
 
 New workspace creation offers **Start from…**. **Blank** keeps the empty-folder
@@ -112,6 +127,23 @@ UI and agent callers share `workspace.starters.list/save/duplicate/remove`,
 `workspace.setup.inspect/retry/reconcile` and `workspace.resources.list/add/update`.
 Edits and status changes use observed revisions; all setup effects are scoped to
 the reviewed creation plan.
+
+Workspace Details also exposes **Resource reservations**, using the shared
+`workspace.resources.reservations/reserve/release/uncertain` actions. A task can
+reserve an agreed exact key exclusively or explicitly share it with other
+holders. Matching keys conflict across workspace registrations in the same app
+data home. Use a stable command ID for each mutation; retries return the saved
+outcome, even after a later release. Updates require the observed revision.
+`coordination.context` includes the first 16 current reservations and a cursor
+for an explicit paginated read; it does not load peer conversations.
+
+The host binds agents to their actual root or child identity; a child cannot
+release its root's claim. A user can reconcile a retained claim with evidence,
+including after its workspace registration disappears. Uncertain claims remain
+held. Stop, restart and disconnect do not release claims. Release never performs
+teardown or proves the underlying resource stopped. These cooperative claims
+do not fence external writers, resolve differently named aliases, or coordinate
+separate app installations. Inventory observations remain independent.
 
 ## Placement actions
 

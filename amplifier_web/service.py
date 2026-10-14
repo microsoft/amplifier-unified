@@ -331,6 +331,8 @@ from .computer_visual import ComputerVisuals, definitions as computer_visual_def
 ACTION_DEFINITIONS.update(computer_visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
+from .workspace_resources import definitions as resource_reservation_definitions
+ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
 ACTION_DEFINITIONS.update(presentation_definitions(schema, string))
@@ -370,6 +372,7 @@ for _access, _actions in {
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
+        "worktree.create", "worktree.attach", "worktree.remove", "worktree.handoff", "worktree.reconcile",
     },
     "presentation": {
         "session.select", "session.pin", "session.markUnread", "session.archive", "session.restore", "session.rename",
@@ -382,6 +385,7 @@ for _access, _actions in {
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
         "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
+        "worktree.inspect", "worktree.list", "worktree.status",
     },
     "domain_authoritative": {
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
@@ -392,6 +396,7 @@ for _access, _actions in {
         *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
         *canvas_version_definitions(schema, string),
         *publishing_definitions(schema, string),
+        *resource_reservation_definitions(schema, string),
     },
 }.items():
     for _action in _actions:
@@ -1453,6 +1458,9 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action in resource_reservation_definitions(schema, string):
+            from .workspace_resources import dispatch_reservation
+            return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
         if action.startswith("profiling."):
             host = getattr(self, "profiling_host", None)
             if host is None:
@@ -4014,7 +4022,7 @@ class AppService:
                 finally:
                     INPUT_DETACHED.reset(token)
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_coordination = args['action'].startswith('coordination.')
+            compact_domain_receipt = args['action'].startswith(('coordination.', 'worktree.')) or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -4069,15 +4077,15 @@ class AppService:
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
-                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_coordination))
+                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_domain_receipt))
             await self._flush_pending_progress()
-            if compact_coordination:
+            if compact_domain_receipt:
                 # The exact domain receipt already carries admission, correlation
                 # and result evidence. Repeating the app overview on each tool
                 # call can exhaust a single, non-compactable human turn.
                 return {**result, 'state': {
                     'revision': self.state['revision'], 'sessionId': session_id,
-                    '_stateAccess': {'note': 'Coordination receipts contain the full action result. Use get_state with a JSON Pointer when other app state is needed.'}}}
+                    '_stateAccess': {'note': 'The domain receipt contains the full action result. Use get_state with a JSON Pointer when other app state is needed.'}}}
             if compact_smart_tool:
                 context = {'revision': self.state['revision'], 'sessionId': session_id,
                            '_stateAccess': {'note': 'Use smartTools.readResult with the receipt operationId to read status and results. Use get_state with a JSON Pointer for other app state.'}}
