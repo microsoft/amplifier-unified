@@ -72,7 +72,10 @@ advisory file overlap, and requests needing attention. Independent peers remain
 independent. Shared tasks and assignment controls are optional disclosures, and
 inspection never starts or follows up a worker. Older rows load only on demand;
 transcripts, exact identities and retained result details stay behind explicit
-inspection.
+inspection. Workspace chat rows include an explicit Open chat action, including
+commissioned helpers omitted from ordinary recent-chat lists. Only that action
+selects the chat and closes the overview after accepted navigation; it uses the
+existing per-client draft and navigation owner.
 
 Combined checks use a repository picker and saved validation rows. Each selected
 source expectation is the exact revision returned by an explicit inspection;

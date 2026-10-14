@@ -9,10 +9,18 @@ const keyOf=target=>JSON.stringify([target.sessionId,target.workerId||null]);
 const labels={idle:'Ready for follow-up',working:'Working',running:'Working',starting:'Starting',queued:'Queued',stopping:'Interruption requested',completed:'Completed',interrupted:'Outcome unknown',error:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
 const empty={selected:[],cursors:{},results:{},drafts:{}};
 
-export function CoordinationPanel({dispatch,sessionId,session}){
+// Selection uses the ordinary navigation owner, including private draft retention.
+// A delayed response must not close a newer panel or another chat's visit.
+export async function selectWorkspaceChat(dispatch,id,isCurrent){
+ const response=await dispatch('session.select',{id});
+ if(response?.accepted&&isCurrent(id))await dispatch('view.update',{patch:{panel:null}});
+ return response;
+}
+
+export function CoordinationPanel({dispatch,sessionId,session,onOpenChat}){
  const [controls,setControls]=useState(false);
  return <div className="a-coordination a-workspace-work">
-  {sessionId?<RelatedWork key={sessionId} dispatch={dispatch} sessionId={sessionId} session={session}/>:<p>Open a chat to inspect work in its workspace.</p>}
+  {sessionId?<RelatedWork key={sessionId} dispatch={dispatch} sessionId={sessionId} session={session} onOpenChat={onOpenChat}/>:<p>Open a chat to inspect work in its workspace.</p>}
   <details onToggle={event=>setControls(event.currentTarget.open)}><summary>Follow up or watch work</summary>
    {controls&&sessionId&&<CoordinationTargets dispatch={dispatch} sessionId={sessionId}/>}
   </details>
@@ -94,8 +102,9 @@ function ResultFileStatus({response}){
  return null;
 }
 
-export function RelatedWork({dispatch,sessionId,session}){
- const visit=useRef(0);
+export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
+ const visit=useRef(0),openingRef=useRef(false);
+ const [opening,setOpening]=useState(null);
  const [next,setNext]=useState(null),[recap,setRecap]=useState(false);
  const [items,setItems]=useState([]),[context,setContext]=useState({requests:[]}),[error,setError]=useState(''),[inspected,setInspected]=useState({}),[original,setOriginal]=useState(null);
  const refresh=async()=>{
@@ -114,6 +123,13 @@ export function RelatedWork({dispatch,sessionId,session}){
  const openArtifact=async(requestId,reference,responseRevision)=>{
   const [path,expectedSha256]=reference.split(/@sha256:/);
   try{const value=await dispatch('canvas.openFile',{sessionId,workspace:context.workspace,path,expectedSha256,referenceRequestId:requestId,...(responseRevision?{referenceResponseRevision:responseRevision}:{})});if(value.result?.status!=='opened')setError(value.result?.message||'The referenced artifact is unavailable.')}catch(error){setError(error.message)}
+ };
+ const openChat=async id=>{
+  if(openingRef.current||!onOpenChat)return;
+  openingRef.current=true;setOpening(id);setError('');const current=visit.current;
+  try{const response=await onOpenChat(id);if(response?.accepted!==true)throw Error(response?.error||'The chat could not be opened. Your current view was kept.')}
+  catch(error){if(current===visit.current)setError(error.message)}
+  finally{openingRef.current=false;if(current===visit.current)setOpening(null)}
  };
  const memberLabels=Object.fromEntries(items.map(row=>[row.target.sessionId,row.title||'Untitled chat']));
  memberLabels[sessionId]=session?.title||memberLabels[sessionId]||'This chat';
@@ -134,7 +150,7 @@ export function RelatedWork({dispatch,sessionId,session}){
   {session&&<IntegrationEvidence key={'integration:'+sessionId} session={session} act={dispatch}/>}
   <details onToggle={event=>setRecap(event.currentTarget.open)}><summary>Changes since your last view and diagnostics</summary>{recap&&<CoordinationObservations key={'observations:'+sessionId} dispatch={dispatch} sessionId={sessionId}/>}</details>
   <details><summary>Workspace chat list</summary>
-   {items.map(row=><div key={row.target.sessionId}>{row.title||'Untitled chat'}{row.target.sessionId===sessionId?' (this chat)':''} · {labels[row.status]||row.status} · {row.collaboration?'Commissioned chat':'Independent chat'}<details><summary>Chat identity</summary><code>{row.target.sessionId}</code></details></div>)}
+   {items.map(row=><div key={row.target.sessionId} data-workspace-chat-id={row.target.sessionId}>{row.title||'Untitled chat'}{row.target.sessionId===sessionId?' (this chat)':''} · {labels[row.status]||row.status} · {row.collaboration?'Commissioned chat':'Independent chat'} <button type="button" className="a-link" data-action="session.select" aria-label={'Open chat: '+(row.title||'Untitled chat')} disabled={opening!==null||!onOpenChat} onClick={()=>openChat(row.target.sessionId)}>{opening===row.target.sessionId?'Opening…':'Open chat'}</button><details><summary>Chat identity</summary><code>{row.target.sessionId}</code></details></div>)}
    {next!==null&&<button className="a-link" onClick={more}>Load more workspace chats</button>}
   </details>
   <details><summary>Exact requests, messages and saved results</summary>

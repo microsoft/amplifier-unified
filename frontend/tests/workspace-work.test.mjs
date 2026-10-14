@@ -4,7 +4,7 @@ import React,{act} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {CoordinationPanel,RelatedWork}=await vite.ssrLoadModule('/src/coordination.jsx');
+const {CoordinationPanel,RelatedWork,selectWorkspaceChat}=await vite.ssrLoadModule('/src/coordination.jsx');
 const {WorkHeader}=await vite.ssrLoadModule('/src/work-shell.jsx');
 const {WorkNavigationContext}=await vite.ssrLoadModule('/src/work-navigation.js');
 const {IntegrationEvidence,repositoryChoices}=await vite.ssrLoadModule('/src/integration-evidence.jsx');
@@ -115,4 +115,33 @@ test('saved candidate restoration is a scoped passive read only when its disclos
  await act(async()=>{root=create(React.createElement(IntegrationEvidence,{session,act:dispatch}))});assert.deepEqual(calls,[]);
  await toggle(root,'Combine and check work');assert.deepEqual(calls,[['integration.read',{sessionId:'own',id:'retained-candidate'}]]);
  assert.equal(root.root.findByType(IntegrationValidation).props.candidate.id,'retained-candidate');await act(async()=>root.unmount());
+});
+
+
+test('workspace list explicitly opens a commissioned helper through ordinary navigation',async()=>{
+ const calls=[],opened=[];let root;
+ const dispatch=async(action,args)=>{calls.push([action,args]);return accepted(action==='coordination.context'?context:list)};
+ await act(async()=>{root=create(React.createElement(CoordinationPanel,{dispatch,sessionId:'own',session,onOpenChat:async id=>{opened.push(id);return {accepted:true}}}))});
+ assert.deepEqual(opened,[]);
+ const row=root.root.findByProps({'data-workspace-chat-id':'helper'}),open=row.findByProps({'data-action':'session.select'});
+ assert.equal(open.props['aria-label'],'Open chat: Library helper');
+ await act(async()=>open.props.onClick());assert.deepEqual(opened,['helper']);
+ assert.deepEqual(calls.map(([action])=>action),['coordination.context','coordination.list']);
+ await act(async()=>root.unmount());
+});
+
+for(const outcome of ['accepted','refused','obsolete','failed'])test(`explicit chat navigation ${outcome} respects selection and modal boundaries`,async()=>{
+ const calls=[];const dispatch=async(action,args)=>{calls.push([action,args]);if(action==='session.select'&&outcome==='failed')throw Error('Selection failed');return {accepted:outcome!=='refused'}};
+ if(outcome==='failed')await assert.rejects(selectWorkspaceChat(dispatch,'helper',()=>true),/Selection failed/);
+ else await selectWorkspaceChat(dispatch,'helper',()=>outcome!=='obsolete');
+ assert.deepEqual(calls,[['session.select',{id:'helper'}],...(outcome==='accepted'?[['view.update',{patch:{panel:null}}]]:[])]);
+ assert.equal(calls.some(([action,args])=>action==='view.update'&&Object.hasOwn(args.patch,'draft')),false);
+});
+
+test('failed explicit helper navigation keeps the overview available and shows the reason',async()=>{
+ let root;const dispatch=async action=>accepted(action==='coordination.context'?context:list);
+ await act(async()=>{root=create(React.createElement(CoordinationPanel,{dispatch,sessionId:'own',session,onOpenChat:async()=>({accepted:false,error:'Keep current view'})}))});
+ await act(async()=>root.root.findByProps({'aria-label':'Open chat: Library helper'}).props.onClick());
+ assert.match(content(root.toJSON()),/Keep current view/);assert.ok(root.root.findByProps({'aria-label':'Workspace work overview'}));
+ await act(async()=>root.unmount());
 });
