@@ -94,6 +94,25 @@ test('older HTTP baseline cannot overwrite a newer same-demand stream resource',
  newer.instances.chats.resources.recentNavigation={revision:5,value:{recentNavigation:{items:[{id:'new'}]}}};
  await f.render({...f.input(),shellResources:newer});await f.accept(1);
  assert.equal(f.current().data.snapshots.chats.recentNavigation.items[0].id,'new');assert.equal(f.calls.length,2);
+ const diagnostics=JSON.parse(f.attributes['data-amplifier-shell-diagnostics']);
+ const resourceEvent=diagnostics.events.filter(event=>event.reason==='resources').at(-1);
+ assert.equal(resourceEvent.changedRecords,0,'older HTTP record retained by the receiver is not a new revision');
+ assert.equal(diagnostics.resourceRevisions.changedByName.recentNavigation,2,'bootstrap plus the newer streamed page');
+}));
+
+test('runtime diagnostics distinguish repeated baselines and context-only updates without new reads',()=>fixture(async f=>{
+ await f.render(state());const baseline=await f.accept(0);
+ const read=()=>JSON.parse(f.attributes['data-amplifier-shell-diagnostics']);
+ const initial=read().resourceRevisions.changedRecords;
+ for(let index=0;index<3;index++)await f.render({...f.input(),revision:index+2,shellResources:structuredClone(baseline)});
+ assert.equal(read().resourceRevisions.acceptedEnvelopes,4);assert.equal(read().resourceRevisions.unchangedEnvelopes,3);
+ assert.equal(read().resourceRevisions.changedRecords,initial);
+ const context=structuredClone(baseline);context.instances.chats.resources.context.revision++;
+ await f.render({...f.input(),shellResources:context});
+ assert.equal(read().events.at(-1).contextRecords,1);assert.equal(read().events.at(-1).pageRecords,0);
+ const stale={...context,demandId:999};await f.render({...f.input(),shellResources:stale});
+ assert.equal(read().resourceRevisions.acceptedEnvelopes,5,'rejected envelopes are not accepted revision tuples');
+ assert.equal(read().counts.stale,1);assert.equal(f.calls.length,1,'diagnostics add no reads');
 }));
 
 test('reconnect consumes its state baseline; a retired registration uses one idempotent POST',()=>fixture(async f=>{

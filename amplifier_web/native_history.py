@@ -131,7 +131,8 @@ class NativeHistory:
     UNWATCHED_RECONCILE_INTERVAL = 60
     RECOVERY_SLICE_SECONDS = .025
 
-    def __init__(self, home=None, *, known_workspaces=(), watch=False, cache_path=None, directory=False):
+    def __init__(self, home=None, *, known_workspaces=(), watch=False, cache_path=None, directory=False, diagnostics=None):
+        self.diagnostics = diagnostics
         self.home = Path(home).expanduser().resolve() if home is not None else amplifier_home()
         self.known_workspaces = known_workspaces
         self._files = {}
@@ -205,7 +206,7 @@ class NativeHistory:
             return
         try:
             from .native_catalog import NativeCatalog
-            self._catalog = NativeCatalog(self._cache_path, self.home)
+            self._catalog = NativeCatalog(self._cache_path, self.home, diagnostics=self.diagnostics)
             self._catalog.stop = self._closing
             if self.directory:
                 cached_projects, cached_files = self._catalog.load_projects(), {}

@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.145",
+      "title": "Avoid unchanged navigation refreshes",
+      "changes": [
+        "Empty history-folder bookkeeping and repeated removal of already-absent sessions no longer invalidate chat-list pages. Actual chat and workspace changes continue to refresh their affected lists.",
+        "History retention reuses size accounting for the same index within one read, avoiding repeated traversal after cache eviction.",
+        "Bounded diagnostics distinguish received navigation updates from changed resources and identify catalog invalidation reasons without conversation content. Selected work-history loading remains under investigation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.144",
       "title": "Stream only the navigation sections you need",
       "changes": [

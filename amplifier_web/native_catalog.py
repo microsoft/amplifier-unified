@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import fnmatch
 import uuid
 from itertools import islice
+from collections import Counter
 
 
 SCALAR_COLUMNS = ('public_id', 'workspace_id', 'workspace_path', 'title', 'description',
@@ -59,11 +60,12 @@ def tuples(value):
 class NativeCatalog:
     VERSION = 2
 
-    def __init__(self, path, home):
+    def __init__(self, path, home, *, diagnostics=None):
         self.path = Path(path)
         self.home = Path(home)
         self.namespace = hashlib.sha256(str(self.home).encode()).hexdigest()
         self.stop = None
+        self.diagnostics = diagnostics
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
@@ -392,14 +394,18 @@ class NativeCatalog:
     def save(self, projects, previous, files, dirty_files):
         """Commit only changed metadata; no transcript, event or app view bodies."""
         changed, removed = [], []
+        reasons = Counter()
         revision = observation = membership = navigation = False
         with self.connect() as db:
             for name in previous.keys() - projects.keys():
                 self._check_running()
-                revision = observation = membership = navigation = True
+                revision = True
                 removed.extend((name, row[0]) for row in db.execute(
                     'SELECT identity FROM native_rows WHERE namespace=? AND project=?', (self.namespace, name)))
-                db.execute('DELETE FROM native_rows WHERE namespace=? AND project=?', (self.namespace, name))
+                deleted = db.execute('DELETE FROM native_rows WHERE namespace=? AND project=?', (self.namespace, name))
+                if deleted.rowcount:
+                    observation = membership = navigation = True
+                reasons['project.remove.occupied' if deleted.rowcount else 'project.remove.empty'] += 1
                 db.execute('DELETE FROM native_projects WHERE namespace=? AND project=?', (self.namespace, name))
                 db.execute('DELETE FROM native_recovery_seen WHERE namespace=? AND token IN '
                            '(SELECT token FROM native_recovery_stages WHERE namespace=? AND project=?)',
@@ -417,29 +423,42 @@ class NativeCatalog:
                 if project is old:
                     continue
                 if old is None or old['workspace'] != project['workspace']:
-                    revision = navigation = True
-                    if old is None or any(old['workspace'].get(key) != project['workspace'].get(key)
-                                          for key in ('id', 'path')):
-                        observation = True
-                    if old is None or any(old['workspace'].get(key) != project['workspace'].get(key)
-                                          for key in ('id', 'path')):
-                        membership = True
+                    revision = True
                     db.execute('INSERT OR REPLACE INTO native_projects VALUES(?,?,?)',
                                (self.namespace, name, json.dumps({'workspace': project['workspace']})))
+                    # Empty-project discovery changes coverage, not session
+                    # facts. Added rows invalidate below; existing rows still
+                    # inherit every workspace change before this transaction
+                    # commits. The UPSERT starts the writer transaction before
+                    # this keyed existence check; no summaries are decoded.
+                    occupied = db.execute('SELECT 1 FROM native_rows WHERE namespace=? AND project=? LIMIT 1',
+                                          (self.namespace, name)).fetchone() is not None
+                    reasons['project.' + ('add' if old is None else 'change') +
+                            ('.occupied' if occupied else '.empty')] += 1
+                    navigation |= occupied
+                    if occupied and (old is None or any(old['workspace'].get(key) != project['workspace'].get(key)
+                                          for key in ('id', 'path'))):
+                        observation = membership = True
                 patch = project['sessions'] if isinstance(project['sessions'], CatalogPatchRows) else None
                 old_rows = ({identity: patch.base.get(identity) for identity in patch.changed}
                             if patch else {row['nativeIdentity']: row for row in old['sessions']} if old else {})
                 new_rows = patch.changed if patch else {row['nativeIdentity']: row for row in project['sessions']}
                 for identity in (patch.removed if patch else old_rows.keys() - new_rows.keys()):
-                    revision = observation = membership = navigation = True
-                    db.execute('DELETE FROM native_rows WHERE namespace=? AND project=? AND identity=?',
-                               (self.namespace, name, identity))
+                    revision = True
+                    deleted = db.execute('DELETE FROM native_rows WHERE namespace=? AND project=? AND identity=?',
+                                         (self.namespace, name, identity))
+                    if deleted.rowcount:
+                        observation = membership = navigation = True
+                    reasons['row.remove' if deleted.rowcount else 'row.absent'] += 1
+                    # A repeated absence can still repair a caller's stale
+                    # projection, but cannot change committed session facts.
                     removed.append((name, identity))
                 for identity, row in new_rows.items():
                     self._check_running()
                     if row != old_rows.get(identity):
                         prior = old_rows.get(identity)
                         revision = True
+                        reasons['row.upsert'] += 1
                         membership |= prior is None or any(row.get(key) != prior.get(key) for key in MEMBERSHIP_FIELDS)
                         observation |= prior is None or any(row.get(key) != prior.get(key) for key in OBSERVATION_FIELDS)
                         navigation |= prior is None or any(row.get(key) != prior.get(key) for key in NAVIGATION_FIELDS)
@@ -470,6 +489,11 @@ class NativeCatalog:
             if revision:
                 db.execute('UPDATE native_revisions SET revision=revision+1,observation_sessions=observation_sessions+?,observation_membership=observation_membership+?,navigation=navigation+? WHERE namespace=?',
                            (int(observation), int(membership), int(navigation), self.namespace))
+        # The connection context committed successfully. Fixed categories only:
+        # never record an identity/path/value, and never count rolled-back work.
+        if self.diagnostics is not None:
+            for reason, amount in reasons.items():
+                self.diagnostics.increment('catalog.write.' + reason, amount)
         return {'sessions': changed, 'removed': removed}
 
 

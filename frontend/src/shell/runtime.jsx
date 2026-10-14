@@ -55,7 +55,7 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
    if(snapshot!==host.snapshot){host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn())}
   }
  },[]);
- const receive=useCallback((envelope,reason='resources')=>{
+ const receive=useCallback(envelope=>{
   const current=latest.current,bootstrap=current.bootstrap;
   if(!bootstrap||!alive.current)return false;
   const authoritativeHost=current.authoritative?.client?.hostInstanceId;
@@ -63,6 +63,7 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
   if(matchesResources(envelope,bootstrap,current.demand))envelope=retainResourceVersions(current.data?.shellResources,envelope);
   const snapshots=resourceSnapshots(bootstrap,envelope,current.demand,current.data?.snapshots);
   if(!snapshots){diagnostics.current.record('stale',{demandId:envelope?.demandId});return false}
+  const previousResources=current.data?.shellResources;
   synced.current=current.demand.id;
   for(const host of hosts.current.values()){
    const raw=snapshots[host.id];
@@ -70,8 +71,8 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
   }
   setError('');current.connection.onRecovered?.();
   publish({...bootstrap,shellResources:envelope,snapshots});
+  diagnostics.current.acceptResources(previousResources,envelope);
   if(envelope.error){setError(envelope.error.message);diagnostics.current.record('error',{demandId:envelope.demandId})}
-  else diagnostics.current.record(reason,{demandId:envelope.demandId,resources:current.demand.resources});
   return true;
  },[publish]);
  const refresh=useCallback((reason='manual')=>{

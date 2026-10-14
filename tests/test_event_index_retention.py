@@ -261,6 +261,127 @@ def test_root_measured_once_after_associations(home, monkeypatch):
     assert calls == [path]
 
 
+@pytest.mark.parametrize('bound', ['entries', 'bytes'])
+def test_same_read_eviction_reuses_only_unchanged_live_object_charges(home, monkeypatch, bound):
+    row = session(home, 'receipt-root')
+    root = events.event_path(row, row['id'])
+    for number in range(2):
+        child = f'child-{number}'
+        append(root, row['id'], call=f'delegate-{number}')
+        with root.open('a') as stream:
+            stream.write(json.dumps({'event': 'delegate:agent_spawned', 'timestamp': 1,
+                'data': {'session_id': row['id'], 'sub_session_id': child,
+                         'tool_call_id': f'delegate-{number}'}}) + '\n')
+        for call in range(4):
+            append(events.event_path(row, child), child, call=f'call-{call}')
+    view = events.EventLogView(SimpleNamespace(data_dir=home / 'host'))
+    expected = view.read(row)
+    # Stabilize checkpoint bookkeeping and per-read counters before this exact
+    # unchanged-object case. A checkpoint write itself must invalidate a charge.
+    for index in view.indexes.values():
+        view._checkpoint(index)
+    view.read(row)
+    children = {key: index for key, index in view.indexes.items() if index.path != root}
+    if bound == 'entries':
+        view.MAX_INDEXES = 2
+    else:
+        view.MAX_INDEX_BYTES = sum(view._index_sizes[key][1] for key in children)
+        assert max(size for _, size in view._index_sizes.values()) <= view.MAX_INDEX_BYTES
+    view._forget_index(str(root))
+    calls = []
+    original = events.retained_index_size
+    def observed(index, **kwargs):
+        calls.append(index)
+        return original(index, **kwargs)
+    monkeypatch.setattr(events, 'retained_index_size', observed)
+    for _ in range(2):
+        with root.open('a') as stream:
+            stream.write(json.dumps({'event': 'synthetic:metadata',
+                                     'data': {'session_id': row['id']}}) + '\n')
+        calls.clear()
+        assert view.read(row) == expected
+        assert len(calls) == 1 and calls[0].path == root
+        assert all(view.indexes[key] is index for key, index in children.items())
+        assert view.retained_index_bytes == sum(size for _, size in view._index_sizes.values())
+        assert view.retained_index_bytes <= view.MAX_INDEX_BYTES
+        assert len(view.indexes) <= view.MAX_INDEXES
+    # Persisted descriptors carry no RAM charge: a different reader must size
+    # every restored object even though all canonical revisions still match.
+    restored = events.EventLogView(view.service)
+    calls.clear()
+    assert restored.read(row) == expected
+    assert len(calls) == 3
+    assert not any(index is prior for index in calls for prior in children.values())
+
+
+@pytest.mark.parametrize('mutation', ['append', 'association', 'checkpoint', 'read-counter'])
+def test_retention_receipt_remeasures_every_size_affecting_revision(home, monkeypatch, mutation):
+    row = session(home, 'mutated-receipt')
+    path = events.event_path(row, row['id'])
+    append(path, row['id'])
+    view = events.EventLogView(SimpleNamespace(data_dir=home / 'host'))
+    view.read(row)
+    index = view.indexes[str(path)]
+    receipt = (index, view._index_sizes[str(path)])
+    view._forget_index(str(path))
+    if mutation == 'append':
+        append(path, row['id'], call='new')
+        assert index.refresh()
+    elif mutation == 'association':
+        transcript = path.parent.parent / 'transcript.jsonl'
+        transcript.write_text(json.dumps({'role': 'user', 'content': 'new prompt'}) + '\n')
+        index.associations(path.parent.parent)
+    elif mutation == 'checkpoint':
+        view._checkpoint(index)
+        assert index._checkpoint_signature is not None
+    else:
+        assert index.read_bytes > 0
+        assert index.refresh() and index.read_bytes == 0
+    calls = []
+    original = events.retained_index_size
+    def observed(value, **kwargs):
+        calls.append(value)
+        return original(value, **kwargs)
+    monkeypatch.setattr(events, 'retained_index_size', observed)
+    view._retain_index(index, receipt=receipt)
+    assert calls == [index]
+    assert view.retained_index_bytes == original(index)
+    # A failed fresh measurement never leaves a stale charge or resident index.
+    append(path, row['id'], call='failed-measurement')
+    assert index.refresh()
+    def failure(value, **kwargs):
+        raise MemoryError('injected receipt remeasurement failure')
+    monkeypatch.setattr(events, 'retained_index_size', failure)
+    with pytest.raises(MemoryError):
+        view._retain_index(index, receipt=receipt)
+    assert not view.indexes and not view._index_sizes and view.retained_index_bytes == 0
+
+
+def test_new_checkpoint_object_never_borrows_another_objects_charge(home, monkeypatch):
+    row = session(home, 'restored-receipt')
+    path = events.event_path(row, row['id'])
+    append(path, row['id'])
+    view = events.EventLogView(SimpleNamespace(data_dir=home / 'host'))
+    view.read(row)
+    old = view.indexes[str(path)]
+    view._checkpoint(old)
+    view.read(row)
+    receipt = (old, view._index_sizes[str(path)])
+    restored = view._new_index(path, row['id'])
+    assert restored is not old
+    assert view._charge_signature(restored) == view._charge_signature(old)
+    calls = []
+    original = events.retained_index_size
+    def observed(index, **kwargs):
+        calls.append(index)
+        return original(index, **kwargs)
+    monkeypatch.setattr(events, 'retained_index_size', observed)
+    view._retain_index(restored, receipt=receipt)
+    assert calls == [restored]
+    assert view.indexes[str(path)] is restored
+    assert view.retained_index_bytes == original(restored)
+
+
 async def test_cancelled_refresh_keeps_reader_accounting_serialized(home, monkeypatch):
     row = session(home, 'cancelled')
     append(events.event_path(row, row['id']), row['id'])

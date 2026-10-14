@@ -43,3 +43,55 @@ test('DOM diagnostics are bounded and exclude resource values, paths, filters an
  assert.ok(text.length<=8192);const result=JSON.parse(text);assert.ok(result.events.length<=24);assert.equal(result.counts.demand,200);
  assert.doesNotMatch(text,/secret|private|\/home/);assert.deepEqual(result.events[0].resources,['sidebarSearch']);
 });
+
+function diagnosticFixture(){
+ let text;const log=createShellDiagnostics({setAttribute:(_name,value)=>text=value});
+ return {log,read:()=>JSON.parse(text),text:()=>text};
+}
+test('accepted unchanged revision tuples do not count as changed resource records',()=>{
+ const f=diagnosticFixture(),baseline=envelope();f.log.acceptResources(null,baseline);
+ const first=f.read();assert.equal(first.resourceRevisions.acceptedEnvelopes,1);
+ assert.equal(first.resourceRevisions.changedRecords,3);assert.equal(first.resourceRevisions.unchangedEnvelopes,0);
+ f.log.acceptResources(baseline,structuredClone(baseline));
+ const next=f.read();assert.equal(next.resourceRevisions.acceptedEnvelopes,2);assert.equal(next.resourceRevisions.unchangedEnvelopes,1);
+ assert.equal(next.resourceRevisions.changedRecords,3);assert.equal(next.resourceRevisions.unchangedRecords,3);
+ assert.equal(next.events.at(-1).changedRecords,0);assert.deepEqual(next.events.at(-1).changedByName,{});
+});
+test('context, named pages and custom revisions have separate numeric change counts',()=>{
+ const f=diagnosticFixture();let prior=envelope();f.log.acceptResources(null,prior);
+ for(const [instance,name,category] of [['chat','context','contextRecords'],['chat','sidebarSearch','pageRecords'],['custom','customSnapshot','customRecords']]){
+  const next=structuredClone(prior);next.instances[instance].resources[name].revision++;
+  f.log.acceptResources(prior,next);const event=f.read().events.at(-1);
+  assert.equal(event.changedRecords,1);assert.equal(event.unchangedRecords,2);assert.equal(event[category],1);
+  for(const other of ['contextRecords','pageRecords','customRecords'])if(other!==category)assert.equal(event[other],0);
+  assert.deepEqual(event.changedByName,{[name]:1});prior=next;
+ }
+ assert.deepEqual(f.read().resourceRevisions.changedByName,{context:2,sidebarSearch:2,customSnapshot:2});
+});
+test('coverage removal is separate from changed values and replacement identities are not unchanged',()=>{
+ const f=diagnosticFixture(),prior=envelope(),removed=envelope();delete removed.instances.chat.resources.sidebarSearch;
+ f.log.acceptResources(prior,removed);
+ assert.equal(f.read().events[0].removedRecords,1);assert.equal(f.read().events[0].changedRecords,0);
+ assert.equal(f.read().resourceRevisions.unchangedEnvelopes,0);
+ for(const patch of [{hostInstanceId:'new-host'},{clientId:'new-client'},{bootstrapKey:'new-key'},{demandId:2},{scope:['other','workspace','chat',null,null]}]){
+  f.log.acceptResources(prior,{...envelope(),...patch});const event=f.read().events.at(-1);
+  assert.equal(event.changedRecords,3);assert.equal(event.removedRecords,3);assert.equal(event.unchangedRecords,0);
+ }
+ const generation=envelope();generation.instances.chat.generation++;
+ f.log.acceptResources(prior,generation);assert.equal(f.read().events.at(-1).changedRecords,2);
+ assert.equal(f.read().events.at(-1).unchangedRecords,1);assert.equal(f.read().events.at(-1).removedRecords,2);
+});
+test('revision diagnostics never read payloads and remain bounded across many instances and updates',()=>{
+ const f=diagnosticFixture(),baseline=envelope(),names=['context','customSnapshot','chatNavigation','homeNavigation','pinnedNavigation','recentNavigation','workspaceShortcuts','workspaceExplorer','sidebarSearch','sidebarWorkspace','sidebarRecent','sidebarPinned','workspaceOverview'];
+ baseline.instances={};
+ for(let index=0;index<64;index++){
+  const records={};for(const name of names)records[name]={revision:1,get value(){throw Error('Resource value must not be inspected')}};
+  Object.defineProperty(records,'private-resource-name',{get(){throw Error('Unknown resource must not be inspected')}});
+  baseline.instances['private-instance-title-'+index]={generation:1,resources:records};
+ }
+ for(let index=0;index<200;index++)f.log.acceptResources(null,baseline);
+ const result=f.read();assert.ok(f.text().length<=8192);assert.ok(result.events.length<=24);
+ assert.equal(result.resourceRevisions.changedRecords,200*64*13);assert.equal(result.resourceRevisions.changedByName.recentNavigation,200*64);
+ assert.equal(result.resourceRevisions.pageRecords,200*64*11);
+ assert.doesNotMatch(f.text(),/private|draft|client|host/);
+});
