@@ -40,7 +40,7 @@ considering a Rust implementation behind the same interface.
 
 ## Implementation progress, October 14
 
-Releases .143 through .149 are published. Release .143 introduced bounded
+Releases .143 through .151 are published. Release .143 introduced bounded
 requested navigation pages and removed duplicate ordinary-state projections;
 .142 was not published. Release .144 replaced repeated whole-shell reads with
 [resources on the existing state stream](../docs/browser-state-transport.md#shell-bootstrap-and-active-resources).
@@ -71,6 +71,26 @@ These are individual observations, not sustained percentile qualification or
 completion of the performance exits. Retained release and live-adoption receipts
 are under `output/work-activity-20261013/bounded-directory/release143/` through
 `release149/` in the operator workspace.
+
+Release .150 repaired stale validation fixtures, recorded every extended-browser
+scenario and retained cleanup failures instead of silently skipping later checks.
+Release .151 made earlier-history paging require a directional user gesture and
+canceled obsolete detail reads on selection changes. It also separated workspace
+aggregate invalidation from unrelated worker/title updates and corrected the
+runner's treatment of unchanged pre-existing processes. Tests preserve fail-closed
+cleanup for new or reused processes whose ownership cannot be established.
+
+Live .151 observations on the existing Mac window showed no unsolicited earlier
+history request during two sidebar switches and a workspace-list open. Sidebar
+messages/Work first appeared in 1.99 seconds and 0.74 seconds; these are spot checks,
+not percentile acceptance. The workspace target opened with messages and Work,
+but the old timing recorder could not qualify readiness for an unpinned target
+absent from the sidebar. Its limitation is recorded separately from product
+behavior. Expensive real list invalidations and selected-history reconstruction
+remain active work. Publication is distinct from broad validation: .150 readiness
+and installed-package checks passed, while its browser run stopped on a cleanup
+failure and its full Python run exposed stale runner/evidence tests. Subsequent
+releases repair those findings; the earlier run remains failed/incomplete.
 
 ## Ownership and data flow
 
