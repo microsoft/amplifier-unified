@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.146",
+      "title": "Keep chat updates focused on the current view",
+      "changes": [
+        "Selected browser views no longer calculate an unused count of every saved chat during routine updates. Explicit listings retain their catalog totals.",
+        "Browser acceptance fixtures now follow the streamed navigation contract and locate restored chats through the history catalog."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.145",
       "title": "Avoid unchanged navigation refreshes",
       "changes": [
