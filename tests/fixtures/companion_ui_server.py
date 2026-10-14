@@ -20,8 +20,13 @@ async def main(home):
     })
     destination = service._session()['id']
     await service.dispatch('session.select', {'id': original})
-    await service.dispatch('session.create', {'id': '00000000-0000-4000-8000-000000000001', 'title': 'Deleted target'})
-    service.state['sessions'][:] = [row for row in service.state['sessions'] if row['id'] != '00000000-0000-4000-8000-000000000001']
+    deleted = '00000000-0000-4000-8000-000000000001'
+    await service.dispatch('session.create', {'id': deleted, 'title': 'Deleted target'})
+    service.state['sessions'][:] = [row for row in service.state['sessions'] if row['id'] != deleted]
+    # Eviction is not deletion: remove the fixture's durable owner as well.
+    service.forget_session_records({deleted})
+    service._save()
+    assert service.directory.resolve(deleted) is None
     await service.dispatch('session.select', {'id': original})
     service.projections.invalidate()
     runner = web.AppRunner(app)
