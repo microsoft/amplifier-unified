@@ -102,6 +102,13 @@ receipts keep their existing behavior. Shell descriptor and resource revisions
 have separate owners. This slice does not suspend selected-chat history or
 Work when another surface is open.
 
+Selected-context frames retain `library.bounded`, `detailPath` and
+`workspaceCount` (used by workspace-removal controls). They do not compute or
+send the unused `library.sessionCount` or `continueSessionId`; selected roots,
+worker views and New chat therefore do not count or search the dormant library
+just to publish a frame. Exact totals and continuation metadata remain in the
+existing explicit/general browser projections for independent readers.
+
 Explicit complete-state reads, custom component context, unbound/integration
 clients and independent single-session streams retain their existing contracts.
 No omitted browser page changes durable membership, execution, or persistence.

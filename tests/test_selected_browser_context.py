@@ -58,8 +58,42 @@ async def test_ordinary_web_publication_never_constructs_hidden_pages(app_factor
         assert row['draft'] == f'Private {identity}'
         assert public['canvas']['content'] == f'Canvas {identity}'
         assert public['attention']['sessions'][selected['id']] > 0
-        assert public['library']['sessionCount'] == 80
+        assert public['library'] == {'workspaceCount': 4, 'bounded': True, 'detailPath': '/api/state/detail'}
     assert counts == [selected['id'], selected['id']]
+    assert app.runtime.started == [] and app.runtime.sent == []
+
+
+@pytest.mark.parametrize('selection', ['root', 'child', 'none'])
+async def test_selected_context_never_counts_or_finds_an_unused_library_root(app_factory, monkeypatch, selection):
+    app, rows = setup(app_factory, roots=80, children=2)
+    selected = rows[0]['id'] if selection == 'root' else rows[-1]['id'] if selection == 'child' else None
+    record = app.clients.records['web-a']
+    record['selectedSessionId'] = selected
+    app._publish()
+    monkeypatch.setattr(app.directory, 'root_count', lambda *a, **k: pytest.fail('Unused library total queried'))
+    original_select = app.directory.select
+    def scoped_select(where='1', *args, **kwargs):
+        assert where != "session_kind='root'", 'Unused continuation searched dormant roots'
+        return original_select(where, *args, **kwargs)
+    monkeypatch.setattr(app.directory, 'select', scoped_select)
+    decoded = []
+    original_decode = app.directory.decode
+    def decode(row):
+        result = original_decode(row)
+        decoded.append(result['id'])
+        return result
+    monkeypatch.setattr(app.directory, 'decode', decode)
+    with app.clients.bind('web-a'):
+        queue = app.subscribe()
+    # A publication still carries current selection, exact child count and the
+    # workspace count used by removal controls; no library-wide read is needed.
+    app._publish_changes(globals={'sharedHistory'})
+    public = queue.get_nowait()
+    assert public['browserResources'] == ['selectedContext']
+    assert public['library'] == {'workspaceCount': 4, 'bounded': True, 'detailPath': '/api/state/detail'}
+    expected = {selected, rows[0]['id']} - {None} if selected else set()
+    assert {row['id'] for row in public['sessions']} == expected
+    assert set(decoded) <= expected, 'Unused old roots were decoded'
     assert app.runtime.started == [] and app.runtime.sent == []
 
 
@@ -147,6 +181,11 @@ async def test_explicit_and_independently_released_client_reads_keep_contract(ap
     app.clients.attach('terminal', kind='tui')
     assert PAGES <= snapshot(app, 'terminal').keys()
     assert PAGES <= app.browser_state().keys()
+    for public in (detail, snapshot(app, 'terminal'), app.browser_state()):
+        assert public['library']['sessionCount'] == 3
+        assert public['library']['continueSessionId'] == rows[0]['id']
+        assert public['library']['workspaceCount'] == 4
+    assert 'sessionCount' not in web['library'] and 'continueSessionId' not in web['library']
     assert snapshot(app, 'web-a') is web
 
 

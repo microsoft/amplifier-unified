@@ -262,13 +262,19 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     result['notificationMessages'] = [{key: value for key, value in row.items()
                                       if key != 'text' or state.get('notificationSettings', {}).get('preview', True)}
                                      for row in index.notifications]
-    selected_root = selected_row if selected_row and is_top_level(selected_row) else None
-    first = directory.select("session_kind='root'", limit=1,
-                             order='created DESC, ordinal DESC, id', state=state) if directory and not selected_root else []
-    continuation = selected_root or (first[0] if first else index.first_root)
-    result['library'] = {'sessionCount': directory.root_count(state) if directory else len(index.roots), 'workspaceCount': len(state.get('workspaces', [])),
-                         'continueSessionId': continuation['id'] if continuation else None,
+    result['library'] = {'workspaceCount': len(state.get('workspaces', [])),
                          'bounded': True, 'detailPath': '/api/state/detail'}
+    if 'browserResources' not in derived:
+        # Explicit and independent readers retain the complete library contract.
+        # Bundled selected-context frames do not consume these fields: a native
+        # cache write must not make every publication count the whole directory
+        # or search dormant roots for an unused continuation suggestion.
+        selected_root = selected_row if selected_row and is_top_level(selected_row) else None
+        first = directory.select("session_kind='root'", limit=1,
+                                 order='created DESC, ordinal DESC, id', state=state) if directory and not selected_root else []
+        continuation = selected_root or (first[0] if first else index.first_root)
+        result['library'].update(sessionCount=directory.root_count(state) if directory else len(index.roots),
+                                 continueSessionId=continuation['id'] if continuation else None)
     for key in ('attentionRead', 'nativePresentation', 'conversationExports'):
         result.pop(key, None)
     if demand and client_id is not None and session_id is None:
