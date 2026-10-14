@@ -58,6 +58,7 @@ jobs:
         run: |
           npm run test:new-chat-browser
           npm run test:draft-provider-refresh-browser
+          npm run test:draft-discovery-recovery-browser
       - name: Verify new-chat recovery and submission drafts
         working-directory: frontend
         run: |

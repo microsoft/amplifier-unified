@@ -250,9 +250,93 @@ class GitWorktrees:
     def status(self, identity):
         record = self.get(identity)
         if record['status'] == 'removed': return record
+        if record['status'] in {'archive_pending', 'archive_unknown'}:
+            with self.lock(record['repository']):
+                record = self.get(identity)
+                for operation in record.get('archiveOperations', {}).values():
+                    if operation['status'] in {'pending', 'unknown'}:
+                        self._settle_relocation(record, operation)
         try: record['checkout'] = self.inspect(record['path'])
         except (ValueError, OSError) as exc: record['inspectionError'] = str(exc)[:4000]
         return record
+
+    def relocate(self, identity, expected_revision, command_id, *, restore=False):
+        """Retain an entire owned checkout; never classify ignored files as waste."""
+        action = 'restore' if restore else 'archive'
+        with self.command_lock(action, command_id):
+            record = self.get(identity)
+            with self.lock(record['repository']):
+                record = self.get(identity)
+                operations = record.setdefault('archiveOperations', {})
+                signature = digest([action, identity, expected_revision])
+                if command_id in operations:
+                    operation = operations[command_id]
+                    if operation['signature'] != signature:
+                        raise ValueError('This archive request already has different contents')
+                    if operation['status'] in {'pending', 'unknown'}:
+                        self._settle_relocation(record, operation)
+                    return {**record, 'operation': copy.deepcopy(operation), 'duplicate': True}
+                if record['revision'] != expected_revision:
+                    raise ValueError('The worktree record changed; inspect it again')
+                if not record['owned']:
+                    raise ValueError('Only app-created checkouts can be archived or restored here')
+                expected = 'archived' if restore else 'ready'
+                if record['status'] != expected:
+                    raise ValueError('Inspect the checkout before archiving or restoring it')
+                source = Path(record['path'])
+                target = self.directory / ('checkouts' if restore else 'archives') / identity
+                if source.is_symlink() or target.exists() or target.is_symlink():
+                    raise ValueError('The checkout path changed or its destination already exists; files preserved')
+                root, repository = common(source)
+                if root != source or str(repository) != record['repository']:
+                    raise ValueError('Git worktree ownership changed')
+                # Reuse Git registration as commit retention, including detached
+                # HEAD. The entire directory moves; no file traversal or cleanup.
+                observed = source.stat()
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if target.parent.is_symlink() or target.parent.resolve() != target.parent:
+                    raise ValueError('Archive storage changed; files preserved')
+                operation = {'id': command_id, 'signature': signature, 'action': action,
+                    'status': 'pending', 'source': str(source), 'target': str(target),
+                    'directoryIdentity': [observed.st_dev, observed.st_ino],
+                    'createdAt': time.time(), 'originalStatus': expected}
+                operations[command_id] = operation
+                record.update(status='archive_pending', revision=record['revision'] + 1)
+                self.save(record)  # Durable intent before the move.
+                try:
+                    git(source, 'worktree', 'move', str(source), str(target))
+                except BaseException:
+                    self._settle_relocation(record, operation)
+                    raise
+                self._settle_relocation(record, operation)
+                return {**record, 'operation': copy.deepcopy(operation)}
+
+    def _settle_relocation(self, record, operation):
+        """Read actual paths and Git registration; reconciliation never moves files."""
+        source, target = Path(operation['source']), Path(operation['target'])
+        def owns(path):
+            try:
+                if path.is_symlink():
+                    return False
+                info = path.stat()
+                root, repository = common(path)
+                return ([info.st_dev, info.st_ino] == operation['directoryIdentity']
+                    and root == path and str(repository) == record['repository']
+                    and ('worktree ' + str(path) + '\0') in git(path, 'worktree', 'list', '--porcelain', '-z').decode())
+            except (OSError, ValueError):
+                return False
+        if not source.exists() and not source.is_symlink() and owns(target):
+            operation['status'] = 'applied'
+            record.update(path=str(target), status='ready' if operation['action'] == 'restore' else 'archived')
+        elif not target.exists() and not target.is_symlink() and owns(source):
+            operation['status'] = 'not_applied'
+            record['status'] = operation['originalStatus']
+        else:
+            operation['status'] = 'unknown'
+            record['status'] = 'archive_unknown'
+        operation['observedAt'] = time.time()
+        record['revision'] += 1
+        self.save(record)
 
     def remove(self, identity, expected_revision, command_id=None):
         record = self.get(identity)
@@ -261,6 +345,7 @@ class GitWorktrees:
             if command_id and record.get('removeCommand') == {'id': command_id, 'expectedRevision': expected_revision}: return {**record, 'duplicate': True}
             if record['revision'] != expected_revision: raise ValueError('The worktree record changed; inspect it again')
             if record['status'] == 'removed': return record
+            if record['status'] != 'ready': raise ValueError('Restore and inspect this checkout before removal')
             if not record['owned']: raise ValueError('Only app-created checkouts can be removed here')
             root, repository = common(record['path'])
             if str(repository) != record['repository'] or root != Path(record['path']): raise ValueError('Git worktree ownership changed')

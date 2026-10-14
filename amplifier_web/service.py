@@ -314,6 +314,8 @@ from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
 from .collaboration import definitions as collaboration_definitions
 ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
+from .assignments import definitions as assignment_definitions
+ACTION_DEFINITIONS.update(assignment_definitions(schema, string))
 from .workspace_awareness import definitions as workspace_awareness_definitions
 ACTION_DEFINITIONS.update(workspace_awareness_definitions(schema, string))
 for _peer_action in ("conversation.send", "coordination.followup"):
@@ -374,7 +376,7 @@ for _access, _actions in {
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
-        "worktree.create", "worktree.attach", "worktree.remove", "worktree.handoff", "worktree.reconcile",
+        "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile",
         "coordination.intent",
     },
     "presentation": {
@@ -401,6 +403,7 @@ for _access, _actions in {
         *canvas_version_definitions(schema, string),
         *publishing_definitions(schema, string),
         *resource_reservation_definitions(schema, string),
+        *assignment_definitions(schema, string),
     },
 }.items():
     for _action in _actions:
@@ -628,6 +631,8 @@ class AppService:
         self.coordination = Coordination(self)
         from .collaboration import Collaboration
         self.collaboration = Collaboration(self)
+        from .assignments import Assignments
+        self.assignments = Assignments(self)
         from .peer_attribution import PeerAttribution
         self.peer_attribution = PeerAttribution(self.db)
         self.projections.resolver = self.peer_attribution.resolve
@@ -1618,6 +1623,8 @@ class AppService:
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
+        if action.startswith('assignment.'):
+            return await self.assignments.dispatch(action, args, origin, command_id, caller_session_id)
         if action.startswith("capacity."):
             from .capacity import dispatch as capacity_dispatch
             return await capacity_dispatch(self, action, args, origin, command_id, include_state)
@@ -2220,6 +2227,13 @@ class AppService:
                     inherited = prepare(self, args, origin, caller_session_id)
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
+                    if origin == 'scheduler' and args.get('inheritConfiguration', {}).get('scheduledRunId'):
+                        source = self._session(args['inheritConfiguration']['sessionId'])
+                        if self.assignments.current(source):
+                            session['assignmentId'] = self.assignments.reserve_member(source, session['id'], command_id)
+                            assignment = self.assignments.load(session['assignmentId'])
+                            assignment['members'][session['id']]['status'] = 'bound'
+                            self.assignments.save(assignment)
                     reused = (self._reusable_internal(session) if args.get('purpose') and not args.get('id')
                               and not prepared_identity and not args.get('inheritConfiguration') and not args.get('selection') else None)
                     if reused is None:
@@ -3882,7 +3896,8 @@ class AppService:
             reference = self._session(session_id, hydrate=False).get("coordinationReference", {
                 "sessionId": session_id, "grants": [], "requests": [], "bounded": True,
                 "detail": "No retained collaboration reference; discover current coordination.context."})
-            return {**reference, 'awareness': packet(self, session_id, principal=PRINCIPAL.get())}
+            return {**reference, 'awareness': packet(self, session_id, principal=PRINCIPAL.get()),
+                    'assignment': self.assignments.summary(self._session(session_id, hydrate=False))}
         def visual_origin(explicit=None):
             if input_origin is None:
                 return
@@ -4060,7 +4075,7 @@ class AppService:
                 finally:
                     INPUT_DETACHED.reset(token)
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('coordination.', 'worktree.')) or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'].startswith(('coordination.', 'worktree.', 'assignment.')) or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.

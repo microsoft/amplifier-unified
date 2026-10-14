@@ -22,6 +22,8 @@ def definitions(schema, string):
         'worktree.status': ('Inspect a checkout, its original source manifest, conflicts and Git ownership.', schema(identity)),
         'worktree.create': ('Create a managed checkout from an exact inspected source revision. repositoryPath selects the source; carry the inspected absolute root for multi-repository work. Default clean committed HEAD; carry_dirty explicitly copies staged/unstaged/untracked evidence. Does not move execution or configure dependencies.', schema({**sid, **repository, 'sourceRevision': string(100), 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500), 'branch': string(500)}, ['sessionId', 'sourceRevision'])),
         'worktree.attach': ('Associate an existing Git worktree from the selected repositoryPath (canonical home by default); does not copy history or start work. Attached folders cannot be deleted through managed cleanup.', schema({**sid, **repository, 'path': string(4000)}, ['sessionId', 'path'])),
+        'worktree.archive': ('Retire an unused app-created checkout while retaining every file and its Git registration. Moves the whole checkout to private archive storage; does not reclaim disk space or create an immutable snapshot. Active or ambiguous ownership is refused.', schema({**identity, **revision})),
+        'worktree.restore': ('Restore an archived checkout without sending input or moving conversation execution. Keeps dirty, ignored and unknown files. Refuses a destination collision.', schema({**identity, **revision})),
         'worktree.remove': ('Remove an app-created checkout only when it has no changed/untracked/ignored files and no task is executing there. Preserves branch, source, history and manifests.', schema({**identity, **revision})),
         'worktree.handoff': ('Move this task’s execution folder to an associated checkout or back to its canonical home (id null). Return a durable pending receipt, then cooperatively save and release the old runtime. No input or uncertain effect is replayed. History home, saved settings, task, drafts, voice and artifact identities remain unchanged.', schema({**sid, 'id': {'type': ['string', 'null']}, 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}}, ['sessionId', 'id', 'expectedExecutionRevision'])),
         'worktree.reconcile': ('After inspecting an unknown handoff, deliberately choose its source or target. Requires current receipt revision and user evidence, confirms writer release again, and never replays model input. Agents must cite the actual user finding.', schema({**identity, **revision, 'destination': {'enum': ['source', 'target']}, 'evidence': {**string(4000), 'minLength': 1}, 'sourceMessageId': string(200)}, ['sessionId', 'id', 'expectedRevision', 'destination', 'evidence'])),
@@ -200,12 +202,15 @@ class Worktrees:
         elif action == 'worktree.attach':
             source = await asyncio.to_thread(self.repository_path, session, args.get('repositoryPath'), attaching=True)
             result = await asyncio.to_thread(self.git.attach, args['path'], source=source, command_id=identity, session_id=sid)
-        elif action == 'worktree.remove':
+        elif action in {'worktree.remove', 'worktree.archive', 'worktree.restore'}:
             record = self.record(sid, args['id'])
             self.check_host(record)
             if any((s.get('workingDirectory') or s['workspace']) == record['path'] for s in self.app.state['sessions']): raise ValueError('A task still uses this checkout; hand it back first')
             if any(r['phase'] in {'pending', 'unknown'} and record['path'] in {r['source'], r['target']} for s in self.app.state['sessions'] for r in self.receipts(s['id'])): raise ValueError('An unresolved handoff still refers to this checkout')
-            result = await asyncio.to_thread(self.git.remove, args['id'], args['expectedRevision'], identity)
+            if action == 'worktree.remove':
+                result = await asyncio.to_thread(self.git.remove, args['id'], args['expectedRevision'], identity)
+            else:
+                result = await asyncio.to_thread(self.git.relocate, args['id'], args['expectedRevision'], identity, restore=action == 'worktree.restore')
         else: raise ValueError('Unknown worktree action')
         async with self.app.lock: self.changed()
         return result
