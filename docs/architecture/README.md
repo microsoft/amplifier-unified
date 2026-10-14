@@ -7,6 +7,13 @@ The vision and contracts are ratified by user approval on 2026-10-02.
 Numeric performance budgets remain candidate targets pending measurement.
 This packet changes documentation; it does not establish protocol conformance.
 
+**Current main application priority (October 14):** the approved
+[bounded-data implementation plan](../../plans/2026-10-14-main-working-set-architecture.md)
+applies the working-set and ownership principles to today's application first.
+It records measured bottlenecks, scoped reads, background indexing/projection,
+client changes, acceptance and incremental rollout. The AHP/ACP proof below stays
+a separate secondary track; performance delivery does not wait for protocol adoption.
+
 ## Decision
 
 Use **AHP between clients and a durable host**, and **ACP between that host and

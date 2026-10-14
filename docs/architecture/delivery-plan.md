@@ -6,6 +6,15 @@ The user approved the plan and direction on 2026-10-02 and explicitly excluded
 Numeric budgets and repository names remain implementation choices; ratification
 is not evidence that any runtime behavior is complete or shipped.
 
+## Current main application work
+
+The October 14 [bounded-data implementation plan](../../plans/2026-10-14-main-working-set-architecture.md)
+records the approved performance sequence for the existing application. It
+reuses these ownership and working-set commitments without making AHP/ACP adoption
+a release prerequisite. Its concrete resource semantics and numeric budgets remain
+proposals pending owner review. The waves below govern the separate protocol proof
+and migration, not an automatic cutover from main.
+
 ## Sequence and gates
 
 | Wave | Work | Exit evidence |
