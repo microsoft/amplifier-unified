@@ -384,7 +384,8 @@ async def test_real_native_worker_sibling_dependency_conflict_preserves_contribu
         assert any(row['section'] == 'context' for row in value['mounts'])
         dependency = modules['fixture_dependency']
         assert dependency['origin'] == str(workspace / 'dependency/module.py')
-        assert dependency['fileObservedAtMount']['sha256'] == dependency['currentFileSha256']
+        assert dependency['fileStatus'] == 'observed' and dependency['currentFileSha256']
+        assert 'fileObservedAtMount' not in dependency and 'changedSinceMount' not in dependency
         roots = []
         for name in ('candidate', 'dependency'):
             snapshot = (await app.dispatch('worktree.inspect', {'sessionId': sid, 'repositoryPath': name}))['result']['repository']
@@ -401,9 +402,62 @@ async def test_real_native_worker_sibling_dependency_conflict_preserves_contribu
         drift = (await app.dispatch('integration.check', {'sessionId': sid, 'id': 'combined'}))['result']
         assert drift['status'] == 'mismatch'
         row = next(row for row in drift['worker']['modules'] if row['module'] == 'fixture_dependency')
-        assert row['changedSinceMount'] and not row['importedBytesVerified']
+        assert row['currentFileSha256'] != dependency['currentFileSha256']
+        assert 'fileObservedAtMount' not in row and 'changedSinceMount' not in row
+        assert not row['importedBytesVerified']
         assert (workspace / 'candidate/module.py').read_bytes() == before['candidate']
         assert (workspace / 'dependency/module.py').read_text().endswith('# Contributor refinement\n')
         assert (await app.dispatch('integration.read', {'sessionId': sid, 'id': 'combined'}))['result'] == captured
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('bridge', [False, True])
+@pytest.mark.parametrize('action', ['integration.capture', 'integration.check', 'integration.read', 'integration.list', 'runtime.provenance'])
+async def test_integration_observation_uses_metadata_without_hydrating_history(candidate, monkeypatch, action, bridge):
+    app, capture_args, _, _ = candidate
+    sid = capture_args['sessionId']
+    saved = await app.dispatch('integration.capture', capture_args, command_id='existing-candidate')
+    arguments = {'sessionId': sid}
+    if action == 'integration.capture': arguments = capture_args
+    if action in {'integration.check', 'integration.read'}: arguments['id'] = 'existing-candidate'
+    original = app._session
+    calls = []
+    def metadata_only(identity=None, *, hydrate=True):
+        assert not hydrate, 'Integration authority must not load cold conversation bodies'
+        calls.append(identity)
+        return original(identity, hydrate=False)
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_session', metadata_only)
+        patch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('History loaded')))
+        patch.setattr(app.cold_display, 'hydrate', lambda *_: pytest.fail('Cold display hydrated'))
+        before = app.runtime.provenance.await_count
+        if bridge:
+            value = await app.app_bridge('dispatch', {'action': action, 'args': arguments,
+                'id': 'metadata-observation', '_runtimeSessionId': sid}, sid)
+        else:
+            value = await app.dispatch(action, arguments, command_id='metadata-observation')
+        assert value['accepted'] and calls and set(calls) == {sid}
+        if action == 'integration.read': assert value['result'] == saved['result']
+        if action == 'integration.list': assert value['result']['items'][0]['id'] == 'existing-candidate'
+        assert app.runtime.provenance.await_count == before + (action not in {'integration.read', 'integration.list'})
+
+
+@pytest.mark.parametrize('principal', ['foreign-root', 'child'])
+async def test_metadata_only_integration_authority_still_rejects_other_callers(candidate, monkeypatch, principal):
+    app, arguments, _, _ = candidate
+    sid = arguments['sessionId']
+    await app.dispatch('session.create', {'title': 'Other root'})
+    other = app._session()['id']
+    original = app._session
+    def metadata_only(identity=None, *, hydrate=True):
+        assert not hydrate
+        return original(identity, hydrate=False)
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_session', metadata_only)
+        caller = other if principal == 'foreign-root' else sid
+        actor = other if principal == 'foreign-root' else 'child-native-id'
+        with pytest.raises(AppError, match='calling conversation|child cannot borrow'):
+            await app.app_bridge('dispatch', {'action': 'integration.capture', 'args': arguments,
+                '_runtimeSessionId': actor}, caller)
+    app.runtime.provenance.assert_not_awaited()

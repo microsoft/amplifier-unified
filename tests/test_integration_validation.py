@@ -462,3 +462,40 @@ async def test_real_native_shell_command_and_postapproval_stop(project, monkeypa
         assert git(root, 'show', 'contributor:source.txt') == 'contributor change'
         assert (roots[1] / 'source.txt').read_text() == 'original\n'
     finally: await tool.close()
+
+
+@pytest.mark.parametrize('bridge', [False, True])
+@pytest.mark.parametrize('action', ['integration.validate', 'integration.collect'])
+async def test_validation_authority_and_collection_do_not_hydrate_history(project, monkeypatch, action, bridge):
+    app, sid, roots, calls = project
+    await validate(app, sid, roots[0])
+    arguments = {'sessionId': sid, 'captureId': 'candidate'}
+    if action == 'integration.validate':
+        # A drifted candidate must be rejected before any execution is started,
+        # including when the saved chat's display/transcript has gone cold.
+        (roots[1] / 'source.txt').write_text('changed since capture\n')
+        arguments.update(repositoryPath=str(roots[1]), command='printf should-not-run')
+    else:
+        arguments['validationIds'] = ['run']
+    original = app._session
+    metadata_reads = []
+    def metadata_only(identity=None, *, hydrate=True):
+        assert not hydrate, 'Integration authority must not load cold conversation bodies'
+        metadata_reads.append(identity)
+        return original(identity, hydrate=False)
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_session', metadata_only)
+        patch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('History loaded')))
+        patch.setattr(app.cold_display, 'hydrate', lambda *_: pytest.fail('Cold display hydrated'))
+        if bridge:
+            value = await app.app_bridge('dispatch', {'action': action, 'args': arguments,
+                'id': 'metadata-result', '_runtimeSessionId': sid}, sid)
+        else:
+            value = await app.dispatch(action, arguments, command_id='metadata-result')
+        assert value['accepted'] and metadata_reads and set(metadata_reads) == {sid}
+        if action == 'integration.validate':
+            assert value['result']['phase'] == 'not_started'
+            assert value['result']['status'] == 'mismatch'
+        else:
+            assert [row['status'] for row in value['result']['repositories']] == ['passed', 'not_validated']
+        assert len(calls) == 1  # Neither path launched another command.

@@ -246,6 +246,11 @@ requested project code, installs dependencies, starts a dormant worker or
 claims checkout isolation from an editable dependency's origin. Loaded origin,
 file bytes observed at mount, and file bytes observed now are distinct facts;
 none retroactively proves exact imported bytecode or a successful test.
+Worker readiness captures only bounded in-memory identities and never waits for
+source-file hashing. File bytes are inspected only on an explicit provenance
+request. Without a real earlier file observation, mount-time hashes and
+change-since-mount comparisons remain unavailable; a later read cannot supply
+them retroactively.
 
 An explicit combined candidate can name up to eight inspected repository
 snapshots and sixteen expected loaded project-module origins/file hashes.

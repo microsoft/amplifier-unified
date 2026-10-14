@@ -600,8 +600,8 @@ class Worker:
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
-            from amplifier_web.loaded_provenance import observe as observe_loaded
-            self.provenance_mount = await observe_loaded(self.session)
+            from amplifier_web.loaded_provenance import capture_mount
+            self.provenance_mount = capture_mount(self.session)
             await self.ownership.register()
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)

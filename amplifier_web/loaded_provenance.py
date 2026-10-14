@@ -11,6 +11,7 @@ import time
 MAX_FILE = 2 * 1024 * 1024
 MAX_TOTAL = 16 * 1024 * 1024
 MAX_MODULES = 64
+MAX_SECONDS = 6
 MODULE = re.compile(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\Z')
 
 
@@ -22,8 +23,10 @@ def identities(session, requested):
         for section in ('orchestrator', 'context', 'providers', 'tools'):
             value = coordinator.get(section)
             values = value.items() if isinstance(value, dict) else [(section, value)]
-            for key, obj in values:
-                if obj is None or len(mounts) >= MAX_MODULES:
+            for offset, (key, obj) in enumerate(values):
+                if offset >= MAX_MODULES or len(mounts) >= MAX_MODULES:
+                    break
+                if obj is None:
                     continue
                 # Follow only the host's ordinary provider wrapper field;
                 # never enumerate properties or invoke an inspection hook.
@@ -85,6 +88,26 @@ def hashes(rows):
     return result
 
 
+def snapshot(session, rows, mounts, *, stable=True):
+    return {'status': 'observed' if stable else 'unknown', 'identityStable': stable,
+            'capturedAt': time.time(), 'modules': rows, 'mounts': mounts,
+            'mounted': session is not None, 'python': sys.executable,
+            'runtimeSessionId': getattr(session, 'session_id', None),
+            'limits': {'modules': MAX_MODULES, 'requestedModules': 16, 'fileBytes': MAX_FILE, 'totalBytes': MAX_TOTAL},
+            'limitations': ['Loaded origin and current file bytes do not prove the exact imported bytes.',
+                'Inspection covers only listed modules; subprocess, JavaScript and transitive dependency closure are not proven.',
+                'No imports, installs, tests or worker startup were performed.']}
+
+
+def capture_mount(session):
+    """Record bounded in-memory identities; readiness never waits for file I/O."""
+    rows, mounts, _ = identities(session, ())
+    value = snapshot(session, [{**row, 'fileStatus': 'unknown', 'importedBytesVerified': False}
+                               for row in rows], mounts)
+    value['limitations'].append('Mount-time file bytes were not inspected; request provenance explicitly to observe current files.')
+    return value
+
+
 async def observe(session, requested=(), *, mounted=None):
     if (not isinstance(requested, (tuple, list)) or len(requested) > 16
             or any(not isinstance(name, str) or len(name) > 200 or not MODULE.fullmatch(name) for name in requested)):
@@ -92,7 +115,7 @@ async def observe(session, requested=(), *, mounted=None):
     rows, mounts, objects = identities(session, requested)
     captured = rows
     try:
-        async with asyncio.timeout(6):
+        async with asyncio.timeout(MAX_SECONDS):
             rows = await asyncio.to_thread(hashes, rows)
     except TimeoutError:
         rows = [{**row, 'fileStatus': 'unknown', 'importedBytesVerified': False} for row in rows]
@@ -106,11 +129,4 @@ async def observe(session, requested=(), *, mounted=None):
         if stamp and stamp.get('origin') == row.get('origin') and stamp.get('fileStatus') == 'observed':
             row['fileObservedAtMount'] = {'sha256': stamp['currentFileSha256'], 'capturedAt': mounted['capturedAt']}
             row['changedSinceMount'] = (row['currentFileSha256'] != stamp['currentFileSha256']) if row.get('fileStatus') == 'observed' else None
-    return {'status': 'observed' if stable else 'unknown', 'identityStable': stable,
-            'capturedAt': time.time(), 'modules': rows, 'mounts': mounts,
-            'mounted': session is not None, 'python': sys.executable,
-            'runtimeSessionId': getattr(session, 'session_id', None),
-            'limits': {'modules': MAX_MODULES, 'requestedModules': 16, 'fileBytes': MAX_FILE, 'totalBytes': MAX_TOTAL},
-            'limitations': ['Loaded origin and current file bytes do not prove the exact imported bytes.',
-                'Inspection covers only listed modules; subprocess, JavaScript and transitive dependency closure are not proven.',
-                'No imports, installs, tests or worker startup were performed.']}
+    return snapshot(session, rows, mounts, stable=stable)

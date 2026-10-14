@@ -102,9 +102,9 @@ async def _dispatch(app, action, args, origin, command_id, caller):
     sid = args['sessionId']
     try:
         async with app.lock:
-            source = app._session(sid)
+            source = app._session(sid, hydrate=False)
             if origin not in {'ui', 'user'}:
-                root = app.collaboration.source({}, origin, caller)
+                root = app.collaboration.source({}, origin, caller, hydrate=False)
                 if root['id'] != sid:
                     raise ValueError('Inspect provenance from the calling conversation.')
             if action == 'integration.read':
@@ -199,7 +199,7 @@ async def _dispatch(app, action, args, origin, command_id, caller):
                 if roots != current_roots:
                     raise ValueError('Repository bindings changed during inspection. No candidate was retained.')
             async with app.lock:
-                current = app._session(sid)
+                current = app._session(sid, hydrate=False)
                 if binding(current) != captured_binding:
                     raise ValueError('The execution binding changed during inspection. No candidate was retained; inspect again.')
                 if action == 'runtime.provenance':

@@ -226,7 +226,7 @@ class Operations:
         return values
 
     def status(self, session_id, identity):
-        self.service._session(session_id)
+        self.service._session(session_id, hydrate=False)
         prefix = identity.partition(":")[0]
         if prefix in self.adapters:
             _, reading = self.adapters[prefix]

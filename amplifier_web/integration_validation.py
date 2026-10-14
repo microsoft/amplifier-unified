@@ -273,7 +273,7 @@ async def dispatch(app, action, args, origin, command_id, caller):
             raise ValueError('Validation command identity must be at most 160 characters.')
         digest = fingerprint([action, args, origin])
         async with app.lock:
-            source = app.collaboration.source({'sessionId': sid}, origin, caller)
+            source = app.collaboration.source({'sessionId': sid}, origin, caller, hydrate=False)
             if source['id'] != sid:
                 raise ValueError('Integration actions belong to the calling conversation.')
             prior = app.collaboration.duplicate(identity, digest)

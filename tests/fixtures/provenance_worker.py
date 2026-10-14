@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 from amplifier_foundation.bundle import Bundle, BundleModuleResolver, PreparedBundle
-from amplifier_web.loaded_provenance import observe
+from amplifier_web.loaded_provenance import capture_mount
 from amplifier_web.runtime_worker import Worker, configure_protocol, publish
 
 
@@ -29,7 +29,7 @@ async def main():
                 sys.modules[spec.name] = module
                 spec.loader.exec_module(module)
                 await worker.session.coordinator.mount('tools', module.ProvenanceTool(), name='fixture')
-                worker.provenance_mount = await observe(worker.session)
+                worker.provenance_mount = capture_mount(worker.session)
                 publish({'type': 'runtime.ready', 'report': {}})
             elif data['op'] == 'stop':
                 break
