@@ -1,19 +1,21 @@
 # Browser state transport and idle work
 
-## Opt-in shell navigation resources
+## Shell navigation resources
 
-Updated browsers may send `navigationResources` to `GET /api/shell` as a JSON
+The bundled browser must send `navigationResources` to `GET /api/shell` as a JSON
 array of resource names (at most 16 entries and 4,096 characters). The allowed
 names are `chatNavigation`, `homeNavigation`, `pinnedNavigation`,
 `recentNavigation`, `workspaceShortcuts`, `workspaceExplorer`, `sidebarSearch`,
 `sidebarWorkspace`, `sidebarRecent`, `sidebarPinned`, and `workspaceOverview`.
-The host validates the request before constructing projections. This opt-in
-applies to the built-in Chats and Workspaces snapshots; custom navigation
-packages and `shell.query` keep their complete existing snapshots. Omitting the
-parameter, including requests with only `compact=1`, retains existing behavior.
-Older hosts can ignore the parameter and return a complete snapshot.
+The host rejects missing or invalid demand before constructing projections.
+Resource selection applies to the built-in Chats and Workspaces snapshots; custom
+navigation packages and explicit `shell.query`/`shell.inspect` reads keep their
+complete existing snapshots. `compact=1` changes wire encoding, not demand. The
+bundled browser and server ship together and use this contract directly; no
+old-bundle fallback or capability negotiation is required. Independently released
+clients and custom packages remain governed by their explicit contracts.
 
-Opted-in snapshots contain `navigationResources`, the supplied resource names.
+Built-in browser snapshots contain `navigationResources`, the supplied resource names.
 An omitted resource was not requested; it is not an empty result. Base instance
 generation, view/controller metadata, selected registration and permitted actions
 remain available. `recentNavigation` also supplies `recentShortcuts` and
@@ -27,8 +29,8 @@ needs it. Demand and workspace tab participate in request identity. Superseded
 responses cannot populate a newly selected surface; absent/mismatched pages show
 loading until their matching resource arrives. Retained controller/draft state
 does not require constructing a hidden workspace page. Releasing read demand
-does not cancel accepted work or replay commands. This is an additive current
-transport optimization, not an AHP adoption or a change to stream snapshots.
+does not cancel accepted work or replay commands. This changes the current bundled navigation transport. Stream snapshots and
+the separate AHP development track are unchanged.
 
 ## Existing stream and receipt behavior
 

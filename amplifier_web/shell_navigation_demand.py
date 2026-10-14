@@ -1,4 +1,4 @@
-"""Opt-in navigation resource selection; omitted demand preserves the v1 snapshot."""
+"""Explicit navigation resource selection for the bundled browser transport."""
 import json
 
 NAVIGATION_RESOURCES = frozenset({
@@ -9,9 +9,7 @@ NAVIGATION_RESOURCES = frozenset({
 
 
 def parse_navigation_resources(value):
-    """Parse the bounded HTTP JSON array; None is the complete legacy contract."""
-    if value is None:
-        return None
+    """Require a bounded HTTP JSON array before constructing navigation."""
     from .service import AppError
     if not isinstance(value, str) or len(value) > 4096:
         raise AppError('Invalid navigation resources.', 400)

@@ -29,7 +29,7 @@ async function measure(directory){
    const searchMs=performance.now()-started;
    const sizes=await page.evaluate(async()=>{
     const state=await (await fetch('/api/state')).text(),clientId=window.amplifier.shellClientId;
-    const shell=clientId?await (await fetch('/api/shell?clientId='+clientId)).text():'';
+    const shell=clientId?await (await fetch('/api/shell?clientId='+clientId+'&navigationResources='+encodeURIComponent(JSON.stringify(['chatNavigation','homeNavigation','pinnedNavigation','recentNavigation','workspaceShortcuts','workspaceExplorer','sidebarSearch','sidebarWorkspace','sidebarRecent','sidebarPinned','workspaceOverview'])))).text():'';
     return {stateBytes:new TextEncoder().encode(state).length,shellBytes:new TextEncoder().encode(shell).length,domNodes:document.getElementsByTagName('*').length};
    });
    samples.push({startupMs:Math.round(startupMs),searchMs:Math.round(searchMs),streams,...sizes});

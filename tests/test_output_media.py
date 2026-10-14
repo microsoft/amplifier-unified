@@ -1430,7 +1430,7 @@ async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
                 json={'action': action, 'args': {'clientId': identity, **values}, 'id': command_id})
 
         requests = [
-            asyncio.create_task(client.get('/api/shell', params={'clientId': 'fresh-browser'})),
+            asyncio.create_task(client.get('/api/shell', params={'clientId': 'fresh-browser', 'navigationResources': '[]'})),
             asyncio.create_task(post('owner-browser', 'shell.report',
                 {'revision': 0, 'instances': {'chats': 'ready', 'workspaces': 'ready'}}, 'owned-report')),
             asyncio.create_task(post('other-browser', 'shell.query', {'instanceId': 'chats'}, 'owned-query')),

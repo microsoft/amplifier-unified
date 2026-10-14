@@ -1,4 +1,4 @@
-"""Opt-in resource demand removes construction work without changing legacy reads."""
+"""Resource demand bounds bundled reads; explicit complete APIs remain available."""
 from copy import deepcopy
 import json
 import pytest
@@ -8,16 +8,15 @@ from amplifier_web.shell_navigation_demand import NAVIGATION_RESOURCES, parse_na
 from test_shell_modules import service, stage, record_validation
 
 
-def test_resource_parser_preserves_legacy_and_bounds_untrusted_input():
-    assert parse_navigation_resources(None) is None
+def test_resource_parser_requires_demand_and_bounds_untrusted_input():
     assert parse_navigation_resources('[]') == frozenset()
     assert parse_navigation_resources('["recentNavigation","recentNavigation"]') == {'recentNavigation'}
-    for value in ('null', '{}', '"recentNavigation"', '[0]', '[{}]', '["unknown"]', '[', ' '*4097,
+    for value in (None, 'null', '{}', '"recentNavigation"', '[0]', '[{}]', '["unknown"]', '[', ' '*4097,
                   json.dumps(['recentNavigation']*17), '['*1000, 12):
         with pytest.raises(AppError): parse_navigation_resources(value)
 
 
-async def test_legacy_full_snapshot_and_custom_packages_keep_existing_contract(service):
+async def test_explicit_full_snapshot_and_custom_packages_keep_existing_contract(service):
     client = service.shell.client('demand-client')
     instance = {'id':'chats','package':'builtin.chats','slot':'navigation'}
     full = service.shell.snapshot(client, instance, identity='demand-client')

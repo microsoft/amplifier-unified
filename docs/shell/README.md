@@ -50,12 +50,13 @@ navigation state. They do not expose transcripts, composer drafts, credentials
 or runtime mount plans through the SDK. The existing app-wide observation API
 continues to exist outside the module SDK.
 
-The built-in browser can explicitly request a subset of navigation resources
+The built-in browser explicitly requests its required navigation resources
 before construction; the snapshot names its supplied resources and omitted pages
-are not empty results. See [the transport contract](../browser-state-transport.md#opt-in-shell-navigation-resources).
-Custom navigation packages, ordinary `shell.query`, and HTTP callers without the
-opt-in retain the complete bounded navigation snapshot. Wire compaction alone
-does not enable omission. Component instance generation and command authority are
+are not empty results. See [the transport contract](../browser-state-transport.md#shell-navigation-resources).
+Custom navigation packages and explicit `shell.query`/`shell.inspect` reads retain
+the complete bounded navigation snapshot. The bundled HTTP endpoint requires
+resource demand; client and server ship together without old-bundle fallbacks.
+Wire compaction alone does not enable omission. Component instance generation and command authority are
 unchanged.
 
 Shell compositions and view state use the existing client-attachment contract.
