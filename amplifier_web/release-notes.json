@@ -8,7 +8,9 @@
         "New-chat model settings reload after missing results or a reconnect. Delayed and failed reads offer an in-place retry while preserving drafts and explicit choices.",
         "Slow default reads no longer block later edits. Concurrent requests for the same draft settings share one server probe.",
         "Available bundles show a selection prompt instead of a loading placeholder when only the inherited default is unresolved.",
-        "Unconfirmed new-chat submissions use an explicit retry of their original identity. Empty-chat suggestions no longer appear above recovery messages, and saved-work replay confirmations remain separate."
+        "Unconfirmed new-chat submissions use an explicit retry of their original identity. Empty-chat suggestions no longer appear above recovery messages, and saved-work replay confirmations remain separate.",
+        "Mounted reference file and patch tools reject stale worker edits until a fresh read, helping preserve concurrent changes. This protection does not cover shell commands, external editors or other unwrapped writers.",
+        "Commissioned helpers share host-owned assignment admission limits and scoped Stop controls. Independent chats retain their own controls; stopping work does not undo external effects."
       ],
       "notices": []
     },
