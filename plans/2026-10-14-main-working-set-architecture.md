@@ -40,29 +40,37 @@ considering a Rust implementation behind the same interface.
 
 ## Implementation progress, October 14
 
-Release .143 includes the bounded requested navigation pages and removal of
-duplicate ordinary-state projections; .142 was not published. Live .143 measurement reduced shell response size and
-cost, but did not stop repeated reads: its broad `shellDataKey` changed with no
-selection, status, model, Canvas or shell-token change. Selected Work reconstruction
-also remains slow on large histories; these are separate outstanding costs.
+Releases .143 through .149 are published. Release .143 introduced bounded
+requested navigation pages and removed duplicate ordinary-state projections;
+.142 was not published. Release .144 replaced repeated whole-shell reads with
+[resources on the existing state stream](../docs/browser-state-transport.md#shell-bootstrap-and-active-resources).
+Descriptors load once per host/composition generation, explicit demand selects
+pages, and immutable resource revisions follow their semantic dependencies.
+Independent component snapshots retain their own contract.
 
-The .144 change, merged in PR #680 with publication pending, replaces that refresh fan-in with the
-[existing-stream shell resource contract](../docs/browser-state-transport.md#shell-bootstrap-and-active-resources).
-Descriptors load once per host/composition generation. Explicit demand selects
-pages, canonical committed changes invalidate their semantic dependencies, and
-immutable resource revisions travel through the existing state-delta baseline.
-Independent component snapshots retain their SDK contract. Bounded diagnostics
-record reasons and timings without conversation content. Qualification and live
-adoption are separate evidence; this entry does not claim the candidate is
-published or that selected-history performance has been solved.
+Release .145 removed false native-directory invalidations and repeated sizing of
+the same event index within a retention pass. Release .146 removed unused
+whole-library counts from selected browser frames. Release .147 moved installed
+interface identity onto the existing stream and added bounded page-rebuild reason
+diagnostics. Release .148 suppressed media lookups for chats known to have no
+linked media. Release .149 gave admitted native metadata one live owner, removing
+an overwrite/save cycle that repeatedly invalidated unchanged navigation.
 
-A separate selected-history follow-up preserves exact-object size charges during
-one retention pass, avoiding repeated traversal when an earlier index evicts a
-later index still held by that read. Its two-file implementation passed 139
-focused tests. A paired synthetic three-log probe reduced stable size traversals
-from three to one while preserving output and remeasuring newly restored objects.
-The follow-up is not published, and this mechanism proof does not establish a live
-latency improvement. Live .144 measurements determine the next history priority.
+The durable typed SQLite directory, keyed admission, requested pages, local native
+watch hints and bounded reconciliation already exist; build on them rather than
+introducing another catalog. Remaining catalog work concerns aggregate dependency
+boundaries and query/maintenance isolation. Reconciliation currently uses threads,
+not the bounded background process proposed below.
+
+Live .149 spot checks observed no repeated whole-shell or healthy build-identity
+polling and no known-empty media requests. One comparable selection produced 18
+navigation rebuild attempts versus 36 in .147, but large selected Work histories
+still took seconds to reconstruct. Existing event offsets/checkpoints and paged
+Work summaries do not yet avoid reconstructing the selected descendant tree.
+These are individual observations, not sustained percentile qualification or
+completion of the performance exits. Retained release and live-adoption receipts
+are under `output/work-activity-20261013/bounded-directory/release143/` through
+`release149/` in the operator workspace.
 
 ## Ownership and data flow
 
@@ -396,16 +404,27 @@ server/client/worker revisions before claiming the live problem fixed.
 
 ## Decisions and immediate next slice
 
-The architecture direction and execution sequence are approved. Resolve the
-30-day/workspace defaults, total-count behavior,
-resource protocol details, source-generation guarantees, storage partition and
-numeric budgets with their owners before implementing those changes. No need to
-settle every future repository name before repairing current demand boundaries.
+The architecture direction and execution sequence are approved. The bundled
+navigation resource protocol on the existing state stream is implemented; it is
+not an outstanding transport choice. Before changing their respective contracts,
+settle source-generation and cursor guarantees, read-model storage partition and
+writer ownership, dependency-specific count semantics, and measured worker/cache/
+queue budgets. The optional 30-day and workspace-visibility defaults can wait
+without blocking performance work. Future repository names and extraction order
+can wait until their interfaces are independently qualified.
 
-The next slice is step 1: integrate the small qualified query/diagnostic work,
-remove hidden navigation projections at their source, and measure the same chat
-switches and concurrent admission. Then proceed to bounded catalog and selected
-history lanes against their reviewed interfaces. Keep actual implementation and
-qualification status in lane receipts; this document is the shared plan, not a
-substitute for evidence. Clean owned source copies, dependencies, DTUs and obsolete
-worktrees as slices complete, retaining recoverable commits and useful evidence.
+Continue steps 2 and 3 against reviewed owner interfaces: finish aggregate/query
+bounds and isolate maintenance while developing JIT, incremental selected-history
+read models with bounded process scheduling. Preserve existing directory pages,
+watch recovery and canonical history; do not start a second index or convert the
+whole library. Step 4 continues alongside those lanes by consolidating client
+resource ownership, retaining independent-client contracts and qualifying rapid
+switching, hidden viewers and reconnect. Remove superseded bundled paths after
+migration; extraction remains step 5, not a performance prerequisite.
+
+Keep implementation and qualification status in exact-source lane receipts and
+measure the same selected-history and concurrent-admission workloads. This shared
+plan is not a substitute for evidence that an exit or budget passed. Continue the
+fast release policy with background verification and cleanup of owned source
+copies, dependencies, DTUs and obsolete worktrees, retaining recoverable commits
+and useful evidence.

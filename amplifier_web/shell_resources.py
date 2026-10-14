@@ -184,7 +184,7 @@ class ShellResources:
     def _epochs(self, keys):
         return self.unknown_epoch, tuple((key, self.epochs[key]) for key in sorted(keys))
 
-    def _page_key(self, name, scoped, instance, navigation_revision, client):
+    def _page_key(self, name, scoped, instance, navigation_revision, client, workspace_revision):
         view = dict(scoped['view'])
         saved = view.get('navRecentLimit', 20)
         from .chat_navigation import RECENT_LIMITS
@@ -193,6 +193,9 @@ class ShellResources:
         workspace = scoped.get('selectedWorkspaceId')
         mode = instance.get('scope', {}).get('mode')
         globals_key = self._epochs(CHAT_GLOBALS)
+        if name in {'workspaceExplorer', 'workspaceShortcuts'}:
+            navigation_revision = (workspace_revision, None)
+            globals_key = self._epochs({'workspaces', 'pinnedWorkspaceIds'})
         if name in {'workspaceExplorer', 'workspaceShortcuts', 'workspaceOverview'}:
             filters = WORKSPACE_FILTERS if name != 'workspaceOverview' else ()
             return (navigation_revision, globals_key, workspace, mode,
@@ -239,11 +242,12 @@ class ShellResources:
         directory = getattr(self.shell.service, 'directory', None)
         semantic = directory.observation_revision if directory is not None else {}
         nav = (semantic.get('navigation', state.get('revision')), semantic.get('attention'))
+        workspace_revision = semantic.get('workspace', state.get('revision'))
         from .shell_components import resolved
         recent = tuple((item['id'], self.shell.recent_limits.get(self.shell.recent_key(client, item)))
                        for item in resolved(self._composition(client, registration['recovery']))
                        if item['slot'] == 'navigation')
-        stamp = (bootstrap, nav, self._epochs(GLOBAL_KEYS), encoded(client.get('views', {})),
+        stamp = (bootstrap, nav, workspace_revision, self._epochs(GLOBAL_KEYS), encoded(client.get('views', {})),
                  tuple(registration['scope']), registration['wanted'],
                  recent, self.total_bytes,
                  state.get('revision') if any(item['package'] not in ('builtin.chats', 'builtin.workspaces')
@@ -252,7 +256,8 @@ class ShellResources:
         if registration.get('failed_stamp') == stamp:
             return registration['error_envelope']
         try:
-            result = self._snapshot(identity, state=state, client=client, bootstrap=bootstrap, navigation_revision=nav)
+            result = self._snapshot(identity, state=state, client=client, bootstrap=bootstrap,
+                navigation_revision=nav, workspace_revision=workspace_revision)
         except ResourceLimit:
             result = {'hostInstanceId': self.shell.service.instance_id, 'clientId': identity,
                 'demandId': registration['demandId'], 'bootstrapKey': bootstrap,
@@ -265,7 +270,7 @@ class ShellResources:
         registration.pop('error_envelope', None)
         return result
 
-    def _snapshot(self, identity, *, state, client, bootstrap, navigation_revision):
+    def _snapshot(self, identity, *, state, client, bootstrap, navigation_revision, workspace_revision):
         registration = self.clients[identity]
         from .shell_components import resolved
         from .shell_modules import BUILTINS
@@ -304,7 +309,7 @@ class ShellResources:
                 scoped = self.shell.scoped_state(client, instance)
                 dirty = set()
                 for resource in registration['wanted']:
-                    key = (bootstrap, self._page_key(resource, scoped, instance, navigation_revision, client))
+                    key = (bootstrap, self._page_key(resource, scoped, instance, navigation_revision, client, workspace_revision))
                     own_keys[resource] = key
                     if previous_keys.get(resource) == key:
                         own[resource] = previous[resource]

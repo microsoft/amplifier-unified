@@ -91,6 +91,14 @@ monotonic `viewRevision`; the HTTP `result.shellView` receipt prevents an older
 queued context frame from briefly restoring an acknowledged prior value.
 
 The server reuses immutable resource values while semantic dependencies match.
+Workspace explorer and shortcut aggregates have a separate directory generation:
+root membership, placement, stable recency, activity and notice/read facts can
+change them; chat titles and child/internal progress cannot. Native membership
+changes conservatively invalidate because duplicate identities can alter public
+ownership. Workspace registry commits and pin preferences remain separate inputs.
+The shared workspace cache retains only its current aggregate/registry generation
+within the existing bounded query cache. Old local public-fact rows derive the
+additional dependency on keyed access, without a full-library migration read.
 Canonical conditional global writes report the keys that actually changed;
 their dependency epochs advance only after successful commit. Session facts
 retain the directory's semantic revision authority. Ordinary telemetry, streamed

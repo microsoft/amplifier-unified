@@ -83,6 +83,33 @@ and probes the wheel outside the source checkout. The full Python, broad readine
 and extended browser suites run in independent jobs after publication.
 The full Python lane has a 90-minute limit and prints each test's identity as it
 runs, so a timeout does not conceal failed or unfinished test identities.
+It retains the verbose log and, when pytest completes, JUnit results. A partial
+log or absent JUnit file is not a successful or complete suite.
+
+Extended browser checks use the explicit `frontend/tests/browser-checks.json`
+plan, preserving distinct flags and modes. Scenarios run serially in separate
+process groups, with a complete intended-coverage record written before execution.
+A failed scenario remains failed while later independent scenarios run. The
+runner retires only its owned process group and uniquely tagged descendants
+(including detached Chromium processes) before proceeding; leaked processes
+fail that scenario, and uncertain cleanup, cancellation or the bounded run budget
+leaves the remainder explicitly unrun. Any failure or unrun scenario fails the
+job. Per-scenario logs, durations, commands, declared environment, source/tree,
+plan/runner hashes and build-metadata digest are retained with the run/attempt.
+These are observations for that exact source, not reusable release receipts.
+Fixtures must continue owning their synthetic state and cleaning resources;
+runner process cleanup does not authorize access to real/shared installations.
+Each scenario records existing PID/start-time pairs before launch. Unchanged
+pre-existing processes are outside its inherited-token ownership; unreadable
+new or reused identities still stop cleanup rather than being assumed unrelated.
+
+Do not infer complete history from DOM Work-group counts. The reusable
+`scripts/browser_dom_recorder.js` probe reports grouped headers and standalone
+single-turn headers separately, excluding embedded turns inside expanded groups.
+Its minimum-header and settled-DOM milestones are visibility observations only.
+Canonical turn/event completeness needs an explicit source oracle; regrouping
+can raise or lower header counts without adding or losing work. Historical
+captures made with older counting semantics must retain that limitation.
 
 The reporting job writes a run summary and opens or updates one tracked issue per
 release when any expected lane fails, is cancelled, is skipped or is missing.
@@ -99,8 +126,8 @@ When a next release is already in progress, incorporate relevant corrections
 there; otherwise address findings directly while idle. Newly discovered urgent
 regressions still receive prompt attention. Reusing earlier qualification requires
 matching the exact tested inputs; affected checks run again when those inputs
-change. This policy does not itself claim that cross-workflow proof reuse is
-already implemented.
+change. The frontend lane implements the exact-input reuse described below;
+other passing runs are not blanket waivers for a later candidate.
 
 The broad suites also remain manually runnable. Changing this policy requires an
 explicit decision and an update to this document, tests and repository rules.

@@ -15,6 +15,10 @@ try{
  await control({op:'patch',sessions:{[alpha]:{historyLoaded:false,historyLoading:true,execution:{turns,nodes:turns.map((turn,i)=>({id:'node'+i,kind:'tool',label:'Synthetic activity '+i,turnId:turn.id,anchorMessageId:turn.anchorMessageId,phase:'completed',startedAt:turn.startedAt,endedAt:turn.endedAt}))}}}});
  browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers});
+ await page.addInitScript(()=>{
+  const fetch=window.fetch;window.fixtureHistoryReads=[];
+  window.fetch=(url,options)=>{if(String(url).startsWith('/api/conversation/detail?'))window.fixtureHistoryReads.push({url,signal:options?.signal});return fetch(url,options)};
+ });
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(url);
  await expect(page.getByText('Loading conversation…',{exact:true})).toBeVisible();
@@ -40,6 +44,19 @@ try{
  assert.ok(await page.locator('[data-message-id]').count()>before);
  await page.unroute('**/api/conversation/detail?*');
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+ const held=new Promise(resolve=>{release=resolve});let pendingRead=false;
+ await page.route('**/api/conversation/detail?*',async route=>{
+  pendingRead=true;await held;
+  // The old reader has gone away; a late response must not restore its window.
+  await route.fulfill({json:{items:[],offset:0,turns:[],segments:[]}}).catch(()=>{});
+ });
+ await page.evaluate(()=>{window.fixtureHistoryReads=[]});
+ await earlier.evaluate(button=>button.click());await expect.poll(()=>pendingRead).toBe(true);
+ await act('session.select',{id:beta});
+ await expect.poll(()=>page.evaluate(()=>window.fixtureHistoryReads.length>0&&window.fixtureHistoryReads.every(row=>row.signal?.aborted))).toBe(true);
+ release();await page.unrouteAll({behavior:'wait'});
+ await expect(page.locator('[data-message-id]')).toHaveCount(2);
+ await act('session.select',{id:alpha});await expect(earlier).toBeEnabled();
  await act('canvas.show',{kind:'text',title:'Alpha artifact',content:'Alpha canvas contents'});
  await act('view.update',{patch:{canvasWidth:570,canvasDraft:{filter:'Alpha'}}});
  const artifact=await page.evaluate(()=>window.amplifier.getState().canvas.id);
@@ -64,5 +81,5 @@ try{
  await expect(page.getByRole('button',{name:'Load earlier conversation',exact:true})).toBeEnabled();
  const ids=await page.locator('[data-message-id]').evaluateAll(rows=>rows.map(r=>r.dataset.messageId));assert.equal(new Set(ids).size,ids.length);
  await page.screenshot({path:'/tmp/unified-chat-view-state.png'});
- assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:true,initialHistoryGated:true,pairedHistoryPages:true,canvasPerChat:true,reloadPreserved:true}));
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:true,initialHistoryGated:true,pairedHistoryPages:true,supersededReadsAborted:true,canvasPerChat:true,reloadPreserved:true}));
 }finally{release?.();await browser?.close();fixture.kill()}

@@ -30,8 +30,14 @@ try{
  await expect.poll(read).toBe(true);
  const pane=page.getByRole('log',{name:'Conversation messages'});
  await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBeGreaterThan(120);
+ const detailReads=[];page.on('request',request=>{if(new URL(request.url()).pathname==='/api/conversation/detail')detailReads.push(request.url())});
  await pane.evaluate(el=>{el.scrollTop=80});
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.equal(detailReads.length,0,'restoration/anchoring does not load unrequested older history');
+ await expect(page.locator('[data-message-id]')).toHaveCount(60);
+ await pane.hover();await page.mouse.wheel(0,-60);
  await expect(page.locator('[data-message-id]')).toHaveCount(120);
+ assert.equal(detailReads.length,1,'one intentional older-history gesture loads one page');
  assert.deepEqual(errors,[]);
- console.log('Delayed appearance startup attaches completion acknowledgement and automatic earlier-history scrolling.');
+ console.log('Delayed appearance startup attaches completion acknowledgement; only intended earlier-history scrolling loads another page.');
 }finally{release?.();await browser?.close();fixture.kill()}

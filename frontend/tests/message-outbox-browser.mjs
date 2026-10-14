@@ -1,31 +1,36 @@
 import {readComposerDraft} from './composer-test-helpers.mjs';
+import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
 // Real UI with explicitly controlled admission, lost replies, and server updates.
 import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',title:'Saved conversation',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[{id:'fixture',module:'provider-fixture',config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
+const shell=createShellHttpFixture(()=>state);
 const waiting=[],calls=[],errors=[];let browser,vite,page,blockedDraft;let blockNextDraft=false;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,label){for(let i=0;i<150&&!check();i++)await sleep(10);assert.ok(check(),label)}
 async function next(){await until(()=>waiting.length,'Expected pending operation');return waiting.shift()}
 const chat=()=>state.sessions.find(s=>s.id===state.selectedSessionId);
-async function emit(){state.revision++;await page.evaluate(state=>window.emitState(state),state)}
-async function received(item,text=item.body.args.text){const message={id:'server-'+item.body.id,inputId:item.body.id,role:'user',text,createdAt:Date.now()/1000,delivery:{status:'accepted'}};chat().messages.push(message);state.revision++;await item.route.fulfill({json:{accepted:true,delivery:'accepted',state}})}
+async function emit(){state.revision++;await page.evaluate(state=>window.emitState(state),shell.state())}
+async function received(item,text=item.body.args.text){const message={id:'server-'+item.body.id,inputId:item.body.id,role:'user',text,createdAt:Date.now()/1000,delivery:{status:'accepted'}};chat().messages.push(message);state.revision++;await item.route.fulfill({json:{accepted:true,delivery:'accepted',state:shell.state()}})}
 try{
- vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
+ vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),cacheDir:fileURLToPath(new URL('../.vite-outbox-fixture',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
- await page.addInitScript(()=>{window.fixtureClipboard=navigator.clipboard;const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this);queueMicrotask(async()=>{const state=await fetch('/api/state').then(r=>r.json());this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)}))})}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))});
+ await page.addInitScript(()=>{window.fixtureClipboard=navigator.clipboard});
+ await page.addInitScript(installFixtureEvents);
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
-  if(path==='/api/state')return route.fulfill({json:state});
+  const shellResponse=shell.response(route.request());
+  if(shellResponse!==undefined)return route.fulfill({json:shellResponse});
+  if(path==='/api/state')return route.fulfill({json:shell.state()});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
   const body=route.request().postDataJSON();calls.push(body);
   if(['conversation.send','conversation.delivery','conversation.retry','message.edit'].includes(body.action)){waiting.push({route,body,client:route.request().headers()['x-amplifier-client']});return}
   if(body.action==='view.update'&&blockNextDraft&&body.args.patch?.draft===''){blockNextDraft=false;blockedDraft={route,body};return}
   if(body.action==='view.update')state.view={...state.view,...body.args.patch};
-  state.revision++;return route.fulfill({json:{accepted:true,state}});
+  state.revision++;return route.fulfill({json:{accepted:true,state:shell.state()}});
  });
  const composer=()=>page.getByRole('textbox',{name:'Message Amplifier'});
  const editor=()=>page.getByRole('textbox',{name:'Edit your message'});
@@ -109,7 +114,7 @@ try{
  assert.ok(blockedDraft,'The draft clear is still waiting for its HTTP receipt');
  await received(independent);
  await composer().fill('New draft while old clear waits');
- await blockedDraft.route.fulfill({json:{accepted:true,state}});
+ await blockedDraft.route.fulfill({json:{accepted:true,state:shell.state()}});
  await until(()=>state.view.draft==='New draft while old clear waits','Newer draft saves after the stalled clear');
  assert.equal(await readComposerDraft(composer()),'New draft while old clear waits');
  assert.equal(calls.filter(c=>c.id===independent.body.id).length,1,'Late draft acknowledgement does not resend');
@@ -118,7 +123,7 @@ try{
  await composer().fill('Same text twice intentionally');await until(()=>state.view.draft==='Same text twice intentionally','New typing saves while admission waits');
  chat().messages.push({id:'first',inputId:first.body.id,role:'user',text:first.body.args.text,delivery:{status:'sending'}});await emit();
  assert.equal(await page.locator('.a-user').count(),1,'Tentative shared bubble replaces optimistic copy');assert.equal(await readComposerDraft(composer()),'Same text twice intentionally');
- chat().messages[0].delivery.status='accepted';state.revision++;await first.route.fulfill({json:{accepted:true,delivery:'accepted',state}});
+ chat().messages[0].delivery.status='accepted';state.revision++;await first.route.fulfill({json:{accepted:true,delivery:'accepted',state:shell.state()}});
  await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await readComposerDraft(composer()),'Same text twice intentionally','Late acknowledgement cannot clear the next identical draft');
  const failed=await send('Rejected input');await failed.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection',code:'invalid_input'}});
  const rejected=page.locator('.a-user').filter({hasText:'Rejected input'});await rejected.getByRole('button',{name:'Retry',exact:true}).waitFor();
@@ -139,7 +144,7 @@ try{
  await page.locator('[data-message-id="tentative-corrected"]').waitFor();assert.notEqual(tentativeRetry.id,optimisticRetryId,'Shared tentative identity remounts the bubble');await closedPendingRetry(corrected,retryText);
  await composer().fill('Newer draft while unsent retry waits');await until(()=>state.view.draft==='Newer draft while unsent retry waits','Ordinary composer remains editable during retry');
  chat().messages=chat().messages.filter(m=>m.id!==tentativeRetry.id);state.revision++;
- await corrected.route.fulfill({status:409,json:{accepted:false,error:'Fixture corrected-input rejection',code:'invalid_input',state}});
+ await corrected.route.fulfill({status:409,json:{accepted:false,error:'Fixture corrected-input rejection',code:'invalid_input',state:shell.state()}});
  const correctedBubble=page.locator(`[data-input-id="${corrected.body.id}"]`);
  await correctedBubble.getByRole('button',{name:'Retry',exact:true}).waitFor();assert.equal(await editor().count(),0,'Rejected retry is available through Edit, not an automatic restoration');
  assert.equal(state.view.messageEdit,null);assert.equal(await correctedBubble.getAttribute('data-message-id'),optimisticRetryId);
@@ -173,10 +178,10 @@ try{
  await received(sharedRetryAccepted);await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);
  assert.equal(chat().messages.at(-1).text,sharedRetryText);assert.equal(state.sessions.length,1);assert.equal(calls.filter(c=>c.action==='message.edit').length,0);
  const lostRejection=await send('Rejection reply lost');await lostRejection.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).click();
- const rejectionCheck=await next();assert.equal(rejectionCheck.body.action,'conversation.delivery');assert.equal(rejectionCheck.body.args.inputId,lostRejection.body.id);await rejectionCheck.route.fulfill({json:{accepted:true,result:{delivery:'not_saved',message:'No saved copy; retry the original submission.'},state}});
+ const rejectionCheck=await next();assert.equal(rejectionCheck.body.action,'conversation.delivery');assert.equal(rejectionCheck.body.args.inputId,lostRejection.body.id);await rejectionCheck.route.fulfill({json:{accepted:true,result:{delivery:'not_saved',message:'No saved copy; retry the original submission.'},state:shell.state()}});
  assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,1,'Check never resends');
  await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
- const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state}});
+ const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state:shell.state()}});
  await page.getByRole('button',{name:'Retry',exact:true}).click();const rejectedRetry=await next();assert.notEqual(rejectedRetry.body.id,lostRejection.body.id);await received(rejectedRetry);
  const delayed=await send('Acknowledgement delayed');chat().status='working';chat().messages.push({id:'delayed',inputId:delayed.body.id,role:'user',text:delayed.body.args.text,delivery:{status:'sending'}});await emit();
  await composer().fill('Keep this next draft');await until(()=>state.view.draft==='Keep this next draft','Draft saves while acknowledgement waits');
@@ -187,7 +192,7 @@ try{
  await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await page.getByText('Acknowledgement delayed',{exact:true}).count(),1);assert.equal(await readComposerDraft(composer()),'Keep this next draft');assert.equal(calls.filter(c=>c.id===delayed.body.id).length,1,'Late acknowledgement does not resend');
  const lost=await send('Delivery uncertain');await lost.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
  await page.reload();await composer().waitFor();await page.getByRole('button',{name:'Check delivery',exact:true}).click();const checked=await next();assert.equal(checked.body.action,'conversation.delivery');assert.equal(checked.body.args.inputId,lost.body.id);assert.notEqual(checked.client,lost.client,'Reload has a new client identity');
- await checked.route.fulfill({json:{accepted:true,result:{delivery:'sending',message:'The original send is still in progress.'},state}});await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
+ await checked.route.fulfill({json:{accepted:true,result:{delivery:'sending',message:'The original send is still in progress.'},state:shell.state()}});await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
  chat().messages.push({id:'late',inputId:lost.body.id,role:'user',text:lost.body.args.text,delivery:{status:'accepted'}});await emit();
  await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await page.getByText('Delivery uncertain',{exact:true}).count(),1);assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lost.body.id).length,1,'Check did not resubmit');
  const editText='  Edit the last input — e\u0301\nKeep\tspacing.  \n',savedHistory=JSON.stringify(chat().messages);
@@ -214,7 +219,7 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
   await emit();await page.waitForFunction(()=>document.querySelector('.a-message-editor textarea')?.readOnly===false);
  }
  await forkMode().uncheck();await until(()=>state.view.messageEdit?.fork===false,'Mode editable after rejection and unblock');await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice restored');
- await page.getByRole('button',{name:'Create edited chat',exact:true}).click();const acceptedFork=await next();assert.equal(acceptedFork.body.args.mode,'fork');assert.equal(acceptedFork.body.args.text,editText);assert.notEqual(acceptedFork.body.id,fork.body.id);state.view.messageEdit=null;state.revision++;await acceptedFork.route.fulfill({json:{accepted:true,state}});
+ await page.getByRole('button',{name:'Create edited chat',exact:true}).click();const acceptedFork=await next();assert.equal(acceptedFork.body.args.mode,'fork');assert.equal(acceptedFork.body.args.text,editText);assert.notEqual(acceptedFork.body.id,fork.body.id);state.view.messageEdit=null;state.revision++;await acceptedFork.route.fulfill({json:{accepted:true,state:shell.state()}});
  await editor().waitFor({state:'detached'});assert.equal(calls.filter(c=>c.action==='message.edit').length,3,'No hidden admission beyond the three deliberate edit attempts');
  // Choosing another editor while admission waits does not cancel admitted
  // work, and an old rejection must not issue any global restoration write.
@@ -243,10 +248,10 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  await composer().fill('Please find a good pause point.');await page.getByRole('button',{name:'Send message',exact:true}).click();
  const correction=await next();assert.equal(correction.body.args.expectedGenerationId,'original-run','Composer binds steering to the observed run');assert.equal(correction.body.args.allowNextTurn,true,'Ordinary messages may cross normal completion');
  const steered={id:'steered',inputId:correction.body.id,role:'user',text:correction.body.args.text,delivery:{status:'accepted'},steering:{generationId:'original-run',disposition:'queued'}};
- chat().messages.push(steered);state.revision++;await correction.route.fulfill({json:{accepted:true,delivery:'accepted',steering:steered.steering,state}});
+ chat().messages.push(steered);state.revision++;await correction.route.fulfill({json:{accepted:true,delivery:'accepted',steering:steered.steering,state:shell.state()}});
  await page.getByText('Received by the active run; waiting for its next step…',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Check delivery',exact:true}).click();const steeringCheck=await next();assert.equal(steeringCheck.body.action,'conversation.delivery');
- await steeringCheck.route.fulfill({json:{accepted:true,result:{delivery:'accepted',steering:steered.steering},state}});
+ await steeringCheck.route.fulfill({json:{accepted:true,result:{delivery:'accepted',steering:steered.steering},state:shell.state()}});
  steered.steering.disposition='applied';await emit();await page.getByText('Added to the active run’s context',{exact:true}).waitFor();
  assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Steering updates and checks never resend');
  await page.screenshot({path:'/tmp/amplifier-steering-applied.png'});

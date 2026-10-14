@@ -263,7 +263,11 @@ async def test_publishing_error_response_preserves_unknown_receipt(authenticated
 async def test_work_sync_is_read_only_and_origin_protected(authenticated_client, tmp_path):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
                            runtime=Runtime(), voice=False, background_updates=False)
-    service=app['service'];await service.dispatch('session.create',{})
+    service=app['service']
+    # Isolate the endpoint's revision contract from unrelated startup publishers.
+    await service.history.close()
+    await service.diagnostics.close()
+    await service.dispatch('session.create',{})
     session=service._session();session['execution']={'turns':[{'id':'turn'}],
         'nodes':[{'id':'tool','turnId':'turn','kind':'tool','phase':'running'}]}
     client=await authenticated_client(app)

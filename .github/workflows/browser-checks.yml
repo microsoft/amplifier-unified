@@ -17,6 +17,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
+      - name: Record intended coverage before dependency setup
+        run: >-
+          python scripts/browser_check_runner.py
+          --plan frontend/tests/browser-checks.json
+          --output output/browser-checks --initialize
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -32,186 +37,21 @@ jobs:
       - name: Install browser dependencies
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: Check active-client latency and state transport
-        working-directory: frontend
-        env:
-          AMPLIFIER_PERF_EVIDENCE: ${{ github.workspace }}/output/active-client-performance/report.json
-        run: |
-          npm run test:active-client-performance-browser
-          npm run test:state-transport-browser
-          npm run test:demand-browser
-      - name: Retain active-client timing diagnostics
+      - name: Run all extended browser scenarios serially
+        run: >-
+          uv run --no-sync python scripts/browser_check_runner.py
+          --plan frontend/tests/browser-checks.json
+          --output output/browser-checks
+          --budget-seconds 1500
+      - name: Retain scenario coverage and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: active-client-performance-diagnostics
-          path: output/active-client-performance/
-          if-no-files-found: ignore
-      - name: Retain state transport timing diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: state-transport-diagnostics
-          path: output/state-transport-browser/
-          if-no-files-found: ignore
-      - name: Verify scoped navigation and selected chat context
-        working-directory: frontend
-        run: |
-          AMPLIFIER_TEST_OUTPUT="$GITHUB_WORKSPACE/output/scoped-navigation" node tests/scoped-navigation-browser.mjs
-          AMPLIFIER_TEST_OUTPUT="$GITHUB_WORKSPACE/output/selected-context" node tests/selected-context-browser.mjs
-      - name: Retain scoped browser demand diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: scoped-browser-demand
+          name: extended-browser-evidence-${{ github.run_attempt }}
           path: |
+            output/browser-checks/
+            output/active-client-performance/
+            output/state-transport-browser/
             output/scoped-navigation/
             output/selected-context/
-          if-no-files-found: ignore
-      - name: Verify candidate module source validation
-        if: ${{ hashFiles('frontend/tests/registry-validation-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:registry-browser
-      - name: Verify first launch with empty storage
-        if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:empty-host-browser
-      - name: Verify draft-first chat setup and composer controls
-        working-directory: frontend
-        run: |
-          npm run test:new-chat-browser
-          npm run test:draft-provider-refresh-browser
-          npm run test:draft-discovery-recovery-browser
-      - name: Verify new-chat recovery and submission drafts
-        working-directory: frontend
-        run: |
-          npm run test:new-chat-recovery-browser
-          node tests/feedback-browser.mjs
-          node tests/feedback-followup-browser.mjs
-      - name: Restored composer readiness
-        working-directory: frontend
-        run: |
-          npm run test:composer-readiness-browser
-          npm run test:composer-primary-action-browser
-      - name: Verify live surface awareness and draft checkpoints
-        working-directory: frontend
-        run: npm run test:surface-context-browser
-      - name: Verify shared Work workflow controls
-        if: ${{ hashFiles('frontend/tests/desktop-readiness-browser.mjs', 'frontend/tests/memory-personalization-browser.mjs', 'frontend/tests/publishing-browser.mjs', 'frontend/tests/portability-browser.mjs') != '' }}
-        working-directory: frontend
-        run: |
-          node tests/desktop-readiness-browser.mjs
-          node tests/memory-personalization-browser.mjs
-          node tests/publishing-browser.mjs
-          node tests/portability-browser.mjs
-      - name: Verify settings navigation and retained capabilities
-        working-directory: frontend
-        run: |
-          npm run test:settings-browser
-          npm run test:settings-completeness-browser
-          npm run test:settings-collections-browser
-          npm run test:settings-mobile-browser
-      - name: Verify workspace starters and retained resource observations
-        working-directory: frontend
-        run: npm run test:workspace-starters-browser
-      - name: Verify complete themes and saved appearance startup
-        working-directory: frontend
-        run: |
-          npm run test:themes-browser
-          npm run test:appearance-startup-browser
-          npm run test:appearance-library-browser
-      - name: Verify review during a pending send
-        if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:review-during-send-browser
-      - name: Verify action content and execution detail loading
-        working-directory: frontend
-        run: |
-          npm run test:execution-browser
-          npm run test:execution-actions-browser
-          npm run test:interim-replies-browser
-          npm run test:tool-outcomes-browser
-      - name: Verify stable navigation and workspace drill-in
-        if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}
-        working-directory: frontend
-        run: |
-          npm run test:navigation-browser
-          node tests/chat-title-browser.mjs
-      - name: Verify pending message delivery and editing
-        working-directory: frontend
-        run: |
-          npm run test:message-outbox-browser
-          npm run test:message-delivery-browser
-      - name: Verify embedded HTML audio and video playback
-        working-directory: frontend
-        run: npm run test:canvas-media-browser
-      - name: Verify canvas toolbar and app options
-        if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:toolbar-browser
-      - name: Verify embedded tool visibility acknowledgements
-        working-directory: frontend
-        run: npm run test:smart-tools-browser
-      - name: Verify validated shell component controls
-        working-directory: frontend
-        run: npm run test:shell-components-browser
-      - name: Verify responsive navigation and immediate Canvas visibility
-        working-directory: frontend
-        run: npm run test:mobile-navigation-browser
-      - name: Verify cached-source update reporting
-        if: ${{ hashFiles('frontend/tests/cache-usage-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:cache-usage-browser
-      - name: Verify bundle selection and scoped defaults
-        working-directory: frontend
-        run: npm run test:bundle-browser
-      - name: Verify live Markdown composing and draft persistence
-        working-directory: frontend
-        run: npm run test:markdown-composer-browser
-      - name: Verify drafts survive rapid chat switching
-        if: ${{ hashFiles('frontend/tests/draft-switch-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:draft-switch-browser
-      - name: Keep pending drafts through immediate reload
-        working-directory: frontend
-        run: npm run test:draft-reload-browser
-      - name: Verify history paging in live conversations
-        working-directory: frontend
-        run: npm run test:live-history-browser
-      - name: Full-history conversation navigation
-        working-directory: frontend
-        run: npm run test:conversation-navigation-browser
-      - name: Verify independent live clients
-        working-directory: frontend
-        run: npm run test:live-clients-browser
-      - name: Verify composer ownership and explicit takeover
-        working-directory: frontend
-        run: npm run test:ownership-browser
-      - name: Verify unsaved artifact edits survive navigation
-        if: ${{ hashFiles('frontend/tests/canvas-dirty-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:canvas-dirty-browser
-      - name: Verify shared conversation surfaces and isolation
-        working-directory: frontend
-        run: npm run test:canvas-apps-browser
-      - name: Verify shared drawing, resize and save recovery
-        working-directory: frontend
-        run: npm run test:canvas-drawing-browser
-      - name: Verify conversation diagnosis and recovery
-        if: ${{ hashFiles('frontend/tests/session-health-browser.mjs') != '' }}
-        working-directory: frontend
-        run: |
-          npm run test:session-health-browser
-          node tests/session-health-browser.mjs --context-limit
-          node tests/session-health-browser.mjs --context-limit --active-worker
-          node tests/session-health-browser.mjs --module-failure
-      - name: Verify activity feedback and dismissal
-        if: ${{ hashFiles('frontend/tests/activity-feedback-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:activity-feedback-browser
-      - name: Verify capacity, coordination and connector controls
-        working-directory: frontend
-        run: |
-          npm run test:capacity-browser
-          npm run test:coordination-browser
-          npm run test:connectors-browser
+          if-no-files-found: warn
