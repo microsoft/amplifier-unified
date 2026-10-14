@@ -34,9 +34,11 @@ async def test_late_activity_preserves_worker_lifecycle_and_report(service, stat
         "phase": "retrying", "time": 20, "detail": "Late hook"})
     assert session["workers"] == before
     assert service.session_state(session["id"])["sessions"][0]["workers"][0]["status"] == status
-    agent = await service.dispatch("coordination.list", {"sessionId": session["id"]}, origin="agent")
-    assert agent["result"]["items"][1]["status"] == status
-    assert agent["result"]["items"][1]["canFollowup"] is (status == "idle")
+    agent = await service.app_bridge("dispatch", {"action": "coordination.list",
+        "args": {"sessionId": session["id"], "includeWorkers": True}}, session["id"])
+    child = next(item for item in agent["result"]["items"] if item["target"].get("workerId") == "child")
+    assert child["status"] == status
+    assert child["canFollowup"] is (status == "idle")
 
 
 async def test_activity_preserves_stopping_and_distinct_children(service):
@@ -104,11 +106,12 @@ async def test_terminal_projection_stays_settled_for_update_readiness_and_waiter
     session["status"] = "idle"
     manager = UpdateManager(service)
     target = {"sessionId": session["id"], "workerId": "child"}
-    first = (await service.dispatch("coordination.wait", {"targets": [target], "waitMs": 0}, origin="agent"))["result"]
+    first = (await service.app_bridge("dispatch", {"action": "coordination.wait",
+        "args": {"targets": [target], "waitMs": 0}}, session["id"]))["result"]
     assert not manager.busy()
     await emit(service, {"type": "worker.activity", "workerId": "child", "runId": "run", "phase": "tools"})
-    repeated = (await service.dispatch("coordination.wait", {"targets": [
-        {**target, "afterCursor": first["targets"][0]["nextCursor"]}], "waitMs": 0}, origin="agent"))["result"]
+    repeated = (await service.app_bridge("dispatch", {"action": "coordination.wait", "args": {"targets": [
+        {**target, "afterCursor": first["targets"][0]["nextCursor"]}], "waitMs": 0}}, session["id"]))["result"]
     assert not repeated["changed"]
     assert repeated["targets"][0]["results"] == []
     assert not manager.busy()
