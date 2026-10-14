@@ -1,6 +1,5 @@
 """Real HTTP/SSE with a Spark-sized disposable catalog and synthetic progress."""
 import asyncio
-import copy
 import json
 import os
 from pathlib import Path
@@ -12,6 +11,8 @@ from library_performance_server import make_catalog, NoModelRuntime
 from aiohttp import web
 from amplifier_web.server import create_app
 from amplifier_web.capacity import admission
+from amplifier_web.native_catalog import NativeCatalog
+from amplifier_web.native_history import NativeHistory
 from amplifier_web.session_projection import view_path
 
 
@@ -22,14 +23,39 @@ async def main():
                           AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'),
                           AMPLIFIER_SESSION_STATE_HOME=str(root/'session-state'))
         catalog = make_catalog(root/'workspaces', 22915, 3932, 4000)
+        # Seed the real indexed history boundary. Overriding the obsolete full
+        # scan hook forces every synthetic chat into the admitted working set,
+        # bypassing the very residency contract this browser scenario measures.
+        (root/'app').mkdir()
+        native = NativeCatalog(root/'app'/'native-catalog.sqlite3', root/'native')
+        projects = {row['nativeProject']:{'workspace':row,'sessions':[]} for row in catalog['workspaces']}
+        for row in catalog['sessions']:
+            projects[row['nativeProject']]['sessions'].append(row)
+        native.save(projects, {}, {}, set())
+        for row in catalog['sessions'][:2]:
+            folder = root/'native'/'projects'/row['nativeProject']/'sessions'/row['nativeIdentity']
+            folder.mkdir(parents=True)
+            (folder/'metadata.json').write_text(json.dumps({'session_id':row['nativeIdentity'],
+                'working_dir':row['workspace'],'name':row['title'],'bundle':'anchors','parent_id':None}))
+            (folder/'transcript.jsonl').write_text(json.dumps({'role':'user','content':'Synthetic saved question'})+'\n'
+                +json.dumps({'role':'assistant','content':'Synthetic saved reply'})+'\n')
         runtime = NoModelRuntime()
         app = await create_app(root/'app', workspace=catalog['workspaces'][0]['path'], runtime=runtime,
                                voice=False, background_updates=False, preload_providers=False)
         app['control_token'] = 'fixture-active-client-token'
         service = app['service']
         await service.history.close()
-        service.history.index.scan_if_changed = lambda **kwargs: (object(), copy.deepcopy(catalog))
-        await service.history.refresh()
+        service.history.index = NativeHistory(root/'native', watch=False,
+            cache_path=native.path, directory=True)
+        # The disposable catalog is a frozen performance input, not a filesystem
+        # discovery test. Exercise ordinary persisted scan_changes/refresh with
+        # a quiet watcher and no scheduled reconciliation during this journey.
+        service.history.index._invalidations = lambda: (True, set())
+        service.history.index._reconcile_at = time.monotonic() + 900
+        await service.history.refresh(force=False)
+        assert native.count() == 22915 and service.directory.root_count() == 4000
+        assert len(service.state['workspaces']) == 3932
+        assert len(service.state['sessions']) <= 6
         assert not service.state['sharedHistory'].get('error')
         sessions = [service._session(row['id']) for row in catalog['sessions'][:2]]
         for index, session in enumerate(sessions):
@@ -48,6 +74,7 @@ async def main():
                  'provider': 'fixture', 'model': 'fixture', 'detail': 'Historical accounting ' * 40}
                 for i in range(1000)]}
         service._publish()
+        assert len(service.state['sessions']) <= 6
         progress = None
         ticks = 0
 
@@ -87,6 +114,8 @@ async def main():
             return web.json_response(result)
 
         async def metrics(request):
+            assert len(service.state['sessions']) <= 6
+            assert native.count() == 22915
             return web.json_response({'sessions': [s['id'] for s in sessions], 'ticks': ticks,
                                       'subscriptions': len(service.queue_clients), 'runtimeCalls': runtime.calls})
 

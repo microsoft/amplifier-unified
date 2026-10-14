@@ -20,7 +20,9 @@ async def main(home):
     (directory / 'metadata.json').write_text(json.dumps({'session_id': 'imported-report', 'working_dir': str(workspace),
         'name': '', 'name_source': 'fallback', 'created': '2026-01-01T12:00:00Z', 'turn_count': 1}))
     await service.history.refresh()
-    source = next(row for row in service.state['sessions'] if row.get('nativeIdentity') == 'imported-report')
+    # Discovery keeps unselected native chats in the indexed directory. Resolve
+    # this exact owner without loading its transcript or selecting it in the UI.
+    source = service.directory.resolve('imported-report', project_slug(workspace))
     release = asyncio.Event()
     calls = []
     original_probe = fixture.SetupManager.probe
