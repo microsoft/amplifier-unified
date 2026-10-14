@@ -289,6 +289,25 @@ still checks current authority. No privileged effect is stored for replay.
 Raw API requests return a pending receipt without parking an agent. A decision
 after worker loss saves authority but never starts or replays the lost turn.
 
+## Registered own-history scope addition — 2026-10-14
+
+The authenticated same-user app/tool capability already permits explicit access
+to registered own-history across workspaces. Read scope selects that existing
+library; it is not a new grant database, assignment privilege or multi-tenant
+boundary. Agent history discovery, waits, transcript windows and exact-message
+reads default to the caller's workspace and accept explicit `scope: all` for the
+registered library. Recall source reads retain the search scope explicitly and
+check it again with the original source revision. Applicable shared session
+history actions use the same scope rule. Human UI selection of an exact registered
+conversation retains its existing library access without another approval.
+
+`scope: all` does not widen request-result participation, start/stop/steer
+authority, source references or output-library ownership. Request results retain
+the request participants and saved workspace checks. Artifact references do not
+authorize listing or reading another root's private output library. Existing
+per-session HTTP endpoints remain exact-target user-client routes. All these
+reads remain passive and never acquire a native writer or replay work.
+
 ## Assignment control addition — 2026-10-14
 
 New commissioned roots share an explicit host-owned assignment with their

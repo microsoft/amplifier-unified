@@ -412,6 +412,14 @@ for _access, _actions in {
 ACTION_POLICIES["session.create"] = {"access": "grant_creation", "target": None}
 ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
 from .configuration_authority import BUNDLE_GLOBAL
+from .owned_history import SESSION_READS, SCOPE as HISTORY_SCOPE, guard_action as guard_history_action
+for _action in SESSION_READS:
+    ACTION_DEFINITIONS[_action][1]['properties']['scope'] = HISTORY_SCOPE
+for _action in {'history.list', 'history.shared.list', 'history.shared.view'}:
+    _properties=ACTION_DEFINITIONS[_action][1]['properties']
+    _properties['scope']=HISTORY_SCOPE
+    _properties.setdefault('offset',{'type':'integer','minimum':0})
+    _properties.setdefault('limit',{'type':'integer','minimum':1,'maximum':50})
 for _action in BUNDLE_GLOBAL:
     ACTION_POLICIES[_action] = {"access": "caller_controlled", "target": "sessionId"}
     ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
@@ -1461,6 +1469,19 @@ class AppService:
             raise AppError('Open in Canvas requires an explicit click in the originating browser client.', 403)
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
+        guard_history_action(self, action, args, origin, caller_session_id)
+        if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
+            reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
+            if not reader:
+                raise AppError('History reads require a registered calling conversation.', 403)
+            from .history_query import query_history
+            values = {'action':'read' if action.endswith('.view') else 'list',
+                'scope':args.get('scope','workspace'), 'offset':args.get('offset',0), 'limit':min(50,args.get('limit',20))}
+            if args.get('workspace'):
+                values['workspace'] = args['workspace']
+            if action.endswith('.view'):
+                values['session_id'] = args['id']
+            return {'accepted':True, 'result':await query_history(self,values,reader)}
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
@@ -1923,6 +1944,7 @@ class AppService:
                         saved_receipt['result'] = self.questions.read('question.read', args)
                     return {**saved_receipt, **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
             self.configuration_authority.check(configuration_authority)
+            guard_history_action(self, action, args, origin, caller_session_id)
             if checked_session:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)

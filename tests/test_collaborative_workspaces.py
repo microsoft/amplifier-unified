@@ -1182,8 +1182,9 @@ async def test_staged_declaration_restart_is_unknown_not_sealed_or_replayed(app)
 
 
 @pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("scope", ["workspace", "all"])
 @pytest.mark.parametrize("reader", ["sender", "recipient", "foreign", "workspace", "child", "missing", "unknown"])
-async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, reader, legacy):
+async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, reader, legacy, scope):
     source, target = app.state["sessions"]
     await send(app, mode="notify")
     if legacy:
@@ -1201,7 +1202,7 @@ async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, r
         source["workspace"] = "/foreign"
     elif reader == "missing":
         caller = None
-    args = {"requestId": "absent" if reader == "unknown" else "request-1"}
+    args = {"requestId": "absent" if reader == "unknown" else "request-1", "scope": scope}
     if reader in {"sender", "recipient"}:
         # Human stop and legacy suppression prevent work, not scoped reads.
         target["status"] = "stopped"

@@ -82,6 +82,26 @@ shared-host adoption; broad combined-program qualification remains separate.
 Remaining scope: combined repository/dependency validation, retention-aware
 checkout cleanup, full repeated provider journeys and release/adoption.
 
+## Consistent registered-history scope — 2026-10-14
+
+Native history, recall, coordination list/wait/exact-message/window reads and
+applicable shared session-history reads now use the same caller-workspace/all
+selector. Explicit all preserves useful registered own-history search without
+new grant records or repeated approvals. Waits check scope before loading a
+target and after waiting; history/recall recheck after I/O. Recall references
+retain the search scope alongside their exact source revision. Human exact-target
+UI reads retain existing access; an explicitly supplied scope is honored.
+
+Request results keep exact participant/workspace authority even with all, and
+peer output libraries remain caller-owned. Authenticated per-session HTTP paths
+retain their exact chosen target. This is a same-user retrieval rule, not a new
+secrecy boundary for all app state or an assignment-based access mechanism.
+The [route and native-consumer audit](owned-history-scope.md) lists retained
+domain boundaries and qualification limits. The focused source suite passed
+440 checks; native root/finite/resumed/persistent/nested/in-process recipe tools
+and a freshly installed wheel are checked separately. No provider, deployment
+or cross-account isolation is claimed.
+
 ## Scoped configuration administration — 2026-10-14
 
 Root agents can request explicit configuration effects and scopes through the
@@ -110,7 +130,7 @@ integration remains its own gate.
 
 The [consumer and read-history audit](configuration-authority.md) names each
 covered administration route, alternate settings aliases, live/delayed limits,
-and the remaining inconsistent cross-workspace read scope. These are not OS,
+and the separate registered-history scope. These are not OS,
 universal credential, per-tool or multi-tenant isolation guarantees. Existing
 registered own-history access is independent of configuration grants.
 

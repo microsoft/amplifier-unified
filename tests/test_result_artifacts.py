@@ -98,14 +98,15 @@ async def test_invalid_exact_source_retains_report_without_accepting_dependency(
     assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 0
 
 
-async def test_foreign_reader_and_forged_reference_do_not_grant_peer_library_access(app, tmp_path):
+@pytest.mark.parametrize('scope', ['workspace', 'all'])
+async def test_foreign_reader_and_forged_reference_do_not_grant_peer_library_access(app, tmp_path, scope):
     source, peer, _, args = await setup(app, tmp_path)
     await declare(app, peer, args)
     unrelated = app._new_session({'title': 'Independent'})
     app.state['sessions'].append(unrelated)
     await generation(app, unrelated, 'unrelated', ['unrelated-input'])
     with pytest.raises(AppError, match='request and workspace'):
-        await read(app, unrelated, args)
+        await read(app, unrelated, args, scope=scope)
     with pytest.raises(AppError, match='exact artifact'):
         await read(app, source, {**args, 'references': ['private.md@sha256:' + 'a'*64]})
     source['workspace'] += '/moved'

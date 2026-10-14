@@ -88,13 +88,13 @@ def definitions(schema, string):
             "returnNotification": {"type": "boolean", "default": True},
         }, ["title", "text"])),
         "coordination.read": ("Read a bounded window from one existing native conversation without selecting or warming it.", schema({
-            **sid, "messageId": string(200), "offset": {"type": "integer", "minimum": 0},
+            **sid, "scope": {"enum": ["workspace", "all"]}, "messageId": string(200), "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
             "textLimit": {"type": "integer", "minimum": 1, "maximum": 4000},
         }, ["sessionId"])),
-        "coordination.result": ("Inspect admission and exact qualified final result links for one request. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200)}, ["requestId"])),
+        "coordination.result": ("Inspect admission and exact qualified final result links for one request. scope=all never widens request-participant/workspace authority. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
         "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
-            "requestId": string(200), "reference": string(2000), "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
+            "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
         "coordination.reply": ("Record a typed reply to your exact delivered request. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. At most 32 revisions per request.", schema({
             "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline", "question", "conflict"]},
@@ -1152,11 +1152,16 @@ class Collaboration:
             return {'accepted': True, 'result': packet(self.service, target['id'],
                 principal=PRINCIPAL.get(), offset=args.get('offset', 0), limit=args.get('limit', 8))}
         if action == "coordination.read":
+            from .owned_history import require, selected
+            if origin not in {'ui','user'} and not caller:
+                self.error('History reads require a registered calling conversation.')
+            scope = selected(args, 'workspace' if caller else 'all')
+            reader = caller or (self.service.state.get('selectedSessionId') if 'scope' in args else None) or args['sessionId']
+            require(self.service,reader,args['sessionId'],scope)
             if args.get("messageId"):
                 target = self.service._session(args["sessionId"])
-                if origin not in {"ui", "user"}:
-                    self.authorize(self.source({}, origin, caller), args)
                 await self.service.history.ensure_loaded(target["id"])
+                require(self.service,reader,target['id'],scope)
                 message = self.resolve_message(target, args["messageId"])
                 if not message:
                     self.error("The exact original message is unavailable.", 404)
@@ -1169,7 +1174,7 @@ class Collaboration:
                     "text": text[:limit], "truncated": len(text) > limit}}}
             from .history_query import query_history
             return {"accepted": True, "result": await query_history(self.service, {
-                "action": "read", "session_id": args["sessionId"], "scope": "all",
+                "action": "read", "session_id": args["sessionId"], "scope": scope,
                 "offset": args.get("offset", 0), "limit": args.get("limit", 16), "text_limit": args.get("textLimit", 1000),
             }, caller or args["sessionId"])}
         if action == "coordination.context":

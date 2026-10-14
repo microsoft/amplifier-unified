@@ -97,27 +97,15 @@ APIs. General update/install/deploy authority and real-time provider effects are
 not covered by this grant slice. Neither a root grant nor assignment membership
 grants stop/steer/settings authority over an independent peer.
 
-## Read-history audit: separate existing behavior
+## Read-history audit: separate authority
 
-Configuration grants do not grant or restrict history access. The current
-single-user host exposes registered own-history through several independent
-routes:
-
-- `coordination.list` defaults to caller workspace; an explicit workspace can
-  broaden discovery. `coordination.wait` accepts explicit registered targets.
-- Exact-message `coordination.read` applies same-workspace authorization; its
-  transcript-window variant delegates to history query with `scope=all`.
-- History query and `recall.search(scope=all)` can traverse registered sessions;
-  internal/child history has separate inclusion flags. `recall.read` checks the
-  source index revision and registered source identity.
-- Memory has task/workspace/global scopes, including explicit cross-scope reads.
-  User-memory writes retain their separate attributable-human-source checks.
-- Shared peer-read action policy includes registered session/history inspection.
-
-These routes are not one consistent cross-workspace read-capability boundary.
-They have existing registration, attribution, pagination and source-validation
-mechanisms; no new read permission platform was added here. Cross-account or
-multi-tenant isolation is not established by this local configuration work.
+Configuration grants do not grant or restrict history access. The authenticated
+same-user app/tool capability supplies access to the registered own-history
+library. A separate [read-scope resolver](owned-history-scope.md) applies explicit
+workspace/all selection to history, recall and coordination reads. No read grant
+database or per-read approval was introduced. Request results, output libraries,
+user memory and mutation authority keep their independent narrower rules.
+Cross-account or multi-tenant isolation is not established by this local work.
 
 ## Qualification boundary
 
