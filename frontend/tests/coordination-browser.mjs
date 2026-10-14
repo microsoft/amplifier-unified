@@ -181,7 +181,14 @@ try{
  assert.equal(peerState.sent.length,sentBefore);assert.equal(peerState.contexts[current.other],undefined);
  await related.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
  await related.getByText('Workspace chat list',{exact:true}).click();
- for(const task of tasks)await expect(related.getByText(task.title+' · Working · Commissioned chat')).toBeVisible();
+ for(const task of tasks){
+  // A working peer also appears in the activity overview. Assert the exact
+  // chat-list row instead of matching both legitimate representations.
+  const row=related.locator('[data-workspace-chat-id="'+task.id+'"]');
+  await expect(row).toBeVisible();
+  await expect(row).toContainText(task.title+' · Working · Commissioned chat');
+  await expect(row.getByRole('button',{name:'Open chat: '+task.title,exact:true})).toBeEnabled();
+ }
  const rounds=[],continuations=new Set();
  for(const task of tasks){
   let firstCandidate,firstGeneration;
