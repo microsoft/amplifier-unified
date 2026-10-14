@@ -28,7 +28,7 @@ export function publicationImageGeneration(item,messageId,sessionId){
 // identity invalidate derived pixels; they are not authority supplied to the host.
 export function retainedThumbnailTuple(item,messageId,state){
  const {row,version,publication}=item;
- if(state.selectedSessionId!==row.sessionId||publicationMode(item)!=='inline'||
+ if(state.selectedSessionId!==row.sessionId||row.workspaceId!=null&&state.selectedWorkspaceId!==row.workspaceId||publicationMode(item)!=='inline'||
   !publicationImageGeneration(item,messageId,row.sessionId))return null;
  const entries=row.versions||[];
  const saved=entries.find(entry=>entry.version===version)||

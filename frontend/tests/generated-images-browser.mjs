@@ -4,7 +4,10 @@ import {readFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/generated_images_server.py'],{stdio:['ignore','pipe','inherit']});
+// Authored, unexecuted source-lane check. --retained-thumbnails uses a real host
+// with ten canonical saved receipts; not a stub that ignores the view limit.
+const retainedMode=process.argv.includes('--retained-thumbnails');
+const fixture=spawn(root+'.venv/bin/python',['-u',root+(retainedMode?'tests/test_retained_thumbnails.py':'tests/fixtures/generated_images_server.py'),...(retainedMode?['--browser-fixture']:[])],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  const boot=await new Promise((resolve,reject)=>{
@@ -14,9 +17,13 @@ try{
  });
  if(process.env.AMPLIFIER_EXPECTED_PACKAGE)assert.equal(boot.package,process.env.AMPLIFIER_EXPECTED_PACKAGE+'/server.py');
  browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
- const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-generated-images'}});
+ const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer '+(retainedMode?'fixture-retained-thumbnails':'fixture-generated-images')}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const control=async(op,id)=>{const response=await page.request.post(boot.url+'/api/fixture/images',{data:{op,id}});assert.equal(response.status(),200);return response.json()};
+ if(retainedMode){
+  await retainedJourney(page,boot);
+  assert.deepEqual(errors,[]);
+ }else{
  await page.goto(boot.url+'/login');await page.getByLabel('Username').fill('image-fixture');await page.getByLabel('Password').fill('fixture-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent');
  // A persisted older appearance is loaded after application styles.
@@ -76,7 +83,10 @@ try{
  }),'Saved image follows its work and stays before the next request');
 
  const publication=await page.evaluate(id=>window.amplifier.getState().canvasArtifacts.find(row=>row.id===id),first.canvasId);
- assert.deepEqual(publication.publications,[{messageId:'origin',version:1}]);
+ assert.equal(publication.publications.length,1);
+ assert.deepEqual({...publication.publications[0],imageGeneration:undefined},
+  {messageId:'origin',version:1,chat:'inline',outputId:first.id,imageGeneration:undefined});
+ assert.equal(publication.publications[0].imageGeneration.verified,true);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false);
  // Hold the resource request to measure the loading frame and scroll position.
  let release,entered;
@@ -135,4 +145,127 @@ try{
  await control('stop');await page.reload();await expect(generating).toHaveCount(0);
  assert.deepEqual(errors,[]);
  console.log('Generated images passed: stable pending/result gallery slots, out-of-order completion, delayed landscape/portrait swaps without scroll movement, older saved appearance, automatic native receipt display without a model attach action, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
+ }
 }finally{await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)resolve();else{fixture.once('exit',resolve);setTimeout(resolve,5000)}})}
+
+async function retainedJourney(page,boot){
+ const admissions=[],releases=[],reads=[];
+ page.on('request',request=>{
+  const url=new URL(request.url());
+  if(/^\/api\/outputs\/[^/]+\/image$/.test(url.pathname))reads.push(url);
+  if(url.pathname==='/api/actions'&&request.method()==='POST'){
+   const command=request.postDataJSON();
+   if(command.action==='canvas.views.inline')admissions.push(command.args);
+   if(command.action==='canvas.views.release')releases.push(command.args);
+  }
+ });
+ await page.addInitScript(()=>{
+  const decode=window.createImageBitmap.bind(window);
+  window.thumbnailDecodes={started:0,pending:0,peak:0,closed:0};
+  window.thumbnailDecodeWaits=[];
+  window.createImageBitmap=async(...args)=>{
+   const stats=window.thumbnailDecodes;
+   stats.started++;stats.pending++;stats.peak=Math.max(stats.peak,stats.pending);
+   if(window.holdThumbnailDecode)await new Promise(resolve=>window.thumbnailDecodeWaits.push(resolve));
+   const bitmap=await decode(...args),close=bitmap.close.bind(bitmap);
+   bitmap.close=()=>{stats.closed++;stats.pending--;close()};
+   return bitmap;
+  };
+ });
+ await page.goto(boot.url+'/login');
+ await page.getByLabel('Username').fill('thumbnail-fixture');
+ await page.getByLabel('Password').fill('fixture-password');
+ await page.getByRole('button',{name:'Sign in',exact:true}).click();
+ await page.waitForSelector('#amp-one');
+ await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Unsent thumbnail review');
+ const gallery=page.locator('.a-inline-gallery'),rail=gallery.locator('.a-inline-gallery-choices');
+ const ordinary=page.locator(`.a-general-artifact[data-artifact-id="${boot.document.id}"]`);
+ const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ const allThumbnails=async(count=10)=>{
+  await expect(rail.locator('button')).toHaveCount(count);
+  for(let index=0;index<count;index++){
+   const choice=rail.locator('button').nth(index);await choice.scrollIntoViewIfNeeded();
+   await expect.poll(()=>choice.locator('img').evaluateAll(images=>images.length===1&&images[0].complete&&images[0].naturalWidth>0)).toBe(true);
+  }
+  await expect(rail.locator('img')).toHaveCount(count);
+  assert.ok(await rail.locator('img').evaluateAll(images=>images.every(image=>
+   image.src.startsWith('data:image/png;base64,')&&Math.max(image.naturalWidth,image.naturalHeight)<=80)));
+ };
+ await gallery.scrollIntoViewIfNeeded();await allThumbnails();
+ await expect(gallery.locator('.a-inline-image img')).toBeVisible();
+ await ordinary.scrollIntoViewIfNeeded();await expect(ordinary.getByText('Independent ordinary renderer',{exact:true})).toBeVisible();
+ assert.equal(admissions.length,2,'Ten thumbnails leave slots for the selected preview and the ordinary renderer');
+ assert.ok(admissions.every(args=>[boot.records[0].canvasId,boot.document.id].includes(args.resourceId)));
+ assert.equal(releases.length,0,'No thumbnail admission/release occurs during retained loading');
+ assert.equal(reads.length,10,'Each current tuple receives one bounded read');
+ for(const url of reads){
+  const record=boot.records.find(record=>url.pathname===`/api/outputs/${record.id}/image`);
+  assert.ok(record);assert.equal(url.searchParams.get('sessionId'),boot.sessionId);
+  assert.equal(url.searchParams.get('artifactId'),record.canvasId);
+  assert.equal(url.searchParams.get('messageId'),boot.messageId);
+  assert.equal(url.searchParams.get('version'),'1');assert.equal(url.searchParams.get('sha256'),record.sha256);
+  assert.ok(url.searchParams.get('clientId'),'Bytes use the actual attached client URL');
+ }
+ await expect.poll(()=>page.evaluate(()=>window.thumbnailDecodes.pending)).toBe(0);
+ assert.ok((await page.evaluate(()=>window.thumbnailDecodes.peak))<=2);
+ const targetFields=['viewId','resourceId','resourceRevision','generation'];
+ const preview=await page.evaluate(id=>window.amplifier.getState().canvasWorkspace.views.find(view=>view.resourceId===id),boot.records[0].canvasId);
+ await action('canvas.views.release',Object.fromEntries(targetFields.map(key=>[key,preview[key]])));
+ await expect(gallery.locator('.a-inline-image img')).toHaveCount(0);
+ await expect(rail.locator('img')).toHaveCount(10);
+ assert.equal(reads.length,10,'Releasing an individual selected preview does not reauthorize thumbnails');
+ await expect(ordinary.getByText('Independent ordinary renderer',{exact:true})).toBeVisible();
+ // A cold page reauthorizes, and keyboard retry is the existing choice button,
+ // not a nested button or a mount that consumes a Canvas slot.
+ let fail=true;
+ await page.route('**/api/outputs/*/image?*',route=>{
+  if(fail&&new URL(route.request().url()).pathname===`/api/outputs/${boot.records[0].id}/image`){
+   fail=false;return route.fulfill({status:503,contentType:'application/json',body:'{"error":"Temporary thumbnail failure"}'});
+  }
+  return route.continue();
+ });
+ await page.reload();await gallery.scrollIntoViewIfNeeded();
+ const retry=gallery.getByRole('button',{name:'Retry thumbnail for Image 1: Concept 1',exact:true});
+ await expect(retry).toBeVisible();
+ const selection=await gallery.locator('.a-inline-artifact-heading strong').textContent();
+ await retry.focus();await retry.press('Enter');await allThumbnails();
+ assert.equal(await gallery.locator('.a-inline-artifact-heading strong').textContent(),selection);
+ assert.equal(await rail.locator('button button').count(),0);
+ await page.unroute('**/api/outputs/*/image?*');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveText('Unsent thumbnail review');
+ // Hold real saved bytes, remove only that saved publication, then release
+ // the late response. It may not reinsert the removed thumbnail.
+ const removed=boot.records[9];let finish,entered;
+ const waiting=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{finish=resolve});
+ await page.route(`**/api/outputs/${removed.id}/image?*`,async route=>{
+  entered();await gate;await route.continue().catch(()=>{});
+ });
+ await page.reload();await rail.locator('button').last().scrollIntoViewIfNeeded();await waiting;
+ await action('outputs.unlink',{sessionId:boot.sessionId,id:removed.id,expectedRevision:removed.revision});
+ await expect(rail.locator('button')).toHaveCount(9);finish();
+ await page.unrouteAll({behavior:'wait'});
+ await allThumbnails(9);
+ assert.equal(await gallery.getByRole('button',{name:/Concept 10/}).count(),0);
+ // Decode is also asynchronous. Suppressing its exact publication while a
+ // real bitmap is pending clears old pixels before completion; closed bitmaps
+ // do not revive that publication.
+ await page.addInitScript(()=>{window.holdThumbnailDecode=true});
+ await page.reload();await gallery.scrollIntoViewIfNeeded();
+ await expect.poll(()=>page.evaluate(()=>window.thumbnailDecodeWaits.length)).toBeGreaterThan(0);
+ await action('canvas.present',{sessionId:boot.sessionId,id:boot.records[0].canvasId,version:1,messageId:boot.messageId,
+  presentation:{chat:'none',canvas:'unchanged'}});
+ await expect(rail.locator('button')).toHaveCount(8);
+ await page.evaluate(()=>{window.holdThumbnailDecode=false;window.thumbnailDecodeWaits.splice(0).forEach(resolve=>resolve())});
+ await allThumbnails(8);
+ assert.equal(await gallery.getByRole('button',{name:/Concept 1$/}).count(),0);
+ await expect.poll(()=>page.evaluate(()=>window.thumbnailDecodes.pending)).toBe(0);
+ // Scope changes unmount the rail. Re-entry reads the remaining saved tuples,
+ // rather than reviving pixels from the previous client/session scope.
+ const before=reads.length;
+ await action('session.create',{title:'Other thumbnail scope'});
+ await expect(gallery).toHaveCount(0);
+ await action('session.select',{id:boot.sessionId});
+ await gallery.scrollIntoViewIfNeeded();await allThumbnails(8);
+ assert.ok(reads.length>=before+8);
+ console.log('Retained thumbnail journey passed: real host, ten decoded <=80px thumbnails, selected and unrelated inline renderers with only two admissions, two decoder slots, explicit keyboard retry, reload reauthorization, independent selected-view release, late fetch/unlink and late decode/publication suppression, scope cleanup. Synthetic saved receipts; no image/model API calls.');
+}

@@ -155,8 +155,8 @@ class Outputs:
                 "AND json_extract(value,'$.canvasId')=? "
                 "AND json_extract(value,'$.bodyFormat')='canvas-image-v1'",
                 (sid, aid)).fetchall()
-            matched = [json.loads(value) for value, in candidates
-                       if generation_binding(json.loads(value), row, version)]
+            matched = [candidate for value, in candidates
+                       if generation_binding(candidate := json.loads(value), row, version)]
             if len(matched) != 1 or matched[0]['id'] != identity:
                 raise ValueError('The canonical saved image relationship is ambiguous or unavailable.')
         if 'sha256' in values and values['sha256'] != record.get('sha256'):

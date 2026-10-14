@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,publicationOutputIds,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest} from '../src/artifact-presentation.js';
+import {createHash,webcrypto} from 'node:crypto';
+import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,publicationOutputIds,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,retainedThumbnailTuple} from '../src/artifact-presentation.js';
 import {imageGalleryEntries,imageGallerySelection} from '../src/image-generation.js';
 import {createArtifactOverrides,createInlineOwnership,inlineEditNotice} from '../src/conversation-navigation.js';
 
@@ -353,9 +354,8 @@ test('actual gallery retains initial and explicitly selected slots across job re
  }
 });
 
-// Run the actual shared gallery admission hook, not a stand-in authorization
-// policy. Both Preview and Thumbnail consume this hook; DOM checks are authored
-// separately in general-inline-ownership-browser.mjs.
+// Retain the original admission negatives for the selected gallery preview.
+// Thumbnails now have an independent retained-read lifetime tested below.
 function imageViewHarness({dispatch,request=async()=>({kind:'image',content:'PRIVATE_PIXELS'})}={}){
  const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
  const start=source.indexOf('function useImageView('),end=source.indexOf('// Body downloads',start);
@@ -478,4 +478,206 @@ test('actual gallery unmount and host removal discard late fetches and release o
  harness.render();harness.dispose();const writes=harness.writes.length;
  admit({accepted:true,result:inlineView,stateRevision:2});await settle();
  assert.equal(harness.writes.length,writes);assert.equal(harness.calls.filter(row=>row.action==='canvas.views.release').length,1);
+});
+
+const thumbnailItem=()=>({row:{id:'generated',kind:'image',sessionId:'conversation',workspaceId:'project',revision:2,
+ versions:[{version:1,kind:'image',body:{$resource:'original-body'},outputBinding:{
+  outputId:'output',outputVersion:1,sessionId:'conversation',sha256:'a'.repeat(64)}},
+ {version:2,kind:'image',body:{$resource:'later-body'},outputBinding:{
+  outputId:'later-output',outputVersion:2,sessionId:'conversation',sha256:'b'.repeat(64)}}]},
+ version:1,publication:{messageId:'turn',version:1,chat:'inline',outputId:'output',
+ imageGeneration:{verified:true,requestId:'receipt',operation:'generate',parentId:null}}});
+const thumbnailState=()=>({...state,selectedWorkspaceId:'project',client:{hostInstanceId:'fixture-host',id:'tab'}});
+
+test('retained thumbnail tuple binds exact version/output/hash without adopting the latest body or a view',()=>{
+ const value=thumbnailItem(),scope=thumbnailState(),tuple=retainedThumbnailTuple(value,'turn',scope);
+ const url=new URL(tuple.url,'https://fixture.example');
+ assert.equal(url.pathname,'/api/outputs/output/image');
+ assert.deepEqual(Object.fromEntries(url.searchParams),{
+  sessionId:'conversation',artifactId:'generated',version:'1',messageId:'turn',sha256:'a'.repeat(64)});
+ assert.equal(retainedThumbnailTuple(value,'turn',{...scope,canvasWorkspace:{views:[]}}).identity,tuple.identity,
+  'Selected preview release does not revoke an independent thumbnail');
+ assert.equal(retainedThumbnailTuple(value,'turn',{...scope,revision:100}).identity,tuple.identity,
+  'Unrelated state/history updates do not fetch or decode again');
+ value.row.versions[1].body={$resource:'different-latest'};
+ assert.equal(retainedThumbnailTuple(value,'turn',scope).identity,tuple.identity);
+ value.row.versions[0].body={$resource:'changed-exact-body'};
+ assert.notEqual(retainedThumbnailTuple(value,'turn',scope).identity,tuple.identity);
+ for(const key of ['hostInstanceId','id']){
+  assert.notEqual(retainedThumbnailTuple(value,'turn',{...scope,client:{...scope.client,[key]:'other'}}).identity,tuple.identity);
+ }
+ for(const patch of [{selectedSessionId:'other'},{selectedWorkspaceId:'other'}])
+  assert.equal(retainedThumbnailTuple(value,'turn',{...scope,...patch}),null);
+ assert.equal(retainedThumbnailTuple(value,'foreign',scope),null);
+ for(const chat of ['none','compact']){
+  assert.equal(retainedThumbnailTuple({...value,publication:{...value.publication,chat}},'turn',scope),null);
+ }
+ value.publication.imageGeneration.verified=false;
+ assert.equal(retainedThumbnailTuple(value,'turn',scope),null);
+});
+
+test('legacy thumbnail has no invented hash; partial or mismatched new bindings never fall back',()=>{
+ const scope=thumbnailState();
+ for(const change of [
+  binding=>{delete binding.sha256},binding=>{binding.outputId='wrong'},
+  binding=>{binding.sessionId='foreign'},binding=>{binding.outputVersion=0}
+ ]){
+  const value=thumbnailItem();change(value.row.versions[0].outputBinding);
+  assert.equal(retainedThumbnailTuple(value,'turn',scope),null);
+ }
+ const legacy=thumbnailItem();delete legacy.row.versions[0].outputBinding;
+ const tuple=retainedThumbnailTuple(legacy,'turn',scope);
+ assert.ok(tuple);assert.equal(tuple.sha256,undefined);
+ assert.equal(new URL(tuple.url,'https://fixture.example').searchParams.has('sha256'),false);
+ assert.ok(!tuple.identity.includes('later-body'),'Legacy requested identity never borrows a current body');
+ legacy.row.versions=[];legacy.row.revision=2;
+ assert.equal(retainedThumbnailTuple(legacy,'turn',scope),null,'An unavailable old version is not Latest');
+});
+
+// Actual Thumbnail hook closures, with fake pixels and no rendered DOM. This
+// deliberately does not claim browser decoding or authenticated-host acceptance.
+function thumbnailHarness(decode=async()=> 'SMALL_PIXELS'){
+ const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('function Thumbnail('),end=source.indexOf(' return <span',start);
+ const slots=[],effects=[],writes=[],fetches=[];let index=0;
+ const button={getAttribute:()=> 'Image 1: Concept',setAttribute(){},addEventListener(){},removeEventListener(){}};
+ const hooks={
+  useRef(value){const at=index++;slots[at]??={current:value===undefined?{closest:()=>button}:value};return slots[at]},
+  useState(value){const at=index++;slots[at]??={value};return [slots[at].value,next=>{
+   slots[at].value=typeof next==='function'?next(slots[at].value):next;writes.push(at);
+  }]},
+  useEffect(fn,deps){const at=index++,old=slots[at];if(!old||deps.some((value,n)=>!Object.is(value,old.deps[n]))){
+   const entry={deps,cleanup:old?.cleanup};slots[at]=entry;effects.push(()=>{entry.cleanup?.();entry.cleanup=fn()});
+  }}
+ };
+ const invoke=runInNewContext(source.slice(start,end)+'return {result,retry,identity};} Thumbnail',{
+  ...hooks,useLayoutEffect:hooks.useEffect,retainedThumbnailTuple,AbortController,titleOf:()=> 'Concept',
+  IntersectionObserver:class{constructor(fn){this.fn=fn}observe(){this.fn([{isIntersecting:true}])}disconnect(){}},
+  thumbnailWork:(_signal,work)=>Promise.resolve().then(work),
+  thumbnailPixels:(tuple,signal)=>{fetches.push({tuple,signal});return decode(tuple,signal)}
+ });
+ return {fetches,writes,
+  render(saved=thumbnailItem(),value=thumbnailState()){
+   index=0;const result=invoke({item:saved,index:0,messageId:'turn',state:value});
+   while(effects.length)effects.shift()();return result;
+  },
+  dispose(){for(const slot of slots)slot?.cleanup?.()}
+ };
+}
+
+test('actual thumbnail hook keeps one read per tuple and explicitly retries a failure',async()=>{
+ let reads=0;
+ const harness=thumbnailHarness(async()=>{if(++reads===1)throw Error('Temporary failure');return 'SMALL_PIXELS'});
+ const saved=thumbnailItem(),scope=thumbnailState();
+ harness.render(saved,scope);harness.render(saved,scope);await settle();
+ let rendered=harness.render(saved,scope);assert.equal(rendered.result.error,true);
+ harness.render(saved,{...scope,revision:100});await settle();
+ assert.equal(reads,1,'There is no automatic retry after state updates');
+ rendered.retry({type:'keydown',key:'Enter',preventDefault(){},stopPropagation(){}});
+ harness.render(saved,scope);await settle();
+ assert.equal(harness.render(saved,scope).result.pixels,'SMALL_PIXELS');assert.equal(reads,2);
+ assert.equal(harness.render(saved,{...scope,canvasWorkspace:{views:[]}}).result.pixels,'SMALL_PIXELS');
+ assert.equal(harness.fetches.length,2,'View release neither clears nor refetches the thumbnail');
+ harness.dispose();
+});
+
+test('actual thumbnail hook aborts and discards late fetch/decode on every owning identity change',async()=>{
+ for(const mutation of ['unmount','host','client','session','publication','output','body','version']){
+  const pending=[];
+  const harness=thumbnailHarness((_tuple,signal)=>new Promise(resolve=>pending.push({signal,resolve})));
+  const saved=thumbnailItem(),scope=thumbnailState();
+  harness.render(saved,scope);harness.render(saved,scope);await settle();
+  assert.equal(pending.length,1);
+  if(mutation==='unmount')harness.dispose();
+  else{
+   const changed=structuredClone(saved),value=structuredClone(scope);
+   if(mutation==='host')value.client.hostInstanceId='other-host';
+   if(mutation==='client')value.client.id='other-tab';
+   if(mutation==='session')value.selectedSessionId='other-chat';
+   if(mutation==='publication')changed.publication.chat='none';
+   if(mutation==='output')changed.publication.outputId='foreign';
+   if(mutation==='body')changed.row.versions[0].body={$resource:'new-body'};
+   if(mutation==='version'){changed.version=2;changed.publication.version=2;changed.publication.outputId='later-output'}
+   assert.equal(harness.render(changed,value).result,null,'Derived pixels are removed during the scope-changing render');
+  }
+  assert.equal(pending[0].signal.aborted,true);const writes=harness.writes.length;
+  pending[0].resolve('OLD_LATE_PIXELS');await settle();
+  assert.equal(harness.writes.length,writes,'Late completion cannot write old pixels into the new owner');
+  harness.dispose();
+ }
+});
+
+test('actual thumbnail reload reauthorizes the same tuple and never reuses a disposed page result',async()=>{
+ let late;
+ const oldPage=thumbnailHarness(()=>new Promise(resolve=>{late=resolve}));
+ oldPage.render();oldPage.render();await settle();oldPage.dispose();
+ const newPage=thumbnailHarness(async()=> 'REAUTHORIZED_SMALL_PIXELS');
+ newPage.render();newPage.render();await settle();
+ assert.equal(newPage.fetches.length,1);
+ assert.equal(newPage.render().result.pixels,'REAUTHORIZED_SMALL_PIXELS');
+ late('DISPOSED_PAGE_PIXELS');await settle();
+ assert.equal(newPage.render().result.pixels,'REAUTHORIZED_SMALL_PIXELS');
+ assert.equal(oldPage.fetches[0].signal.aborted,true);
+ newPage.dispose();
+});
+
+test('actual thumbnail slot pool bounds whole decode lifetimes and removes cancelled queued jobs',async()=>{
+ const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('const thumbnailQueue='),end=source.indexOf('async function thumbnailPixels(',start);
+ const work=runInNewContext(source.slice(start,end)+'thumbnailWork',{DOMException,Promise});
+ let running=0,peak=0;const complete=[];
+ const controllers=Array.from({length:10},()=>new AbortController());
+ const tasks=controllers.map((controller,n)=>work(controller.signal,()=>new Promise(resolve=>{
+  running++;peak=Math.max(peak,running);complete.push(()=>{running--;resolve(n)});
+ })).catch(error=>error.name));
+ await settle();assert.equal(complete.length,2);
+ controllers[7].abort();
+ while(complete.length){complete.shift()();await settle()}
+ const values=await Promise.all(tasks);
+ assert.equal(values[7],'AbortError');assert.equal(peak,2);
+ assert.equal(values.filter(value=>Number.isInteger(value)).length,9);
+});
+
+test('actual retained pixel boundary checks bytes/hash/PNG before decode and closes full-size intermediates',async()=>{
+ const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('async function thumbnailPixels('),end=source.indexOf('function Thumbnail(',start);
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==','base64');
+ const sha256=createHash('sha256').update(png).digest('hex');
+ for(const damage of [null,'hash','tuple-hash','not-png','dimension','byte-limit','length','content-type','late-decode']){
+  const data=Uint8Array.from(png);
+  if(damage==='dimension')new DataView(data.buffer).setUint32(16,4097);
+  if(damage==='not-png')data[0]=0;
+  const hash=createHash('sha256').update(data).digest('hex'),controller=new AbortController();
+  const canvas={width:0,height:0,getContext:()=>({drawImage(){}}),toDataURL:()=> 'DERIVED_SMALL_DATA_URI'};
+  let decoded=0,closed=0,bodyReads=0,requestPath,options;
+  const pixelRead=runInNewContext(source.slice(start,end)+'thumbnailPixels',{
+   Uint8Array,DataView,Blob,DOMException,crypto:webcrypto,
+   clientUrl:path=>path+'&clientId=attached',document:{createElement:()=>canvas},
+   fetch:async(path,args)=>{requestPath=path;options=args;return {
+    ok:true,headers:new Map([
+     ['Content-Type',damage==='content-type'?'text/html':'image/png'],
+     ['Content-Length',String(damage==='byte-limit'?8*1024*1024+1:damage==='length'?data.length+1:data.length)],
+     ['X-Amplifier-Image-SHA256',damage==='hash'?'0'.repeat(64):hash]]),
+    arrayBuffer:async()=>{bodyReads++;return data.buffer}
+   }},
+   createImageBitmap:async()=>{
+    decoded++;if(damage==='late-decode')controller.abort();
+    return {width:1,height:1,close(){closed++}};
+   }
+  });
+  const tuple={url:'/api/outputs/output/image?sessionId=conversation',
+   sha256:damage==='tuple-hash'?'f'.repeat(64):damage==='dimension'||damage==='not-png'?hash:sha256};
+  if(damage===null){
+   assert.equal(await pixelRead(tuple,controller.signal),'DERIVED_SMALL_DATA_URI');
+   assert.equal(decoded,1);assert.equal(closed,1);assert.equal(bodyReads,1);
+  }else{
+   await assert.rejects(pixelRead(tuple,controller.signal));
+   assert.equal(decoded,damage==='late-decode'?1:0);
+   assert.equal(closed,decoded);
+   if(['byte-limit','content-type'].includes(damage))assert.equal(bodyReads,0);
+  }
+  assert.equal(canvas.width,0);assert.equal(canvas.height,0);
+  assert.ok(requestPath.endsWith('&clientId=attached'));
+  assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
+ }
 });

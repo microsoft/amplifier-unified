@@ -151,7 +151,7 @@ async function thumbnailPixels(tuple,signal){
   if(![137,80,78,71,13,10,26,10].every((value,index)=>header[index]===value)||
    view.getUint32(8)!==13||view.getUint32(12)!==0x49484452)throw Error('Thumbnail PNG header is invalid');
   const width=view.getUint32(16),height=view.getUint32(20);
-  if(width<1||height<1||width>4096||height>4096||header[24]!==8||![2,6].includes(header[25]))throw Error('Thumbnail PNG dimensions are invalid');
+  if(width<1||height<1||width>4096||height>4096||header[24]!==8||![2,6].includes(header[25])||header[26]||header[27]||header[28])throw Error('Thumbnail PNG dimensions are invalid');
   const canonical=response.headers.get('X-Amplifier-Image-SHA256');
   if(canonical||tuple.sha256){
    if(canonical&&!/^[a-f0-9]{64}$/.test(canonical)||canonical&&tuple.sha256&&canonical!==tuple.sha256)throw Error('Thumbnail binding changed');
@@ -222,7 +222,7 @@ function Thumbnail({item,index,messageId,state}){
   return()=>{if(failed){button.setAttribute('aria-label',label);button.removeEventListener('keydown',action);button.removeEventListener('click',action,true)}};
  },[failed,identity,index]);
  return <span ref={root} className="a-gallery-thumbnail" title={failed?'Retry thumbnail':undefined}>
-  {result?.pixels?<img alt="" src={result.pixels} onError={()=>setLoaded({identity,error:true})}/>:<><ImageIcon/><span>{failed?'Retry thumbnail':index+1}</span></>}
+  {result?.pixels?<img alt="" src={result.pixels} onError={()=>setLoaded({identity,error:true})}/>:<><ImageIcon/><span>{failed?'Retry':index+1}</span></>}
  </span>;
 }
 

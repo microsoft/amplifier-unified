@@ -302,9 +302,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def output_image(request):
         import base64
+        fields = ('sessionId', 'artifactId', 'version', 'messageId', 'sha256')
+        scoped = any(key in request.query for key in fields)
+        # Preserve the raw route's existing lookup/error behavior.
+        record = None if scoped else service.outputs.store.read(request.match_info['identity'])
         try:
-            fields = ('sessionId', 'artifactId', 'version', 'messageId', 'sha256')
-            scoped = any(key in request.query for key in fields)
             if scoped:
                 if any(len(request.query.getall(key, [])) != 1 for key in fields[:4]) or len(request.query.getall('sha256', [])) > 1:
                     raise ValueError('Supply one complete saved thumbnail tuple; partial reads never fall back.')
@@ -314,11 +316,14 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                 headers = {'X-Amplifier-Image-SHA256': digest}
             else:
                 # Existing general outputs.image URLs keep their host-owner policy.
-                record=service.outputs.store.read(request.match_info['identity'])
                 value=service.outputs.image(record['sessionId'],record['id'],record.get('sha256'))
                 data=base64.b64decode(value['_image'])
                 headers = {}
-        except (ValueError, KeyError, TypeError) as exc:
+        except ValueError as exc:
+            raise AppError(str(exc),409) from None
+        except (KeyError, TypeError) as exc:
+            if not scoped:
+                raise
             raise AppError(str(exc),409) from None
         return web.Response(body=data,content_type='image/png',headers={
             **headers, 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'self'; sandbox"})
