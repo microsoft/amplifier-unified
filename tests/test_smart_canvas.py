@@ -49,6 +49,9 @@ async def service(tmp_path):
 
 
 async def test_agent_call_view_reopen_and_context(service):
+    from amplifier_web.canvas_library import remember
+    from amplifier_web.resource_files import root
+    from amplifier_web.state_storage import resource
     sid=service.state['selectedSessionId']
     result=await service.app_bridge('dispatch',{'action':'smartTools.call','id':'call1','args':{'id':'one','name':'read','arguments':{'object':'shared'}}},sid)
     assert result['operationId']=='call1'
@@ -57,15 +60,76 @@ async def test_agent_call_view_reopen_and_context(service):
     await settled(service)
     canvas=copy.deepcopy(service.state['canvas'])
     assert canvas['mcp']['toolArguments']=={'object':'shared'}
+    row = service.state['canvasArtifacts'][-1]
+    reference = copy.deepcopy(row['mcpState'])
+    binding = resource(service.db, reference['$resource'])
+    saved_file = root(service.db) / (reference['$resource'] + '.json')
+    saved_bytes = saved_file.read_bytes()
     await service.dispatch('smartTools.context',{'canvasId':canvas['id'],'context':{'structuredContent':{'selection':'A'}}})
+    remember(service.state, service.db)
+    assert row['mcpState'] == reference
+    assert resource(service.db, reference['$resource']) == binding
+    assert saved_file.read_bytes() == saved_bytes
     await service.dispatch('canvas.close')
     load(service.state,service.db,canvas['id'])
     assert service.state['canvas']['mcp']['context']['structuredContent']['selection']=='A'
     assert len(service.state['smartTools']['operations'])==2
+    assert row['mcpState'] == reference
+    assert resource(service.db, reference['$resource']) == binding
+    assert saved_file.read_bytes() == saved_bytes
     overview=await service.app_bridge('get_state',{},sid)
     assert 'smartTools' in overview
     # MCP body is in durable storage, not duplicated into every artifact index.
     assert 'mcp' not in service.state['canvasArtifacts'][-1]
+
+
+async def test_fresh_attach_strips_only_detached_primary_observation_and_operations(service):
+    service._message(service._session(), 'user', 'Open a synthetic tool view')
+    await service.smart_tools.command('smartTools.call', {'id': 'one', 'name': 'read'},
+                                      'launch', 'agent')
+    await service.smart_canvas.open({'id': 'one', 'tool': 'read', 'operationId': 'launch'})
+    identity = service.state['canvas']['id']
+    await service.dispatch('smartTools.context', {'canvasId': identity,
+        'context': {'structuredContent': {'selection': 'A'}}})
+    await service.smart_canvas.command('smartTools.appCall', {'canvasId': identity, 'name': 'read'},
+                                      'root-operation', 'ui')
+    root_canvas = copy.deepcopy(service.state['canvas'])
+    root_tabs = copy.deepcopy(service.state.get('canvasTabs'))
+    canonical = copy.deepcopy(service.state['canvasArtifacts'][0])
+    service.clients.attach('existing')
+    with service.clients.bind('existing'):
+        await service.dispatch('smartTools.context', {'canvasId': identity,
+            'context': {'selection': 'existing-owner'}})
+    existing = copy.deepcopy(service.clients.records['existing'])
+    fresh = service.clients.attach('fresh')
+    assert fresh['canvas']['mcp'].get('context', {}) == {}
+    assert 'contextUpdatedAt' not in fresh['canvas']['mcp']
+    assert 'lastOperationId' not in fresh['canvas']['mcp']
+    for key in ('serverId', 'resourceUri', 'operationId', 'configuration', 'allowedTools'):
+        assert fresh['canvas']['mcp'][key] == root_canvas['mcp'][key]
+    assert fresh['canvas']['mcp']['operationId'] == 'launch'
+    with service.clients.bind('fresh'):
+        primary = service.canvas_views.canvas('primary')
+        inline = (await service.dispatch('canvas.views.inline', {
+            'resourceId': identity, 'version': canonical['revision'],
+            'messageId': canonical['publications'][0]['messageId'],
+            'previewId': 'fresh-inline', 'followLatest': True}))['result']
+        assert service.canvas_views.canvas(inline['viewId'])['mcp'].get('context', {}) == {}
+        assert 'lastOperationId' not in service.canvas_views.canvas(inline['viewId'])['mcp']
+        assert primary['mcp'].get('context', {}) == {}
+        assert 'lastOperationId' not in primary['mcp']
+        load(service.state, service.db, identity, version=canonical['revision'])
+        numbered = service.canvas_views.canvas('primary')
+        assert numbered['selectedVersion'] == canonical['revision']
+        assert numbered['mcp'].get('context', {}) == {}
+        assert 'lastOperationId' not in numbered['mcp']
+        load(service.state, service.db, identity)
+        assert service.state['canvas']['mcp'].get('context', {}) == {}
+    assert service.state['canvas'] == root_canvas
+    assert service.state['canvasTabs'] == root_tabs
+    assert service.clients.records['existing'] == existing
+    assert service.state['canvasArtifacts'][0] == canonical
+    assert len(service.state['smartTools']['operations']) == 2
 
 
 async def test_stale_closed_and_unknown_tool_bindings(service):

@@ -767,3 +767,193 @@ async def test_actual_view_detachment_during_post_call_update_preserves_complete
         assert connection.requests == [('call_tool', ('change', {'amount': 8}))]
     finally:
         service.smart_canvas.local_update = original
+
+
+@pytest.mark.parametrize('tabs', ['absent', None])
+async def test_root_context_seeds_presentation_without_changing_controls_and_writers_survive_restart(
+        tmp_path, tabs):
+    from amplifier_web.canvas_library import load, presentation
+    from amplifier_web.state_storage import resource
+    app = AppService(tmp_path / 'data', workspace=tmp_path)
+    try:
+        identity = await setup(app)
+        row = app.state['canvasArtifacts'][0]
+        controls = {'view': {'zoom': 1.25, 'source': True}, 'tabOpen': True, 'lastViewedAt': 123.0}
+        row.update(deepcopy(controls))
+        app.state['canvas']['view'] = deepcopy(controls['view'])
+        if tabs == 'absent':
+            app.state.pop('canvasTabs', None)
+        else:
+            app.state['canvasTabs'] = tabs
+        reference = deepcopy(row['mcpState'])
+        saved_file = root(app.db) / (reference['$resource'] + '.json')
+        saved_bytes = saved_file.read_bytes()
+        # Direct accepted context isolates seeding from unrelated publication.
+        app.smart_canvas.context({'canvasId': identity, 'context': {'selection': 'A'}})
+        assert isinstance(app.state['canvasTabs'], dict)
+        local = presentation(app.state, row)
+        assert local is not row
+        assert {key: local[key] for key in controls} == controls
+        assert {key: row[key] for key in controls} == controls
+        assert 'mcpObservation' not in row
+        await app.dispatch('canvas.view', {'id': identity, 'patch': {'zoom': 2}})
+        assert presentation(app.state, row)['view']['zoom'] == 2
+        await app.dispatch('canvas.tabClose', {'id': identity})
+        assert not presentation(app.state, row)['tabOpen']
+        await app.close()
+        app = AppService(tmp_path / 'data', workspace=tmp_path)
+        row = app.state['canvasArtifacts'][0]
+        assert presentation(app.state, row)['view']['zoom'] == 2
+        assert not presentation(app.state, row)['tabOpen']
+        load(app.state, app.db, identity)
+        assert app.state['canvas']['mcp']['context'] == {'selection': 'A'}
+        await app.dispatch('canvas.view', {'id': identity, 'patch': {'zoom': 3}})
+        await app.dispatch('canvas.tabClose', {'id': identity})
+        assert presentation(app.state, row)['view']['zoom'] == 3
+        assert not presentation(app.state, row)['tabOpen']
+        assert row['mcpState'] == reference
+        assert resource(app.db, reference['$resource']).get('context', {}) == {}
+        assert saved_file.read_bytes() == saved_bytes
+    finally:
+        await app.close()
+
+
+async def test_owner_primary_context_replaces_targeted_observation_without_lending_mount_authority(view_http):
+    from amplifier_web.canvas_library import load
+    client, service, identity, one, _, connection = view_http
+    with service.clients.bind('one'):
+        load(service.state, service.db, identity)
+        primary = service.canvas_views.summary('primary')
+        await service.dispatch('smartTools.context', {**exact_target(primary), 'canvasId': identity,
+            'context': {'selection': 'targeted'}})
+        await service.dispatch('smartTools.context', {**exact_target(one), 'canvasId': identity,
+            'context': {'selection': 'inline'}})
+        await service.dispatch('smartTools.context', {'canvasId': identity,
+            'context': {'selection': 'replacement'}})
+        assert service.canvas_views.canvas('primary')['mcp']['context'] == {'selection': 'replacement'}
+        assert service.canvas_views.canvas(one['viewId'])['mcp']['context'] == {'selection': 'inline'}
+    payload = {'id': 'primary-mounted-operation', 'name': 'change', 'arguments': {'amount': 7}}
+    response = await client.post(f'/api/canvas/{identity}/tools/call', params=query(primary), json=payload)
+    assert response.status == 200
+    with service.clients.bind('one'):
+        assert service.canvas_views.canvas('primary')['mcp']['lastOperationId'] == payload['id']
+        await service.dispatch('canvas.close')
+        load(service.state, service.db, identity)
+        reopened = service.canvas_views.canvas('primary')
+        assert reopened['mcp']['context'] == {'selection': 'replacement'}
+        assert 'lastOperationId' not in reopened['mcp']
+        assert reopened['generation'] != primary['generation']
+        assert service.canvas_views.canvas(one['viewId'])['mcp']['context'] == {'selection': 'inline'}
+    path = '/api/smart-tools/operations/' + payload['id']
+    assert (await client.get(path, params=query(primary))).status == 409
+    resumed = service.clients.attach('resumed', resume='one')
+    assert 'lastOperationId' not in resumed['canvas']['mcp']
+    with service.clients.bind('resumed'):
+        load(service.state, service.db, identity)
+        assert service.canvas_views.canvas('primary')['mcp']['context'] == {'selection': 'replacement'}
+        await service.dispatch('smartTools.context', {'canvasId': identity, 'context': {}})
+        load(service.state, service.db, identity)
+        assert service.canvas_views.canvas('primary')['mcp']['context'] == {}
+    with service.clients.bind('one'):
+        assert service.canvas_views.canvas('primary')['mcp']['context'] == {'selection': 'replacement'}
+    with service.clients.bind('two'):
+        load(service.state, service.db, identity)
+        assert service.canvas_views.canvas('primary')['mcp'].get('context', {}) == {}
+    assert connection.requests == [('call_tool', ('change', {'amount': 7}))]
+
+
+async def test_owner_context_restart_keeps_description_not_stale_primary_operation(tmp_path):
+    from amplifier_web.canvas_library import load
+    app = AppService(tmp_path / 'data', workspace=tmp_path)
+    connection = ViewConnection()
+    try:
+        identity = await setup(app)
+        app.smart_tools.connections['fixture'] = connection
+        app.clients.attach('owner')
+        with app.clients.bind('owner'):
+            primary = app.canvas_views.summary('primary')
+            await app.dispatch('smartTools.context', {**exact_target(primary), 'canvasId': identity,
+                'context': {'selection': 'first'}})
+            await app.dispatch('smartTools.context', {'canvasId': identity,
+                'context': {'selection': 'latest'}})
+            receipt = await app.dispatch('smartTools.appCall', {**exact_target(primary),
+                'canvasId': identity, 'name': 'change', 'arguments': {'amount': 5}},
+                command_id='before-restart')
+            await app.wait_smart_tool(receipt['operationId'])
+            operation = deepcopy(app.smart_tools.operation(receipt['operationId']))
+            assert app.canvas_views.canvas('primary')['mcp']['lastOperationId'] == receipt['operationId']
+            await app.dispatch('canvas.view', {'id': identity, 'patch': {'zoom': 2}})
+            app._save()
+        await app.close()
+        app = AppService(tmp_path / 'data', workspace=tmp_path)
+        transport(app)
+        app.clients.attach('owner')
+        with app.clients.bind('owner'):
+            assert app.state['canvas']['mcp']['context'] == {'selection': 'latest'}
+            assert 'lastOperationId' not in app.state['canvas']['mcp']
+            reopened = app.canvas_views.canvas('primary')
+            assert reopened['mcp']['context'] == {'selection': 'latest'}
+            assert 'lastOperationId' not in reopened['mcp']
+            assert reopened['view']['zoom'] == 2
+            assert reopened['generation'] != primary['generation']
+            with pytest.raises(AppError):
+                app.smart_canvas.view_operation(exact_target(primary), operation)
+            load(app.state, app.db, identity)
+            assert app.state['canvas']['mcp']['context'] == {'selection': 'latest'}
+            await app.dispatch('canvas.view', {'id': identity, 'patch': {'zoom': 3}})
+            await app.dispatch('canvas.tabClose', {'id': identity})
+            assert app.state['canvasTabs'][identity]['view']['zoom'] == 3
+            assert not app.state['canvasTabs'][identity]['tabOpen']
+        assert connection.requests == [('call_tool', ('change', {'amount': 5}))]
+    finally:
+        await app.close()
+
+
+async def test_resume_rejects_operation_when_canonical_binding_changes_without_visible_revision(app):
+    from amplifier_web.canvas_library import load
+    from amplifier_web.resource_files import put
+    from amplifier_web.state_storage import resource
+    identity = app.state['canvas']['id']
+    app.clients.attach('owner')
+    with app.clients.bind('owner'):
+        primary = app.canvas_views.summary('primary')
+        await app.dispatch('smartTools.context', {'canvasId': identity, 'context': {'selection': 'old'}})
+        # Exact host association, not a permissive generic-operation fixture.
+        operation = {'viewBinding': app.smart_canvas.operation_binding({
+            **exact_target(primary), 'canvasId': identity, 'name': 'change'})}
+        row = app.state['canvasArtifacts'][0]
+        binding = resource(app.db, row['mcpState']['$resource'])
+        binding['catalogRevision'] = 'changed-without-new-document'
+        row['mcpState'] = put(app.db, binding)
+        app.smart_tools._server('fixture')['catalogRevision'] = binding['catalogRevision']
+        assert app.canvas_views.revision(row) == primary['resourceRevision']
+    app.clients.attach('owner', resume='owner')
+    with app.clients.bind('owner'):
+        assert app.state['canvas']['mcp']['catalogRevision'] == binding['catalogRevision']
+        assert app.state['canvas']['mcp'].get('context', {}) == {}
+        assert 'lastOperationId' not in app.state['canvas']['mcp']
+        assert app.canvas_views.canvas('primary')['mcp'].get('context', {}) == {}
+        with pytest.raises(AppError):
+            app.smart_canvas.view_operation(exact_target(primary), operation)
+        load(app.state, app.db, identity)
+        assert app.state['canvas']['mcp'].get('context', {}) == {}
+
+
+async def test_reconnect_does_not_requalify_old_primary_description_or_alter_inline_context(view_http):
+    from amplifier_web.canvas_library import load
+    _, service, identity, one, _, connection = view_http
+    with service.clients.bind('one'):
+        load(service.state, service.db, identity)
+        await service.dispatch('smartTools.context', {'canvasId': identity,
+            'context': {'selection': 'before-reconnect'}})
+        await service.dispatch('smartTools.context', {**exact_target(one), 'canvasId': identity,
+            'context': {'selection': 'inline-independent'}})
+        before = deepcopy(service.state['canvasTabs'][identity])
+        result = await recover(service, identity)
+        assert result['result']['status'] == 'ready'
+        assert service.state['canvasTabs'][identity] == before
+        assert service.canvas_views.canvas('primary')['mcp'].get('context', {}) == {}
+        load(service.state, service.db, identity)
+        assert service.state['canvas']['mcp'].get('context', {}) == {}
+        assert service.canvas_views.canvas(one['viewId'])['mcp']['context'] == {'selection': 'inline-independent'}
+    assert connection.requests == []
