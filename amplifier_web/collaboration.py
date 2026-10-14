@@ -407,6 +407,19 @@ class Collaboration:
                 self.error('The original request boundary no longer permits a later reply: ' + reason, 409)
         return active, request, revision, delivered
 
+    def require_result_reader(self, receipt, origin, caller):
+        if origin in {'ui', 'user'}:
+            return
+        reader = self.source({}, origin, caller)
+        sid = receipt.get('target', {}).get('sessionId') or receipt['sessionId']
+        sender = receipt.get('senderSessionId') or receipt.get('result', {}).get('creatorSessionId')
+        workspace = receipt.get('workspace') or self.service._session(sender, hydrate=False)['workspace']
+        if (reader['id'] not in {sender, sid}
+                or reader['workspace'] != workspace
+                or receipt.get('commandAction') == 'coordination.send'
+                and self.service._session(sid, hydrate=False)['workspace'] != reader['workspace']):
+            self.error("This result is outside the caller's request and workspace scope.")
+
     def resolve_message(self, session, identity):
         def correlated(row):
             anchor = next((item for item in session.get("collaborationMessageAnchors", [])
@@ -1195,22 +1208,18 @@ class Collaboration:
                 result['resources'] = {**resources['result'], 'workspaceId': workspace['id']}
             return {"accepted": True, "result": result}
         if action == "coordination.result":
-            reader = self.source({}, origin, caller) if origin not in {"ui", "user"} else None
             receipt = self.receipt(args["requestId"])
             if receipt.get("commandAction") not in {"coordination.send", "coordination.create"}:
                 self.error("This receipt is not a peer request.", 409)
             sid = receipt.get("target", {}).get("sessionId") or receipt["sessionId"]
-            if reader:
-                sender = receipt.get("senderSessionId") or receipt.get("result", {}).get("creatorSessionId")
-                workspace = receipt.get("workspace") or self.service._session(sender)["workspace"]
-                if (reader["id"] not in {sender, sid}
-                        or reader["workspace"] != workspace
-                        or receipt.get("commandAction") == "coordination.send"
-                        and self.service._session(sid)["workspace"] != reader["workspace"]):
-                    self.error("This result is outside the caller's request and workspace scope.")
+            self.require_result_reader(receipt, origin, caller)
             target = next((row for row in self.service.state["sessions"] if row["id"] == sid), None)
             if target:
                 await self.service.history.ensure_loaded(sid)
+                # Hydration yields to workspace moves and session replacement.
+                # Resolve the actual reader and target again before exposing data.
+                self.require_result_reader(receipt, origin, caller)
+                target = next((row for row in self.service.state['sessions'] if row['id'] == sid), None)
             initial = None
             if receipt.get('commandAction') == 'coordination.create' and receipt.get('initialInputId'):
                 row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (receipt['initialInputId'],)).fetchone()

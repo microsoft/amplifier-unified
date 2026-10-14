@@ -1218,6 +1218,23 @@ async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, r
     assert not app.runtime.inputs
 
 
+@pytest.mark.parametrize('moved', ['reader', 'target'])
+async def test_result_rechecks_workspace_after_hydration(app, moved, monkeypatch):
+    source, target = app.state['sessions']
+    await send(app, mode='notify')
+
+    async def hydrate(_):
+        await asyncio.sleep(0)
+        (source if moved == 'reader' else target)['workspace'] += '/other-workspace'
+        target['activity'] = {'detail': 'Activity in the newly moved workspace'}
+
+    monkeypatch.setattr(app.history, 'ensure_loaded', hydrate)
+    with pytest.raises(AppError, match='scope'):
+        await app.dispatch('coordination.result', {'requestId': 'request-1'},
+            origin='agent', caller_session_id=source['id'])
+    assert not app.runtime.inputs
+
+
 @pytest.mark.parametrize("capability", ["active", "idle", "terminal", "unsupported"])
 async def test_peer_discovery_advertises_steer_only_for_current_runtime_capability(app, capability):
     source, target = app.state["sessions"]
