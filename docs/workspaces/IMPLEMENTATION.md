@@ -82,6 +82,38 @@ shared-host adoption; broad combined-program qualification remains separate.
 Remaining scope: combined repository/dependency validation, retention-aware
 checkout cleanup, full repeated provider journeys and release/adoption.
 
+## Scoped configuration administration — 2026-10-14
+
+Root agents can request explicit configuration effects and scopes through the
+existing approval card, then reuse approved authority across turns. Direct user
+settings actions remain available. Native app-control requests wait in the
+existing worker approval map; Allow/Deny resumes that tool without replaying any
+write. Raw API requests retain nonblocking receipts. Advanced settings exposes
+the same canonical grant records and revision-checked revocation.
+
+Shared command receipts own grants and decisions. Delayed management/settings
+effects retain grant provenance and recheck after waits. Stop, revocation, expiry
+and workspace changes suppress unperformed effects; queued configuration plans
+survive restart for inspection. Children/new roots do not inherit grants. Peer
+input cannot borrow a higher-authority root's grant; saved dependency returns
+retain the original input lineage. Explicitly authorized global administration
+works through the actual mounted root tool.
+
+Qualification after the new-chat discovery merge includes 494 affected Python
+checks, 686 frontend checks, the production build, desktop/narrow browser grant
+approval/reuse/revoke/reload and private-draft preservation. A freshly installed
+wheel passes 100 checks including actual Core/Foundation child/root mounts,
+native approval waiting, durable grants, shared HTTP clients, schedules and
+management. Native orchestrators and browser runtime are scripted; no live
+provider or installed-host adoption is claimed. The broader program's full
+integration remains its own gate.
+
+The [consumer and read-history audit](configuration-authority.md) names each
+covered administration route, alternate settings aliases, live/delayed limits,
+and the remaining inconsistent cross-workspace read scope. These are not OS,
+universal credential, per-tool or multi-tenant isolation guarantees. Existing
+registered own-history access is independent of configuration grants.
+
 ## Assignment admission and scoped Stop — 2026-10-14
 
 New commissioned roots now share their initiating root's assignment. Nested

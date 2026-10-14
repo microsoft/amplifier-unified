@@ -46,6 +46,7 @@ See [implementation and evidence](workspaces/IMPLEMENTATION.md) for qualificatio
 | Read original admitted history | Work's `read_transcript`, separate from cross-conversation discovery |
 | Ask durable choices while independent work continues | Shared `question.*` actions; [question and delivery contract](DURABLE-QUESTIONS.md) |
 | Voice lifecycle and scoped file access | `call.*` and `permissions.*` shared actions |
+| Authorize settings administration | `capability.read/request/grant/revoke`; existing user approval, reusable scoped root grants, delayed-effect rechecks and Advanced settings revocation. See [configuration authority and consumer audit](workspaces/configuration-authority.md). |
 
 Host services are supplied by Unified, not by the portable Work bundle. The
 agent's app-control description and runtime guidance explain these discovery

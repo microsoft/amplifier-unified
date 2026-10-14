@@ -353,6 +353,8 @@ class SetupManager:
             await asyncio.gather(stderr_task,return_exceptions=True)
 
     def _keys(self,updates):
+        from .configuration_authority import check_current
+        check_current()
         path=self.store.shared_home/'keys.env'
         path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
         with FileLock(str(path)+'.lock',timeout=10):

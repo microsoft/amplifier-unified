@@ -662,3 +662,28 @@ async def test_session_commands_share_one_shot_watch_retry_scope_and_private_sta
     cancelled = await action('coordination.watch.cancel', {'watchId': 'watch-command'}, 'cancel')
     assert (await cancelled.json())['result']['status'] == 'cancelled'
     assert service.state['selectedSessionId'] == target
+
+
+async def test_configuration_grant_actions_share_session_http_scope(authenticated_client,tmp_path,monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_HOME',str(tmp_path/'native'))
+    app=await create_app(tmp_path/'app',workspace=tmp_path,runtime=Runtime(),voice=False,background_updates=False)
+    transport=await authenticated_client(app)
+    await transport.post('/api/clients/attach',json={'clientId':'capability-tui','kind':'tui','protocolVersion':1})
+    headers={'X-Amplifier-Client':'capability-tui'}
+    service=app['service']
+    for title in ('Owner','Peer'):
+        await service.dispatch('session.create',{'title':title})
+    owner,peer=service.state['sessions']
+    body={'id':'http-grant','action':'capability.grant','args':{'effects':['file_access'],'scopes':['local'],'reason':'Explicit HTTP user setup'}}
+    response=await transport.post(f"/api/sessions/{owner['id']}/commands",headers=headers,json=body)
+    assert response.status==200,await response.text()
+    grant=(await response.json())['result']
+    response=await transport.post(f"/api/sessions/{owner['id']}/commands",headers=headers,json=body)
+    assert (await response.json())['duplicate']
+    response=await transport.post(f"/api/sessions/{peer['id']}/commands",headers=headers,json={'id':'foreign-revoke','action':'capability.revoke',
+        'args':{'id':grant['id'],'expectedRevision':grant['revision']}})
+    assert response.status==403
+    response=await transport.post(f"/api/sessions/{owner['id']}/commands",headers=headers,json={'id':'http-revoke','action':'capability.revoke',
+        'args':{'id':grant['id'],'expectedRevision':grant['revision']}})
+    assert response.status==200,await response.text()
+    assert (await response.json())['result']['status']=='revoked'

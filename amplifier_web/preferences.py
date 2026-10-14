@@ -19,4 +19,9 @@ class SettingsStore:
         return read_yaml(self.path(workspace, scope, session_id=session_id))
 
     def update(self, workspace, scope, mutator, *, session_id=None):
-        return update_settings(self.path(workspace, scope, session_id=session_id), mutator)
+        from .configuration_authority import check_current
+        def checked_mutator(value):
+            check_current(workspace=workspace, scope=scope)
+            return mutator(value)
+        check_current(workspace=workspace, scope=scope)
+        return update_settings(self.path(workspace, scope, session_id=session_id), checked_mutator)

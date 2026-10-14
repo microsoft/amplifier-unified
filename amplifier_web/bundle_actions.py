@@ -7,6 +7,8 @@ from pathlib import Path
 
 
 async def perform(management, action, args):
+    from .configuration_authority import check_current
+    check_current()
     app = management.service
     sid = args['sessionId']
     async with app.lock:
@@ -39,6 +41,7 @@ async def perform(management, action, args):
                 if not checked['modelCompatible'] and not args.get('resetModel'):
                     raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
                 replacement = {**checked, 'resetModel': args.get('resetModel', False)}
+                check_current()
                 await management.ensure_runtime(source, bundle_replacement=replacement)
         else:
             await management.ensure_runtime(source)
@@ -52,6 +55,7 @@ async def perform(management, action, args):
                     'configuration': await app.runtime.control(sid, 'configuration.inspect', {}),
                     'providers': await app.runtime.control(sid, 'configuration.providers', {})}
             else:
+                check_current()
                 result = await app.runtime.control(sid, action, args)
             if result.get('requiresModelChoice'):
                 async with app.lock:
@@ -85,8 +89,10 @@ async def perform(management, action, args):
             events = []
             async def collect(event, payload): events.append((event, payload))
             try:
+                check_current()
                 target.update(fork_session(app.data_dir, source, identity, live_messages=live.get('messages'),
                                           bundle=args['bundle'], reset_model=args.get('resetModel', False)))
+                check_current()
                 await app.runtime.start(target, collect)
                 configuration = await app.runtime.control(identity, 'configuration.inspect', {})
                 providers = await app.runtime.control(identity, 'configuration.providers', {})

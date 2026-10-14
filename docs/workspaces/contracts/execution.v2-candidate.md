@@ -239,6 +239,52 @@ declared artifact to the request participants in the recorded workspace; they do
 not grant general access to the producing conversation's output library.
 
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.
+
+### Configuration authority addition — 2026-10-14
+
+Configuration authority is a host-issued, revocable grant to one root conversation
+for named configuration effects and explicit scopes. Sharing a folder, receiving
+a peer request, copying a mount plan, or spawning a scheduled/recipe child does
+not convey the source conversation's administrative grants. Existing provider
+and model selection remains an ordinary own-conversation action. Persistent
+connection, module/source, file-access and bundle changes, and replacement or
+enabling of the runtime mount plan, require an applicable grant for agent actors.
+An omitted persistent scope never silently selects global scope. App-wide default
+actions have an explicit global effect; alternate default-setting routes receive
+the same check. A provider-connection grant includes its executable source and
+credential configuration, as displayed in the approval.
+
+The existing command receipts own grants, requests and decisions. A user may
+grant explicitly through the shared action API, or allow an agent's attributable
+request through the ordinary approval control. The authorization remains useful
+across subsequent turns until its expiry, revocation, changed workspace or Stop;
+it is not re-requested for every matching settings action. The host requires the
+actual current root generation for an agent to request or use it. Native children
+retain their own identity and cannot borrow root administration. A fresh peer
+request intersects the receiver grant with its authenticated senders through
+bounded retained input lineage; revoking a sender also fences delayed effects.
+A human can expressly approve the current peer request. Host-created returns to
+the receiver’s own saved dependency wait preserve that receiver’s original grant. Scope names
+describe configuration ownership, not filesystem confinement or read authority.
+
+Accepted delayed changes retain the selected grant revision and interruption
+revision. The host checks these after waiting and before supported settings,
+credential, validation and runtime-control effects. Queued changes survive
+restart with that provenance; revocation or Stop suppresses unperformed effects
+without retrying them or discarding the requested configuration. A request already
+admitted to an external authentication process, validator or worker can complete;
+revocation does not undo external effects. Saving configuration is distinct from
+mounting it. User actions use the same domain checks and do not require an agent
+grant. No grant permits a peer mutation, grants user approval to an agent, or
+adds OS protection around arbitrary shell programs or external modules.
+
+Native root `app_control` requests park the current tool call in the existing
+worker approval map before the host publishes the approval. The durable user
+decision resolves that waiter; the agent then chooses its next action, which
+still checks current authority. No privileged effect is stored for replay.
+Raw API requests return a pending receipt without parking an agent. A decision
+after worker loss saves authority but never starts or replays the lost turn.
+
 ## Assignment control addition — 2026-10-14
 
 New commissioned roots share an explicit host-owned assignment with their
