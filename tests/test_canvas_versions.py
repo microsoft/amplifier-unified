@@ -227,7 +227,12 @@ async def test_optional_legacy_inspection_is_metadata_only_exact_and_nonmutating
                          if k not in {'id', 'sessionId', 'version', 'revision', 'createdAt'}}
             service.outputs.store.create(sid, duplicate)
         elif case == 'scope':
-            service.clients.records['metadata-tab']['selectedWorkspaceId'] = 'foreign'
+            foreign = tmp_path / 'registered-other-workspace'
+            foreign.mkdir()
+            await service.dispatch('workspace.add', {'path': str(foreign)})
+            foreign_id = next(row['id'] for row in service._state['workspaces']
+                              if row['path'] == str(foreign))
+            service.clients.records['metadata-tab']['selectedWorkspaceId'] = foreign_id
         elif case == 'source':
             args['includeSource'] = True
         elif case == 'message':
@@ -253,6 +258,10 @@ async def test_optional_legacy_inspection_is_metadata_only_exact_and_nonmutating
         monkeypatch.setattr(artifact_presentation, 'output_bytes', lambda *args: pytest.fail('Inspection decoded output'))
         monkeypatch.setattr(service.cold_display, 'hydrate', lambda *args: pytest.fail('Inspection hydrated history'))
         with service.clients.bind('metadata-tab'):
+            if case == 'scope':
+                client = service.clients.records['metadata-tab']
+                assert client['selectedSessionId'] == sid
+                assert client['selectedWorkspaceId'] == foreign_id != saved['workspaceId']
             if case in {'valid', 'later', 'missing'}:
                 result = canvas_versions.command(service, 'canvas.versions.inspect', args, 'ui')
                 qualified = result['legacyGeneration']

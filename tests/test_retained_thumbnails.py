@@ -45,26 +45,28 @@ class NoModel:
         pass
 
 
-async def saved_host(root, count=2):
+async def saved_host(root, count=2, *, managed=False):
     app = await create_app(root / 'app', workspace=root, runtime=NoModel(),
                            voice=False, preload_providers=False, background_updates=False)
     service = app['service']
-    await service.dispatch('session.create', {'title': 'Retained thumbnail fixture'})
+    await service.dispatch('session.create', {'title': 'Retained thumbnail fixture',
+                                             **({'location': {'kind': 'managed'}} if managed else {})})
     session = service._session()
+    artifact_root = Path(session['workspace']) if managed else root
     service._message(session, 'user', 'Create synthetic image concepts')
     mid, sid = session['messages'][0]['id'], session['id']
     records = []
     for index in range(count):
         name = 'concept-' + str(index + 1)
         image = png(100 + index, 60)
-        (root / (name + '.png')).write_bytes(image)
+        (artifact_root / (name + '.png')).write_bytes(image)
         receipt = {'schema': 'amplifier.image.receipt.v1', 'status': 'completed',
                    'requestId': name, 'requestHash': 'a' * 64, 'backend': 'fixture',
                    'model': 'fixture', 'operation': 'generate', 'inputs': [],
                    'artifact': {'path': name + '.png', 'sha256': hashlib.sha256(image).hexdigest(),
                                 'bytes': len(image), 'width': 100 + index, 'height': 60,
                                 'mimeType': 'image/png', 'mode': 'RGB'}}
-        (root / (name + '.json')).write_text(json.dumps(receipt))
+        (artifact_root / (name + '.json')).write_text(json.dumps(receipt))
         records.append((await service.dispatch('outputs.attachImage', {
             'sessionId': sid, 'messageId': mid, 'title': 'Concept ' + str(index + 1),
             'receiptPath': name + '.json'}))['result'])
@@ -457,6 +459,67 @@ async def test_two_true_legacy_variants_restart_job_pruning_and_unchanged_eviden
     await client.post('/api/actions', json={'action': 'outputs.relink', 'args': {
         'sessionId': sid, 'id': record['id'], 'expectedRevision': updated['revision']}})
     assert row['publications'][0]['chat'] == 'none', 'Relink does not replay publication'
+
+
+@pytest.mark.parametrize('managed', [False, True], ids=['workspace', 'managed'])
+async def test_legacy_http_reads_keep_exact_client_conversation_and_workspace_scope(
+        authenticated_client, tmp_path, monkeypatch, managed):
+    from amplifier_web import outputs
+    host, sid, mid, records, _ = await saved_host(tmp_path, 1, managed=managed)
+    service = host['service']
+    record = records[0]
+    row = make_true_legacy(service, record)
+    before = copy.deepcopy(row)
+    service.clients.attach('owner-a')
+    owner_scope = service.clients.records['owner-a']['selectedWorkspaceId']
+    if managed:
+        assert owner_scope is None and row['workspaceId'] is None
+        assert all(w['path'] != service._session(sid)['workspace'] for w in service._state['workspaces'])
+        await service.dispatch('session.create', {'title': 'Other managed owner',
+                                                  'location': {'kind': 'managed'}})
+    else:
+        foreign = tmp_path / 'registered-other-workspace'
+        foreign.mkdir()
+        await service.dispatch('workspace.add', {'path': str(foreign)})
+        await service.dispatch('session.create', {'title': 'Other workspace owner',
+                                                  'workspace': str(foreign)})
+    other_sid = service._session()['id']
+    assert other_sid != sid
+    service.clients.attach('owner-b')
+    other_scope = service.clients.records['owner-b']['selectedWorkspaceId']
+    assert other_scope is None if managed else other_scope != owner_scope
+    client = await authenticated_client(host)
+    query = tuple_query(sid, mid, record)
+    inspect = {'action': 'canvas.versions.inspect', 'args': {
+        'sessionId': sid, 'id': row['id'], 'version': 1,
+        'messageId': mid, 'qualifyLegacyGeneration': True}}
+
+    with monkeypatch.context() as guard:
+        guard.setattr(outputs, 'thumbnail_bytes',
+                      lambda *args: pytest.fail('A wrong-scope request opened image bytes'))
+        client.session.headers['X-Amplifier-Client'] = 'owner-b'
+        assert (await client.post('/api/actions', json=inspect)).status == 409
+        assert (await client.get(image_path(record), params=query)).status == 409
+        with service.clients.bind('owner-b'):
+            assert service.clients.record()['selectedSessionId'] == other_sid
+            assert service.clients.record()['selectedWorkspaceId'] == other_scope
+        if not managed:
+            # Isolate the workspace guard while keeping the correct session.
+            service.clients.records['owner-a']['selectedWorkspaceId'] = other_scope
+            client.session.headers['X-Amplifier-Client'] = 'owner-a'
+            assert (await client.post('/api/actions', json=inspect)).status == 409
+            assert (await client.get(image_path(record), params=query)).status == 409
+            with service.clients.bind('owner-a'):
+                assert service.clients.record()['selectedSessionId'] == sid
+                assert service.clients.record()['selectedWorkspaceId'] == other_scope
+            service.clients.records['owner-a']['selectedWorkspaceId'] = owner_scope
+        client.session.headers['X-Amplifier-Client'] = 'owner-a'
+        response = await client.post('/api/actions', json=inspect)
+        assert response.status == 200
+        assert (await response.json())['result']['legacyGeneration']['outputId'] == record['id']
+    response = await client.get(image_path(record), params=query)
+    assert response.status == 200 and await response.read() == png(100, 60)
+    assert artifact(service, record) == before
 
 
 @pytest.mark.parametrize('field,value', [
