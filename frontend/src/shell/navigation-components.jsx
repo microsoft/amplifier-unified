@@ -378,9 +378,9 @@ export function ChatSearch({page,model,view,viewAct,now}){
    </div></details>
    <label className="a-search-sort">Sort<select aria-label="Sort conversations" value={view.navSort||'activity'} onChange={e=>update({navSort:e.target.value})}><option value="activity">Recent activity</option><option value="created">Newest created</option><option value="name">Name</option></select></label>
   </div>
-  <div className="a-search-result-summary"><span role="status">{page.pending?'Searching…':`${page.total} ${page.total===1?'chat':'chats'}${view.navFilter?' found':''}`}</span>{active&&<button className="a-link" type="button" onClick={()=>update({navArchive:'active',navStatusFilter:'all',navLocationFilter:'all'})}>Clear filters</button>}</div>
+  <div className="a-search-result-summary"><span role="status">{page.unavailable?'Search unavailable':page.pending?'Searching…':`${page.total} ${page.total===1?'chat':'chats'}${view.navFilter?' found':''}`}</span>{active&&<button className="a-link" type="button" onClick={()=>update({navArchive:'active',navStatusFilter:'all',navLocationFilter:'all'})}>Clear filters</button>}</div>
   <div className="a-nav-chats" aria-label="Search results" aria-busy={!!page.pending}>{page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now} showLocation/>)}</div>
-  {!page.total&&!page.pending&&<div className="a-search-empty"><h2>No chats found</h2><p>Try another name or workspace, or clear your filters.</p><button type="button" className="a-soft" onClick={clear}>Clear search and filters</button></div>}
+  {!page.total&&!page.pending&&!page.unavailable&&<div className="a-search-empty"><h2>No chats found</h2><p>Try another name or workspace, or clear your filters.</p><button type="button" className="a-soft" onClick={clear}>Clear search and filters</button></div>}
   <ChatPagination page={page} onChange={index=>update({navChatPage:{...page.scope,index}})}/>
  </section>;
 }
@@ -400,7 +400,7 @@ export function ChatList({page,model,view,viewAct,now,showLocation,planAct}){
   </details>
   {page.pending&&<p role="status">Loading conversations…</p>}
   <WorkspacePlans ids={page.items.map(chat=>chat.id).slice(0,50)} act={planAct}><div className="a-nav-chats">{page.items.map(chat=><div key={chat.id}><ChatRow chat={chat} model={model} now={now} showLocation={showLocation}/>{planAct&&<WorkspacePlan id={chat.id}/>}</div>)}</div></WorkspacePlans>
-  {!page.total&&!page.pending&&<p className="a-nav-empty">{view.navFilter||view.navStatusFilter&&view.navStatusFilter!=='all'?'No matching chats.':'Your conversations will appear here.'}</p>}
+  {!page.total&&!page.pending&&!page.unavailable&&<p className="a-nav-empty">{view.navFilter||view.navStatusFilter&&view.navStatusFilter!=='all'?'No matching chats.':'Your conversations will appear here.'}</p>}
   <ChatPagination page={page} onChange={index=>patch(viewAct,{navChatPage:{...page.scope,index}})}/>
  </>;
 }
