@@ -1,5 +1,5 @@
 // The built-in sidebar stays visible while the main browsing surface changes.
-// Custom modules and older hosts retain their complete snapshot contract.
+// Custom modules retain their complete snapshot contract.
 export function navigationResources(state){
  const resources=['pinnedNavigation','recentNavigation','workspaceShortcuts'];
  const view=state?.view||{},surface=view.workSurface||'chat';
@@ -17,5 +17,5 @@ export function navigationDemandKey(state){
 }
 
 export function hasNavigationResource(snapshot,resource){
- return snapshot.navigationResources===undefined||snapshot.navigationResources.includes(resource);
+ return Array.isArray(snapshot?.navigationResources)&&snapshot.navigationResources.includes(resource);
 }

@@ -45,3 +45,26 @@ for(const outcome of ['success','error'])test(`late ${outcome} for a replaced na
   Object.assign(globalThis,previous);
  }
 });
+
+for(const variant of ['missing marker','missing snapshot','malformed marker','custom'])test(`shell coverage: ${variant}`,async()=>{
+ const previous={fetch:globalThis.fetch,document:globalThis.document,window:globalThis.window};
+ globalThis.document=Object.assign(new EventTarget(),{hidden:false});globalThis.window=new EventTarget();
+ const input=state({workSurface:'chat'}),response=snapshot(input);let root,current;
+ if(variant==='missing snapshot')delete response.snapshots.chats;
+ else if(variant==='malformed marker')response.snapshots.chats.navigationResources='pinnedNavigation';
+ else delete response.snapshots.chats.navigationResources;
+ if(variant==='custom'){
+  const custom={...instance,package:'custom.navigation'};
+  response.resolvedInstances=[custom];response.effectiveComposition.instances=[custom];
+ }
+ globalThis.fetch=async path=>new Response(JSON.stringify(path.startsWith('/api/actions')?{}:response));
+ function Probe(){current=useShell(input,async()=>({accepted:true}),'test-client',input);return null}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});
+  assert.equal(current.ready,variant==='custom');
+  if(variant==='custom')assert.equal(current.error,'');
+  else{assert.equal(current.data,null);assert.match(current.error,/Navigation is still loading/)}
+ }finally{
+  if(root)await act(async()=>root.unmount());Object.assign(globalThis,previous);
+ }
+});

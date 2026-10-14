@@ -47,7 +47,7 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
    for(const instance of next.resolvedInstances||[]){
     if(!['builtin.chats','builtin.workspaces'].includes(instance.package))continue;
     const snapshot=next.snapshots?.[instance.id];
-    if(snapshot&&!resources.every(resource=>hasNavigationResource(snapshot,resource)))throw Error('Navigation is still loading. Refresh to try again.');
+    if(!resources.every(resource=>hasNavigationResource(snapshot,resource)))throw Error('Navigation is still loading. Refresh to try again.');
    }
    loadedKey.current=requestedKey;
    next=retainEqual(latest.current.data,next);

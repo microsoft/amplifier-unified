@@ -16,9 +16,10 @@ test('demand scope changes for workspace/tab but not unrelated drafts or progres
  assert.equal(navigationDemandKey(state),navigationDemandKey({...state,revision:99,view:{...state.view,draft:'private'}}));
  assert.equal(navigationDemandKey({view:{}}),navigationDemandKey({view:{workWorkspaceTab:'files'}}));
 });
-test('missing opted-in resources stay unavailable; legacy and custom full snapshots remain supported',()=>{
+test('built-in resources require explicit coverage from the bundled server',()=>{
  assert.equal(hasNavigationResource({navigationResources:sidebar},'sidebarSearch'),false);
  assert.equal(hasNavigationResource({navigationResources:[]},'workspaceExplorer'),false);
  assert.equal(hasNavigationResource({navigationResources:[...sidebar,'workspaceExplorer']},'workspaceExplorer'),true);
- assert.equal(hasNavigationResource({},'workspaceExplorer'),true);
+ for(const snapshot of [undefined,{}, {navigationResources:null},{navigationResources:'workspaceExplorer'}])
+  assert.equal(hasNavigationResource(snapshot,'workspaceExplorer'),false);
 });
