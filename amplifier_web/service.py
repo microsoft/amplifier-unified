@@ -1661,6 +1661,22 @@ class AppService:
                 raise AppError('Smart Tools service is unavailable.')
             async with self.lock:
                 return {'accepted': True, 'result': inspect(self, args['canvasId'], args if 'viewId' in args else None), 'effects': []}
+        if action == 'canvas.versions.inspect' and args.get('qualifyLegacyGeneration') is True:
+            # Automatic legacy classification is a metadata read, not a Canvas
+            # mutation. In particular, never remember an unrelated Latest body.
+            from .canvas_versions import command
+            if origin == 'agent' and (not caller_session_id or
+                    args.get('sessionId', self.state.get('selectedSessionId')) != caller_session_id):
+                raise AppError('Inspect the artifact in the calling conversation.', 409)
+            async with self.lock:
+                if expected_revision is not None and expected_revision != self.state['revision']:
+                    raise AppError('The app changed. Refresh its state and retry.', 409)
+                try:
+                    result = command(self, action, args, origin)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                return {'accepted': True, 'revision': self.state['revision'],
+                        'result': result, 'effects': []}
         if action.startswith("kernels."):
             from .computation import dispatch
             return await dispatch(self, action, args, origin)

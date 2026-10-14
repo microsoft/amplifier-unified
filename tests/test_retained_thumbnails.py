@@ -271,6 +271,87 @@ async def test_http_retained_bytes_still_enforce_canonical_integrity_and_png_bou
     assert (await client.get(image_path(record), params=tuple_query(sid, mid, record))).status == 409
 
 
+@pytest.mark.parametrize('case', ['valid', 'unlinked', 'ambiguous'])
+async def test_http_legacy_qualification_is_read_only_with_unrelated_latest_open(
+        retained, monkeypatch, case):
+    _, service, client, sid, mid, records, document = retained
+    from amplifier_web import resource_files, canvas_library, state_storage
+    response = await client.post('/api/actions', json={
+        'action': 'canvas.select', 'args': {'id': document['id']}})
+    assert response.status == 200
+    record = records[0]
+    make_true_legacy(service, record)
+    if case == 'unlinked':
+        service.outputs.store.link(record['id'], record['revision'], False)
+    elif case == 'ambiguous':
+        duplicate = {key: value for key, value in service.outputs.store.read(record['id']).items()
+                     if key not in {'id', 'sessionId', 'version', 'revision', 'createdAt'}}
+        service.outputs.store.create(sid, duplicate)
+    task = getattr(service, '_maintenance_task', None)
+    if task is not None:
+        await task
+    with service.clients.bind('thumbnail-client'):
+        primary = copy.deepcopy(service.state['canvas'])
+    assert primary['id'] == document['id'] and primary.get('content')
+    assert not primary.get('selectedVersion') and not primary.get('outputBinding')
+    assert not primary.get('contentResource')
+    before = copy.deepcopy(service._state['canvasArtifacts'])
+    events = copy.deepcopy(service._state['events'])
+    revision = service._state['revision']
+    commands = service.db.execute('SELECT * FROM commands ORDER BY id').fetchall()
+    resources = service.db.execute('SELECT * FROM resources ORDER BY id').fetchall()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Automatic qualification entered body or Canvas persistence')
+
+    real_session = service._session
+
+    def metadata_only(identity=None, *, hydrate=True):
+        assert hydrate is False
+        return real_session(identity, hydrate=False)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service, '_session', metadata_only)
+        patch.setattr(service.cold_display, 'hydrate', forbidden)
+        patch.setattr(service, '_save', forbidden)
+        patch.setattr(resource_files, 'put', forbidden)
+        patch.setattr(canvas_library, 'put', forbidden)
+        patch.setattr(state_storage, 'resource', forbidden)
+        for attempt in range(2):
+            response = await client.post('/api/actions', json={
+                'id': 'qualification-read-' + str(attempt),
+                'action': 'canvas.versions.inspect', 'args': {
+                    'sessionId': sid, 'id': record['canvasId'], 'version': 1,
+                    'messageId': mid, 'qualifyLegacyGeneration': True}})
+            assert response.status == (200 if case == 'valid' else 409)
+            result = await response.json()
+            if case == 'valid':
+                assert result['result']['legacyGeneration']['outputId'] == record['id']
+                assert result['revision'] == revision and result['effects'] == []
+        assert service._state['revision'] == revision
+        assert service._state['canvasArtifacts'] == before
+        assert service._state['events'] == events
+        assert service.db.execute('SELECT * FROM commands ORDER BY id').fetchall() == commands
+        assert service.db.execute('SELECT * FROM resources ORDER BY id').fetchall() == resources
+    with service.clients.bind('thumbnail-client'):
+        assert service.state['canvas'] == primary
+
+
+@pytest.mark.parametrize('version', [None, '1', True, 99])
+async def test_unlink_legacy_image_ignores_invalid_publication_version(retained, version):
+    _, service, client, sid, mid, records, _ = retained
+    record = records[0]
+    row = make_true_legacy(service, record)
+    invalid = {'messageId': mid, 'version': version}
+    row['publications'].append(invalid)
+    response = await client.post('/api/actions', json={'action': 'outputs.unlink', 'args': {
+        'sessionId': sid, 'id': record['id'], 'expectedRevision': record['revision']}})
+    assert response.status == 200
+    assert service.outputs.store.read(record['id'])['linked'] is False
+    assert row['publications'][0]['chat'] == 'none'
+    assert invalid == {'messageId': mid, 'version': version}
+
+
 async def test_ten_retained_reads_allocate_zero_views_and_release_is_not_revocation(
         authenticated_client, tmp_path):
     app, sid, mid, records, document = await saved_host(tmp_path, 10)

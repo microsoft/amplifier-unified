@@ -711,6 +711,7 @@ class Outputs:
                     legacy_links = []
                     if action == 'outputs.unlink' and linked_record.get('canvasId'):
                         from .artifact_presentation import legacy_generation_metadata
+                        from .canvas_versions import entries
                         # The mutation knows its canonical Canvas ID. Never scan
                         # the output library on a render/state projection path.
                         canvas = next((row for row in self.app.state.get('canvasArtifacts', [])
@@ -719,6 +720,10 @@ class Outputs:
                         for publication in canvas.get('publications', []) if canvas else []:
                             if ('outputId' in publication or 'imageGeneration' in publication
                                     or publication.get('messageId') != linked_record.get('origin', {}).get('messageId')):
+                                continue
+                            version = publication.get('version')
+                            if type(version) is not int or not any(
+                                    saved.get('version') == version for saved in entries(canvas)):
                                 continue
                             canonical = legacy_generation_metadata(self.app, canvas, publication['version'])
                             if canonical and canonical['id'] == linked_record['id']:
