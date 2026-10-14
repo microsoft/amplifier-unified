@@ -11,7 +11,9 @@ six seconds.
 
 The frontend embeds the package version from `pyproject.toml` in both its
 JavaScript bundle and `static/build.json`. After updating the Python package
-versions and release notes, run `npm ci --prefix frontend`,
+versions (including the local `amplifier-unified` entry in `uv.lock`) and release
+notes, verify `uv sync --locked --dry-run --group dev --group artifacts` in the
+owned environment, then run `npm ci --prefix frontend`,
 `npm test --prefix frontend`, and `npm run build --prefix frontend`. Include all
 resulting `amplifier_web/static` changes in the release commit. Rebuild once more
 and require `git diff --exit-code -- amplifier_web/static` to pass before merging
