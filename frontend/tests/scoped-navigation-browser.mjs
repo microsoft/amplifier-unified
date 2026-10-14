@@ -154,9 +154,16 @@ try{
  await expect.poll(async()=>(await (await page.request.get(url+'/fixture/scoped-query')).json()).entered).toBeGreaterThan(0);
  await expect(body.getByRole('status').filter({hasText:'Updating chat search'})).toBeVisible();
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toBeVisible();
- const localDraft=page.frameLocator('.a-canvas-html').getByRole('textbox');
- await localDraft.fill('responsive while search waits');await expect(localDraft).toHaveValue('responsive while search waits');
- await localDraft.fill('preserved canvas input');
+ // Canvas is intentionally retained but hidden on Search. Exercise a visible
+ // local disclosure without changing the held query's demand or forcing input
+ // into the hidden frame; exact Canvas draft conservation is checked below.
+ const beforeDisclosureRequests=subscriptionCount;
+ const filters=body.locator('.a-search-filters');
+ await filters.locator('summary').click();
+ await expect(filters.getByRole('combobox',{name:'Filter chats by location',exact:true})).toBeVisible();
+ await filters.locator('summary').click();
+ await expect(filters.getByRole('combobox',{name:'Filter chats by location',exact:true})).toBeHidden();
+ assert.equal(subscriptionCount,beforeDisclosureRequests);
  await queryControl('fail');
  await expect(body.getByRole('button',{name:'Retry chat search',exact:true})).toBeVisible();
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toBeVisible();
@@ -179,8 +186,7 @@ try{
  await queryControl('release');await waitCoverage(['sidebarSearch']);
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B refreshed',exact:true})).toBeVisible();
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toHaveCount(0);
- await expect(localDraft).toHaveValue('preserved canvas input');
- checks.push({heldQueryRetainsRows:true,queryFailureExplicitRetry:true,queryWaitKeepsInputResponsive:true});
+ checks.push({heldQueryRetainsRows:true,queryFailureExplicitRetry:true,queryWaitKeepsVisibleControlsResponsive:true});
  await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'Your workspaces',exact:true})).toBeVisible();
  await act('session.select',{id:chats[0]});await waitCoverage([]);await expect(composer).toHaveDraft('Keep this unsent scoped-navigation draft');
  assert.equal(await page.evaluate(()=>window.scopedDocument===document.querySelector('#amp-one')&&window.scopedFrame===document.querySelector('.a-canvas-html')),true);
