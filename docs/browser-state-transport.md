@@ -246,6 +246,13 @@ restores their committed presentation/runtime record when detail or execution
 actually needs it. Client selection and Canvas pointers survive non-residency.
 An ambiguous raw native ID stays ambiguous even when only one project is loaded.
 
+Native refresh updates dormant local overlays directly. Admitted owners reconcile
+native metadata through the live history merge and persist once through their
+normal save, preserving parent aliases and stable busy-chat navigation activity.
+Detached refresh must not temporarily overwrite the same admitted owner and
+create semantic navigation revisions for values its live save will restore.
+Canonical removals still mark both dormant and admitted saved overlays unavailable.
+
 Ordinary global/scoped saves preserve all unmaterialized durable records.
 Explicit deletion/reset records the exact local owners it removes. Garbage
 collection still enumerates complete durable roots, including dormant records;

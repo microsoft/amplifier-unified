@@ -316,11 +316,17 @@ class HistoryDirectory:
         return verified
 
     def refresh_native(self, rows, removed, state, *, naming_proofs=None):
-        """Refresh only overlays whose canonical metadata actually changed."""
+        """Refresh dormant overlays; admitted owners merge through AutomaticHistory."""
         changed = []
+        admitted = {row['id'] for row in state.get('sessions', ())}
         for native in rows:
-            for raw, in self.db.execute('SELECT summary FROM history_local_rows WHERE native_project=? AND native_id=?',
-                                       (native['nativeProject'], native['nativeIdentity'])):
+            for identity, raw in self.db.execute('SELECT id,summary FROM history_local_rows WHERE native_project=? AND native_id=?',
+                                                (native['nativeProject'], native['nativeIdentity'])):
+                if identity in admitted:
+                    # The live merge owns availability, parent aliases and frozen
+                    # busy-chat navigation activity. Writing a detached variant
+                    # first makes its later save look like a second real change.
+                    continue
                 row = json.loads(raw)
                 confirmed = (row.get('nativeNameRevision', 0), row.get('nativeNamePolicyRevision', 0), row.get('title')) in (naming_proofs or {}).get((native['nativeProject'], native['nativeIdentity']), ())
                 name_current = confirmed or native.get('nameRevision', 0) >= row.get('nativeNameRevision', 0)
