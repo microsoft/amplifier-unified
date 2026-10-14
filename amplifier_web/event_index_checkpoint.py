@@ -14,7 +14,7 @@ import stat
 import tempfile
 import zlib
 
-SCHEMA = 1
+SCHEMA = 2
 MAX_DECODED = 64 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_TOTAL = 256 * 1024 * 1024
@@ -33,7 +33,7 @@ def encode(index):
         events.append({**row, 'data': {**data, '_prompt_digest': digest.hex()}}
                       if isinstance(digest, bytes) else row)
     return {'schema': SCHEMA, 'path': str(index.path), 'identity': index.identity,
-        **{key: getattr(index, key) for key in ('offset', 'file_id', 'revision', 'last',
+        **{key: getattr(index, key) for key in ('offset', 'file_id', 'revision', 'last', 'prefix_digest',
            'children', 'worker_runs', 'tool_owners', 'diagnostics', 'association_revision', 'association_cache')},
         'nodes': list(index.nodes.items()), 'pending': list(index.pending.items()), 'association_events': events}
 
@@ -44,6 +44,10 @@ def restore(index, value):
     if type(value.get('offset')) is not int or value['offset'] < 0:
         raise ValueError('Invalid index offset')
     index.offset = value['offset']
+    if (not isinstance(value.get('prefix_digest'), str) or len(value['prefix_digest']) != 64
+            or any(char not in '0123456789abcdef' for char in value['prefix_digest'])):
+        raise ValueError('Invalid committed prefix digest')
+    index.prefix_digest = value['prefix_digest']
     for key in ('file_id', 'revision', 'association_revision'):
         setattr(index, key, tuples(value[key]))
     for key in ('last', 'children', 'worker_runs', 'tool_owners', 'diagnostics', 'association_events'):
