@@ -156,6 +156,7 @@ class NativeCatalog:
                 CREATE INDEX IF NOT EXISTS native_rows_workspace ON native_rows(namespace,workspace_id,kind,recent DESC,public_id DESC);
                 CREATE INDEX IF NOT EXISTS native_rows_recent ON native_rows(namespace,kind,recent DESC,public_id DESC);
                 CREATE INDEX IF NOT EXISTS native_rows_parent ON native_rows(namespace,project,parent_id);
+                CREATE INDEX IF NOT EXISTS native_rows_parent_workspace ON native_rows(namespace,parent_id,workspace_path);
             ''')
             db.execute('UPDATE native_cache_version SET version=?', (self.VERSION,))
         self.path.chmod(0o600)
