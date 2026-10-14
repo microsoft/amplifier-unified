@@ -172,3 +172,9 @@ Configuration invalidation follows changed source keys and actual dependents.
 Persisted, effective and mounted revisions remain separate. One provider setting
 may affect many dependent sessions legitimately; it must not mount them all or
 rebuild unrelated histories just to report the saved value.
+
+Selected-history Work projections use the disposable process-owned read model in
+[selected history projection](../selected-history-projection.md). Its SQLite rows,
+sparse checkpoints and spool files are derived caches, never resume or execution
+authority. Native sources remain intact; generation fencing and bounded JIT import
+apply before publication.
