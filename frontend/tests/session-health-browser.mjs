@@ -1,7 +1,7 @@
 import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const moduleFailure=process.argv.includes('--module-failure');
@@ -28,6 +28,35 @@ try{
  await expect(page.getByRole('button',{name:'Conversation details',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Copy session ID',exact:true})).toHaveCount(0);
  await page.screenshot({path:output+'compact-error.png'});
+ // The explanation must not collapse into a few characters beside the actions.
+ // Exercise the actual interruption, startup and context-limit banner variants.
+ const banner=page.locator('#amp-one>.a-alert').filter({hasText:contextLimit?'Context limit reached.':moduleFailure?'Chat could not start.':'A turn stopped.'});
+ const originalTheme=await page.evaluate(()=>window.amplifier.getState().theme);
+ const savedTheme={name:'Saved custom appearance',css:await readFile(new URL('../../tests/fixtures/legacy_theme.css',import.meta.url),'utf8')};
+ for(const theme of [originalTheme,savedTheme]){
+ await page.evaluate(theme=>window.amplifier.dispatch('theme.apply',{name:theme.name,css:theme.css}),theme);
+ for(const width of [390,320]){
+  await page.setViewportSize({width,height:844});
+  await expect(banner).toBeVisible();
+  const bounds=await banner.evaluate(element=>{
+   const box=element.getBoundingClientRect(),text=element.querySelector(':scope>span').getBoundingClientRect();
+   return {width:box.width,textWidth:text.width,textBottom:text.bottom,left:box.left,right:box.right,bottom:box.bottom,
+    scrollWidth:element.scrollWidth,clientWidth:element.clientWidth,scrollHeight:element.scrollHeight,clientHeight:element.clientHeight,
+    actions:[...element.querySelectorAll(':scope>button')].map(button=>{const rect=button.getBoundingClientRect();return {left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom}})};
+  });
+  assert.ok(bounds.textWidth>=bounds.width-40,'explanation keeps the full content width');
+  assert.ok(bounds.scrollWidth<=bounds.clientWidth+1,'banner has no horizontal overflow');
+  assert.ok(bounds.scrollHeight<=bounds.clientHeight+1,'normal failure explanation and actions are not clipped');
+  for(const action of bounds.actions){
+   assert.ok(action.top>=bounds.textBottom,'actions follow the explanation');
+   assert.ok(action.left>=bounds.left&&action.right<=bounds.right+1&&action.bottom<=bounds.bottom+1,'actions remain within the banner');
+  }
+  await page.screenshot({path:output+`error-${theme===savedTheme?'saved':'current'}-${width}.png`});
+ }
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().theme.css),theme.css,'responsive layout leaves saved theme bytes unchanged');
+ }
+ await page.evaluate(theme=>window.amplifier.dispatch('theme.apply',{name:theme.name,css:theme.css}),originalTheme);
+ await page.setViewportSize({width:1280,height:900});
  if(contextLimit)await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
  else await page.getByRole('button',{name:'View error details',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Chat details',exact:true});
