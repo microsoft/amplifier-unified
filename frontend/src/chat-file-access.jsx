@@ -22,9 +22,11 @@ export function ChatFileAccess({state,session,act}){
   finally{if(alive.current)setSending(false)}
  };
  useEffect(()=>{alive.current=true;run('permissions.get');return()=>{alive.current=false}},[session.id]);
- const completion=pending&&state.managementResults?.[pending.id];
+ // The browser receives current action status, not the full command-history
+ // map. Match acceptance exactly; another client's operation cannot settle it.
+ const completion=pending&&state.actionStatus?.[pending.action];
  useEffect(()=>{
-  if(!pending||!completion)return;
+  if(!pending||completion?.commandId!==pending.id||!['ready','error'].includes(completion.phase))return;
   request.current=false;setPending(null);
   if(completion.phase==='error'){setError(completion.error||'Could not update file settings. Reload the preview before retrying.');return}
   const value=state.permissions;

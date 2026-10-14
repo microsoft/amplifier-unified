@@ -81,6 +81,38 @@ async def test_noop_reset_does_not_create_or_rewrite_session_settings(app):
     assert not app.runtime.calls
 
 
+async def test_browser_permission_completion_uses_streamed_action_status_not_full_history(app):
+    """Exercise the same demand projection consumed by the chat settings pane."""
+    source = app.state['sessions'][0]
+    app.clients.attach('permission-browser')
+    with app.clients.bind('permission-browser'):
+        await app.dispatch('view.update', {'patch': {'panel':'chat-write-files'}})
+        for action, extra in [('permissions.get', {}),
+                              ('permissions.save', {'allowed':[], 'denied':['private']}),
+                              ('permissions.reset', {})]:
+            identity = action+'-browser'
+            values = {'sessionId':source['id'], 'scope':'session'}
+            if action != 'permissions.get':
+                values.update(expectedRevision=read(app)['revision'], **extra)
+            receipt, done = await command(app, action, values, identity)
+            state = app.browser_state()
+            assert done['phase'] == 'ready'
+            assert 'managementResults' not in state
+            assert state['actionStatus'][action]['commandId'] == receipt['operationId']
+            assert state['actionStatus'][action]['phase'] == 'ready'
+            assert state['permissions']['commandId'] == receipt['operationId']
+            assert state['permissions']['sessionId'] == source['id']
+            assert state['permissions']['scope'] == 'session'
+        _, done = await command(app, 'permissions.reset', {
+            'sessionId':source['id'], 'scope':'session', 'expectedRevision':'stale'}, 'stale-browser')
+        state = app.browser_state()
+        assert done['phase'] == 'error'
+        assert 'managementResults' not in state
+        assert state['actionStatus']['permissions.reset']['commandId'] == 'stale-browser'
+        assert state['actionStatus']['permissions.reset']['phase'] == 'error'
+        assert 'Reload' in state['actionStatus']['permissions.reset']['error']
+
+
 async def test_reset_prunes_only_emptied_ancestors_and_session_native_alias(app):
     source = app.state['sessions'][0]
     source['nativeIdentity'] = 'native-settings-owner'
