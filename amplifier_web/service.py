@@ -2931,6 +2931,9 @@ class AppService:
                 queued = {'id': command_id, 'action': action, 'origin': 'app',
                           'target': {'canvasId': args['canvasId'], 'name': args['name']},
                           'status': 'queued', 'createdAt': time.time(), 'updatedAt': time.time()}
+                association = self.smart_canvas.operation_binding(args)
+                if association:
+                    queued['viewBinding'] = association
                 self.state['smartTools']['operations'].append(queued)
                 self.smart_tools.persist_operation(queued)
             from .action_save_scope import scope as action_scope

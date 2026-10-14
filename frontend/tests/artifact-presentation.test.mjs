@@ -100,7 +100,7 @@ function component({dispatch,request=async()=>({id:'saved-artifact',kind:'image'
  const source=readFileSync(new URL('../src/inline-artifacts.jsx',import.meta.url),'utf8');
  const start=source.indexOf('export function GeneralArtifact('),end=source.indexOf(" if(mode==='none')return null;",start);
  assert.ok(start>=0&&end>start);
- const slots=[],effects=[],writes=[];let index=0,serial=0;
+ const slots=[],effects=[],writes=[],edits=createInlineOwnership();let index=0,serial=0;
  const hooks={
   useRef(value){const i=index++;slots[i]??={current:value};return slots[i]},
   useState(value){const i=index++;slots[i]??={value:typeof value==='function'?value():value};
@@ -114,13 +114,17 @@ function component({dispatch,request=async()=>({id:'saved-artifact',kind:'image'
  };
  const render=runInNewContext(`${source.slice(start,end).replace('export ','')}
  return {mode,loaded,view,revoked,refusal,notice,override,busy,root,owned,opening,changeMode,open,follow,bodyError,setBodyAttempt};}\nGeneralArtifact`,{
-  ...hooks,useLayoutEffect:hooks.useEffect,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,overrides,inlineOwnership:createInlineOwnership(),inlineEditNotice,
+  ...hooks,useLayoutEffect:hooks.useEffect,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,overrides,inlineOwnership:edits,inlineEditNotice,
   targetOf:view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]])),
-  request,AbortController,URLSearchParams,crypto:{randomUUID:()=>`preview-command-${++serial}`},
+  request:async(path,options)=>{
+   const body=await request(path,options),params=new URL(path,'https://fixture.invalid').searchParams;
+   return {...Object.fromEntries(['viewId','resourceRevision'].map(field=>[field,params.get(field)])),
+    generation:Number(params.get('generation')),...body,...(body.app?{app:{manifest:{},...body.app}}:{})};
+  },AbortController,URLSearchParams,crypto:{randomUUID:()=>`preview-command-${++serial}`},
   window:{amplifier:{getActions:()=>actions}},
   ...(!visible?{IntersectionObserver:class{observe(){}disconnect(){}}}:{})
  });
- return {writes,
+ return {writes,edits,
   render(patch={}){index=0;const result=render({item:saved,messageId:'turn',state:{...state,canvasWorkspace:{views:[inlineView]}},dispatch,...patch});result.root.current={};
    while(effects.length)effects.shift()();return result},
   dispose(){for(const entry of slots)entry?.cleanup?.()}
@@ -290,13 +294,18 @@ test('actual follow receipt can lag its new host generation; unknown delivery re
    calls.push({action,args,meta});
    if(action==='canvas.views.inline')return {accepted:true,result:initial};
    if(action==='canvas.views.follow'){
+    const hold=await harness.edits.prepareTransition(args,meta.id,args.followLatest,{...state,canvasWorkspace:{views:[view]}});
+    hold.sent=true;
     if(unknown){unknown=false;throw Object.assign(Error('Version change delivery unconfirmed'),{unconfirmed:true})}
-    return new Promise(resolve=>{resolveFollow=resolve});
+    return new Promise(resolve=>{resolveFollow=async receipt=>{
+     await harness.edits.completeTransition(hold,receipt,{...state,canvasWorkspace:{views:[view]}});resolve(receipt);
+    }});
    }
    return {accepted:true};
   }});
  const render=()=>harness.render({state:{...state,canvasWorkspace:{views:[view]}}});
  render();render();await settle();render();await settle();
+ const detach=harness.edits.registerRenderer(initial,{prepare:async()=>({token:'synthetic-proof'}),validate:()=>true,release(){}});
  await render().follow(true);assert.match(render().notice,/unconfirmed/);
  view=next;
  assert.equal(render().revoked,false,'Unconfirmed version change is not access revocation');
@@ -305,7 +314,35 @@ test('actual follow receipt can lag its new host generation; unknown delivery re
  assert.equal(render().revoked,false,'State may precede its own accepted receipt');
  resolveFollow({accepted:true,result:next});await retry;render();await settle();
  const result=render();assert.equal(result.revoked,false);assert.equal(result.view.generation,2);assert.equal(result.view.followLatest,true);
- harness.dispose();
+ detach();harness.dispose();
+});
+
+test('native body contracts accept deferred exact sources and typed retained media, not invented eager bodies',()=>{
+ const target={viewId:'inline-source',resourceId:'native',resourceRevision:'exact-saved',generation:4};
+ const base={id:'native',sessionId:'chat',...target},pointer={$resource:'a'.repeat(64),bytes:100};
+ for(const kind of ['html','babylon','pdf']){
+  const body={...base,kind,contentResource:pointer};
+  assert.equal(requireArtifactBody(body,target),body);
+  for(const damage of [{contentResource:{}},{contentResource:{$resource:'bad',bytes:100}},
+   {contentResource:{...pointer,bytes:0}},{generation:5},{id:'other'}])
+   assert.throws(()=>requireArtifactBody({...body,...damage},target),/source is unavailable/);
+ }
+ for(const kind of ['gif','mp4']){
+  const body={...base,kind,mediaReference:{messageId:'turn',item:{id:'output',sessionId:'chat',version:2,
+   sha256:'b'.repeat(64),title:'Saved media',filename:'saved.'+kind,
+   media:{mimeType:kind==='gif'?'image/gif':'video/mp4',loopCount:null}}}};
+  assert.equal(requireArtifactBody(body,target),body);
+  assert.throws(()=>requireArtifactBody({...body,mediaReference:undefined,content:'not a retained reference'},target));
+  assert.throws(()=>requireArtifactBody({...body,mediaReference:{...body.mediaReference,item:{...body.mediaReference.item,sessionId:'foreign'}}},target));
+ }
+ for(const [kind,fields] of [
+  ['canvas-app',{app:{revision:1,manifest:{},state:{}}}],
+  ['mcp-app',{mcp:{serverId:'connector',configuration:'saved-config'}}],
+  ['a2ui',{surface:{root:'root',components:[{id:'root',component:{Text:{text:{literalString:'Actual surface'}}}}]}}]
+ ]){
+  const body={...base,kind,...fields};assert.equal(requireArtifactBody(body,target),body);
+  assert.throws(()=>requireArtifactBody({...base,kind,content:'not native data'},target));
+ }
 });
 
 test('actual owned preview does not retarget a revoked generation or reused target from another client',async()=>{

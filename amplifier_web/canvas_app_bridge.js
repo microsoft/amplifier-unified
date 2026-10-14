@@ -4,7 +4,7 @@
   let snapshot, channel, sequence = 0, editVersion = 0, queued = 0, notified, tail = Promise.resolve();
   const listeners = new Set(), pending = new Map();
   const visualRegions = new Set(), drafts = new Set(), gestures = new Set();
-  let localPending = false, observationTimer, lastObservation;
+  let localPending = false, observationTimer, lastObservation, transition, uncertain = false;
   let readyResolve;
   const ready = new Promise(resolve => { readyResolve = resolve; });
   const send = value => parent.postMessage({type: 'canvas-app', id, channel, ...value}, '*');
@@ -15,6 +15,7 @@
   addEventListener('unhandledrejection', event => { renderError = String(event.reason?.message || 'Surface interaction failed').slice(0, 1000); report(); });
   addEventListener('DOMContentLoaded', report, {once: true});
   const markEdit = () => {
+    if (transition) throw Error('This surface is disabled while its version changes. Input was not accepted.');
     ++editVersion;
     localPending = true;
     if (channel) send({op: 'editing', editVersion});
@@ -29,6 +30,7 @@
     scheduleObservation();
   }
   function operation(op, args, options = {}) {
+    if (transition) return Promise.reject(Error('This surface is disabled while its version changes. Work was not queued.'));
     const editing = editVersion, commit = options.commit;
     if (commit !== undefined && (!Number.isSafeInteger(commit) || commit < 0 || commit > editing))
       return Promise.reject(Error('Commit must identify an existing local edit.'));
@@ -40,6 +42,7 @@
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(requestId);
+          uncertain = true;
           reject(Error('The host did not acknowledge this change. Inspect the surface before retrying.'));
         }, 20000);
         pending.set(requestId, {resolve, reject, timer});
@@ -129,6 +132,28 @@
     if (channel && data.channel !== channel) return;
     const connected = !channel;
     channel = data.channel;
+    if (data.prepareTransition) {
+      // Preparation is NOT a checkpoint. Never flush drafts or await tail:
+      // host writes behind the follow command cannot finish until it returns.
+      if (transition && transition !== data.prepareTransition) return;
+      transition = data.prepareTransition;
+      const blocked = 'inert' in document.documentElement;
+      if (blocked) document.documentElement.inert = true;
+      document.activeElement?.blur();
+      const draftPending = [...drafts].some(draft => {
+        const status = draft.getStatus(); return status.dirty || status.saving || status.error;
+      });
+      send({op: 'transition', token: transition, editVersion, blocked,
+        quiescent: blocked && !localPending && !queued && !pending.size && !gestures.size && !draftPending && !uncertain,
+        localPending, queued, pending: pending.size, gestures: gestures.size, draftPending, uncertain});
+      return;
+    }
+    if (data.releaseTransition) {
+      if (transition === data.releaseTransition) {
+        transition = undefined; document.documentElement.inert = false;
+      }
+      return;
+    }
     if (data.checkpoint) { checkpoint(data.checkpoint); return; }
     if (connected) {
       if (editVersion) send({op: 'editing', editVersion});

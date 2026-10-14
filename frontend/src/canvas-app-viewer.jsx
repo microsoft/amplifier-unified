@@ -21,6 +21,35 @@ export function CanvasAppViewer({canvas,dispatch}){
  if(canvas.app.revision!==latest.current.app.revision||canvas.app.stateRevision>=latest.current.app.stateRevision)latest.current=canvas;
  shown.current=mounted;
  const app=canvas.app;
+ const transition=useRef(null),root=useRef(null),[transitioning,setTransitioning]=useState(false);
+ const releaseTransition=id=>{
+  const hold=transition.current;if(!hold||hold.id!==id)return;
+  hold.reject?.(Error('Surface version preparation ended without replacing this mount.'));
+  clearTimeout(hold.timer);transition.current=null;
+  frame.current?.contentWindow?.postMessage({type:'canvas-app-host',id:shown.current.id,channel:hold.channel,releaseTransition:id},'*');
+  if(frame.current){frame.current.inert=false;frame.current.tabIndex=0}
+  setTransitioning(false);
+ };
+ useEffect(()=>inlineOwnership.registerRenderer(targetOf(mounted),{
+  prepare:id=>{
+   if(transition.current||!frame.current||dirtyRef.current||busy.current)throw Error('Finish or cancel unfinished surface input before changing versions.');
+   if(!('inert' in frame.current))throw Error('This browser cannot disable iframe input safely. Version was not changed.');
+   const hold={id,channel:channel.current,target:targetOf(shown.current)};transition.current=hold;
+   // Freeze keyboard and pointer before asking the bridge. Keep the original
+   // DOM; this is not a checkpoint and must not flush queued operations.
+   frame.current.inert=true;frame.current.tabIndex=-1;root.current?.focus();setTransitioning(true);
+   if(document.activeElement===frame.current)throw Error('Focus could not leave the surface. Version was not changed.');
+   return new Promise((resolve,reject)=>{
+    hold.resolve=resolve;hold.reject=reject;
+    hold.timer=setTimeout(()=>reject(Error('The surface did not acknowledge disabled, quiescent input. Version was not changed.')),1200);
+    frame.current.contentWindow?.postMessage({type:'canvas-app-host',id:shown.current.id,channel:hold.channel,prepareTransition:id},'*');
+   });
+  },
+  validate:(id,proof)=>transition.current?.id===id&&proof?.token===id&&proof.channel===channel.current&&
+   sameDefinition(shown.current,{...shown.current,...transition.current.target})&&
+   proof.editVersion===editVersion.current&&!dirtyRef.current&&!busy.current&&frame.current?.inert===true,
+  release:releaseTransition
+ }),[mounted]);
  const checkpoints=useRef(new Map());
  const mount=value=>{editVersion.current=0;channel.current=crypto.randomUUID();seen.current.clear();setReview(null);setError('');setRenderError('');sent.current=null;reported.current=null;setMounted({...value})};
  const send=(force=false)=>{
@@ -47,7 +76,7 @@ export function CanvasAppViewer({canvas,dispatch}){
   }).catch(e=>{if(epoch===channel.current){dirtyRef.current=true;setDirty(true);setError(e.message)}throw e});
  };
  useEffect(()=>{
-  if(!sameDefinition(canvas,mounted)&&!dirtyRef.current&&!busy.current){mount(canvas)}
+  if(!sameDefinition(canvas,mounted)&&!dirtyRef.current&&!busy.current&&!transition.current){mount(canvas)}
   else{
    // A remote definition can race an unacknowledged local declaration. Retain
    // both the iframe conflict and the new target's local leave protection;
@@ -77,6 +106,17 @@ export function CanvasAppViewer({canvas,dispatch}){
    if(event.source!==frame.current?.contentWindow||data?.type!=='canvas-app'||data.id!==latest.current.id)return;
    if(data.op==='ready'){send(true);return}
    if(data.channel!==channel.current)return;
+   if(data.op==='transition'){
+    const hold=transition.current;
+    if(!hold||data.token!==hold.id||hold.channel!==channel.current)return;
+    clearTimeout(hold.timer);
+    if(data.blocked!==true||data.quiescent!==true||data.editVersion!==editVersion.current||
+     dirtyRef.current||busy.current||data.localPending!==false||data.queued!==0||data.pending!==0||
+     data.gestures!==0||data.draftPending!==false||data.uncertain!==false){
+     hold.reject(Error('The surface has pending, changed or uncertain input. Version was not changed.'));
+    }else hold.resolve({...data,channel:channel.current});
+    return;
+   }
    if(data.op==='observation'){
     const value=data.observation;
     if(!value||JSON.stringify(value).length>480000)return;
@@ -93,6 +133,7 @@ export function CanvasAppViewer({canvas,dispatch}){
    if(data.op==='editing'){if(Number.isSafeInteger(data.editVersion)&&data.editVersion>editVersion.current){editVersion.current=data.editVersion;declare(true).catch(()=>{})}return}
    if(!['state','event','request','dirty'].includes(data.op)||typeof data.requestId!=='string'||data.requestId.length>80)return;
    const reply=extra=>frame.current?.contentWindow?.postMessage({type:'canvas-app-host',id:latest.current.id,channel:channel.current,requestId:data.requestId,...extra},'*');
+   if(transition.current){reply({error:'This surface is disabled during a version change. Input was not accepted.'});return}
    if(latest.current.readOnlyVersion){reply({error:'This saved version is read-only. Select Latest to interact.'});return}
    if(JSON.stringify(data).length>320000){reply({error:'This change exceeds the surface message size limit.'});return}
    if(data.revision!==shown.current.app.revision){reply({error:'This design changed. Inspect the current surface before retrying.'});return}
@@ -115,7 +156,7 @@ export function CanvasAppViewer({canvas,dispatch}){
     if(epoch!==channel.current)return;
     const response={snapshot:{id:latest.current.id,app:result.app,theme:hostTheme()}};seen.current.set(data.requestId,response);reply(response);setError('');
    }catch(e){if(epoch!==channel.current)return;const response={error:e.message};seen.current.set(data.requestId,response);reply(response);setError(e.message)}
-   finally{busy.current--;if(epoch===channel.current&&!busy.current&&!dirtyRef.current&&!sameDefinition(latest.current,shown.current))mount(latest.current)}
+   finally{busy.current--;if(epoch===channel.current&&!busy.current&&!dirtyRef.current&&!transition.current&&!sameDefinition(latest.current,shown.current))mount(latest.current)}
   };
   window.addEventListener('message',receive);
   let scheduled;
@@ -126,15 +167,31 @@ export function CanvasAppViewer({canvas,dispatch}){
   queries.forEach(q=>q.addEventListener('change',refresh));
   return()=>{unregister();for(const done of checkpoints.current.values())done();checkpoints.current.clear();window.removeEventListener('message',receive);observer.disconnect();cancelAnimationFrame(scheduled);queries.forEach(q=>q.removeEventListener('change',refresh))};
  },[dispatch]);
- const args=()=>({id:canvas.id,sessionId:canvas.sessionId,expectedRevision:latest.current.app.revision,expectedStateRevision:latest.current.app.stateRevision});
- const run=async(action,extra)=>{try{const result=await dispatch(action,{...args(),...extra});setError('');return result}catch(e){setError(e.message)}};
- const preview=async request=>{const result=await dispatch('canvas.apps.inspect',{id:canvas.id,sessionId:canvas.sessionId,requestId:request.id});setReview({request,input:result.result.requestInput})};
+ const args=()=>({...targetOf(shown.current),id:shown.current.id,sessionId:shown.current.sessionId,
+  expectedRevision:shown.current.app.revision,expectedStateRevision:sameDefinition(shown.current,latest.current)?latest.current.app.stateRevision:shown.current.app.stateRevision});
+ const run=async(action,extra)=>{try{
+  if(canvas.readOnlyVersion||transition.current)throw Error('Select Latest to use native controls.');
+  const exact=args();
+  if(extra?.approve&&(!review||!['viewId','resourceId','resourceRevision','generation'].every(field=>exact[field]===review.target[field])||exact.expectedRevision!==review.target.expectedRevision||exact.expectedStateRevision!==review.target.expectedStateRevision))throw Error('This surface changed after review. Review the current request before approving.');
+  const result=await dispatch(action,{...exact,...extra});if(result?.accepted!==true)throw Error(result?.error||'The surface control was not accepted.');setError('');return result;
+ }catch(e){setError(e.message)}};
+ const preview=async request=>{
+  if(canvas.readOnlyVersion||transition.current)throw Error('Select Latest to review native controls.');
+  const exact=args(),{expectedRevision,expectedStateRevision,...target}=exact;
+  const result=await dispatch('canvas.apps.inspect',{...target,requestId:request.id});
+  if(result?.accepted!==true)throw Error(result?.error||'The surface review was not accepted.');
+  const current=args();
+  if(result.result?.app?.revision!==expectedRevision||result.result?.app?.stateRevision!==expectedStateRevision||
+   !['viewId','resourceId','resourceRevision','generation','expectedRevision','expectedStateRevision'].every(field=>current[field]===exact[field]))throw Error('This surface changed while reviewing. Review the current request before approving.');
+  setReview({request,input:result.result.requestInput,target:exact});
+ };
  const url=clientUrl(`/api/canvas/${mounted.id}/app-host?`+new URLSearchParams(targetOf(mounted)));
- return <section className="a-canvas-app" aria-label="Interactive conversation surface">
+ return <section ref={root} tabIndex={-1} className="a-canvas-app" aria-label="Interactive conversation surface">
+  {transitioning&&<p role="status">Surface input disabled while the version change is reconciled. New typing is not accepted.</p>}
   {dirty&&<p className="a-canvas-unsaved" role="status">Unsaved input</p>}
   <CanvasControl><div className="a-canvas-app-bar"><span>Revision {app.revision}</span>
    <details><summary>History & shared state</summary><p>Restoring a design keeps compatible current inputs and never repeats actions.</p>
-    {app.versions.map(v=><button type="button" key={v.version} disabled={v.version===app.revision||dirty||canvas.readOnlyVersion} onClick={()=>run('canvas.apps.restore',{version:v.version})}>Restore revision {v.version}</button>)}
+    {app.versions.map(v=><button type="button" key={v.version} disabled={v.version===app.revision||dirty||canvas.readOnlyVersion||transitioning} onClick={()=>run('canvas.apps.restore',{version:v.version})}>Restore revision {v.version}</button>)}
     <pre aria-label="Shared surface state">{JSON.stringify(app.state,null,2)}</pre>
    </details>
   </div></CanvasControl>

@@ -260,8 +260,13 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  const advancing=loaded&&!loaded.revoked&&loaded.seen&&loaded.view.followLatest===true&&followsLatest(row.kind)&&
   sameClient&&
   (state.canvasWorkspace?.views||[]).find(value=>value.viewId===loaded.view.viewId&&value.resourceId===row.id&&value.followLatest===true&&value.publishedVersion===version);
- const authorized=access.status==='live'?access.view:advancing;
- const view=authorized||loaded?.view,revoked=!!loaded&&!authorized&&(!loaded.pendingFollow||!sameClient)&&access.status==='revoked';
+ const hold=loaded?.lifecycle.transition;
+ const transitionView=hold&&sameClient&&(state.canvasWorkspace?.views||[]).find(value=>
+  value.viewId===hold.target.viewId&&value.resourceId===row.id&&value.publishedVersion===version&&
+  (['viewId','resourceId','resourceRevision','generation'].every(field=>value[field]===hold.target[field])||
+   value.followLatest===hold.followLatest&&value.selectedVersion===(hold.followLatest?null:version)));
+ const authorized=transitionView?loaded.view:access.status==='live'?access.view:advancing;
+ const view=authorized||loaded?.view,revoked=!!loaded&&!authorized&&access.status==='revoked';
  if(loaded&&authorized){loaded.seen=true;loaded.view=view;loaded.lifecycle.view=view;if(owned.current===loaded)owned.current.view=view}
  if(revoked)loaded.revoked=true;
  const release=async record=>{
@@ -285,7 +290,8 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  useLayoutEffect(()=>{
   if(!loaded||!authorized||revoked)return;
   loaded.lifecycle.unregister?.();
-  const unregister=inlineOwnership.register(state,view,{sessionId:row.sessionId,messageId,version});
+  const unregister=inlineOwnership.register(state,view,{sessionId:row.sessionId,messageId,version,
+   onTransition:transition=>{loaded.lifecycle.transition=transition}});
   loaded.lifecycle.unregister=unregister;
   return unregister;
  },[binding,!!authorized,revoked]);
@@ -293,7 +299,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
   if(!loaded||!authorized||revoked)return;
   let active=true;const controller=new AbortController(),target=targetOf(view);
   setBodyError('');
-  request(`/api/canvas/views/${view.viewId}/resource?`+new URLSearchParams(target),{signal:controller.signal}).then(requireArtifactBody).then(canvas=>{
+  request(`/api/canvas/views/${view.viewId}/resource?`+new URLSearchParams(target),{signal:controller.signal}).then(body=>requireArtifactBody(body,target)).then(canvas=>{
    if(active)setLoaded(old=>old===loaded?{...old,canvas,bodyBinding:binding}:old);
   }).catch(error=>{if(active&&error.name!=='AbortError')setBodyError(error.message)});
   return()=>{active=false;controller.abort()};
@@ -335,7 +341,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
   if(changing.current||!loaded||!sameClient||(!authorized&&!followCommand.current)||revoked)return;
   changing.current=true;setBusy(true);setNotice('');
   try{
-   if(inlineOwnership.blocksTarget(view)||view.dirty)throw Error(inlineEditNotice);
+   if(!followCommand.current&&(inlineOwnership.blocksTarget(view)||view.dirty))throw Error(inlineEditNotice);
    if(!followCommand.current)followCommand.current={action:'canvas.views.follow',args:{...targetOf(view),followLatest},id:crypto.randomUUID()};
    loaded.pendingFollow=true;
    const command=followCommand.current,receipt=await run.current(command.action,command.args,{id:command.id});
@@ -344,6 +350,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    if(next?.viewId!==view.viewId||next.resourceId!==row.id||next.publishedVersion!==version||next.followLatest!==command.args.followLatest||
     (next.followLatest?next.selectedVersion!==null:next.selectedVersion!==version))throw Error('The host did not return the exact publication view binding.');
    followCommand.current=null;
+   inlineOwnership.adoptTransition(command.args,command.id);
    loaded.lifecycle.unregister?.();loaded.lifecycle.view=next;
    const record={...loaded,view:next,canvas:null,bodyBinding:null,seen:false,revoked:false,pendingFollow:false,stateRevision:receipt.stateRevision??receipt.state?.revision};
    owned.current=record;

@@ -112,6 +112,85 @@ test('even a clean inline mount stays on screen during queued speculative sessio
  finally{unregister()}
 });
 
+test('transition holds veto late dirty/busy input and survive SSE before receipt until exact adoption',async()=>{
+ const edits=createInlineOwnership(),initial={...target,publishedVersion:2,selectedVersion:2,followLatest:false};
+ const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
+ let frozen=false,prepared=0,valid=true;
+ edits.register(scope,initial,owner);
+ edits.registerRenderer(initial,{prepare:async id=>{prepared++;frozen=true;return {id}},validate:()=>valid,release:()=>{frozen=false}});
+ const hold=await edits.prepareTransition(initial,'exact-command',true,scope);
+ assert.equal(frozen,true);assert.equal(edits.blocksWindow('a',[]),true);
+ edits.validateTransition(hold,scope);
+ valid=false;assert.throws(()=>edits.validateTransition(hold,scope),/Finish or cancel/);valid=true;
+ edits.intent(initial,true);assert.throws(()=>edits.validateTransition(hold,scope),/Finish or cancel/);
+ edits.settle(edits.intent(initial,false),{accepted:true});edits.validateTransition(hold,scope);
+ hold.sent=true;
+ const next={...initial,resourceRevision:'next',generation:2,followLatest:true,selectedVersion:null};
+ const streamed={...scope,canvasWorkspace:{views:[next]}};
+ assert.equal(edits.reconcile(streamed),false);
+ assert.equal(frozen,true);assert.equal(edits.transition(initial),hold);
+ assert.equal(await edits.prepareTransition(initial,'exact-command',true,streamed),hold);
+ assert.equal(prepared,1,'Unknown exact retry never prepares another mount');
+ await assert.rejects(edits.prepareTransition(initial,'new-command',false,streamed));
+ await edits.completeTransition(hold,{accepted:true,result:next},streamed);
+ assert.equal(frozen,true,'Receipt and state are both observed; old DOM stays held until caller adopts');
+ edits.adoptTransition(initial,'exact-command');assert.equal(frozen,false);
+ assert.equal(edits.transition(initial),undefined);
+});
+
+test('missing preparation, explicit refusal and actual scope revocation never authorize a POST',async()=>{
+ for(const missing of [true,false]){
+  const edits=createInlineOwnership(),scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[target]}};
+  edits.register(scope,target,owner);
+  if(!missing)edits.registerRenderer(target,{prepare:()=>Promise.reject(Error('Pending operation, no flush')),release(){},validate:()=>false});
+  await assert.rejects(edits.prepareTransition(target,'refused',true,scope));
+  assert.equal(edits.transition(target),undefined);assert.equal(edits.dirty(),false);
+ }
+ const edits=createInlineOwnership(),scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[target]}};
+ let released=0;
+ edits.register(scope,target,owner);
+ edits.registerRenderer(target,{prepare:async()=>({}),release:()=>released++,validate:()=>true});
+ await edits.prepareTransition(target,'unknown',true,scope);
+ assert.equal(edits.reconcile({...scope,client:{id:'other',hostInstanceId:'host'},canvasWorkspace:{views:[]}}),true);
+ assert.equal(released,1);assert.equal(edits.hasMounts(),false);
+});
+
+// Exercise main.execute itself, not a replacement queue implementation.
+test('actual execute prepares only at execution, validates immediately before POST and holds unknown delivery',async()=>{
+ const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+ const start=source.indexOf('  const execute=async()=>{'),end=source.indexOf('  // Reviewing exact item',start);
+ assert.ok(start>=0&&end>start);
+ for(const outcome of ['dirty','stale','known-refusal','unknown','accepted']){
+  const edits=createInlineOwnership(),initial={...target,publishedVersion:2,selectedVersion:2,followLatest:false};
+  const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
+  const latest={current:scope},posts=[];let frozen=false,prepared=0;
+  edits.register(scope,initial,owner);
+  edits.registerRenderer(initial,{prepare:async id=>{prepared++;frozen=true;return {id}},validate:()=>outcome!=='stale',release:()=>{frozen=false}});
+  const meta={id:'central-exact'},args={...target,followLatest:true};
+  const execute=runInNewContext(source.slice(start,end)+'execute',{
+   meta,command:{action:'canvas.views.follow',args},action:'canvas.views.follow',args,navigation:false,
+   dirtyBarrier:null,inlineOwnership:edits,inlineEditNotice,latest,dirtyTickets:[],DOMException,crypto:{randomUUID:()=> 'unused'},
+   request:async(_url,options)=>{
+    posts.push(options.body);
+    if(outcome==='known-refusal')throw Object.assign(Error('Host refused'),{status:409});
+    if(outcome==='unknown')throw Object.assign(Error('Disconnected'),{unconfirmed:true});
+    const next={...initial,generation:2,followLatest:true,selectedVersion:null};
+    return {accepted:true,result:next,state:{...scope,canvasWorkspace:{views:[next]}}};
+   },
+   acceptState:value=>{edits.reconcile(value);latest.current=value},awaitState:async()=>{}
+  });
+  assert.equal(prepared,0); // Queue waiting interval remains editable.
+  if(outcome==='dirty')edits.intent(initial,true);
+  if(outcome==='accepted'){
+   const result=await execute();assert.equal(result.accepted,true);assert.equal(frozen,true);
+   edits.adoptTransition(target,meta.id);assert.equal(frozen,false);
+  }else await assert.rejects(execute());
+  assert.equal(posts.length,['dirty','stale'].includes(outcome)?0:1);
+  if(['dirty','stale','known-refusal'].includes(outcome))assert.equal(frozen,false);
+  if(outcome==='unknown'){assert.equal(frozen,true);assert.equal(edits.transition(target).id,meta.id)}
+ }
+});
+
 test('Settings leave checks normalize wrapped commands and separate publication from one-time opening',()=>{
  for(const action of ['session.select','session.draft','workspace.select','session.create','canvas.select']){
   assert.equal(leavesSettings(action,{}),true);

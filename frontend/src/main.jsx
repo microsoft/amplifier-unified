@@ -219,11 +219,28 @@ function App(){
    if(navigation&&inlineOwnership.dirty())throw Error(inlineEditNotice);
    if(command.action==='canvas.views.release'&&inlineOwnership.blocksTarget(command.args))throw Error(inlineEditNotice);
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
-   const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
-   if(result.state)acceptState(result.state);
-   else await awaitState(result);
-   inlineOwnership.settle(dirtyTickets,result);
-   return result;
+   const hold=command.action==='canvas.views.follow'?
+    await inlineOwnership.prepareTransition(command.args,meta.id,command.args.followLatest,latest.current):null;
+   let posted=false;
+   try{
+    if(hold)inlineOwnership.validateTransition(hold,latest.current);
+    if(meta.signal?.aborted)throw new DOMException('Version change cancelled','AbortError');
+    if(hold)hold.sent=true;
+    posted=true;
+    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+    if(result.accepted===false){if(hold)inlineOwnership.refuseTransition(hold);return result}
+    if(result.state)acceptState(result.state);
+    else await awaitState(result);
+    if(hold)await inlineOwnership.completeTransition(hold,result,latest.current);
+    inlineOwnership.settle(dirtyTickets,result);
+    return result;
+   }catch(error){
+    if(hold){
+     if(!posted&&!hold.sent||error.status>=400&&!error.unconfirmed)inlineOwnership.refuseTransition(hold);
+     else error.unconfirmed=true; // Unknown transport/replication holds the old mount.
+    }
+    throw error;
+   }
   };
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');

@@ -134,21 +134,71 @@ class SmartCanvas:
             raise api.AppError('Tool disconnected. Reconnect it in Settings before trying again.', 409)
         return canvas, binding
 
+    def operation_binding(self, args, *, reconnect=False):
+        """Host-derived receipt association; never authority supplied by a caller."""
+        if 'viewId' not in args:
+            return None
+        if reconnect:
+            from .mcp_view_recovery import saved
+            canvas, _ = saved(self.service, args['canvasId'], view_target=args)
+            binding = canvas['mcp']
+        else:
+            canvas, binding = self.admit_call(args)
+        from .mcp_view_recovery import revision
+        return {'clientId': self.service.clients.current.get(), 'sessionId': canvas['sessionId'],
+                'target': {key: args[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')},
+                'bindingRevision': revision(binding)}
+
+    def view_operation(self, target, operation):
+        """Generic activity remains owner-readable; an iframe gets only its receipt."""
+        association = (operation or {}).get('viewBinding')
+        if not association or association.get('clientId') != self.service.clients.current.get() or association.get('target') != target:
+            raise api.AppError('This operation does not belong to this exact tool view.', 409)
+        from .mcp_view_recovery import revision, saved
+        canvas, _ = saved(self.service, target['resourceId'], view_target=target)
+        if association.get('sessionId') != canvas.get('sessionId') or association.get('bindingRevision') != revision(canvas['mcp']):
+            raise api.AppError('This operation belongs to an earlier tool binding.', 409)
+        try:
+            self.binding(target['resourceId'], view_target=target)
+        except api.AppError:
+            # A reconnect may inspect its own progress while disconnected, never
+            # tool results or a different operation. Completion needs live checks.
+            if operation.get('action') == 'smartTools.reconnectView' and operation.get('status') in {'queued', 'running', 'failed', 'interrupted'}:
+                return {key: copy.deepcopy(operation[key]) for key in ('id', 'action', 'status', 'error') if key in operation}
+            raise
+        server = next((row for row in self.service.state['smartTools']['servers'] if row['id'] == canvas['mcp']['serverId']), {})
+        if server.get('status') not in {None, 'connected'}:
+            if operation.get('action') == 'smartTools.reconnectView' and operation.get('status') in {'queued', 'running', 'failed', 'interrupted'}:
+                return {key: copy.deepcopy(operation[key]) for key in ('id', 'action', 'status', 'error') if key in operation}
+            raise api.AppError('Tool disconnected. This view cannot read operation results.', 409)
+        return operation
+
     async def command(self, action, args, operation_id, origin, *, defer_publish=False):
         manager = self.service.smart_tools
         if action in {'smartTools.open', 'smartTools.reconnectView'}:
             record = {'id':operation_id,'action':action,'origin':origin,'target':copy.deepcopy(args),
                       'status':'running','createdAt':time.time(),'updatedAt':time.time()}
+            if action == 'smartTools.reconnectView' and 'viewId' in args:
+                try:
+                    record['viewBinding'] = self.operation_binding(args, reconnect=True)
+                except api.AppError as exc:
+                    record.update(status='failed', error=str(exc)[:2000])
             async with self.service.lock:
                 rows = self.service.state['smartTools']['operations']
                 rows[:] = [r for r in rows if r.get('status') == 'running'] + [r for r in rows if r.get('status') != 'running'][-49:]
                 rows.append(record)
                 manager.persist_operation(record)
                 self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
+            if record['status'] == 'failed':
+                return
             try:
                 if action == 'smartTools.reconnectView':
                     from .mcp_view_recovery import reconnect
                     result = await reconnect(self.service, args)
+                    # Only the original exact mount can regain the refreshed
+                    # binding. Reconnect never lends results to another view.
+                    if record.get('viewBinding') and result.get('status') == 'ready':
+                        record['viewBinding'] = self.operation_binding(args, reconnect=True)
                 else:
                     result = await self.open(args)
                 record.update(status='completed',result=result)
@@ -160,14 +210,24 @@ class SmartCanvas:
                 self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             return
         if action == 'smartTools.appCall':
+            # A queued HTTP admission already owns its exact association.
+            # Other admitted calls derive it from the current bound client
+            # before any tool await, never from caller-provided metadata.
+            association = (manager.operation(operation_id) or {}).get('viewBinding')
             try:
                 canvas, binding = self.binding(args['canvasId'], args.get('expectedRevision'), args if 'viewId' in args else None)
+                current_association = self.operation_binding(args)
+                if association and association != current_association:
+                    raise api.AppError('This admitted operation belongs to an earlier tool binding.', 409)
+                association = association or current_association
                 if args['name'] not in binding['allowedTools']:
                     raise api.AppError('This tool was not granted to this canvas view.', 403)
             except Exception as exc:
                 async with self.service.lock:
                     record = {'id':operation_id,'action':action,'origin':'app','target':{'canvasId':args['canvasId'],'name':args['name']},
                               'status':'failed','error':str(exc)[:2000],'createdAt':time.time(),'updatedAt':time.time()}
+                    if association:
+                        record['viewBinding'] = copy.deepcopy(association)
                     rows = self.service.state['smartTools']['operations']
                     rows[:] = [r for r in rows if r['id'] != operation_id and r.get('status') in {'running', 'queued'}] + [r for r in rows if r['id'] != operation_id and r.get('status') not in {'running', 'queued'}][-49:]
                     rows.append(record)
@@ -177,6 +237,8 @@ class SmartCanvas:
             mapped = {'id':binding['serverId'],'name':args['name'],'arguments':args.get('arguments',{}),
                       'sessionId':canvas.get('sessionId'), '_configuration':binding['configuration'],
                       '_allowedTools':binding['allowedTools'], 'catalogRevision':binding.get('catalogRevision')}
+            if association:
+                mapped['_viewOperation'] = copy.deepcopy(association)
             kwargs = {'defer_publish': True} if defer_publish else {}
             result = await manager.command('smartTools.call', mapped, operation_id, 'agent' if origin == 'agent' else 'app', **kwargs)
             # Context is descriptive, not authority. Retain the latest result only for
@@ -279,6 +341,12 @@ class SmartCanvas:
             _, preference = self.service.canvas_views.target(args)
             preference.setdefault('mcp', {}).update(copy.deepcopy(update))
         else:
+            # Keep only transient fields in the actual primary preference.
+            # Canonical mcpState continues to own account/config/grant authority.
+            row, preference = self.service.canvas_views.resolve('primary')
+            if row['id'] != canvas['id']:
+                raise api.AppError('This primary tool view changed.', 409)
+            preference.setdefault('mcp', {}).update(copy.deepcopy(update))
             canvas['mcp'].update(copy.deepcopy(update))
 
 

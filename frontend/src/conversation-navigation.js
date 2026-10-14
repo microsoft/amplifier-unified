@@ -32,14 +32,77 @@ const scopeOf=state=>JSON.stringify([state?.client?.hostInstanceId??null,state?.
 export function createInlineOwnership(){
  const mounts=new Set(),listeners=new Set();
  const notify=()=>listeners.forEach(listener=>listener());
+ const matching=target=>[...mounts].filter(record=>sameTarget(record.target,target));
+ const held=record=>!!record.transition;
+ const protectedRecord=record=>record.dirty||held(record);
+ const releaseTransition=hold=>{
+  if(hold.closed)return;
+  hold.closed=true;hold.adapter.release(hold.id);
+  for(const record of mounts)if(record.transition===hold){delete record.transition;record.onTransition?.(null)}
+  for(const done of hold.waiters)done();hold.waiters.clear();notify();
+ };
+ const successor=(hold,view)=>view?.viewId===hold.target.viewId&&view.resourceId===hold.target.resourceId&&
+  view.publishedVersion===hold.version&&view.followLatest===hold.followLatest&&
+  view.selectedVersion===(hold.followLatest?null:hold.version);
  return {
   subscribe(listener){listeners.add(listener);return ()=>listeners.delete(listener)},
   register(state,target,owner){
    const record={scope:scopeOf(state),target:{...target},...owner,dirty:!!target.dirty,sequence:0};
    mounts.add(record);return ()=>mounts.delete(record);
   },
-  hasMounts:()=>mounts.size>0,
-  dirty:()=>[...mounts].some(record=>record.dirty),
+  registerRenderer(target,adapter){
+   const record={target:{...target},adapter,renderer:true,dirty:false,sequence:0};
+   mounts.add(record);return ()=>{mounts.delete(record)};
+  },
+  hasMounts:()=>[...mounts].some(record=>!record.renderer),
+  dirty:()=>[...mounts].some(protectedRecord),
+  transition:target=>matching(target).find(held)?.transition,
+  async prepareTransition(target,id,followLatest,state){
+   const records=matching(target),existing=records.find(held)?.transition;
+   if(existing){
+    if(existing.id!==id||existing.followLatest!==followLatest)throw Error('Reconcile the existing version change before starting another.');
+    return existing; // Explicit exact retry, never a new switch or replayed tool.
+   }
+   const owner=records.find(record=>!record.renderer),adapter=records.find(record=>record.adapter)?.adapter;
+   const view=state?.canvasWorkspace?.views?.find(row=>sameTarget(row,target));
+   if(!owner||!adapter||!view||owner.scope!==scopeOf(state)||view.dirty||records.some(record=>record.dirty))throw Error(inlineEditNotice);
+   const hold={id,target:{...target},followLatest,version:owner.version,scope:owner.scope,
+    sessionId:owner.sessionId,adapter,waiters:new Set(),closed:false};
+   for(const record of records){record.transition=hold;record.onTransition?.(hold)}
+   notify();
+   try{hold.proof=await adapter.prepare(id);return hold}
+   catch(error){releaseTransition(hold);throw error}
+  },
+  validateTransition(hold,state){
+   if(hold.closed||hold.scope!==scopeOf(state)||hold.sessionId!==state?.selectedSessionId)throw Error('This preview scope changed.');
+   // An uncertain retry only reconciles the identical admitted command. The
+   // old frame is still frozen; its target can already have an SSE successor.
+   if(hold.sent){
+    if(!hold.adapter.validate(hold.id,hold.proof)||!state?.canvasWorkspace?.views?.some(view=>sameTarget(view,hold.target)||successor(hold,view)))throw Error('The original frozen preview is unavailable. Its version change remains unknown.');
+    return;
+   }
+   const view=state?.canvasWorkspace?.views?.find(row=>sameTarget(row,hold.target));
+   if(!view||view.dirty||matching(hold.target).some(record=>record.dirty)||!hold.adapter.validate(hold.id,hold.proof))throw Error(inlineEditNotice);
+  },
+  refuseTransition:releaseTransition,
+  adoptTransition(target,id){
+   const hold=matching(target).find(held)?.transition;
+   if(hold?.id===id&&hold.reconciled)releaseTransition(hold);
+  },
+  async completeTransition(hold,receipt,state){
+   const next=receipt?.result;
+   if(receipt?.accepted!==true||!successor(hold,next))throw Object.assign(Error('The host did not confirm the exact publication view.'),{unconfirmed:true});
+   hold.next={...next};
+   if(state?.canvasWorkspace?.views?.some(view=>sameTarget(view,next))){hold.reconciled=true;return}
+   // Receipt is not successor replication. Keep the old DOM frozen if state
+   // recovery cannot establish the exact successor; no compensating follow.
+   await new Promise((resolve,reject)=>{
+    const done=()=>{clearTimeout(timer);resolve()};
+    const timer=setTimeout(()=>{hold.waiters.delete(done);reject(Object.assign(Error('Version change accepted; waiting for its exact view state. Retry the same change to reconcile.'),{unconfirmed:true}))},1800);
+    hold.waiters.add(done);
+   });
+   if(hold.closed)throw Error('Preview access was removed during the version change.');
+  },
   intent(target,dirty){
    const tickets=[];
    for(const record of mounts)if(sameTarget(record.target,target)){
@@ -57,20 +120,29 @@ export function createInlineOwnership(){
    }
    if(changed)notify();
   },
-  blocksTarget:target=>[...mounts].some(record=>record.dirty&&sameTarget(record.target,target)),
+  blocksTarget:target=>matching(target).some(protectedRecord),
   protectsPublication(owner){
-   return [...mounts].some(record=>record.dirty&&record.sessionId===owner.sessionId&&record.messageId===owner.messageId&&
+   return [...mounts].some(record=>protectedRecord(record)&&record.sessionId===owner.sessionId&&record.messageId===owner.messageId&&
     record.version===owner.version&&record.target.resourceId===owner.resourceId);
   },
   blocksWindow(sessionId,messages){
    const ids=new Set((messages||[]).map(row=>row.id));
-   return [...mounts].some(record=>record.dirty&&(record.sessionId!==sessionId||!ids.has(record.messageId)));
+   return [...mounts].some(record=>!record.renderer&&protectedRecord(record)&&(record.sessionId!==sessionId||!ids.has(record.messageId)));
   },
   reconcile(state){
    let revoked=false;
    for(const record of mounts){
-    if(record.scope!==scopeOf(state)||!(state?.canvasWorkspace?.views||[]).some(view=>sameTarget(record.target,view))){
-     revoked ||= record.dirty;mounts.delete(record);
+    const views=state?.canvasWorkspace?.views||[],hold=record.transition;
+    const scopeMatches=record.renderer||record.scope===scopeOf(state)&&
+     (state?.selectedSessionId===undefined||record.sessionId===state.selectedSessionId);
+    if(scopeMatches&&hold&&views.some(view=>sameTarget(record.target,view)||successor(hold,view))){
+     if(hold.next&&views.some(view=>sameTarget(hold.next,view))){
+      hold.reconciled=true;for(const done of hold.waiters)done();hold.waiters.clear();
+     }
+     continue;
+    }
+    if(!scopeMatches||!views.some(view=>sameTarget(record.target,view))){
+     revoked ||= protectedRecord(record);if(hold)releaseTransition(hold);mounts.delete(record);
     }
    }
    return revoked;

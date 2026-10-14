@@ -7,12 +7,12 @@ const source=readFileSync(new URL('../../amplifier_web/canvas_app_bridge.js',imp
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(){
  const sent=[],listeners={},parent={postMessage:value=>sent.push(value)};
- const realm={parent,structuredClone,setTimeout,clearTimeout,console,document:{readyState:'complete',querySelectorAll:()=>[],documentElement:{style:{setProperty(){},removeProperty(){}},dataset:{}}},addEventListener:(name,fn)=>{(listeners[name]??=[]).push(fn)},removeEventListener(){},ResizeObserver:class{observe(){} disconnect(){}}};
+ const realm={parent,structuredClone,setTimeout,clearTimeout,console,document:{readyState:'complete',querySelectorAll:()=>[],documentElement:{inert:false,style:{setProperty(){},removeProperty(){}},dataset:{}}},addEventListener:(name,fn)=>{(listeners[name]??=[]).push(fn)},removeEventListener(){},ResizeObserver:class{observe(){} disconnect(){}}};
  realm.window=realm;vm.runInNewContext(source,realm);
  const snapshot=(revision=0,theme={tokens:{accent:'#123456'},scheme:'light'})=>({id:'fixture',app:{revision:1,stateRevision:revision,manifest:{},state:{tab:'draw'}},theme});
  const deliver=value=>listeners.message.forEach(fn=>fn({source:parent,data:{type:'canvas-app-host',id:'fixture',channel:'test',...value}}));
  deliver({snapshot:snapshot()});sent.length=0;
- return {app:realm.canvasApp,sent,deliver,snapshot,input:()=>listeners.input.forEach(fn=>fn())};
+ return {app:realm.canvasApp,sent,deliver,snapshot,document:realm.document,input:()=>listeners.input.forEach(fn=>fn())};
 }
 
 test('custom edits announce immediately while a previous write is pending',async()=>{
@@ -58,4 +58,30 @@ test('canvas sizing skips hidden bounds and avoids repeated bitmap resets',()=>{
  width=0;height=0;painter.redraw();assert.equal(draws,2);assert.equal(writes,2);
  width=600;height=260;painter.redraw();assert.equal(draws,3);assert.equal(writes,2);
  painter.disconnect();painter.redraw();assert.equal(draws,3);
+});
+
+test('prepare disables first and reports quiescence without flushing pending draft or operation queues',async()=>{
+ const clean=fixture();
+ clean.deliver({prepareTransition:'clean-token'});
+ let ack=clean.sent.at(-1);
+ assert.equal(clean.document.documentElement.inert,true);
+ assert.equal(ack.op,'transition');assert.equal(ack.token,'clean-token');assert.equal(ack.quiescent,true);assert.equal(ack.blocked,true);
+ assert.throws(()=>clean.app.beginEdit(),/disabled/);
+ await assert.rejects(clean.app.patch({tab:'ignored'}),/not queued/);
+ clean.deliver({releaseTransition:'stale-token'});assert.equal(clean.document.documentElement.inert,true);
+ clean.deliver({releaseTransition:'clean-token'});assert.equal(clean.document.documentElement.inert,false);
+
+ const pending=fixture(),write=pending.app.patch({tab:'work'});await tick();
+ const request=pending.sent.at(-1);
+ pending.deliver({prepareTransition:'busy-token'});
+ ack=pending.sent.at(-1);assert.equal(ack.quiescent,false);assert.ok(ack.queued>0&&ack.pending>0);
+ assert.equal(pending.sent.filter(row=>row.requestId).length,1,'Prepare did not flush or wait for queued work');
+ pending.deliver({releaseTransition:'busy-token'});
+ pending.deliver({requestId:request.requestId,snapshot:pending.snapshot(1)});await write;
+
+ const draft=fixture(),privateDraft=draft.app.createDraft({delay:60000});
+ privateDraft.update({note:'private'});draft.deliver({prepareTransition:'draft-token'});
+ ack=draft.sent.at(-1);assert.equal(ack.quiescent,false);assert.equal(ack.draftPending,true);
+ assert.equal(draft.sent.some(row=>row.op==='state'),false);
+ draft.deliver({releaseTransition:'draft-token'});privateDraft.dispose();
 });

@@ -476,6 +476,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             canvas = service.canvas_views.canvas(target['viewId'])
             if canvas['id'] != request.match_info['identity']:
                 raise AppError('This artifact view changed.', 409)
+            if canvas.get('kind') not in {'html', 'babylon', 'canvas-app'}:
+                raise AppError('Canvas source unavailable', 404)
             return web.Response(text=raw_source(canvas, service.db), content_type='text/plain',
                                 headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
         row=next((r for r in service.state.get('canvasArtifacts',[]) if r['id']==request.match_info['identity']),None)
@@ -592,9 +594,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def smart_operation(request):
         operation = service.smart_tools.operation(request.match_info['identity'])
+        if any(field in request.query for field in ('viewId', 'resourceId', 'resourceRevision', 'generation')):
+            target = canvas_view_target(request, request.query.get('viewId', ''))
+            operation = service.smart_canvas.view_operation(target, operation)
         if not operation:
             return web.json_response({'status':'pending'}, status=200)
-        return web.json_response(operation)
+        return web.json_response(operation, headers={'Cache-Control': 'no-store'})
 
     app.router.add_get('/api/smart-tools/operations/{identity}', smart_operation)
     async def shared_conversation(request):
