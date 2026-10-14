@@ -1830,6 +1830,20 @@ class AppService:
                     resolver=self.peer_attribution.resolve, message_rows=rows))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
+        retained_file = None
+        if action == 'canvas.openFile' and args.get('referenceRequestId'):
+            from .result_artifacts import load as load_retained_file
+            async with self.lock:
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                response = self.collaboration.receipt(args['referenceRequestId']).get('response') or {}
+                has_retained_version = 'artifacts' in response or args.get('referenceResponseRevision') is not None
+            if has_retained_version:
+                retained_file = await load_retained_file(self.collaboration, args['sessionId'], args['referenceRequestId'],
+                    args['path'] + '@sha256:' + args.get('expectedSha256', ''), args.get('referenceResponseRevision'))
         gif_proof = gif_record = None
         if action == 'canvas.openGif':
             media = self.outputs.media
@@ -2100,7 +2114,7 @@ class AppService:
                 from .workspace_canvas import canvas_command
                 if action == 'canvas.openFile':
                     from .canvas_files import open_file
-                    diagnostic_result = open_file(self, args, origin)
+                    diagnostic_result = open_file(self, args, origin, retained_file=retained_file)
                 elif action == 'canvas.openGif':
                     from .canvas_library import open_gif
                     diagnostic_result = open_gif(self, args, gif_proof)

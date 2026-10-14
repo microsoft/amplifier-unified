@@ -20,6 +20,15 @@ retained resources never fall back silently to a mutable source. Missing,
 changed, over-limit or external sources remain explicit report states and
 cannot qualify a successful dependency.
 
+Canonical resource encoding and hashing run in the capture worker. The existing
+async resource writer retains SQLite writer exclusion while its disk worker
+settles, including cancellation. Artifact API/Canvas reads detach their resource
+index, perform file I/O, decoding and hash verification outside the app lock,
+then recheck request/revision and current navigation before presenting bytes.
+Saved output downloads use the same async reader. No live database connection
+enters those workers. Legacy output inspection/image actions retain their prior
+implementation; this is not a claim that all output paths have been optimized.
+
 `coordination.artifact` exposes bounded text and the exact saved download through
 the agent bridge and per-session HTTP command API. It checks the original
 request participants and workspace, including when reading an explicit older
@@ -29,7 +38,7 @@ a download. Source editing, deletion or removal of the original working copy
 does not change the result. Old replies retain their prior digest-checked source
 fallback; they are not relabeled as snapshots.
 
-Qualification after combining with assignment control: 415 focused Python
+Qualification after combining with assignment control: 418 focused Python
 checks, including real dispatch/bridge/HTTP routes, rollback/lost acknowledgment,
 restart, deletion before first open, foreign-reader rejection, stale generation,
 placement, Stop and response revisions, total/per-file bounds and corrupt-resource
@@ -41,7 +50,7 @@ Frontend tests pass (681). The prior two browser fixture failures assumed that
 reported files still existed and used an unresolved relative Playwright URL;
 their logs were retained and the corrected journey passes.
 
-The installed wheel passes 419 focused checks using the selected native runtime,
+The installed wheel passes 422 focused checks using the selected native runtime,
 including four Core/Foundation child-admission cases inherited from assignment
 control. All 601 packaged application Python/static files match the candidate
 source. This is package and local-runtime evidence, not publication or installed

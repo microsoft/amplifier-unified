@@ -80,6 +80,10 @@ class Outputs:
     def content(self,record):
         if not record.get('body'):return None
         value=self.app.state_resource(record['body']['$resource'])
+        return self.decode_content(record,value)
+
+    @staticmethod
+    def decode_content(record,value):
         if record.get('bodyFormat') == 'canvas-image-v1':
             prefix = 'data:image/png;base64,'
             content = value.get('content')
@@ -91,6 +95,17 @@ class Outputs:
         if hashlib.sha256(data).hexdigest()!=record['sha256']:
             raise ValueError('Saved output content no longer matches its evidence hash.')
         return data
+
+    async def content_async(self,record):
+        """Read immutable output bytes away from the event loop and app lock."""
+        if not record.get('body'):return None
+        from .resource_files import detach, read_detached
+        async with self.app.lock:
+            source=detach(self.app.db,record['body']['$resource'])
+        def materialize():
+            value=read_detached(source,max_bytes=6*20*1024*1024+4096)
+            return self.decode_content(record,value)
+        return await asyncio.to_thread(materialize)
 
     def image(self,sid,identity,expected_hash):
         self.app._session(sid)

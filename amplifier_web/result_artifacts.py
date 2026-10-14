@@ -37,7 +37,12 @@ def prepare_files(root, references):
                 item.update(status='unavailable', detail='This declaration exceeds the 16 MiB retained-file limit.')
             else:
                 total += len(data)
-                item.update(status='retained', data=data, path=actual, filename=name)
+                from .resource_files import prepare as prepare_resource
+                try:
+                    body = {'encoding': 'utf-8', 'data': data.decode('utf-8')}
+                except UnicodeDecodeError:
+                    body = {'encoding': 'base64', 'data': base64.b64encode(data).decode()}
+                item.update(status='retained', resource=prepare_resource(body), bytes=len(data), path=actual, filename=name)
         except (OSError, ValueError):
             # Do not expose details about a rejected external path or content.
             item.update(status='unavailable', detail='Source unavailable or outside the supported workspace/file limits.')
@@ -66,34 +71,29 @@ async def prepare(collaboration, source, args, origin, identity, digest):
     return {'fence': captured, 'items': items}
 
 
-def store(collaboration, source, request, response, prepared, command_id):
+async def store(collaboration, source, request, response, prepared, command_id):
     """Caller owns the lock and the reply transaction. Never commits itself."""
     if prepared['fence'] != fence(source, request):
         collaboration.error('The task or response changed while retaining results; inspect and retry.', 409)
-    from .resource_files import put
+    from .resource_files import put_prepared_async
     app = collaboration.service
     artifacts = []
     available = max(0, 10000 - app.db.execute('SELECT count(*) FROM output_records').fetchone()[0])
     for item in prepared['items']:
-        summary = {key: value for key, value in item.items() if key not in {'data', 'path', 'filename'}}
+        summary = {key: value for key, value in item.items() if key not in {'resource', 'path', 'filename'}}
         if item['status'] == 'retained' and not available:
             summary.update(status='unavailable', detail='The retained output relationship limit is reached.')
         elif item['status'] == 'retained':
-            data = item['data']
-            try:
-                body = {'encoding': 'utf-8', 'data': data.decode('utf-8')}
-            except UnicodeDecodeError:
-                body = {'encoding': 'base64', 'data': base64.b64encode(data).decode()}
+            body = await put_prepared_async(app.db, item['resource'])
             record = app.outputs.store.create(source['id'], {
                 'kind': 'file', 'title': item['filename'], 'filename': item['filename'],
-                'sha256': item['sha256'], 'bytes': len(data), 'body': put(app.db, body),
+                'sha256': item['sha256'], 'bytes': item['bytes'], 'body': body,
                 'versionEvidence': 'snapshot', 'origin': {'source': 'agent'},
                 'collaborationResult': {'requestId': request['requestId'], 'commandId': command_id,
                     'reference': item['reference'], 'generationId': response['generationId'],
                     'executionDirectory': response['executionDirectory'],
                     'executionRevision': source.get('executionRevision', 0),
-                    'workspace': source['workspace'],
-                    'worktree': copy.deepcopy(source.get('worktree'))},
+                    'workspace': source['workspace']},
             })
             summary.update(outputId=record['id'], bytes=record['bytes'])
             available -= 1
@@ -135,18 +135,38 @@ def resolve(collaboration, sid, request_id, reference, response_revision=None):
         if (provenance.get('requestId') != request_id or provenance.get('reference') != reference
                 or record.get('sha256') != item['sha256']):
             raise ValueError('Retained artifact identity mismatch.')
-        data = app.outputs.content(record)
-        if data is None:
-            raise ValueError('Retained artifact bytes unavailable.')
         return {**copy.deepcopy(item), 'filename': record['filename'],
-                'provenance': copy.deepcopy(provenance)}, data, response
+                'provenance': copy.deepcopy(provenance)}, record, response
     except (OSError, ValueError, KeyError):
         return {'reference': reference, 'status': 'unavailable',
                 'detail': 'The retained version is unavailable or failed its content hash. No mutable source was substituted.'}, None, response
 
 
-def read(collaboration, sid, args):
-    item, data, response = resolve(collaboration, sid, args['requestId'], args['reference'], args.get('responseRevision'))
+async def load(collaboration, sid, request_id, reference, response_revision=None):
+    """Detach immutable reads; recheck request authority after worker I/O."""
+    app = collaboration.service
+    async with app.lock:
+        proof = resolve(collaboration, sid, request_id, reference, response_revision)
+    item, record, response = proof
+    if record is None:
+        return item, None, response
+    try:
+        data = await app.outputs.content_async(record)
+        if data is None:
+            raise ValueError('Retained artifact bytes unavailable.')
+    except (OSError, ValueError, KeyError):
+        item = {'reference': reference, 'status': 'unavailable',
+                'detail': 'The retained version is unavailable or failed its content hash. No mutable source was substituted.'}
+        data = None
+    async with app.lock:
+        current = resolve(collaboration, sid, request_id, reference, response_revision)
+        if current != proof:
+            collaboration.error('The result changed while reading its retained version; inspect and retry.', 409)
+    return item, data, response
+
+
+async def read(collaboration, sid, args):
+    item, data, response = await load(collaboration, sid, args['requestId'], args['reference'], args.get('responseRevision'))
     result = {**item, 'responseStatus': response.get('status'), 'qualified': response.get('qualified', False),
               'independentArtifactVerification': False}
     if data is not None:

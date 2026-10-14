@@ -847,8 +847,7 @@ class Collaboration:
             if source['id'] != args['sessionId']:
                 self.error('Read a retained result from the calling conversation.')
             from .result_artifacts import read
-            async with self.service.lock:
-                return {'accepted': True, 'result': read(self, source['id'], args)}
+            return {'accepted': True, 'result': await read(self, source['id'], args)}
         if action in {'coordination.awareness', 'coordination.intent.read', 'coordination.intent'}:
             from .workspace_awareness import packet, intent_for, declare
             if action == 'coordination.intent':
@@ -1009,7 +1008,7 @@ class Collaboration:
                 self.service.db.commit()
                 original = copy.deepcopy(request)
                 try:
-                    store(self, source, request, response, prepared_artifacts, identity)
+                    await store(self, source, request, response, prepared_artifacts, identity)
                     request['response'] = response
                     self.save(args['requestId'], request)
                     receipt = {'accepted': True, 'commandAction': action, 'result': response}

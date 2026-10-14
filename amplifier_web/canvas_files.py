@@ -4,7 +4,7 @@ from .workspace_canvas import canvas_command, ReferencedFileChanged
 from .canvas_library import remember
 
 
-def open_file(service, args, origin):
+def open_file(service, args, origin, *, retained_file=None):
     from .service import AppError
     sid = args['sessionId']
     session = next((row for row in service.state['sessions'] if row['id'] == sid), None)
@@ -31,18 +31,20 @@ def open_file(service, args, origin):
         reference = args['path'] + '@sha256:' + args.get('expectedSha256', '')
         if args.get('referenceResponseRevision') is not None:
             from .result_artifacts import resolve
-            item, data, response = resolve(service.collaboration, sid, args['referenceRequestId'], reference, args['referenceResponseRevision'])
-            if data is None:
-                return {'status': item['status'], 'message': item.get('detail', 'The retained version is unavailable.')}
-            retained = (item, data)
+            _, _, response = resolve(service.collaboration, sid, args['referenceRequestId'], reference, args['referenceResponseRevision'])
         if (receipt.get('workspace') != session['workspace'] or (response.get('status') != 'sealed' and 'artifacts' not in response)
                 or reference not in response.get('references', [])):
             raise AppError('Choose an exact artifact reference from this workspace request.', 403)
         if 'artifacts' in response and retained is None:
             from .result_artifacts import resolve
-            item, data, _ = resolve(service.collaboration, sid, args['referenceRequestId'], reference)
+            item, _, current = resolve(service.collaboration, sid, args['referenceRequestId'], reference, args.get('referenceResponseRevision'))
+            if retained_file is None or current != retained_file[2]:
+                return {'status': 'unavailable', 'message': 'The result changed while opening it. Inspect and retry.'}
+            saved_item, data, _ = retained_file
             if data is None:
-                return {'status': item['status'], 'message': item.get('detail', 'The retained version is unavailable.')}
+                return {'status': saved_item['status'], 'message': saved_item.get('detail', 'The retained version is unavailable.')}
+            if item != saved_item:
+                return {'status': 'unavailable', 'message': 'The result changed while opening it. Inspect and retry.'}
             retained = (item, data)
         file_root = response.get('executionDirectory')
         if not file_root and retained is None:

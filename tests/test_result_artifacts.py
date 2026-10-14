@@ -254,6 +254,73 @@ async def test_prior_response_revision_uses_exact_reply_receipt_not_latest_artif
         await read(app, source, args, responseRevision=3)
 
 
+@pytest.mark.parametrize('surface', ['agent', 'canvas'])
+async def test_retained_reads_release_lock_and_recheck_response_or_navigation(app, tmp_path, monkeypatch, surface):
+    from amplifier_web import resource_files
+    source, peer, _, args = await setup(app, tmp_path)
+    await declare(app, peer, args)
+    entered, release = threading.Event(), threading.Event()
+    original = resource_files.read_detached
+    def blocked(*values, **options):
+        entered.set()
+        assert release.wait(5)
+        return original(*values, **options)
+    monkeypatch.setattr(resource_files, 'read_detached', blocked)
+    if surface == 'agent':
+        task = asyncio.create_task(read(app, source, args))
+    else:
+        task = asyncio.create_task(app.dispatch('canvas.openFile', {'sessionId': source['id'],
+            'workspace': source['workspace'], 'path': 'report.md', 'referenceRequestId': args['requestId'],
+            'expectedSha256': args['references'][0].split('@sha256:')[1]}))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        async with asyncio.timeout(2):
+            async with app.lock:
+                if surface == 'agent':
+                    request = app.collaboration.receipt(args['requestId'])
+                    request['response']['text'] = 'Updated report'
+                    app.collaboration.save(args['requestId'], request)
+                else:
+                    app.state['selectedSessionId'] = peer['id']
+                    app.state['view']['draft'] = 'New private draft'
+        release.set()
+        if surface == 'agent':
+            with pytest.raises(AppError, match='changed while reading'):
+                await task
+        else:
+            assert (await task)['result']['status'] == 'unavailable'
+            assert app.state['selectedSessionId'] == peer['id']
+            assert app.state['view']['draft'] == 'New private draft'
+    finally:
+        release.set()
+
+
+async def test_cancelled_retention_waits_for_owned_file_write_then_rolls_back(app, tmp_path, monkeypatch):
+    from amplifier_web import resource_files
+    _, peer, _, args = await setup(app, tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    original = resource_files.write_prepared
+    def blocked(*values):
+        entered.set()
+        assert release.wait(5)
+        return original(*values)
+    monkeypatch.setattr(resource_files, 'write_prepared', blocked)
+    task = asyncio.create_task(declare(app, peer, args))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        assert app.lock.locked()  # Writer ownership spans the detached write.
+        task.cancel()
+        await asyncio.sleep(.02)  # Event loop remains live while disk is blocked.
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not app.collaboration.receipt(args['requestId']).get('response')
+        assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 0
+    finally:
+        release.set()
+
+
 @pytest.mark.parametrize('name,content,kind', [
     ('report.pdf', b'%PDF-1.4\n%%EOF', 'pdf'),
     ('report.html', b'<h1>Saved HTML</h1>', 'html'),
