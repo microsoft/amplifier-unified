@@ -152,6 +152,46 @@ async def main(home):
 
         app.router.add_post('/fixture/activity', activity)
         app.router.add_post('/fixture/damage', damage)
+    release_query_gate = lambda: None
+    if '--scoped-query-control' in sys.argv:
+        # Only this synthetic browser opts in. Hold the named display query,
+        # then delegate to its real process owner; no replacement result pages.
+        query_owner = app['service'].shell.resources.queries
+        original_factory = query_owner.factory
+        gate = asyncio.Event(); gate.set()
+        release_query_gate = gate.set
+        query_mode, entered = 'release', 0
+        def controlled_factory(*args, **kwargs):
+            projector = original_factory(*args, **kwargs)
+            original_project = projector.project
+            async def project(inputs, **options):
+                nonlocal entered
+                if inputs['operation'] == 'chats' and inputs['args']['section'] == 'search':
+                    if query_mode == 'hold':
+                        entered += 1
+                        await gate.wait()
+                    if query_mode == 'fail':
+                        return {'status': 'retry', 'reason': 'worker_failed'}
+                return await original_project(inputs, **options)
+            projector.project = project
+            return projector
+        query_owner.factory = controlled_factory
+        async def query_control(request):
+            nonlocal query_mode
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            if request.method == 'POST':
+                mode = (await request.json()).get('mode')
+                if mode not in {'hold', 'release', 'fail'}:
+                    raise web.HTTPBadRequest()
+                query_mode = mode
+                if mode == 'hold':
+                    gate.clear()
+                else:
+                    gate.set()
+            return web.json_response({'mode': query_mode, 'entered': entered})
+        app.router.add_get('/fixture/scoped-query', query_control)
+        app.router.add_post('/fixture/scoped-query', query_control)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -171,6 +211,7 @@ async def main(home):
         await stopped.wait()
     finally:
         try:
+            release_query_gate()
             await runner.cleanup()
         finally:
             for signum in shutdown_signals:
