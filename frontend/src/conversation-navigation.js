@@ -98,7 +98,13 @@ export function createInlineOwnership(){
   adoptTransition(target,id,state){
    const hold=matching(target).find(held)?.transition;
    if(hold&&state)confirmCurrent(hold,state);
-   if(hold?.id===id&&hold.reconciled){const next=hold.next;releaseTransition(hold);return next}
+   if(hold?.id===id&&hold.reconciled){
+    // A receipt confirms host execution, not permission to discard input that
+    // arrived after preparation. Keep the exact mount and receipt on conflict.
+    if(hold.next.dirty||matching(target).some(record=>record.dirty)||
+     !hold.adapter.validate(hold.id,hold.proof))throw Object.assign(Error(inlineEditNotice),{unconfirmed:true});
+    const next=hold.next;releaseTransition(hold);return next;
+   }
   },
   async completeTransition(hold,receipt,state){
    const next=receipt?.result;

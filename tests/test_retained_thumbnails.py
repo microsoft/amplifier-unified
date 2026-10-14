@@ -363,6 +363,22 @@ async def test_unlink_legacy_image_ignores_invalid_publication_version(retained,
     assert invalid == {'messageId': mid, 'version': version}
 
 
+@pytest.mark.parametrize('missing', [True, False])
+async def test_unlink_legacy_current_definition_without_version_entries(retained, missing):
+    _, service, client, sid, mid, records, _ = retained
+    record = records[0]
+    row = make_true_legacy(service, record)
+    if missing:
+        row.pop('versions')
+    else:
+        row['versions'] = []
+    response = await client.post('/api/actions', json={'action': 'outputs.unlink', 'args': {
+        'sessionId': sid, 'id': record['id'], 'expectedRevision': record['revision']}})
+    assert response.status == 200
+    assert service.outputs.store.read(record['id'])['linked'] is False
+    assert row['publications'][0]['chat'] == 'none'
+
+
 async def test_ten_retained_reads_allocate_zero_views_and_release_is_not_revocation(
         authenticated_client, tmp_path):
     app, sid, mid, records, document = await saved_host(tmp_path, 10)

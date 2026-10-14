@@ -147,6 +147,29 @@ test('transition holds veto late dirty/busy input and survive SSE before receipt
  assert.equal(edits.transition(initial),undefined);
 });
 
+test('successful follow receipt cannot discard late dirty input or an invalidated preparation proof',async()=>{
+ for(const change of ['dirty-intent','proof','host-dirty']){
+  const edits=createInlineOwnership(),initial={...target,publishedVersion:2,selectedVersion:2,followLatest:false};
+  const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
+  let frozen=false,proofValid=true,releases=0;
+  edits.register(scope,initial,owner);
+  edits.registerRenderer(initial,{prepare:async()=>{frozen=true;return {token:'exact'}},
+   validate:()=>proofValid,release:()=>{frozen=false;releases++}});
+  const hold=await edits.prepareTransition(initial,'accepted-exact',true,scope);
+  edits.validateTransition(hold,scope);hold.sent=true;
+  const next={...initial,generation:2,selectedVersion:null,followLatest:true};
+  const receipt={accepted:true,result:next},current={...scope,canvasWorkspace:{views:[next]}};
+  await edits.completeTransition(hold,receipt,current);
+  if(change==='dirty-intent')edits.intent(initial,true);
+  if(change==='proof')proofValid=false;
+  if(change==='host-dirty')current.canvasWorkspace.views=[{...next,dirty:true}];
+  assert.throws(()=>edits.adoptTransition(initial,'accepted-exact',current),error=>error.unconfirmed===true);
+  assert.equal(frozen,true);assert.equal(releases,0);
+  assert.equal(edits.transition(initial),hold);assert.equal(hold.receipt,receipt);
+  assert.equal(edits.protectsPublication(owner),true);
+ }
+});
+
 test('missing preparation, explicit refusal and actual scope revocation never authorize a POST',async()=>{
  for(const missing of [true,false]){
   const edits=createInlineOwnership(),scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[target]}};

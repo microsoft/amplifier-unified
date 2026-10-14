@@ -234,15 +234,22 @@ test('actual explicit Latest follows the same publication view, blocks dirty cha
    calls.push({action,args,meta});
    if(action==='canvas.views.inline')return {accepted:true,result:view};
    if(action==='canvas.views.follow'){
+    const hold=await harness.edits.prepareTransition(args,meta.id,args.followLatest,{...state,canvasWorkspace:{views:[view]}});
+    harness.edits.validateTransition(hold,{...state,canvasWorkspace:{views:[view]}});hold.sent=true;
     const before=view;view={...view,followLatest:args.followLatest,selectedVersion:args.followLatest?null:2,generation:view.generation+1};
     assert.equal(args.viewId,before.viewId);assert.equal(args.generation,before.generation);
-    return {accepted:true,result:view};
+    const receipt={accepted:true,result:view};
+    render(); // Replicate the host successor before the component adopts it.
+    await harness.edits.completeTransition(hold,receipt,{...state,canvasWorkspace:{views:[view]}});
+    return receipt;
    }
    return {accepted:true};
   }});
  const render=patch=>harness.render({state:{...state,canvasWorkspace:{views:[view]}},...patch});
  render();render();await settle();render();await settle();
+ let detach=harness.edits.registerRenderer(view,{prepare:async()=>({token:'synthetic-proof'}),validate:()=>true,release(){}});
  await render().follow(true);await settle();render();await settle();
+ detach();detach=harness.edits.registerRenderer(view,{prepare:async()=>({token:'next-proof'}),validate:()=>true,release(){}});
  assert.equal(render().view.followLatest,true);
  assert.equal(render().view.publishedVersion,2);
  view={...view,dirty:true};
@@ -257,6 +264,7 @@ test('actual explicit Latest follows the same publication view, blocks dirty cha
  harness.dispose();await settle();
  assert.equal(calls.filter(row=>row.action==='canvas.views.release').length,1);
  assert.equal(calls.at(-1).args.generation,3,'Cleanup addresses only the last accepted generation');
+ detach();
 });
 
 test('actual live app consumes canonical view updates while primary and another client cannot retarget it',async()=>{
