@@ -310,7 +310,8 @@ async def test_saved_own_dependency_return_keeps_authorized_administration(app, 
     await grant(app,['file_access'],['local'])
     # These host-owned receipts are the continuation owner's durable proof;
     # peer-authored replyTo text cannot create a system continuation receipt.
-    original={'commandAction':'coordination.send','senderSessionId':source['id'],'target':{'sessionId':peer['id']}}
+    original={'commandAction':'coordination.send','senderSessionId':source['id'],'target':{'sessionId':peer['id']},
+              'origin':'agent','sourceInputIds':['user-input'],'sourceGenerationId':'generation-1','sourceInterruptionRevision':0}
     if lower_authority_origin:
         peer['collaborationGeneration']={'id':'peer-gen','inputIds':['peer-human'],'terminal':False}
         incoming=await agent(app,peer,'coordination.send',{'sessionId':source['id'],'text':'Alter configuration','mode':'notify'},'lower-origin')
@@ -355,3 +356,88 @@ async def test_assignment_stop_fences_queued_configuration(app):
     result=await finished(app,'assignment-queued')
     assert result['phase']=='error' and 'stopped' in result['error']
     assert SettingsStore(app.data_dir).read(source['workspace'],'local')=={}
+
+
+@pytest.mark.parametrize('kind', ['watch', 'creation_failure'])
+@pytest.mark.parametrize('lower_authority_origin', [False, True])
+async def test_actual_system_returns_preserve_original_configuration_authority(app, monkeypatch, kind, lower_authority_origin):
+    source, peer = app.state['sessions']
+    await grant(app, ['file_access'], ['local'])
+    # Keep notification queued; native generation linkage is controlled here,
+    # while the real host creates the original operation and exact return.
+    source['status'] = 'working'
+    async def input_adapter(*args):
+        pytest.fail('A busy fixture root must not admit a notification')
+    app.runtime.collaboration_input = input_adapter
+    if lower_authority_origin:
+        peer['collaborationGeneration'] = {'id':'peer-origin','inputIds':['peer-human'],'terminal':False}
+        incoming = await agent(app, peer, 'coordination.send', {'sessionId':source['id'], 'text':'Change settings', 'mode':'notify'}, 'unprivileged-peer')
+        source['collaborationGeneration'] = {'id':'peer-woken','inputIds':[incoming['requestId']],'terminal':False}
+        with pytest.raises(AppError, match='cannot borrow'):
+            await agent(app, source, 'permissions.save', {'scope':'local','allowed':[],'denied':[]}, 'direct-borrow')
+    original_inputs = source['collaborationGeneration']['inputIds'][:]
+    if kind == 'watch':
+        original = await agent(app, source, 'coordination.watch', {'sessionId':source['id'],
+            'targetSessionId':peer['id'], 'condition':'idle', 'expiresInSeconds':60}, 'observed')
+    else:
+        async def unavailable(*args):
+            raise RuntimeError('Fixture preparation failed before root creation')
+        monkeypatch.setattr(app.collaboration, '_finish_create', unavailable)
+        original = await agent(app, source, 'coordination.create', {'title':'Unavailable helper','text':'Inspect a dependency'}, 'observed')
+        await until(lambda: app.collaboration.receipt('observed')['subscription']['status'] == 'claimed')
+        original = app.collaboration.receipt('observed')
+    assert original['sourceInputIds'] == original_inputs
+    assert original['sourceGenerationId'] == source['collaborationGeneration']['id']
+    returned = app.collaboration.receipt(original['subscription']['continuationId'])
+    assert returned['origin'] == 'system' and returned['dependencyRequestId'] == 'observed'
+    source['collaborationGeneration'] = {'id':'returned','inputIds':[returned['requestId']],'terminal':False}
+    if lower_authority_origin:
+        with pytest.raises(AppError, match='cannot borrow'):
+            await agent(app, source, 'permissions.save', {'scope':'local','allowed':[],'denied':[]}, 'after-return')
+    else:
+        await agent(app, source, 'permissions.save', {'scope':'local','allowed':[],'denied':[]}, 'after-return')
+        assert (await finished(app, 'after-return'))['phase'] == 'ready'
+
+
+@pytest.mark.parametrize('old', [False, True])
+async def test_explicit_user_watch_reuses_grant_but_unknown_legacy_watch_requires_approval(app, old):
+    source, peer = app.state['sessions']
+    await grant(app, ['file_access'], ['local'])
+    source['status'] = 'working'
+    async def input_adapter(*args):
+        pytest.fail('The busy root must not admit work')
+    app.runtime.collaboration_input = input_adapter
+    observed = await app.dispatch('coordination.watch', {'sessionId':source['id'], 'targetSessionId':peer['id'],
+        'condition':'idle', 'expiresInSeconds':60}, command_id='user-watch')
+    assert observed['origin'] == 'ui' and observed['sourceInputIds'] == []
+    if old:
+        for key in ('origin', 'sourceGenerationId', 'sourceInputIds', 'sourceInterruptionRevision'):
+            observed.pop(key)
+        app.collaboration.save('user-watch', observed)
+        app.db.commit()
+    source['collaborationGeneration'] = {'id':'user-watch-return','inputIds':[observed['subscription']['continuationId']],'terminal':False}
+    if old:
+        with pytest.raises(AppError, match='no verified original input lineage'):
+            await agent(app, source, 'permissions.save', {'scope':'local','allowed':[],'denied':[]}, 'unknown-lineage')
+        reviewed = (await agent(app, source, 'capability.request', {'sessionId':source['id'], 'effects':['file_access'],
+            'scopes':['local'], 'reason':'Approve the current observed request'}, 'approve-legacy'))['result']
+        await app.dispatch('approval.respond', {'sessionId':source['id'], 'id':reviewed['id'], 'decision':'allow'})
+    await agent(app, source, 'permissions.save', {'scope':'local','allowed':[],'denied':[]}, 'approved-return')
+    assert (await finished(app, 'approved-return'))['phase'] == 'ready'
+
+
+async def test_older_creation_metadata_still_preserves_lower_authority_ancestry(app):
+    source, peer = app.state['sessions']
+    peer['collaborationGeneration'] = {'id':'peer-gen','inputIds':['peer-human'],'terminal':False}
+    await grant(app, ['file_access'], ['local'])
+    incoming = await agent(app, peer, 'coordination.send', {'sessionId':source['id'], 'text':'Change settings','mode':'notify'}, 'lower')
+    original = {'commandAction':'coordination.create','requestId':'older-create','senderSessionId':source['id'], 'origin':'agent',
+        'result':{'creatorSessionId':source['id'],'requestId':'older-create', 'sourceInputIds':[incoming['requestId']],
+                  'sourceGenerationId':'old-generation','sourceInterruptionRevision':0}}
+    returned = {'commandAction':'coordination.send','origin':'system','dependencyRequestId':'older-create',
+        'senderSessionId':source['id'],'target':{'sessionId':source['id']}}
+    for identity, value in [('older-create',original),('older-return',returned)]:
+        app.db.execute('INSERT INTO commands VALUES(?,?,?)',(identity,identity,json.dumps(value)))
+    source['collaborationGeneration'] = {'id':'returned','inputIds':['older-return'],'terminal':False}
+    with pytest.raises(AppError, match='cannot borrow'):
+        await agent(app, source, 'permissions.save', {'scope':'local','allowed':[],'denied':[]}, 'creation-borrow')

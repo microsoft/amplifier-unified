@@ -1464,7 +1464,7 @@ class Collaboration:
                 "requestId": identity, "senderSessionId": source["id"], "workspace": source["workspace"], "protocol": PROTOCOL,
                 "sessionId": new_id, "delivery": "creation_pending", "result": metadata,
                 'creationVersion': 1, 'phase': 'planned', 'title': args['title'], 'origin': origin,
-                'sourceInterruptionRevision': lineage['sourceInterruptionRevision'],
+                **lineage,
                 'sourceTaskId': task.get('id'), 'sourceTaskRevision': task.get('revision'),
                 "initialInputId": identity + ":brief", "detail": "Creation committed; preparation is owned by the service."}
             receipt['assignmentId'] = assignment_id

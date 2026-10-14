@@ -146,6 +146,29 @@ class ConfigurationAuthority:
                 self.service.collaboration.active_binding(source)
         return source
 
+    def continuation_inputs(self, original):
+        """Unknown observation ancestry is not an empty, human-rooted input.
+
+        Older creation receipts retained the exact capture under result metadata;
+        use that host-owned provenance, never current inputs or matching prose.
+        """
+        kind = original.get('commandAction')
+        lineage = original
+        if kind == 'coordination.create' and 'sourceInputIds' not in original:
+            metadata = original.get('result') or {}
+            if (metadata.get('creatorSessionId') == original.get('senderSessionId')
+                    and metadata.get('requestId') == original.get('requestId')):
+                lineage = metadata
+        inputs = lineage.get('sourceInputIds')
+        if (kind not in {'coordination.send', 'coordination.watch', 'coordination.create'}
+                or not isinstance(inputs, list) or len(inputs) > 128
+                or any(not isinstance(item, str) or not item for item in inputs)
+                or type(lineage.get('sourceInterruptionRevision')) is not int
+                or original.get('origin') not in {'ui', 'user'} and (
+                    not lineage.get('sourceGenerationId') or not inputs)):
+            self.error('The saved return has no verified original input lineage. Ask the user to authorize this current request before changing configuration.')
+        return inputs
+
     def peer_authorities(self, source, grant, effect, scope):
         """A lower-authority input cannot borrow a more privileged recipient.
 
@@ -173,7 +196,7 @@ class ConfigurationAuthority:
                 if receipt.get('origin') == 'system' and receipt.get('dependencyRequestId'):
                     original = self.service.collaboration.receipt(receipt['dependencyRequestId'])
                     if original.get('senderSessionId') == target['id']:
-                        visit(target, selected, original.get('sourceInputIds', []), depth+1)
+                        visit(target, selected, self.continuation_inputs(original), depth+1)
                         continue  # Exact saved wait owned by this root.
                 sender = self.service._session(receipt['senderSessionId'], hydrate=False)
                 inherited = next((row for row in self.eligible(sender) if self.valid(row, sender)

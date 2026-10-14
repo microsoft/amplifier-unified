@@ -164,6 +164,7 @@ class Watches:
                     answer = {'accepted': True, 'commandAction': action, 'requestId': identity,
                         'senderSessionId': source['id'], 'target': {'sessionId': target['id']},
                         'workspace': source['workspace'], 'protocol': PROTOCOL, 'causalDepth': depth,
+                        'origin': origin, **lineage,
                         'subscription': self.owner.saved_wait(source, identity),
                         'watch': {'status': 'waiting', 'condition': args['condition'],
                                   'baselineStatus': target.get('status'),

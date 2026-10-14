@@ -264,7 +264,11 @@ retain their own identity and cannot borrow root administration. A fresh peer
 request intersects the receiver grant with its authenticated senders through
 bounded retained input lineage; revoking a sender also fences delayed effects.
 A human can expressly approve the current peer request. Host-created returns to
-the receiver’s own saved dependency wait preserve that receiver’s original grant. Scope names
+the receiver’s own saved dependency wait preserve that receiver’s original grant
+only through verified retained original input lineage. One-shot observations and
+creation-failure returns retain that lineage too; missing legacy observation
+lineage requires explicit approval of the current request, not an assumption that
+its origin was human. Scope names
 describe configuration ownership, not filesystem confinement or read authority.
 
 Accepted delayed changes retain the selected grant revision and interruption
