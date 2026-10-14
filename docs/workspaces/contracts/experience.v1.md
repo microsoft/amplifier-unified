@@ -63,6 +63,29 @@ Workspace details → Files · Chats · Directions · Settings
    normal available-workspace list but reachable through history/recovery. Duplicate
    names gain a host/path qualifier. Full paths remain available in details.
 
+## Workspace work and combined checks
+
+The chat header exposes **Workspace work** directly. Opening it preserves the
+selected chat and its draft. Its initial reads are bounded to that chat and its
+canonical workspace: active peers, actual shared or separate execution folders,
+advisory file overlap, and requests needing attention. Independent peers remain
+independent. Shared tasks and assignment controls are optional disclosures, and
+inspection never starts or follows up a worker. Older rows load only on demand;
+transcripts, exact identities and retained result details stay behind explicit
+inspection. Workspace chat rows include an explicit Open chat action, including
+commissioned helpers omitted from ordinary recent-chat lists. Only that action
+selects the chat and closes the overview after accepted navigation; it uses the
+existing per-client draft and navigation owner.
+
+Combined checks use a repository picker and saved validation rows. Each selected
+source expectation is the exact revision returned by an explicit inspection;
+changing a picker or checking a saved candidate does not silently recapture it.
+Commands still require an explicit Run action. Collecting selected runs observes
+their native evidence without rerunning them. Unknown, pending, failed and passed
+outcomes remain distinct. Manual JSON, receipt identities, import expectations
+and publication declarations remain available under advanced disclosure. A lost
+acknowledgement retains the same invocation identity and arguments for retry.
+
 ## Not in v1
 
 - **Custom sidebar sections** are promoted after users need organization beyond

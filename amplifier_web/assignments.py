@@ -26,7 +26,9 @@ def definitions(schema, string):
                   reserveTokens={'type': 'integer', 'minimum': 0},
                   reserveCostUsd={'type': 'number', 'minimum': 0},
                   unknownPolicy={'enum': ['pause', 'allow']}, includeEstimatedCost={'type': 'boolean'})
+    from .assignment_tasks import definitions as task_definitions
     return {
+        **task_definitions(schema, string),
         'assignment.read': ('Inspect this explicit assignment, its members and aggregate usage without starting workers. Independent peers are not members.', schema(target, ['sessionId'])),
         'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Existing chats are never enrolled.', schema(target, ['sessionId'])),
         'assignment.set': ('Owner sets revision-bound aggregate limits. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
@@ -40,6 +42,8 @@ class Assignments:
     def __init__(self, service):
         self.service = service
         self.interrupting = set()
+        from .assignment_tasks import AssignmentTasks
+        self.tasks = AssignmentTasks(self)
         service.db.execute("""CREATE INDEX IF NOT EXISTS assignment_requests ON commands(
             json_extract(receipt,'$.assignmentId'),json_extract(receipt,'$.commandAction'))""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS assignment_interruptions ON commands(
@@ -246,6 +250,8 @@ class Assignments:
                 'enforcement': 'Supported model admission only. Reservations are allowances; actual calls and effects may exceed them.'}
 
     async def dispatch(self, action, args, origin, command_id, caller):
+        if action.startswith('assignment.tasks.'):
+            return await self.tasks.dispatch(action, args, origin, command_id, caller)
         identity = command_id or str(uuid.uuid4())
         try:
             return await self._dispatch(action, args, origin, identity, caller)

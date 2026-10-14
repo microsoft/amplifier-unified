@@ -32,7 +32,7 @@ export function WorkspaceAwareness({dispatch,sessionId,context,refresh}){
   setPage(response.result);setOffsets(previous?offsets.slice(0,-1):[...offsets,offset]);
  }catch(error){setError(error.message)}finally{setPaging(false)}};
  return <section aria-label="Working in this workspace" className="a-workspace-awareness">
-  <h4>Working in this workspace</h4>
+  <h3>Working here</h3>
   <p className="a-caption">Active chats and declared file plans. Declarations help you coordinate; they do not lock files or prevent overwrites. Activity outside this app is unknown.</p>
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   {loaded&&<>
@@ -42,6 +42,7 @@ export function WorkspaceAwareness({dispatch,sessionId,context,refresh}){
     <strong>{peer.title||'Untitled chat'}</strong> · {peer.status} · {peer.kind==='root'?(peer.commissionedBy?'Commissioned chat':'Independent chat'):'Observed child or internal task'}
     <p>{peer.sameExecutionDirectory?'Shares your execution folder':'Uses a different execution folder'}{peer.declaredOverlap&&' · Declared files overlap'}</p>
     {!peer.sameExecutionDirectory&&<details><summary>Execution folder</summary><code>{peer.executionDirectory}</code>{peer.executionDirectoryTruncated&&' (shortened)'}</details>}
+    {peer.intent.status!=='unavailable'&&!peer.intent.pathCount&&<p className="a-caption">No files declared; overlap is unknown.</p>}
     {peer.intent.status==='unavailable'?<p>Declaration unavailable; overlap is unknown.</p>:peer.intent.pathCount>0&&<>
      <ul>{peer.intent.paths.map((row,index)=><li key={index}><code>{displayPath(row,peer)}</code>{row.kind==='directory'?' (folder)':''}{row.truncated?' (shortened)':''}</li>)}</ul>
      <button className="a-link" type="button" onClick={()=>inspect(peer.sessionId)}>View full declaration</button>

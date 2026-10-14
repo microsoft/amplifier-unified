@@ -1,0 +1,105 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React,{act} from 'react';
+import {create} from 'react-test-renderer';
+import {createServer} from 'vite';
+const server=await createServer({configFile:false,server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const {AssignmentTaskList}=await server.ssrLoadModule('/src/assignment-task-list.jsx');
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+test.after(()=>server.close());
+const board=()=>({assignmentId:'assignment',assignmentRevision:3,assignmentStatus:'active',ownerSessionId:'owner',canManage:true,version:'v1',members:[{sessionId:'owner',label:'Coordinator'},{sessionId:'peer',label:'Draft helper'}],tasks:[{id:'first',title:'Inspect source',description:'Check input',revision:1,status:'open',dependsOn:[],blockedBy:[],readiness:'ready',claim:null},{id:'second',title:'Review report',description:'',revision:1,status:'open',dependsOn:['first'],blockedBy:['first'],readiness:'blocked',claim:null}]});
+const text=root=>JSON.stringify(root.toJSON());
+const button=(root,label)=>root.root.findAllByType('button').find(row=>row.children.join('')===label);
+const expand=async root=>{const details=root.root.findAllByType('details')[0],element={open:true};await act(async()=>details.props.onToggle({target:element,currentTarget:element}))};
+function storage(){const map=new Map();return {getItem:key=>map.get(key),setItem:(key,value)=>map.set(key,value),map}}
+function fixture(value=board(),mutation=()=>({accepted:true,result:{task:board().tasks[0]}})){const calls=[];let resolveWait;const dispatch=(action,args,meta={})=>{calls.push({action,args,meta});if(action.endsWith('.list'))return Promise.resolve({result:structuredClone(value)});if(action.endsWith('.wait'))return new Promise((resolve,reject)=>{resolveWait=resolve;meta.signal?.addEventListener('abort',()=>reject(Error('aborted')),{once:true})});return Promise.resolve().then(()=>mutation(action,args,meta))};return {dispatch,calls,wake:next=>resolveWait({result:next,changed:true})}}
+
+for(const independent of [false,true])test(`passive disclosure and readable ${independent?'independent':'assignment'} scope`,async()=>{
+ globalThis.sessionStorage=storage();const value=independent?{assignmentId:null,tasks:[],members:[],canManage:false,version:'unassigned'}:board();const f=fixture(value);let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});assert.equal(f.calls.length,0);await expand(root);assert.equal(f.calls[0].action,'assignment.tasks.list');assert.equal(f.calls[1].action,'assignment.tasks.wait');assert.equal(f.calls[1].meta.presentation,true);
+ if(independent){assert.match(text(root),/independent chat has no shared task list/);assert.equal(button(root,'Add task'),undefined)}else{assert.match(text(root),/Waiting for: /);assert.match(text(root),/Inspect source/);assert.equal(root.root.findAllByType('button').filter(row=>row.children.join('')==='Claim for this chat').length,1)}
+ }finally{await act(async()=>root.unmount())}
+});
+
+test('peer changes arrive passively and completion stays a report',async()=>{
+ globalThis.sessionStorage=storage();const f=fixture();let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);const next=board();next.version='v2';next.tasks[0]={...next.tasks[0],status:'completed',completion:{report:'Checked source',reportedBy:'peer',verification:'participant_report'}};await act(async()=>f.wake(next));assert.match(text(root),/Reported complete/);assert.match(text(root),/Draft helper/);assert.match(text(root),/Artifact verification and integration remain separate/);assert.ok(f.calls.every(row=>['assignment.tasks.list','assignment.tasks.wait'].includes(row.action)));
+ }finally{await act(async()=>root.unmount())}
+});
+
+test('uncertain claim uses one saved request identity on retry and reload',async()=>{
+ globalThis.sessionStorage=storage();let writes=0;const f=fixture(board(),()=>{if(++writes===1)throw Error('Connection lost');return {accepted:true,result:{task:board().tasks[0]}}});let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);await act(async()=>button(root,'Claim for this chat').props.onClick());assert.match(text(root),/no confirmed response/);const first=f.calls.find(row=>row.action==='assignment.tasks.claim');await act(async()=>root.unmount());await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);await act(async()=>button(root,'Check the same task change').props.onClick());const claims=f.calls.filter(row=>row.action==='assignment.tasks.claim');assert.equal(claims.length,2);assert.equal(claims[1].meta.id,first.meta.id);assert.deepEqual(claims[1].args,first.args);assert.doesNotMatch(text(root),/no confirmed response/);
+ }finally{await act(async()=>root.unmount())}
+});
+
+test('session switch ignores delayed previous board and keeps drafts private',async()=>{
+ globalThis.sessionStorage=storage();let release;const calls=[];const dispatch=(action,args,meta)=>{calls.push({action,args,meta});if(args.sessionId==='first'&&action.endsWith('.list'))return new Promise(resolve=>{release=()=>resolve({result:{...board(),tasks:[{...board().tasks[0],title:'OLD PRIVATE TASK'}]}})});if(action.endsWith('.list'))return Promise.resolve({result:{...board(),tasks:[]}});return new Promise((resolve,reject)=>meta.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}))};let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch,sessionId:'first'}))});await expand(root);await act(async()=>root.update(React.createElement(AssignmentTaskList,{dispatch,sessionId:'second'})));await act(async()=>release());assert.doesNotMatch(text(root),/OLD PRIVATE TASK/);await expand(root);assert.equal(calls.filter(row=>row.args.sessionId==='second'&&row.action.endsWith('.list')).length,1);
+ }finally{await act(async()=>root.unmount())}
+});
+
+test('stale responsibility cannot complete and reassignment explains running effects',async()=>{
+ globalThis.sessionStorage=storage();const value=board();value.tasks[0]={...value.tasks[0],status:'claimed',claim:{id:'claim',sessionId:'owner',status:'stale',detail:'The holder was stopped.'}};const f=fixture(value);let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);assert.match(text(root),/Claim needs review/);assert.match(text(root),/Prior file or tool work may continue/);assert.equal(button(root,'Mark reported complete'),undefined);await act(async()=>button(root,'Release claim').props.onClick());const release=f.calls.find(row=>row.action==='assignment.tasks.release');assert.equal(release.args.claimId,'claim');assert.equal(release.args.expectedRevision,1);
+ }finally{await act(async()=>root.unmount())}
+});
+
+
+test('an unconfirmed response keeps the exact pending request',async()=>{
+ globalThis.sessionStorage=storage();const f=fixture(board(),()=>({accepted:false}));let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);await act(async()=>button(root,'Claim for this chat').props.onClick());assert.match(text(root),/no confirmed receipt/);assert.ok(button(root,'Check the same task change'));const saved=JSON.parse(sessionStorage.getItem('amplifier-assignment-tasks:owner'));assert.equal(saved.pending.id,f.calls.find(row=>row.action==='assignment.tasks.claim').meta.id);
+ }finally{await act(async()=>root.unmount())}
+});
+
+test('task revision updates refresh assignment controls without usage reads',async()=>{
+ globalThis.sessionStorage=storage();const value=board();value.assignmentControl={id:'assignment',revision:3,status:'active',ownerSessionId:'owner',limits:{maxOpenTasks:8},members:{owner:{status:'bound'}}};const f=fixture(value),observed=[];let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner',onAssignmentChange:row=>observed.push(row)}))});await expand(root);const next=structuredClone(value);next.version='v2';next.assignmentControl.revision=4;await act(async()=>f.wake(next));assert.deepEqual(observed.map(row=>row.revision),[3,4]);assert.ok(f.calls.every(row=>row.action.startsWith('assignment.tasks.')));
+ }finally{await act(async()=>root.unmount())}
+});
+
+const {AssignmentControls}=await server.ssrLoadModule('/src/assignment-controls.jsx');
+const control=revision=>({id:'assignment',revision,status:'active',ownerSessionId:'owner',limits:{maxOpenTasks:8},members:{owner:{status:'bound'}}});
+const scopedBoard=(revision,status='active')=>({...board(),assignmentRevision:revision,assignmentStatus:status,version:'v'+revision,assignmentControl:{...control(revision),status}});
+const defer=()=>{let resolve;const promise=new Promise(done=>{resolve=done});return {promise,resolve}};
+const disclosure=(root,label)=>root.root.findAllByType('details').find(row=>row.findAllByType('summary')[0]?.children.join('')===label);
+const toggle=async(root,label,open)=>{const element={open};await act(async()=>disclosure(root,label).props.onToggle({target:element,currentTarget:element}))};
+
+test('late task wait cannot undo a newer confirmed parent Stop',async()=>{
+ globalThis.sessionStorage=storage();let revision=3,reads=0;const waits=[];
+ const dispatch=action=>{if(action==='assignment.read'){reads++;return Promise.resolve({result:{assignment:{...control(revision),status:revision===5?'stopped':'active'}}})}if(action==='assignment.stop'){revision=5;return Promise.resolve({accepted:true})}if(action==='assignment.tasks.list')return Promise.resolve({result:scopedBoard(revision,revision===5?'stopped':'active')});if(action==='assignment.tasks.wait'){const wait=defer();waits.push(wait);return wait.promise}throw Error(action)};let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentControls,{dispatch,sessionId:'owner'}))});await toggle(root,'Shared tasks and assignment',true);await toggle(root,'Shared task list',true);const old=waits[0];await act(async()=>button(root,'Stop assignment').props.onClick());assert.equal(reads,2);assert.equal(button(root,'Stop assignment'),undefined);await act(async()=>old.resolve({result:scopedBoard(4)}));assert.match(text(root),/Assignment stopped/);assert.equal(button(root,'Stop assignment'),undefined);assert.equal(button(root,'Claim for this chat'),undefined)}finally{await act(async()=>root.unmount())}
+});
+
+test('late parent read cannot replace newer task-projected assignment revision',async()=>{
+ globalThis.sessionStorage=storage();const old=defer(),waits=[];let reads=0;
+ const dispatch=action=>{if(action==='assignment.read')return ++reads===1?Promise.resolve({result:{assignment:control(3)}}):old.promise;if(action==='assignment.tasks.list')return Promise.resolve({result:scopedBoard(3)});if(action==='assignment.tasks.wait'){const wait=defer();waits.push(wait);return wait.promise}throw Error(action)};let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentControls,{dispatch,sessionId:'owner'}))});await toggle(root,'Shared tasks and assignment',true);await toggle(root,'Shared task list',true);act(()=>{button(root,'Refresh assignment').props.onClick()});await act(async()=>waits[0].resolve({result:scopedBoard(5,'stopped')}));await act(async()=>old.resolve({result:{assignment:control(4)}}));assert.match(text(root),/Assignment stopped/);assert.equal(button(root,'Stop assignment'),undefined)}finally{await act(async()=>root.unmount())}
+});
+
+for(const boundary of ['mutation','close','visibility'])test(`task observations invalidated immediately at ${boundary}`,async()=>{
+ globalThis.sessionStorage=storage();const waits=[],write=defer();let visibility;
+ if(boundary==='visibility')globalThis.document={hidden:false,addEventListener:(_,fn)=>{visibility=fn},removeEventListener:()=>{}};
+ const dispatch=action=>{if(action.endsWith('.list'))return Promise.resolve({result:board()});if(action.endsWith('.wait')){const wait=defer();waits.push(wait);return wait.promise}return write.promise};let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch,sessionId:'owner'}))});await expand(root);const late={...board(),version:'old-late',tasks:[{...board().tasks[0],title:'STALE OBSERVATION'}]};await act(async()=>{if(boundary==='mutation')button(root,'Claim for this chat').props.onClick();else if(boundary==='close'){const el={open:false};disclosure(root,'Shared task list').props.onToggle({target:el,currentTarget:el})}else{document.hidden=true;visibility()}waits[0].resolve({result:late})});assert.doesNotMatch(text(root),/STALE OBSERVATION/);if(boundary==='mutation')await act(async()=>write.resolve({accepted:true,result:{task:board().tasks[0]}}))}finally{await act(async()=>root.unmount());if(boundary==='visibility')delete globalThis.document}
+});
+
+test('replacement claim preserves private report and requires deliberate rebinding',async()=>{
+ globalThis.sessionStorage=storage();const claimed=(id,revision)=>{const value=board();value.assignmentRevision=revision;value.version='v'+revision;value.tasks[0]={...value.tasks[0],revision,status:'claimed',claim:{id,sessionId:'owner',status:'current'}};return value};const f=fixture(claimed('original',3));let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);const report=()=>root.root.findAllByType('textarea').find(row=>row.props.maxLength===4000&&row.props.required);await act(async()=>report().props.onChange({target:{value:'PRIVATE COMPLETION DRAFT'}}));assert.equal(report().props['data-private'],'true');const released=board();released.assignmentRevision=4;released.version='v4';await act(async()=>f.wake(released));await act(async()=>f.wake(claimed('replacement',5)));assert.equal(report().props.value,'PRIVATE COMPLETION DRAFT');assert.match(text(root),/Your report is retained for the earlier claim/);assert.equal(button(root,'Mark reported complete').props.disabled,true);await act(async()=>button(root,'Use reviewed report for current claim').props.onClick());await act(async()=>button(root,'Mark reported complete').parent.props.onSubmit({preventDefault(){}}));const receipt=f.calls.find(row=>row.action==='assignment.tasks.complete');assert.equal(receipt.args.claimId,'replacement');assert.equal(receipt.args.expectedRevision,5);assert.equal(receipt.args.report,'PRIVATE COMPLETION DRAFT')}finally{await act(async()=>root.unmount())}
+});
+
+test('confirmed claim conflict clears only request, preserves private task draft and refreshes',async()=>{
+ globalThis.sessionStorage=storage();const f=fixture(board(),()=>{throw Object.assign(Error('Another member claimed this task. Read current tasks.'),{status:409})});let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);const title=root.root.findAllByType('input').find(row=>row.props.maxLength===200);await act(async()=>title.props.onChange({target:{value:'PRIVATE TASK DRAFT'}}));for(const field of root.root.findAll(row=>['input','textarea'].includes(row.type)&&row.props.type!=='checkbox'))assert.equal(field.props['data-private'],'true');await act(async()=>button(root,'Claim for this chat').props.onClick());assert.match(text(root),/Another member claimed this task/);assert.equal(button(root,'Check the same task change'),undefined);assert.equal(JSON.parse(sessionStorage.getItem('amplifier-assignment-tasks:owner')).draft.title,'PRIVATE TASK DRAFT');assert.equal(f.calls.filter(row=>row.action==='assignment.tasks.list').length,2)}finally{await act(async()=>root.unmount())}
+});
+
+for(const status of [408,503])test(`uncertain ${status} keeps exact claim retry`,async()=>{
+ globalThis.sessionStorage=storage();const f=fixture(board(),()=>{throw Object.assign(Error('No confirmed result'),{status})});let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentTaskList,{dispatch:f.dispatch,sessionId:'owner'}))});await expand(root);await act(async()=>button(root,'Claim for this chat').props.onClick());assert.ok(button(root,'Check the same task change'));assert.equal(JSON.parse(sessionStorage.getItem('amplifier-assignment-tasks:owner')).pending.id,f.calls.find(row=>row.action==='assignment.tasks.claim').meta.id)}finally{await act(async()=>root.unmount())}
+});
+
+test('integration member fallback stays distinct without loading more histories',async()=>{
+ globalThis.sessionStorage=storage();const calls=[];const assignment={...control(3),members:{owner:{status:'bound'},'unlisted-a':{status:'bound'},'unlisted-b':{status:'bound'}}};const dispatch=async action=>{calls.push(action);return {result:{assignment}}};let root;
+ try{await act(async()=>{root=create(React.createElement(AssignmentControls,{dispatch,sessionId:'owner'}))});await toggle(root,'Shared tasks and assignment',true);const names=root.root.findAllByType('option').map(row=>row.children.join(''));assert.ok(names.includes('Member chat · unlisted-a'));assert.ok(names.includes('Member chat · unlisted-b'));assert.deepEqual(calls,['assignment.read'])}finally{await act(async()=>root.unmount())}
+});

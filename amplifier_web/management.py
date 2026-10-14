@@ -511,7 +511,7 @@ class Management:
             self.service.state['draftDefaults'] = {}
             self.service.state.setdefault('setup', {}).pop('providersRequestedWorkspace', None)
             for session in self.service.state['sessions']:
-                if not session.get('historyManaged') and (session_ids is None or session['id'] in session_ids):
+                if (not session.get('historyManaged') or session.get('fileAccessPending')) and (session_ids is None or session['id'] in session_ids):
                     changed.add(session['id'])
                     session['configurationPending']=True
                     session['configurationPendingRevision']=self.service.state['configurationRevision']
@@ -852,6 +852,32 @@ class Management:
             await self.publish(notificationSettings=self.notifications.public())
         elif action=='notifications.save':
             await self.publish(notificationSettings=self.notifications.save(args['patch']))
+        elif action in {'permissions.get', 'permissions.save', 'permissions.reset'} and args.get('scope') == 'session':
+            from .chat_permissions import target, snapshot, change, PENDING_DETAIL
+            if action == 'permissions.get':
+                session = target(self, args)
+                result = snapshot(self, session)
+            else:
+                marked = False
+                try:
+                    async with self.service.lock:
+                        session = target(self, args)
+                        def before_write():
+                            nonlocal marked
+                            # Persist the admission fence BEFORE Foundation's
+                            # atomic settings write. A lost write/ack stays
+                            # fenced until retirement proves the next mount
+                            # reads canonical settings. No-op calls never enter.
+                            session.update(fileAccessPending=True, configurationPending=True)
+                            if not session.get('configurationBusy'):
+                                session['configurationRefresh'] = {'phase':'pending', 'detail':PENDING_DETAIL}
+                            marked = True
+                            self.service._publish_changes(sessions={session['id']})
+                        result = change(self, args, reset=action == 'permissions.reset', before_write=before_write)
+                finally:
+                    if marked:
+                        await self.invalidate_configuration(warm=False, session_ids={session['id']})
+            await self.publish(permissions={**result, 'commandId': command_id})
         elif action=='permissions.get':
             session=self.configuration_session(args);scope=args.get('scope','global')
             config=self.settings.read(session['workspace'],scope)

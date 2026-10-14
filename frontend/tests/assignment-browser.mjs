@@ -18,7 +18,7 @@ try{
  await composer.fill('Private assignment draft');
  await action('view.update',{patch:{panel:'chat-work'}});
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
- const panel=page.locator('.a-assignment');await panel.getByText('Commissioned assignment',{exact:true}).click();
+ const panel=page.locator('.a-assignment');await panel.getByText('Shared tasks and assignment',{exact:true}).click();
  await panel.getByRole('button',{name:'Start assignment',exact:true}).click();
  await expect(panel).toContainText('Assignment active');
  await panel.getByText('Integration responsibility',{exact:true}).click();
@@ -36,7 +36,7 @@ try{
  await panel.getByRole('button',{name:'Save assignment limits',exact:true}).click();
  await expect(panel.getByRole('alert')).toContainText('revision changed');
  await expect(panel.getByLabel('Total token limit',{exact:true})).toHaveValue('20000');
- await page.reload();await panel.getByText('Commissioned assignment',{exact:true}).click();
+ await page.reload();await panel.getByText('Shared tasks and assignment',{exact:true}).click();
  await panel.getByText('Assignment limits',{exact:true}).click();
  await expect(panel.getByLabel('Total token limit',{exact:true})).toHaveValue('20000');
  await panel.getByRole('button',{name:'Discard draft and use latest',exact:true}).click();

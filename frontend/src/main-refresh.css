@@ -116,3 +116,23 @@
 :where(#amp-one,#amp-one *)::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--a-muted) 38%,transparent);border:2px solid transparent;background-clip:padding-box;border-radius:8px}
 :where(#amp-one,#amp-one *)::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,var(--a-muted) 65%,transparent)}
 @media(forced-colors:active){:where(#amp-one,#amp-one *){scrollbar-color:auto;scrollbar-width:auto}}
+
+/* Host-owned workspace inspection layout follows persisted theme CSS. */
+#amp-one .a-work-overview-entry{display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap;flex:none}
+#amp-one .a-work-overview-entry svg{width:1rem;height:1rem;flex:none}
+#amp-one .a-work-overview-entry .a-work-overview-short{display:none}
+#amp-one .a-workspace-work,#amp-one .a-integration-work{min-width:0;overflow-wrap:anywhere}
+#amp-one .a-workspace-work>details,#amp-one .a-coordination-related>details{margin-block:1rem}
+#amp-one .a-workspace-work code,#amp-one .a-integration-work code{white-space:pre-wrap;overflow-wrap:anywhere}
+#amp-one .a-workspace-work .a-dialog-actions,#amp-one .a-integration-work .a-dialog-actions{display:flex;flex-wrap:wrap;gap:.5rem}
+#amp-one .a-integration-work :is(input:not([type=radio]),select,textarea){box-sizing:border-box;width:100%;max-width:100%;min-width:0}
+#amp-one .a-integration-work :is(fieldset,article,section){min-width:0;max-width:100%;box-sizing:border-box;margin-block:.75rem}
+#amp-one .a-integration-work fieldset{padding:.75rem;border:1px solid var(--a-border,#8884);border-radius:.5rem}
+#amp-one .a-integration-work label{display:block;margin-block:.5rem}
+#amp-one .a-integration-work label.a-integration-run{display:flex;align-items:flex-start;gap:.5rem}
+#amp-one .a-integration-run>input[type=radio]{flex:none;width:auto;margin:.25rem 0 0}
+#amp-one .a-integration-run>span{min-width:0;flex:1}
+#amp-one .a-integration-run small{display:block;margin-top:.25rem}
+#amp-one .a-workspace-work button,#amp-one .a-integration-work button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#amp-one .a-workspace-work pre,#amp-one .a-integration-work pre{max-width:100%;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:600px){#amp-one .a-work-overview-entry .a-work-overview-long{display:none}#amp-one .a-work-overview-entry .a-work-overview-short{display:inline}#amp-one .a-workspace-work .a-coordination-related{padding:.5rem}#amp-one .a-integration-work fieldset{padding:.5rem}}
