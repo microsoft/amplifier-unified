@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -41,7 +40,7 @@ def forbidden(kind):
     raise AssertionError('Unexpected ' + kind)
 
 
-def isolate_probes():
+def isolate_probes(cache_home):
     # Install guards BEFORE create_app can schedule any producer. Runtime mocks
     # alone do not prevent independent defaults/catalog/naming SDK probes.
     from amplifier_web import draft_defaults, automatic_naming, naming_backfill
@@ -82,12 +81,15 @@ def isolate_probes():
     SetupManager.cached_probe = lambda *args, **kwargs: forbidden('provider-probe')
     Management.perform = management
 
-    async def subprocess_async(*args, **kwargs):
-        return forbidden('subprocess')
-
-    asyncio.create_subprocess_exec = subprocess_async
-    asyncio.create_subprocess_shell = subprocess_async
-    subprocess.Popen = lambda *args, **kwargs: forbidden('subprocess')
+    # The display-only projector is a canonical reader, not a model/runtime
+    # producer. Keep every other subprocess forbidden, including direct Popen.
+    # Load the helper by fixture path so installed mode keeps package authority.
+    spec = importlib.util.spec_from_file_location('inline_media_process_guard',
+        Path(__file__).with_name('inline_media_process_guard.py'))
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    guard.install(cache_home, forbidden,
+        lambda: COUNTERS.update({'display-projector-start': 1}))
 
 
 class NoModel:
@@ -113,7 +115,7 @@ async def main():
         os.environ.update(AMPLIFIER_HOME=str(root / 'native'), AMPLIFIER_WEB_HOME=str(root / 'app'),
                           AMPLIFIER_SESSION_STATE_HOME=str(root / 'locks'),
                           AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / 'legacy'))
-        isolate_probes()
+        isolate_probes(root / 'app')
         loop = asyncio.get_running_loop()
         loop.set_exception_handler(lambda loop, context: ERRORS.append(str(context.get('exception') or context.get('message'))))
         auth.authenticate_pam = lambda user, password: (user, password) == ('media-fixture', 'fixture-password')
