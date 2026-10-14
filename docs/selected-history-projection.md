@@ -40,6 +40,36 @@ re-enable it. Bounded output receipts retain at most 2,048 paths / 256 KiB; if a
 receipt cannot be retained, a published owner invalidation re-enables the request.
 Refusal receipts contain only digests/source facts, never execution trees.
 
+The qualified process reader also publishes a bounded completion receipt in
+the selected owner's `workProjection`. `receipt` contains the host instance and
+session IDs, a positive host-local `generation`, and `sourceCount`, `nodeCount`
+and `turnCount`. The counts use the already accepted source receipt and tree;
+collecting them adds no history reads, body traversal or hashing. A generation
+is issued only after the existing exact-input, source-stamp and owner/fence
+checks accept the read. Quiet passive validation preserves that generation and
+does not publish a periodic diagnostic update. Status-only transitions use the
+existing bounded selected-web notification and state-delta lane at the unchanged
+application revision; they do not save state or execution. Each selected client
+receives its own immutable frame with its private view/draft. Changed execution
+continues through ordinary durable publication. These ephemeral display receipts
+do not grant command, accounting or execution authority.
+
+`current: false` preserves the previous receipt during loading, retry or refusal.
+Published invalidation and projection retirement remove its current claim before
+another frame can report it. This process-local status is excluded from saved
+views. Missing receipts, another host/session, and the unqualified threaded
+platform path do not certify completion. The paired browser exposes only these
+fixed scalar facts in a bounded `data-work-projection` attribute on the canonical
+messages pane. Acceptance records first messages and first Work headers separately
+from `projectionReadyMs`; captures with `expectWork` require an explicit current
+receipt for the exact host and session before reporting ready.
+
+This proves acceptance of the existing reader's discovered source scope, not an
+independent inventory of every canonical event or eventual undiscovered child.
+Rendered headers can merge or split and are not canonical node/turn totals. The
+bounded group page and any independently qualified source oracle remain separate
+evidence; a missing loading banner is never a completion receipt.
+
 The transport admits at most eight jobs, with 32 MiB encoded inputs, 64 MiB results
 and 256 MiB aggregate spool reservation. Shared exact-key/input jobs outlive an
 individual canceled waiter. EOF, shutdown, timeout and a failed worker retire
