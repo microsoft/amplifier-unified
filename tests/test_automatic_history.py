@@ -95,6 +95,70 @@ async def finish_actions(app):
         await asyncio.wait_for(asyncio.gather(*list(app.tasks)), timeout=5)
 
 
+@pytest.mark.parametrize('change', [None, 'append', 'replace'])
+async def test_selected_refresh_rechecks_source_after_waiting_for_initial_read(
+        tmp_path, app_factory, monkeypatch, change):
+    import threading
+    from amplifier_web import automatic_history
+
+    directory = native_session(tmp_path / 'cli', 'overlapping-selection')
+    app = app_factory()
+    await app.history.refresh()
+    row = next(row for row in app.state['sessions']
+               if row.get('nativeIdentity') == 'overlapping-selection')
+    app.state['selectedSessionId'] = row['id']
+    entered, queued, release = asyncio.Event(), asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    original_read, original_load = automatic_history.read_transcript, app.history.load
+    reads, loads = [], []
+
+    def read(*args, **kwargs):
+        result = original_read(*args, **kwargs)
+        reads.append(result['revision'])
+        if len(reads) == 1:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+        return result
+
+    async def load(*args, **kwargs):
+        loads.append(args[0])
+        if len(loads) == 2:
+            queued.set()
+        return await original_load(*args, **kwargs)
+
+    monkeypatch.setattr(automatic_history, 'read_transcript', read)
+    monkeypatch.setattr(app.history, 'load', load)
+    initial = asyncio.create_task(app.history.refresh_session(row['id']))
+    selected = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        selected = asyncio.create_task(app.history._refresh_selected_history())
+        await asyncio.wait_for(queued.wait(), 5)
+        assert not selected.done() and row['historyLoaded'] is False
+        if change:
+            transcript = directory / 'transcript.jsonl'
+            message = json.dumps({'role': 'assistant', 'content': 'New canonical answer'}) + '\n'
+            if change == 'append':
+                with transcript.open('a') as stream:
+                    stream.write(message)
+            else:
+                replacement = directory / 'replacement.jsonl'
+                replacement.write_text(message)
+                replacement.replace(transcript)
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(initial, *([selected] if selected else [])), 5)
+
+    assert len(reads) == (2 if change else 1)
+    assert row['nativeRevision'] == automatic_history.revision(row)
+    assert row['historyLoaded'] and not row['historyLoading'] and not row['historyError']
+    assert [message['text'] for message in row['messages']] == (
+        ['New canonical answer'] if change == 'replace' else
+        ['Saved CLI question', 'Saved CLI answer', 'New canonical answer'] if change else
+        ['Saved CLI question', 'Saved CLI answer'])
+    assert not app.runtime.started and not app.runtime.sent
+
+
 async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_path, app_factory, monkeypatch):
     from amplifier_web import automatic_history
     native_session(tmp_path / 'native-project', 'bounded-reader', [

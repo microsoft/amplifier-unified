@@ -15,10 +15,12 @@ try{
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const scenario=data=>page.evaluate(async data=>{const client=window.amplifier.shellClientId;const response=await fetch('/fixture/scenario',{method:'POST',headers:{'Content-Type':'application/json','X-Amplifier-Client':client},body:JSON.stringify(data)});if(!response.ok)throw Error(await response.text())},data);
  const inspect=()=>page.request.get(url+'/fixture').then(r=>r.json());
- const setup=()=>action('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['desktop']}});
+ const globalSetup=()=>action('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['desktop']}});
+ const setup=()=>action('view.update',{patch:{panel:'chat-computer'}});
  const check=()=>page.getByRole('button',{name:'Check desktop and browser setup',exact:true}).click();
- await setup();assert.equal((await inspect()).nativeCalls.length,0);
+ await globalSetup();assert.equal((await inspect()).nativeCalls.length,0);
  await check();await expect(page.getByText('Native observation: backend_not_installed',{exact:true})).toBeVisible();
+ await expect(page.getByRole('region',{name:'Conversation computer tools',exact:true})).toHaveCount(0);
  assert.equal((await inspect()).started.length,0);assert.deepEqual((await inspect()).runtimeCalls,[]);
  await action('session.create',{title:'Readiness caller'});const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await action('view.update',{patch:{draft:'Preserve this unsent draft'}});await setup();await check();
@@ -26,6 +28,7 @@ try{
  await expect(page.getByText('/synthetic/worker/bin/python',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Open computer target setup',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Open computer target setup',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Refresh tool catalog',exact:true})).toBeVisible();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.runtimeDraft.tool),'computer_use_unavailable');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.runtimeDraft.toolArgs),'{"action":"discover"}');
  await setup();await scenario({native:'permission'});await check();await expect(page.getByText('Native observation: permission_required',{exact:true})).toBeVisible();

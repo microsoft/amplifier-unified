@@ -29,6 +29,32 @@ from .session_files import amplifier_home, project_slug
 logger = logging.getLogger(__name__)
 
 
+def source_change_reasons(previous, current):
+    """Classify already-observed stamps without paths, contents or new reads."""
+    before, after = dict(previous), dict(current)
+    for path in before.keys() | after.keys():
+        if path not in before or path not in after:
+            # A superseded projection can change the tracked source set. A
+            # newly tracked missing file is not evidence that it appeared.
+            reason = 'tracked'
+        else:
+            old, new = before[path], after[path]
+            if old == new:
+                continue
+            if old is None:
+                reason = 'appeared'
+            elif new is None:
+                reason = 'disappeared'
+            elif old[0] != new[0]:
+                reason = 'replaced'
+            elif old[1] != new[1]:
+                reason = 'resized'
+            else:
+                reason = 'metadata'
+        kind = 'events' if Path(path).name == 'events.jsonl' else 'transcript'
+        yield kind, reason
+
+
 def same_model_call(observed, native):
     """Identify duplicate telemetry, allowing admission time before dispatch."""
     if observed.get('model') != native.get('model') or (observed.get('provider') and native.get('provider') and observed['provider'] != native['provider']):
@@ -476,14 +502,16 @@ class EventIndex:
         return merge_model_observations(rows) if coalesce else rows
 
 
-def retained_index_size(index):
+def retained_index_size(index, *, limit=None):
     """Charge built-in index payloads once, including association bodies.
 
     This excludes Path internals, cache bookkeeping, RSS and allocator overhead.
     Shared objects across indexes are charged separately (a conservative bound).
     Only changed indexes are measured; an unchanged refresh reuses its charge.
+    With a limit, stop once the partial charge already proves rejection. Such
+    a result is never used as the retained charge of an admitted index.
     """
-    seen, pending, total = set(), [vars(index), str(index.path)], 0
+    seen, pending, total = set(), [vars(index), str(index.path)], sys.getsizeof(index)
     while pending:
         value = pending.pop()
         identity = id(value)
@@ -491,12 +519,14 @@ def retained_index_size(index):
             continue
         seen.add(identity)
         total += sys.getsizeof(value)
+        if limit is not None and total > limit:
+            return total
         if isinstance(value, dict):
             pending.extend(value.keys())
             pending.extend(value.values())
         elif isinstance(value, (list, tuple, set, frozenset)):
             pending.extend(value)
-    return total + sys.getsizeof(index)
+    return total
 
 
 class EventLogView:
@@ -504,6 +534,7 @@ class EventLogView:
     # Either limit can retire an index; canonical files remain authoritative.
     MAX_INDEXES = 256
     MAX_INDEX_BYTES = 64 * 1024 * 1024
+    MAX_SIZE_RECEIPTS = 256
 
     def __init__(self, service):
         self.service = service
@@ -511,6 +542,10 @@ class EventLogView:
         self.checkpoints = Checkpoints(service.data_dir) if getattr(service, 'data_dir', None) else None
         self.indexes = OrderedDict()
         self._index_sizes = {}
+        # Negative admission receipts retain only source revisions and a budget,
+        # never descriptors or an index. Restored object sharing can differ, so
+        # a receipt may only reject retention, never supply an admitted charge.
+        self._oversized = OrderedDict()
         self.retained_index_bytes = 0
         # Cancellation releases the async refresh lock before to_thread ends.
         # Keep cache accounting serialized until the actual reader has exited.
@@ -548,8 +583,16 @@ class EventLogView:
         key = str(index.path)
         previous = self._index_sizes.get(key)
         signature = (index.revision, index.association_revision)
+        rejected = self._oversized.get(key)
         try:
-            size = previous[1] if previous and previous[0] == signature else retained_index_size(index)
+            if previous and previous[0] == signature:
+                size = previous[1]
+            elif rejected and rejected[0] == signature and self.MAX_INDEX_BYTES <= rejected[1]:
+                size = self.MAX_INDEX_BYTES + 1
+                count(self.service, 'events.index.size_rejected_reused')
+            else:
+                with measure(self.service, 'events.index.size', synchronous=True):
+                    size = retained_index_size(index, limit=self.MAX_INDEX_BYTES)
         except BaseException:
             self._forget_index(key)
             raise
@@ -558,8 +601,13 @@ class EventLogView:
         # cannot permanently displace the entire bounded recent working set.
         if size > self.MAX_INDEX_BYTES:
             count(self.service, 'events.index.oversize')
+            self._oversized[key] = (signature, self.MAX_INDEX_BYTES)
+            self._oversized.move_to_end(key)
+            while len(self._oversized) > self.MAX_SIZE_RECEIPTS:
+                self._oversized.popitem(last=False)
             self._checkpoint(index)
             return
+        self._oversized.pop(key, None)
         self.indexes[key] = index
         self._index_sizes[key] = (signature, size)
         self.retained_index_bytes += size
@@ -1026,6 +1074,8 @@ class EventLogView:
                     count(self.service, 'events.rebuild.input')
                 if not same_sources:
                     count(self.service, 'events.rebuild.source')
+                    for kind, reason in source_change_reasons(cached[1], before):
+                        count(self.service, 'events.source.' + kind + '.' + reason)
             previous = copy.deepcopy(inputs)
             tree = await asyncio.to_thread(self.read, previous)
             if self.service.closed:

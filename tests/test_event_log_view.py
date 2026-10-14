@@ -1306,6 +1306,31 @@ async def test_projection_rebuild_diagnostics_distinguish_input_source_and_root(
     assert {key: counters['events.rebuild.' + key] for key in ('cold', 'input', 'source', 'root')} == {
         'cold': 1, 'input': 1, 'source': 1, 'root': 1}
     assert counters['events.projection.reused'] == 1
+    assert counters['events.source.events.resized'] == 1
+    assert str(path) not in json.dumps(diagnostics.snapshot())
+
+
+@pytest.mark.parametrize('name,kind', [
+    ('events.jsonl', 'events'), ('transcript.jsonl', 'transcript'),
+    ('transcript.jsonl.backup', 'transcript'), ('transcript.jsonl.append-pending', 'transcript')])
+def test_source_rebuild_reasons_distinguish_tracking_from_canonical_changes(name, kind):
+    from amplifier_web.event_log_view import source_change_reasons
+    path = '/private/workspace/session-sentinel/' + name
+    stamp = ((1, 2), 100, 30, 40)
+    present, missing = [(path, stamp)], [(path, None)]
+    assert list(source_change_reasons(present, present)) == []
+    assert list(source_change_reasons(missing, missing)) == []
+    for before, after, reason in (
+            ([], missing, 'tracked'), (missing, [], 'tracked'),
+            ([], present, 'tracked'), (present, [], 'tracked'),
+            (missing, present, 'appeared'), (present, missing, 'disappeared'),
+            (present, [(path, ((1, 3), 101, 31, 41))], 'replaced'),
+            (present, [(path, ((1, 2), 101, 31, 41))], 'resized'),
+            (present, [(path, ((1, 2), 100, 31, 40))], 'metadata'),
+            (present, [(path, ((1, 2), 100, 30, 41))], 'metadata')):
+        reasons = list(source_change_reasons(before, after))
+        assert reasons == [(kind, reason)]  # One strongest reason per source.
+        assert 'sentinel' not in json.dumps(reasons)
 
 
 def test_projection_stage_failure_closes_measurement_and_preserves_retry(source, monkeypatch):

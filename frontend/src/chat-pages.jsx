@@ -12,6 +12,7 @@ import {Questions} from './questions';
 import {FeedbackDiagnostics} from './feedback';
 import {settingsPatch} from './settings-navigation';
 import {RuntimeSettings} from './runtime-settings';
+import {DesktopReadiness} from './desktop-readiness';
 import {BundleControl} from './bundle-controls';
 import {BundleSettings} from './bundles';
 import {CapacityControls} from './capacity';
@@ -83,6 +84,7 @@ export function ChatPages({page,state,session,act,dispatch=act,open,working,comp
   {groups.filter(row=>runtimeSeen.current.has(row[0])).map(activeGroup=><div key={activeGroup[0]} hidden={group?.[0]!==activeGroup[0]}>{back}{page==='runtime'&&<h3>{activeGroup[1]}</h3>}<RuntimeSettings state={state} session={session} act={act} group={activeGroup[3]} computerControls={computerControls} extras={<>
    {activeGroup[3]==='direction'&&<section className="a-settings-section"><h3>Tasks &amp; workers</h3><div className="a-dialog-actions"><SubagentHistoryButton state={state} session={session} act={act}/><button type="button" className="a-soft" onClick={()=>open('coordination')}>Tasks and workers</button><button type="button" className="a-soft" onClick={()=>open('worker')}>Delegate work</button></div></section>}
    {activeGroup[3]==='tools'&&<><details><summary>Conversation bundle</summary><BundleControl state={state} session={session} act={act} working={working}/></details><details><summary>Conversation modules</summary><SettingsPageContext.Provider value="loaded-modules"><BundleSettings state={state} session={session} act={act}/></SettingsPageContext.Provider></details><details><summary>Save &amp; share a bundle</summary><SettingsPageContext.Provider value="share-bundle"><BundleSettings state={state} session={session} act={act}/></SettingsPageContext.Provider></details></>}
+   {activeGroup[3]==='computer'&&<DesktopReadiness state={state} session={session} act={act}/>}
    {activeGroup[3]==='limits'&&<details><summary>Recovery &amp; recorded errors</summary><ConversationDetails session={session} act={act}/></details>}
   </>}/></div>)}
  </div>;

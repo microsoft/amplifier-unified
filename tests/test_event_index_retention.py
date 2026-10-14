@@ -112,6 +112,91 @@ def test_byte_budget_counts_association_payload_and_deduplicates_aliases(home):
     assert aliased - grown < 1000, 'aliasing the same object must not charge its body twice'
 
 
+def test_sizing_stops_before_expanding_a_proven_oversized_container(home):
+    row = session(home, 'bounded-size')
+    index = events.EventIndex(events.event_path(row, row['id']), row['id'])
+    exact = events.retained_index_size(index)
+    assert events.retained_index_size(index, limit=exact) == exact
+    assert events.retained_index_size(index, limit=exact - 1) > exact - 1
+    class LargeUnvisitedBody(dict):
+        def __sizeof__(self):
+            return 2_000_000
+        def keys(self):
+            raise AssertionError('Admission is already rejected; do not expand this body')
+        def values(self):
+            raise AssertionError('Admission is already rejected; do not expand this body')
+    index.nodes = LargeUnvisitedBody()
+    assert events.retained_index_size(index, limit=1_000_000) > 1_000_000
+
+
+def test_oversize_receipt_reuses_only_negative_admission_after_source_validation(home, monkeypatch):
+    row = session(home, 'negative-receipt')
+    path = events.event_path(row, row['id'])
+    append(path, row['id'], result='exact original output ' * 1000)
+    view = events.EventLogView(SimpleNamespace(data_dir=home / 'host'))
+    view.MAX_INDEX_BYTES = 1024
+    calls, ingested = [], []
+    original, ingest = events.retained_index_size, events.EventIndex.ingest
+    def observed(index, **kwargs):
+        calls.append((index.revision, index.association_revision))
+        return original(index, **kwargs)
+    def observed_ingest(index, event, reference):
+        ingested.append(reference['bytes'])
+        return ingest(index, event, reference)
+    monkeypatch.setattr(events, 'retained_index_size', observed)
+    monkeypatch.setattr(events.EventIndex, 'ingest', observed_ingest)
+    expected = view.read(row)
+    assert len(calls) == 1 and not view.indexes
+    ingested.clear()
+    assert view.read(row) == expected
+    assert len(calls) == 1 and not ingested
+    assert events.read_field(expected['nodes'][0]['_eventFields']['output']) == 'exact original output ' * 1000
+    # A rejection receipt never substitutes for canonical validation or cache
+    # recovery: corrupting the checkpoint still forces native event parsing.
+    view.checkpoints.path(path, row['id']).write_bytes(b'broken checkpoint')
+    assert view.read(row) == expected
+    assert ingested and len(calls) == 1
+    append(path, row['id'], call='appended')
+    assert len(view.read(row)['nodes']) == 2 and len(calls) == 2
+    # Association growth changes size even when the event file is unchanged.
+    transcript = path.parent.parent / 'transcript.jsonl'
+    transcript.write_text(json.dumps({'role': 'user', 'content': 'New association input'}) + '\n')
+    view.read(row)
+    assert len(calls) == 3
+    replacement = path.with_suffix('.replacement')
+    append(replacement, row['id'], call='replacement')
+    replacement.replace(path)
+    assert [node['toolCallId'] for node in view.read(row)['nodes']] == ['replacement']
+    assert len(calls) == 4 and not view.indexes
+    # More memory can admit the source only after a fresh complete measurement.
+    view.MAX_INDEX_BYTES = 1_000_000
+    view.read(row)
+    assert len(calls) == 5 and view.indexes and not view._oversized
+    assert view.retained_index_bytes <= view.MAX_INDEX_BYTES
+    view.MAX_INDEX_BYTES = 512
+    view.read(row)
+    assert len(calls) == 5 and not view.indexes
+    view.read(row)
+    assert len(calls) == 5 and view.retained_index_bytes == 0
+
+
+def test_negative_size_receipts_are_bounded_metadata_only(home):
+    view = events.EventLogView(SimpleNamespace(data_dir=home / 'host'))
+    view.MAX_INDEX_BYTES, view.MAX_SIZE_RECEIPTS = 1024, 3
+    paths = []
+    for number in range(8):
+        row = session(home, f'large-{number}')
+        path = events.event_path(row, row['id'])
+        paths.append(str(path))
+        append(path, row['id'], result='tool preview')
+        view.read(row)
+    assert list(view._oversized) == paths[-3:]
+    def metadata(value):
+        return type(value) in (str, int, type(None)) or type(value) is tuple and all(metadata(v) for v in value)
+    assert all(metadata(value) for value in view._oversized.values())
+    assert not view.indexes and view.retained_index_bytes == 0
+
+
 def test_remeasurement_detects_growth_and_replacement(home, monkeypatch):
     row = session(home, 'growing')
     path = events.event_path(row, row['id'])
@@ -149,7 +234,7 @@ def test_failed_remeasurement_evicts_grown_resident(home, monkeypatch):
     view.read(row)
     assert view.indexes
     append(path, row['id'], call='new')
-    def failure(index):
+    def failure(index, **kwargs):
         raise MemoryError('injected sizing allocation failure')
     monkeypatch.setattr(events, 'retained_index_size', failure)
     with pytest.raises(MemoryError):
@@ -163,9 +248,9 @@ def test_root_measured_once_after_associations(home, monkeypatch):
     append(path, row['id'])
     calls = []
     original = events.retained_index_size
-    def observed(index):
+    def observed(index, **kwargs):
         calls.append(index.path)
-        return original(index)
+        return original(index, **kwargs)
     monkeypatch.setattr(events, 'retained_index_size', observed)
     view = events.EventLogView(None)
     view.read(row)
