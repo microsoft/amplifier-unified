@@ -45,7 +45,7 @@ test('provider configuration changes refresh draft choices without retaining sta
  await renderAct(async()=>root.update(render()));
  assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/Loading model/);
  await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
- assert.equal(calls.filter(row=>row.name==='configuration.defaults').length,2);
+ assert.equal(calls.filter(row=>row.name==='configuration.defaults').length,1);
  assert.equal(calls.filter(row=>row.name==='providers.list').length,1);
  // An explicit draft choice survives discovery and a preference change.
  state={...state,view:{newSessionDraft:{workspace:'/trial',selection:{instance:'chosen',model:'chosen-model'}}}};
@@ -273,4 +273,37 @@ test('a configured model picker can add or manage connections without changing t
   assert.equal(calls[0][1].patch.aiConnectionEditor.step,step);
  }
  await renderAct(async()=>root.unmount());
+});
+
+for(const lost of ['evicted','restarted'])test('draft discovery recovers '+lost+' results without remount or a message send',async()=>{
+ const calls=[];let root,state={hostInstanceId:'first',view:{newSessionDraft:{workspace:'/trial'}},setup:{providersRequestedWorkspace:'/trial'},draftDefaults:{}};
+ const render=()=>React.createElement(ModelControl,{state,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}});
+ try{
+  await renderAct(async()=>root=create(render()));
+  await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
+  assert.equal(calls.filter(c=>c.name==='configuration.defaults').length,1);
+  if(lost==='evicted'){
+   state={...state,draftDefaults:{'["/trial",""]':{phase:'ready',effective:{model:'chosen'},providers:[]}}};
+   await renderAct(async()=>root.update(render()));
+   state={...state,draftDefaults:{}};
+  }else state={...state,hostInstanceId:'restarted'};
+  await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
+  assert.equal(calls.filter(c=>c.name==='configuration.defaults').length,2);
+  assert.ok(calls.every(c=>!['session.create','conversation.send'].includes(c.name)));
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('a rejected draft read can be retried in place without replacing explicit choices',async()=>{
+ const calls=[];let root,state={view:{newSessionDraft:{workspace:'/trial',selection:{instance:'picked',model:'explicit'}},composerModel:{open:true,sessionId:null}},draftDefaults:{}};
+ const render=()=>React.createElement(ModelControl,{state,act:async(name,args)=>{calls.push({name,args});return name==='configuration.defaults'?undefined:{accepted:true}}});
+ try{
+  await renderAct(async()=>root=create(render()));
+  await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
+  assert.match(JSON.stringify(root.toJSON()),/Could not load model settings/);
+  await renderAct(async()=>root.root.findAllByType('button').find(n=>n.children.includes('Retry model settings')).props.onClick());
+  await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
+  assert.equal(calls.filter(c=>c.name==='configuration.defaults').length,2);
+  assert.ok(calls.every(c=>!c.args?.patch?.newSessionDraft));
+  assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/explicit/);
+ }finally{await renderAct(async()=>root?.unmount())}
 });

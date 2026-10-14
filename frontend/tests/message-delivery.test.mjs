@@ -39,12 +39,12 @@ test('another browser can check saved delivery and confirm one explicit resend',
  assert.deepEqual(calls[1],{action:'conversation.retry',args:{sessionId:'chat',inputId:'original',confirmUncertain:true}});
  assert.equal(retryCalls.length,0);await act(async()=>root.unmount());
 });
-test('a local-only message uses its original outbox identity only after confirmation',async()=>{
+test('a local-only message explicitly retries its original identity without claiming to repeat work',async()=>{
  const {root,calls,retryCalls}=await fixture(false);
  await act(async()=>button(root,'Check delivery').props.onClick());
  assert.equal(retryCalls.length,0);
- await act(async()=>button(root,'Send again').props.onClick());
- await act(async()=>button(root,'Send this message again').props.onClick());
+ assert.doesNotMatch(JSON.stringify(root.toJSON()),/could repeat that work/);
+ await act(async()=>button(root,'Retry original submission').props.onClick());
  assert.equal(retryCalls[0].inputId,'original');assert.equal(calls.length,1);
  await act(async()=>root.unmount());
 });

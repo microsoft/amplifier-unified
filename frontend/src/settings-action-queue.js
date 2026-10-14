@@ -2,6 +2,9 @@
 // Saves, chat drafts, navigation and caller-assigned command identities are
 // barriers: their ordering and individual receipts must remain unchanged.
 const editors=new Set(['aiConnectionEditor','imageSettingsEditor','providerEditor','composerModel','composerBundle','bundleDefaultsDraft']);
+// Draft defaults are scoped reads: a stalled receipt must not serialize edits
+// or a retry for another draft. They still observe preceding writes.
+export const isDraftDefaultsRead=(action,meta={})=>action==='configuration.defaults'&&meta.expectedRevision===undefined;
 export const isProviderCatalogRead=(action,meta={})=>meta.expectedRevision===undefined&&['providers.list','providers.models','providers.schema'].includes(action);
 export function settingsDraftKey(action,args,meta={}){
  if(action!=='view.update'||meta.id||meta.expectedRevision!==undefined||meta.signal||meta.pendingViewToken)return null;
