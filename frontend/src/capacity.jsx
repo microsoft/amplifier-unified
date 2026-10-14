@@ -8,7 +8,11 @@ export function CapacityControls({session,act,readOnly=false}){
  const apply=(result,reset=true)=>{setValue(result);if(!reset)return;const b=result.budget;setDraftRevision(b.revision);setDraft({enabled:!!b.enabled,maxTotalTokens:b.maxTotalTokens??'',maxCostUsd:b.maxCostUsd??'',warningFraction:b.warningFraction??.8,unknownPolicy:b.unknownPolicy??'pause',includeEstimatedCost:!!b.includeEstimatedCost})};
  const run=async(action,args={})=>{setBusy(true);setError('');try{const response=await act(action,{sessionId:session.id,...args});if(!alive.current)return;if(response?.result){if(action==='capacity.quota')setQuota(response.result);else apply(response.result)}else if(response?.error)setError(response.error)}catch(e){if(alive.current)setError(e.message)}finally{if(alive.current)setBusy(false)}};
  const edit=patch=>setDraft(old=>({...old,...patch}));
- const evidenceKey=(session.execution?.nodes||[]).filter(row=>row.kind==='llm').map(row=>`${row.id}:${row.revision||0}:${row.phase}`).join('|');
+ // Compact browser frames intentionally omit nodes. Their bounded group receipts
+ // and whole-session usage still change when model evidence changes off page.
+ const evidenceKey=JSON.stringify([session.id,session.execution?.detailsDeferred
+  ? [session.execution.aggregateUsage,(session.execution.segments||[]).map(row=>[row.id,row.detailRevision])]
+  : (session.execution?.nodes||[]).filter(row=>row.kind==='llm').map(row=>[row.id,row.revision||0,row.phase])]);
  useEffect(()=>{if(!value)return;let cancelled=false;act('capacity.read',{sessionId:session.id}).then(response=>{if(!cancelled&&response?.result)apply(response.result,false)}).catch(()=>{});return()=>{cancelled=true}},[evidenceKey]);
  const metrics=value?.usage?.metrics||{},invalid=(!draft.maxTotalTokens&&!draft.maxCostUsd&&draft.enabled)||(draft.maxTotalTokens!==''&&(!Number.isInteger(Number(draft.maxTotalTokens))||Number(draft.maxTotalTokens)<=0))||(draft.maxCostUsd!==''&&!(Number(draft.maxCostUsd)>0));
  return <section className="a-settings-section" aria-label={readOnly?"Usage receipts and quota":"Task usage and budget"} data-part="capacity-controls"><h3>{readOnly?"Call receipts & provider quota":"Task usage & budget"}</h3>{!readOnly&&<p>Track this conversation and its observed workers. Existing calls may finish and exceed a limit; new model calls wait when the budget is reached.</p>}<button className="a-soft" disabled={busy} data-action="capacity.read" onClick={()=>run('capacity.read')}>Inspect task usage</button>{error&&<p role="alert">{error}</p>}

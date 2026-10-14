@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect as playwrightExpect} from '@playwright/test';
-import {openSettingsPage} from './browser-settings.mjs';
+import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 
 // Uses the compiled application and real shared service actions. This browser
 // scope deliberately stops before account checks and destination activation;
@@ -33,8 +33,7 @@ try{
  const screenshot=async name=>{if(screenshots){await mkdir(screenshots,{recursive:true});await page.screenshot({path:join(screenshots,name)});}};
 
  await page.goto(ready.url);
- await expect(page.locator('.a-settings-experience')).toBeVisible();
- await openSettingsPage(page,'runtime');
+ await openChatAdvancedPage(page,'Work & automation');
  const panel=page.getByRole('region',{name:'Move task between hosts'});
  const worktrees=page.getByRole('region',{name:'Task worktrees'});
  await panel.getByText('Export this task',{exact:true}).click();
@@ -76,8 +75,7 @@ try{
  await screenshot('portability-desktop-prepared.png');
 
  await page.reload();
- await expect(page.locator('.a-settings-experience')).toBeVisible();
- await openSettingsPage(page,'runtime');
+ await openChatAdvancedPage(page,'Work & automation');
  await expect(card.getByRole('status')).toHaveText('Export · prepared');
  const cancel=panel.getByRole('button',{name:'Cancel unreleased export',exact:true});
  await expect(cancel).toBeDisabled();
@@ -102,7 +100,7 @@ try{
  await expect(importButton).toBeDisabled();
  await panel.getByLabel('Destination repository',{exact:true}).fill(ready.root);
  await importButton.click();
- const importError=page.getByRole('dialog',{name:'Settings',exact:true})
+ const importError=page.getByRole('dialog',{name:'Work & automation',exact:true})
   .getByRole('alert').filter({hasText:'Unsupported transfer receipt'});
  await expect(importError).toBeVisible();
  await expect(card.getByRole('status')).toHaveText('Export · cancelled');
@@ -116,8 +114,7 @@ try{
  await card.scrollIntoViewIfNeeded();
  await screenshot('portability-mobile-cancelled.png');
  await page.reload();
- await expect(page.locator('.a-settings-experience')).toBeVisible();
- await openSettingsPage(page,'runtime');
+ await openChatAdvancedPage(page,'Work & automation');
  await expect(card.getByRole('status')).toHaveText('Export · cancelled');
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Reloaded mobile document overflows');
  assert.deepEqual(errors,[]);
