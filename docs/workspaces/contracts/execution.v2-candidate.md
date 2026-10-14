@@ -219,3 +219,32 @@ not a claim that every v2 proposal or original v1 isolation promise is delivered
 No current universal checkout fence is known in this source baseline; this is not proof that all integrations are independent of the earlier promise. Existing explicit worktree handoffs, permission checks and preservation checks stay in place. Consumers must distinguish cooperative from genuinely protected bindings and report unsupported enforcement. The first collaboration increment should retain existing folder behavior, add honest context/coordination, and not claim newly enforced write isolation.
 
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.
+## Assignment control addition — 2026-10-14
+
+New commissioned roots share an explicit host-owned assignment with their
+commissioning root. Existing peers and historical commissioning records are
+never enrolled retroactively. Native descendants share their root's admission.
+Membership, limits and Stop are retained in existing command receipts; model
+usage stays in existing execution receipts and is attributed at admission.
+
+Assignment limits cover aggregate supported model calls and open commissioned
+roots. Optional token/cost reservations are declared allowances per call, not
+provider-enforced maxima. Settled receipts replace their allowances; missing
+outcomes remain unknown. Limits cannot promise an exact spend cap. Already
+running effects may finish. Admission is serialized before provider effects.
+
+The commissioning owner may manage the assignment; members may inspect it.
+Membership does not confer control over existing independent peers. Assignment
+Stop closes admission durably before interrupting still-bound roots and their
+native children. A stopped assignment is not automatically resumed by a late
+reply, restart, schedule or another input. The user may explicitly detach a
+conversation after interruption settles; retained usage and late corrections
+remain attributable. Detaching never interrupts another conversation or erases
+accounting. No cleanup or external resource teardown is implied by Stop.
+
+The current adapter cannot interrupt or account for only one request inside an
+independent peer's mixed conversation. Stop reports that limitation and suppresses
+pending assignment input without substituting a whole-conversation interruption.
+When a token or cost limit is enabled, new queue/steer requests to independent
+peers are refused with this limitation; commissioned helpers share the budget.
+Informational notices remain available and do not start independent work.

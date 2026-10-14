@@ -1,5 +1,63 @@
 # Implementation and evidence
 
+## Assignment admission and scoped Stop — 2026-10-14
+
+New commissioned roots now share their initiating root's assignment. Nested
+commissioning and new-task schedules reserve from the same member/open-task
+limits. Historical commissioning records and independent chats are not enrolled
+by inference. Existing command receipts own membership, revisions and Stop;
+existing execution receipts own call usage and reservation metadata. Native
+children use their enclosing root's private model-call admission gate.
+
+The owner can set aggregate token/cost allowances, per-call reservations and
+concurrent-call limits. Admission serializes comparison and durable reservation
+before provider invocation. Actual usage replaces each call's allowance without
+double-counting; history editing, display reconstruction and later corrections
+retain the original assignment binding. Missing usage remains unknown. These
+are allowances for supported calls, not exact provider spend caps or limits on
+arbitrary external tools, uninstrumented providers or separate realtime voice.
+
+Stop closes assignment admission before requesting interruption of still-bound
+roots. Preparation rechecks that authority before creating a root, and delayed
+inputs, schedules and replies cannot restart stopped work. Interruption receipts
+distinguish returned requests from unknown outcomes; restart does not repeat an
+uncertain interruption. Independent chats are never substituted as whole-root
+Stop targets. The current adapter cannot interrupt or account for one request
+inside an independent mixed conversation. Stop reports that limitation. With
+an enabled token/cost limit, queue/steer to such peers is refused; informational
+notices remain available, and commissioned helpers share the budget.
+
+The browser exposes assignment controls under Related work, with private drafts,
+revision conflicts and exact lost-response retries. Attached HTTP/session clients
+and agent actions use the same authority. Only the user can detach a settled
+conversation, retaining all previously attributed usage and late corrections.
+Stop never deletes files, cleans resources or claims to undo external effects.
+
+Qualification includes failure injection before commit and after acknowledgment
+loss, preparation/Stop races, concurrent cross-root reservations, restart,
+late-result suppression and native finite/resumed/persistent/nested child mounts.
+All 478 focused installed-package checks pass, covering adjacent collaboration,
+schedules, client actions and accounting; 149 final source checks also pass.
+The frontend suite passes 681 checks. Browser checks cover saved limits, private edits, stale saves,
+reload, lost responses, narrow layouts and preservation of unrelated work. The
+existing two-peer/two-round collaboration browser journey also passes.
+
+A real-provider run exposed loss of assignment metadata during native display
+reconstruction; the retained accounting projection now preserves it. A later
+run reached its fixture token limit and correctly refused calls in both helpers.
+With a higher fixture allowance, the two-round real-provider journey passes:
+one agent creates two real peer workers, the host records all three roots' usage,
+and assignment Stop interrupts both helpers while an independent real worker
+continues and completes. A synthetic local waiting tool makes the Stop timing
+observable; provider responses and worker processes are real. These checks do
+not establish general parallel-agent efficacy, release publication or host adoption.
+
+The broad earlier-candidate suite reported 6,892 passes, 219 skips and 29 failures.
+Five assignment transaction regressions were corrected and pass in the final
+focused checks. Twenty-three failures reproduce on unchanged main in the host
+environment. One artifact-cleanup timing assertion passes in isolated reruns on
+both candidates but remains recorded; the broad suite is not claimed green.
+
 ## Supported file-tool source checks — 2026-10-14
 
 Unified now wraps the mounted reference filesystem tools and both reference
@@ -332,7 +390,7 @@ competing stores.
 | Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Later correlated replies, question/deferral revisions, expiring one-shot watches and fair bounded delivery; no duplicate continuation or false dependency success |
 | Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
 | Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context, advisory overlap and supported file-tool source conflicts delivered above. Remaining: broader independent/commissioned/native-worker lifecycle and concurrency acceptance |
-| Assignment control | Existing task, capacity and interruption owners | Aggregate reservations and scoped Stop across commissioned roots and nested work, while unrelated project chats keep running |
+| Assignment control | Existing task, capacity and interruption owners | Commissioned-root aggregate admission and scoped Stop delivered above. Request-only accounting/interruption inside an independent mixed conversation remains an explicit adapter limitation; no whole-chat control is substituted. |
 | Durable results and integration | Artifact/resource owner and worktree integration | Retain exact versions before mutable sources disappear; validate the combined candidate and preserve uncertain cleanup effects |
 | Complete supported user journeys | Shared action/API layer, browser and terminal clients | Repeated two-round real-provider work, failure and Stop variants, independent and commissioned peers, disconnect/restart, private client state and measured responsiveness |
 | Release and adoption | Existing package/release and instance owners | Qualify the combined package, migrate retained records, activate fresh workers in an owned candidate instance, and separately verify intended release adoption |

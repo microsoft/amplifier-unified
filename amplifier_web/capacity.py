@@ -66,6 +66,10 @@ def usage_snapshot(session, *, admission_only=False):
     descendants = {root, session['id']}
     descendants.update(row.get('sessionId') for row in nodes if row.get('kind') == 'worker' and row.get('rootSessionId') == root)
     descendants.update(row.get('sessionId') for row in session.get('workers', []) if row.get('sessionId'))
+    # Admission already authenticated the enclosing worker. Its child's topology
+    # event may arrive later than the reservation; do not drop that held call.
+    descendants.update(row.get('sessionId') for row in nodes if row.get('kind') == 'llm'
+                       and row.get('rootSessionId') == root and row.get('admittedAt'))
     calls = {}
     rejected = 0
     for row in nodes:
@@ -83,11 +87,20 @@ def usage_snapshot(session, *, admission_only=False):
             # The caller holds app.lock and does not expose/mutate these aliases.
             calls[key] = row
             continue
-        calls[key] = {k: copy.deepcopy(row[k]) for k in ('id', 'revision', 'producerId', 'budgetRevision', 'admittedAt', 'sessionId', 'provider', 'model', 'phase', 'startedAt', 'endedAt', 'usage', 'lifecycle') if k in row}
+        calls[key] = {k: copy.deepcopy(row[k]) for k in ('id', 'revision', 'producerId', 'budgetRevision', 'admittedAt', 'sessionId', 'provider', 'model', 'phase', 'startedAt', 'endedAt', 'usage', 'lifecycle', 'assignmentId', 'assignmentRevision', 'assignmentReservation') if k in row}
         if 'usage' in calls[key]:
             calls[key]['usage'] = with_gross_tokens(calls[key]['usage'] or {})
     if admission_only:
         return {'metrics': {}, 'receipts': list(calls.values())}
+    # A late correction can be projected into the live tree after history edits
+    # moved its original admission to retired usage. Keep that immutable binding
+    # while selecting the latest usage revision; do not charge the call twice.
+    for row in nodes:
+        key = (row.get('sessionId'), row.get('id'))
+        if key in calls and row.get('rootSessionId') == root and row.get('admittedAt'):
+            for field in ('admittedAt', 'assignmentId', 'assignmentRevision', 'assignmentReservation'):
+                if field in row:
+                    calls[key].setdefault(field, copy.deepcopy(row[field]))
     receipts = sorted(calls.values(), key=lambda row: (row.get('startedAt') or 0, row['id']))
     groups = {}
     for row in receipts:
@@ -318,6 +331,11 @@ async def admission(service, session_id, args):
                     'reasons': ['This model-call ID was already admitted; its outcome must not be replayed']}
         usage = usage_snapshot(session, admission_only=not policy.get('enabled'))
         result = {**evaluate(policy, usage), 'budgetRevision': policy['revision']}
+        for key in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):
+            row.pop(key, None)  # Assignment authority is selected by the host.
+        assignment = service.assignments.admission(session, row)
+        if not assignment['allowed']:
+            result.update(allowed=False, state='paused', reasons=result['reasons'] + assignment['reasons'])
         if result['allowed']:
             # Persist intent using the existing execution ID before any provider
             # request. A crash leaves pending/unknown evidence, never a replay.
@@ -325,5 +343,35 @@ async def admission(service, session_id, args):
             row.update(budgetRevision=policy['revision'], admittedAt=time.time())
             result['admittedAt'] = row['admittedAt']
             ingest(session, row)
-            service._save_changes(sessions={session_id})
+            try:
+                service._save_changes(sessions={session_id})
+            except BaseException:
+                # No provider request follows a failed admission. An in-memory
+                # phantom must not be committed later; a lost acknowledgment
+                # after commit must retain its authoritative reservation.
+                retained = None
+                try:
+                    from .cold_display import load, MARKER
+                    stored = service.db.execute("SELECT value FROM state_records WHERE kind='session' AND id=?", (session_id,)).fetchone()
+                    saved = json.loads(stored[0]) if stored else {}
+                    if saved.get('$viewPayload'):
+                        saved = load(service.db, saved['$viewPayload'])
+                    tree = saved.get('execution')
+                    if tree is None and saved.get(MARKER, {}).get('execution'):
+                        tree = load(service.db, saved[MARKER]['execution'])
+                    if tree is not None:
+                        retained = any(item.get('id') == row['id'] for item in tree.get('nodes', []) + tree.get('retiredUsageNodes', []))
+                    elif stored and saved.get('id') == session_id and not saved.get('$view'):
+                        retained = False
+                except Exception:
+                    pass  # An unreadable retained projection cannot free capacity.
+                if retained is False:
+                    session['execution']['nodes'] = [item for item in session['execution']['nodes'] if item.get('id') != row['id']]
+                else:
+                    for item in session['execution']['nodes']:
+                        if item.get('id') == row['id']:
+                            item['phase'] = 'outcome_unknown'
+                from .execution import refresh_usage
+                refresh_usage(session['execution'])
+                raise
         return result

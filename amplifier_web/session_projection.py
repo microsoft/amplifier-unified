@@ -67,7 +67,8 @@ def migrate(home, state):
 # never persist action bodies or lazy event-file references here.
 ACCOUNTING_FIELDS = {'id', 'revision', 'producerId', 'budgetRevision', 'admittedAt',
     'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
-    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle'}
+    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle',
+    'assignmentId', 'assignmentRevision', 'assignmentReservation'}
 ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
     'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'grossInputTokens',
     'grossTotalTokens', 'costUsd', 'costType', 'costSource'}
@@ -114,6 +115,10 @@ def accounting_projection(tree):
                                    if name in ACCOUNTING_USAGE_FIELDS and type(amount) in (str, int, float)}
             else:
                 record[field] = value if type(value) in scalar_types else copy.deepcopy(value)
+        if prior:
+            for field in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):
+                if field in prior:
+                    record[field] = copy.deepcopy(prior[field])
         saved[key] = record
     return list(saved.values())
 

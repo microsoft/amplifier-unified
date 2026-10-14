@@ -204,6 +204,8 @@ class Schedules:
             return result
 
     def dependency_reason(self, session, task, schedule):
+        if reason := self.app.assignments.blocked(session):
+            return reason
         if session.get('configurationBusy'):
             return 'This task has an unresolved configuration change or execution-folder handoff.'
         if session.get('executionRevision', 0) != schedule.get('executionRevision', 0):
