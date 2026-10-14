@@ -1,5 +1,6 @@
 """Immutable, content-addressed artifact files; SQLite contains only an index."""
 import asyncio
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
@@ -289,19 +290,45 @@ def resolve(db, identity, value):
 
 
 def references(value):
-    if isinstance(value, Mapping):
-        from .cold_display import ColdRecord
-        if isinstance(value, ColdRecord):
-            # Its manifest is a durable root; do not load payloads during GC.
-            yield from references(dict(dict.items(value)))
-            return
-        if isinstance(value.get('$resource'), str):
-            yield value['$resource']
-        for item in value.values():
-            yield from references(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from references(item)
+    """Walk containers, not every scalar, without hydrating cold payloads.
+
+    Shared projections can expose the same mutable graph several times. Keep a
+    bounded identity set for duplicate/cycle suppression, not a payload cache.
+    The traversal limit fails closed on an oversized or otherwise cyclic graph.
+    """
+    from .cold_display import ColdRecord
+    pending, seen, visited = [value], {}, 0
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            if type(current) is dict or isinstance(current, ColdRecord):
+                reference, children = dict.get(current, '$resource'), dict.values(current)
+            else:
+                reference, children = current.get('$resource'), current.values()
+        elif isinstance(current, list):
+            reference, children = None, current
+        elif isinstance(current, Mapping):
+            reference, children = current.get('$resource'), current.values()
+        else:
+            continue
+        identity = id(current)
+        if identity in seen:
+            continue
+        visited += 1
+        if visited > 1_000_000:
+            raise ValueError('Resource reference graph exceeds the traversal limit.')
+        if len(seen) < 65_536:
+            seen[identity] = current  # Strong reference prevents temporary ID reuse.
+        if isinstance(reference, str):
+            yield reference
+        for child in children:
+            # Most fields are strings/numbers. Avoid a recursive generator and
+            # Mapping ABC checks for ordinary JSON scalars on this hot path.
+            kind = type(child)
+            if kind is dict or kind is list or (
+                    kind not in (str, int, float, bool, type(None))
+                    and isinstance(child, (Mapping, list))):
+                pending.append(child)
 
 
 def retained_references(db, state):
@@ -376,6 +403,56 @@ def marked_references(db, state):
 def detached_references(source):
     """Validate the actual body and walk all nested edges away from SQLite."""
     return list(references(read_detached(source)))
+
+
+class ReferenceEdges:
+    """Bounded derived edges for validated immutable files, never body values.
+
+    An entry is usable only for the same exact Detached index and unchanged
+    device/inode/size/mtime/ctime. Changed, missing, or non-regular files must be
+    revalidated or refuse collection; a cached graph is never deletion authority.
+    Inline resources are deliberately not cached: their index is their payload.
+    """
+    def __init__(self, *, max_entries=65_536, max_edges=262_144):
+        self.entries = OrderedDict()
+        self.max_entries, self.max_edges = max_entries, max_edges
+        self.edge_count = 0
+        self.hits = self.misses = self.bytes_read = 0
+
+    def _drop(self, key):
+        prior = self.entries.pop(key, None)
+        if prior is not None:
+            self.edge_count -= len(prior[1])
+
+    def read(self, source):
+        blob = _blob_index(source)
+        try:
+            signature = detached_signature(source)
+        except (OSError, ValueError):
+            self._drop(source)
+            raise
+        prior = self.entries.get(source) if blob else None
+        if prior is not None and prior[0] == signature:
+            self.entries.move_to_end(source)
+            self.hits += 1
+            return prior[1]
+        self._drop(source)
+        self.misses += 1
+        edges = tuple(set(detached_references(source)))
+        if detached_signature(source) != signature:
+            raise ValueError('Artifact changed while inspecting its reference edges.')
+        # Malformed references already make the following detach fail closed;
+        # reject here too so an arbitrary string cannot expand metadata storage.
+        if any(not re.fullmatch('[a-f0-9]{64}', edge) for edge in edges):
+            raise ValueError('Invalid retained resource reference.')
+        self.bytes_read += signature[2] if blob else len(source.indexed.encode())
+        if blob and self.max_entries > 0 and len(edges) <= self.max_edges:
+            while self.entries and (len(self.entries) >= self.max_entries
+                                    or self.edge_count + len(edges) > self.max_edges):
+                self._drop(next(iter(self.entries)))
+            self.entries[source] = (signature, edges)
+            self.edge_count += len(edges)
+        return edges
 
 
 async def marked_references_async(db, state):

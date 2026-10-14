@@ -31,7 +31,7 @@ def test_bounded_detached_timings_on_errors(monkeypatch):
         with diagnostics.measure(str(i)):
             pass
         diagnostics.increment(str(i))
-    assert len(diagnostics.operations) == len(diagnostics.counters) == 32
+    assert len(diagnostics.operations) == len(diagnostics.counters) == 64
 
 
 async def test_wait_cancellation_and_monitor_cleanup():

@@ -37,7 +37,7 @@ class PerformanceDiagnostics:
             if isinstance(session_id, str):
                 row['sessionId'] = session_id[:200]
             with self.lock:
-                if name in self.operations or len(self.operations) < 32:
+                if name in self.operations or len(self.operations) < 64:
                     summary = self.operations.setdefault(name, {'count': 0, 'totalMs': 0, 'maxMs': 0})
                     summary['count'] += 1
                     summary['totalMs'] += elapsed
@@ -47,7 +47,7 @@ class PerformanceDiagnostics:
 
     def increment(self, name, amount=1):
         with self.lock:
-            if name in self.counters or len(self.counters) < 32:
+            if name in self.counters or len(self.counters) < 64:
                 self.counters[name] = self.counters.get(name, 0) + amount
 
     def record_lag(self, delay):
