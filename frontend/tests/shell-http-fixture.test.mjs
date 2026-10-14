@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createShellHttpFixture} from './shell-http-fixture.mjs';
+import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
 import {shellScope} from '../src/shell/resources.js';
 
 function fixture(){
@@ -29,4 +29,28 @@ test('mock receipts update accepted scope and omit pages until replacement deman
  f.register(f.demand(2));assert.equal(f.shell.state().shellResources.demandId,2);
  f.attach('two');assert.equal(f.shell.state().shellResources,undefined);
  assert.throws(()=>f.register(f.demand(3)),/one/);
+});
+
+test('mock stream bootstraps after attachment and closes without late frames',async()=>{
+ const previousWindow=globalThis.window,previousFetch=globalThis.fetch;
+ const pending=[];
+ globalThis.window={};globalThis.fetch=()=>new Promise(resolve=>pending.push(resolve));
+ try{
+  installFixtureEvents();
+  const closed=new window.EventSource(),closedFrames=[];
+  closed.addEventListener('state',event=>closedFrames.push(JSON.parse(event.data)));
+  await Promise.resolve();closed.close();pending.shift()({json:async()=>({revision:1})});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(closedFrames,[]);
+  const live=new window.EventSource(),frames=[];
+  live.addEventListener('state',event=>frames.push(JSON.parse(event.data)));
+  await Promise.resolve();pending.shift()({json:async()=>({revision:2,client:{id:'attached'}})});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(frames,[{revision:2,client:{id:'attached'}}]);
+  window.emitState({revision:3});live.close();window.emitFixtureState({revision:4});
+  assert.deepEqual(frames,[{revision:2,client:{id:'attached'}},{revision:3}]);
+ }finally{
+  if(previousWindow===undefined)delete globalThis.window;else globalThis.window=previousWindow;
+  globalThis.fetch=previousFetch;
+ }
 });

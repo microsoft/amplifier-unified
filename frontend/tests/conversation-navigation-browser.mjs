@@ -2,17 +2,20 @@ import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
-import {shellFor} from './shell-host.mjs';
+import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
 const full=Array.from({length:791},(_,i)=>({id:'m'+i,role:i<731&&i%10===0?'user':'assistant',text:'Message '+i,createdAt:1000+i}));
-let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',sessionKind:'root',title:'Long chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:false,historyLoaded:true,messages:full.slice(-60),messageWindow:{offset:731,total:791,before:'m731'},execution:{nodes:[],turns:[]}}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',canvas:{open:false}};
+let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{setupJourney:'done',navPinned:true},sessions:[{id:'chat',sessionKind:'root',title:'Long chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:false,historyLoaded:true,messages:full.slice(-60),messageWindow:{offset:731,total:791,before:'m731'},execution:{nodes:[],turns:[]}}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',canvas:{open:false}};
 const previews=[],windows=[];let invalidIndex=true;
 let browser,vite,page;const errors=[],calls=[];
+const shell=createShellHttpFixture(()=>state);
 try{
- vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false}});await vite.listen();
+ vite=await createServer({configFile:false,cacheDir:fileURLToPath(new URL('../.vite-legacy-mocks',import.meta.url)),root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false}});await vite.listen();
  browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>errors.push(e.stack||e.message));
- await page.addInitScript(initial=>{const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this);setTimeout(()=>{this.onopen?.();this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(initial)}))},0)}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})));},state);
+ await page.addInitScript(installFixtureEvents);
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
+  const shellResponse=shell.response(route.request());
+  if(shellResponse!==undefined)return route.fulfill({json:shellResponse});
   if(path==='/api/conversation/navigation'){
    const query=new URL(route.request().url()).searchParams,id=query.get('messageId');
    if(!id&&invalidIndex){invalidIndex=false;return route.fulfill({json:{}})}
@@ -21,15 +24,14 @@ try{
    if(query.get('window')==='true'){windows.push(id);const start=Math.max(0,index-5);return route.fulfill({json:{messages:full.slice(start,start+60),offset:start,total:full.length,before:start?'m'+Math.max(0,start-55):null,after:'m'+(start+60),execution:{nodes:[],turns:[]}}})}
    previews.push(id);return route.fulfill({json:{id,text:full[index].text,reply:full[index+1].text}});
   }
-  if(path==='/api/state')return route.fulfill({json:state});
+  if(path==='/api/state')return route.fulfill({json:shell.state()});
   if(path==='/api/outputs/media'&&route.request().method()==='GET')
    return route.fulfill({json:{items:[],overflow:false,mediaRevision:0}});
-  if(path==='/api/shell')return route.fulfill({json:shellFor(state,()=>{}).data});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path==='/api/actions'){
    const envelope=route.request().postDataJSON(),body=envelope.action==='shell.command'?envelope.args:envelope;calls.push(body);
    if(body.action==='view.update')state={...state,revision:state.revision+1,view:{...state.view,...body.args.patch}};
-   return route.fulfill({json:{accepted:true,operationId:body.id,state}});
+   return route.fulfill({json:{accepted:true,operationId:body.id,state:shell.state()}});
   }
   return route.fulfill({json:{ok:true}});
  });
@@ -58,7 +60,7 @@ try{
  await pane.evaluate(el=>{el.scrollTop=250;el.dispatchEvent(new Event('scroll'))});
  const readingTop=await pane.evaluate(el=>el.scrollTop);
  state={...state,revision:2,sessions:state.sessions.map(s=>({...s,sharedHistoryOffset:10,messages:[...s.messages,{id:'m791',role:'assistant',text:'New live reply'}],messageWindow:{...s.messageWindow,total:792}}))};
- await page.evaluate(value=>window.emitState(value),state);
+ await page.evaluate(value=>window.emitState(value),shell.state());
  await expect(page.locator('[data-message-id="m791"]')).toHaveCount(0);
  await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBe(readingTop);
  // A reload initially gets only the live tail. Fetch the saved reading window
@@ -69,7 +71,7 @@ try{
  await expect.poll(()=>pane.evaluate((el,id)=>el.querySelector(`[data-message-id="${id}"]`).getBoundingClientRect().top-el.getBoundingClientRect().top,reading.id)).toBeCloseTo(reading.offset,0);
  assert.equal(windows.at(-1),reading.id);
  assert.ok(await page.locator('[data-message-id]').count()<=60);
- await page.evaluate(value=>window.emitState(value),state);
+ await page.evaluate(value=>window.emitState(value),shell.state());
  await page.getByRole('button',{name:'Return to latest',exact:true}).click();
  await expect(page.locator('[data-message-id="m791"]')).toBeVisible();
  assert.ok(await page.locator('[data-message-id]').count()<=61);
