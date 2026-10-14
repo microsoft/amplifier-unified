@@ -34,7 +34,7 @@ class Runtime:
     async def stop_worker(self, sid, wid):
         self.stops.append((sid, wid))
 
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         self.stops.append((sid,))
 
     async def close(self):

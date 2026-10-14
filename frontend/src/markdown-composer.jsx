@@ -23,7 +23,7 @@ export function MarkdownComposer({value,onChange,onSend,onFiles,disabled=false,r
   const editable=()=>!latest.current.disabled&&!latest.current.readOnly;
   const view=new EditorView(host.current,{
    state:composerState(latest.current.value),editable,clipboardTextSerializer:composerClipboard,
-   attributes:{role:'textbox','aria-label':'Message Amplifier','aria-multiline':'true','data-action':'view.update',class:'a-markdown-composer',spellcheck:'true'},
+   attributes:{role:'textbox','aria-label':'Message Amplifier','aria-multiline':'true','data-action':'view.update','data-private':'true','data-view-label':'Message Amplifier',class:'a-markdown-composer',spellcheck:'true'},
    dispatchTransaction(transaction){
     view.updateState(view.state.apply(transaction));
     if(transaction.docChanged){published.current=composerMarkdown(view.state.doc);latest.current.onChange(published.current);}
@@ -111,7 +111,7 @@ export function MarkdownComposer({value,onChange,onSend,onFiles,disabled=false,r
     </select>
    </div>
    {linkOpen&&<form className="a-composer-link" onSubmit={e=>{e.preventDefault();e.stopPropagation();if(setComposerLink(editor.current,link)){setLinkOpen(false);setLinkError('');}else setLinkError('Use an http, https, mailto, or relative link.');}}>
-    <label>Link address<input autoFocus aria-label="Link address" placeholder="https://example.com" value={link} onChange={e=>setLink(e.target.value)}/></label>
+    <label>Link address<input data-private="true" autoFocus aria-label="Link address" placeholder="https://example.com" value={link} onChange={e=>setLink(e.target.value)}/></label>
     <div><button type="submit">Apply</button><button type="button" onClick={()=>{setComposerLink(editor.current,'');setLinkOpen(false);}}>Remove link</button></div>
     {linkError&&<p role="alert">{linkError}</p>}
    </form>}

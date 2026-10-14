@@ -36,7 +36,7 @@ class NoModelRuntime:
     async def control(self, *args):
         self.calls.append('control')
         raise AssertionError('Navigation must not inspect providers')
-    async def stop(self, *args): pass
+    async def stop(self, *args, reason="stopped"): pass
     async def close(self): pass
 
 

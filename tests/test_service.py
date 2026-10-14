@@ -18,7 +18,7 @@ class Runtime:
             "generation_id": "test-generation", "input_ids": [input_id], "text": "Test transport result",
             "active_job_ids": [], "disposition": "manager_turn_finished"})
         await emit("runtime.status", {"sessionId": session["id"], "status": "idle"})
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         self.stopped.append(sid)
     async def close(self):
         pass
@@ -621,13 +621,15 @@ async def test_background_activity_cannot_restart_finished_conversation(service)
 
 
 async def test_failed_direct_send_settles_activity_without_replay_or_lost_input(tmp_path):
+    import sys
     from amplifier_web.runtime import RuntimeManager
     from amplifier_web.updates import UpdateManager
-    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    # An unexpected startup failure differs from deliberately closing the host.
+    runtime = RuntimeManager(command=[sys.executable, '-c', 'raise SystemExit(3)'],
+                             retention={'prewarm_on_select': False})
     app = AppService(tmp_path, runtime, workspace=tmp_path)
     try:
         await app.dispatch('session.create', {})
-        await runtime.close()
         request = {'text': 'Keep this unsent request'}
         with pytest.raises(AppError, match='did not send your message') as failure:
             await app.dispatch('conversation.send', request, command_id='failed-start')

@@ -15,7 +15,7 @@ class Runtime:
     async def start(self, *args):
         pass
 
-    async def stop(self, *args):
+    async def stop(self, *args, reason="stopped"):
         pass
 
     async def close(self):

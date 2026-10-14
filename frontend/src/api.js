@@ -76,20 +76,33 @@ export function download(filename, content, type='application/json') {
 }
 // Repeated browser observations describe client-owned UI. Conversation text and
 // elapsed progress already have an authoritative, session-scoped server view.
-// Keep full rendered text for explicit window.amplifier.getState() inspection.
-function interfaceText(root){
+// Both automatic reports and local rendered-view inspection exclude private input.
+const privateSelector='[data-private="true"],input[type="password"]';
+const privateElement=el=>!!el?.closest(privateSelector);
+function observedText(root,interfaceOnly=false){
+  if(privateElement(root))return "";
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT,{acceptNode(node){
-    if(node.nodeType===Node.ELEMENT_NODE){const style=getComputedStyle(node);return node.dataset.viewSource||style.display==='none'||style.visibility==='hidden'?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_SKIP;}
+    if(node.nodeType===Node.ELEMENT_NODE){const style=getComputedStyle(node);return privateElement(node)||(interfaceOnly&&node.dataset.viewSource)||style.display==='none'||style.visibility==='hidden'?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_SKIP;}
     return node.textContent.trim()?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_SKIP;
   }});
   let node,text='';
   while((node=walker.nextNode())&&text.length<60000)text+=node.textContent.trim()+'\n';
   return text.slice(0,60000);
 }
+function observedSelection(root){
+  const selection=window.getSelection();
+  if(!selection?.rangeCount||!root.contains(selection.anchorNode)||!root.contains(selection.focusNode))return '';
+  // A range may start and end outside a private editor while crossing it.
+  for(let i=0;i<selection.rangeCount;i++){
+    const range=selection.getRangeAt(i);
+    if([...root.querySelectorAll(privateSelector)].some(el=>range.intersectsNode(el)))return '';
+  }
+  return selection.toString().slice(0,10000);
+}
 export function visibleView(root, clientId, {interfaceOnly=false}={}) {
   if(!root)return {clientId};
   const visible=el=>!!el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden';
-  const controls=[...root.querySelectorAll('button,input,textarea,select,a,[role=separator],[role=textbox]')].filter(visible).map(el=>({id:el.id||null,action:el.dataset.action||el.closest('[data-action]')?.dataset.action||null,...(el.closest('[data-shell-component]')?{component:{instanceId:el.closest('[data-shell-component]').dataset.shellComponent,slot:el.closest('[data-shell-component]').dataset.shellSlot,command:el.dataset.shellCommand||null}}:{}),label:el.dataset.viewLabel||el.getAttribute('aria-label')||el.labels?.[0]?.textContent||el.textContent?.trim().slice(0,160),type:el.getAttribute('role')||el.type||el.tagName.toLowerCase(),...(el.getAttribute('role')==='separator'?{minimum:Number(el.getAttribute('aria-valuemin')),maximum:Number(el.getAttribute('aria-valuemax')),current:Number(el.getAttribute('aria-valuenow'))}:{}),value:(el.type==='password'||el.dataset.private==='true')?'[redacted]':el.isContentEditable?el.textContent:el.value,disabled:el.getAttribute('aria-disabled')==='true'||!!el.disabled||!!el.closest('[inert]'),...(el.hasAttribute('aria-expanded')?{expanded:el.getAttribute('aria-expanded')==='true'}:{}),focused:document.activeElement===el}));
+  const controls=[...root.querySelectorAll('button,input,textarea,select,a,[role=separator],[role=textbox]')].filter(visible).map(el=>({id:el.id||null,action:el.dataset.action||el.closest('[data-action]')?.dataset.action||null,...(el.closest('[data-shell-component]')?{component:{instanceId:el.closest('[data-shell-component]').dataset.shellComponent,slot:el.closest('[data-shell-component]').dataset.shellSlot,command:el.dataset.shellCommand||null}}:{}),label:privateElement(el)?(el.dataset.viewLabel||'[private control]'):el.dataset.viewLabel||el.getAttribute('aria-label')||el.labels?.[0]?.textContent||observedText(el).trim().slice(0,160),type:el.getAttribute('role')||el.type||el.tagName.toLowerCase(),...(el.getAttribute('role')==='separator'?{minimum:Number(el.getAttribute('aria-valuemin')),maximum:Number(el.getAttribute('aria-valuemax')),current:Number(el.getAttribute('aria-valuenow'))}:{}),value:privateElement(el)?'[redacted]':el.isContentEditable?el.textContent:el.value,disabled:el.getAttribute('aria-disabled')==='true'||!!el.disabled||!!el.closest('[inert]'),...(el.hasAttribute('aria-expanded')?{expanded:el.getAttribute('aria-expanded')==='true'}:{}),focused:document.activeElement===el}));
   const panes=Object.fromEntries(['navigation','conversation','canvas'].flatMap(name=>{const el=root.querySelector(`[data-part="${name}"]`);if(!el)return [];const box=el.getBoundingClientRect();return [[name,{x:Math.round(box.x),y:Math.round(box.y),width:Math.round(box.width),height:Math.round(box.height),visible:visible(el),interactive:visible(el)&&!el.closest('[inert]')}]]}));
-  return {clientId,panes,webApp:{standalone:!!(window.matchMedia?.('(display-mode: standalone)').matches||window.matchMedia?.('(display-mode: window-controls-overlay)').matches||navigator.standalone),secureContext:window.isSecureContext,serviceWorkerControlled:!!navigator.serviceWorker?.controller,online:navigator.onLine},visibleText:interfaceOnly?interfaceText(root):root.innerText.slice(0,60000),...(interfaceOnly?{visibleTextScope:'interface',conversationSource:'Selected session messages, execution and activity in app state'}:{}),controls,selectedText:window.getSelection()?.toString().slice(0,10000)||'',viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},url:location.pathname};
+  return {clientId,panes,webApp:{standalone:!!(window.matchMedia?.('(display-mode: standalone)').matches||window.matchMedia?.('(display-mode: window-controls-overlay)').matches||navigator.standalone),secureContext:window.isSecureContext,serviceWorkerControlled:!!navigator.serviceWorker?.controller,online:navigator.onLine},visibleText:observedText(root,interfaceOnly),...(interfaceOnly?{visibleTextScope:'interface',conversationSource:'Selected session messages, execution and activity in app state'}:{}),controls,selectedText:observedSelection(root),viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},url:location.pathname};
 }

@@ -105,7 +105,9 @@ async def test_agent_uses_same_action_and_state_with_explicit_client(app):
         await app.app_bridge('dispatch', {'action': 'canvas.reference', 'args': args}, args['sessionId'])
     result = await app.app_bridge('dispatch', {'action': 'canvas.reference', 'args': {**args, 'clientId': 'one'}}, args['sessionId'])
     assert result['result']['sent'] is False
-    assert result['state']['view']['draft'] == result['result']['draft']
+    assert 'draft' not in result['state']['view']
+    observed = await app.app_bridge('get_state', {'path': '/view/draft', 'clientId': 'one'}, args['sessionId'])
+    assert observed['value'] == result['result']['draft']
     other = await call(app, 'session.create', {}, client='two')
     with pytest.raises(AppError, match='calling conversation'):
         await app.app_bridge('dispatch', {'action': 'canvas.reference', 'args': {**args, 'clientId': 'two'}}, args['sessionId'])

@@ -77,6 +77,13 @@ export function CoordinationPanel({dispatch,sessionId}){
  </div>;
 }
 
+function ResultFileStatus({response}){
+ if(!response.references?.length)return null;
+ if(response.artifactVerification==='not_requested')return <p className="a-caption">No file versions saved. These references are citations only.</p>;
+ if(response.artifactVerification==='incomplete')return <p role="status">Some file versions were not saved. Check the reference details.</p>;
+ return null;
+}
+
 export function RelatedWork({dispatch,sessionId}){
  const visit=useRef(0);
  const [items,setItems]=useState([]),[context,setContext]=useState({requests:[]}),[error,setError]=useState(''),[inspected,setInspected]=useState({}),[original,setOriginal]=useState(null);
@@ -113,12 +120,15 @@ export function RelatedWork({dispatch,sessionId}){
    <button className="a-link" onClick={()=>reveal(row.target.sessionId,row.messageId)}>Open submitted message</button>
    {response&&<div data-part="exact-result"><p>Result: {response.status} · {response.outcome} · {response.qualified?'Qualified terminal evidence':'Not qualified'}</p><p>{response.text}</p>{response.detail&&<p role="alert">{response.detail}</p>}
     {response.terminalMessageId&&response.status==='sealed'&&<button className="a-link" data-message-id={response.terminalMessageId} onClick={()=>reveal(row.target.sessionId,response.terminalMessageId)}>Open exact terminal message</button>}
-    {(response.references||[]).map(reference=>{const artifact=response.artifacts?.find(item=>item.reference===reference);return <p key={reference}><code>{reference}</code>{artifact&&<small> · {artifact.status==='retained'?'Exact version saved':artifact.detail||artifact.status}</small>}{/^[^@\n]+@sha256:[a-f0-9]{64}$/.test(reference)&&!reference.includes('://')&&<button className="a-link" onClick={()=>openArtifact(row.requestId,reference,response.responseRevision)}>Open referenced artifact</button>}{artifact?.status==='retained'&&<a className="a-link" href={'/api/outputs/'+artifact.outputId+'/content'} download>Download saved version</a>}</p>})}
+    <ResultFileStatus response={response}/>
+    {(response.references||[]).map(reference=>{const artifact=response.artifacts?.find(item=>item.reference===reference);return <p key={reference}><code>{reference}</code>{artifact&&<small> · {artifact.status==='retained'?'Exact version saved':artifact.detail||artifact.status}</small>}{((!artifact&&!response.artifactVerification)||artifact?.status==='retained')&&/^[^@\n]+@sha256:[a-f0-9]{64}$/.test(reference)&&!reference.includes('://')&&<button className="a-link" onClick={()=>openArtifact(row.requestId,reference,response.responseRevision)}>Open referenced artifact</button>}{artifact?.status==='retained'&&<a className="a-link" href={'/api/outputs/'+artifact.outputId+'/content'} download>Download saved version</a>}</p>})}
     {(response.messageIds||[]).map(messageId=><button key={messageId} className="a-link" onClick={()=>reveal(row.target.sessionId,messageId)}>Open evidence message {messageId}</button>)}
    </div>}{result?.revisions?.some(item=>item.responseRevision!==receipt.response?.responseRevision)&&<details>
     <summary>Earlier replies</summary>
     {result.revisions.filter(item=>item.responseRevision!==receipt.response?.responseRevision).map(item=><div key={item.responseRevision} data-response-revision={item.responseRevision}>
      <p>Reply {item.responseRevision} · {item.outcome} · {item.qualified?'Qualified terminal evidence':'Not qualified'}</p><p>{item.text}</p>
+     <ResultFileStatus response={item}/>
+     {(item.artifacts||[]).filter(artifact=>artifact.status!=='retained').map(artifact=><p key={artifact.reference}><code>{artifact.reference}</code> · {artifact.detail||artifact.status}</p>)}
      {(item.artifacts||[]).filter(artifact=>artifact.status==='retained').map(artifact=><p key={artifact.outputId}>
       <button className="a-link" onClick={()=>openArtifact(row.requestId,artifact.reference,item.responseRevision)}>Open saved reply {item.responseRevision}</button>
       <a className="a-link" href={'/api/outputs/'+artifact.outputId+'/content'} download>Download saved reply {item.responseRevision}</a>

@@ -40,7 +40,10 @@ chat catalog. A repository is identified separately from any one task checkout.
 
 4. **Private drafts stay private.** Another chat's unfinished edits, composer,
    and full transcript are not ambient shared context. An explicit reference or
-   authorized collaboration supplies a named snapshot to its recipient.
+   authorized collaboration supplies a named snapshot to its recipient. Even the
+   calling chat's unsent composer is excluded from ordinary app readback. An
+   explicit `/view/draft` read must name a client displaying that calling chat
+   and is intended only for user-requested draft work.
 
 5. **Shared decisions have attributable updates.** Task notes belong to their
    task. Promoting a decision records source, revision, and actor through one

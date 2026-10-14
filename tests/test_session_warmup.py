@@ -78,6 +78,15 @@ async def test_failed_background_preparation_does_not_create_attention_error(ser
     assert session['preparation']['status'] == 'unavailable'
 
 
+async def test_orderly_host_shutdown_leaves_background_preparation_cold(service):
+    from amplifier_web.runtime import RuntimeHostClosingError
+    service.runtime.prewarm = AsyncMock(side_effect=RuntimeHostClosingError())
+    session = service._session()
+    await service.warmup.run(session['id'])
+    assert session['status'] == 'idle' and 'error' not in session
+    assert session['preparation'] == {'status': 'cold'}
+
+
 @pytest.mark.parametrize('raw_error', [True, False])
 async def test_passive_preparation_preserves_failed_turn_evidence_and_history(service, raw_error):
     session = service._session()
