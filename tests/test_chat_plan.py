@@ -1,5 +1,7 @@
 import json
 
+from test_automatic_history import app_factory
+
 from amplifier_web.browser_detail import project
 from amplifier_web.chat_plan import latest_plan
 from amplifier_web.event_log_view import EventLogView, event_path
@@ -75,3 +77,36 @@ def test_workspace_plan_summary_uses_recorded_steps_not_tool_payloads():
     assert overview(session, include_items=True)['plan']['items'] == tasks('completed')
     session['execution']['nodes'].append(node('bad', output={'todos': False}, at=3))
     assert overview(session)['plan']['unavailable']
+
+
+async def test_workspace_plan_query_avoids_hydration_children_and_transcript_association(app_factory, monkeypatch):
+    app = app_factory()
+    made = await app.dispatch('session.create', {'title': 'Plans'})
+    session = app._session(made['sessionId'])
+    identity = session.get('runtimeSessionId') or session['id']
+    path = event_path(session, identity)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(''.join(json.dumps({'event': event, 'timestamp': at, 'data': data}) + '\n'
+        for event, at, data in [
+            ('delegate:agent_spawned', 1, {'session_id': identity, 'sub_session_id': 'huge-child', 'tool_call_id': 'child'}),
+            ('tool:pre', 2, {'session_id': identity, 'tool_name': 'todo', 'tool_call_id': 'todo', 'tool_input': {'action': 'update', 'todos': tasks()}}),
+            ('tool:post', 3, {'session_id': identity, 'tool_name': 'todo', 'tool_call_id': 'todo', 'result': {'success': True, 'output': {'status': 'updated'}}})]))
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Plan listing must not hydrate chat history or project full execution')
+    monkeypatch.setattr(app.cold_display, 'hydrate', forbidden)
+    monkeypatch.setattr(app.event_log_view, 'refresh', forbidden)
+    from amplifier_web.event_log_view import EventIndex
+    monkeypatch.setattr(EventIndex, 'associations', forbidden)
+    original = EventIndex.refresh
+    scanned = []
+    def observed(index):
+        scanned.append(index.identity)
+        return original(index)
+    monkeypatch.setattr(EventIndex, 'refresh', observed)
+    result = await app.dispatch('session.plans', {'ids': [session['id']]})
+    plan = result['result']['items'][0]['plan']
+    assert (plan['done'], plan['total']) == (0, 1)
+    assert 'items' not in plan
+    assert scanned == [identity]
+    detail = await app.dispatch('session.plans', {'ids': [session['id']], 'includeItems': True})
+    assert detail['result']['items'][0]['plan']['items'] == tasks()

@@ -1077,3 +1077,27 @@ def test_response_without_request_and_no_fabricated_response(source):
     assert read_text(session, {**recorded['responseDetail'], 'complete': 'true'})['value'] == 'Provider text... [truncated]'
     missing = next(row for row in rows if row != recorded)
     assert 'responseDetail' not in missing
+
+
+@pytest.mark.parametrize('field', ['request', 'response'])
+def test_model_recording_is_not_formatted_until_explicit_read(source, monkeypatch, field):
+    from amplifier_web import event_log_view as events
+    session, path = source
+    raw = {'large_recording': ['retained exact payload'] * 20000}
+    append(path, 'llm:request', {'request_id': 'one', **({'raw': raw} if field == 'request' else {})})
+    if field == 'response':
+        append(path, 'llm:response', {'request_id': 'one', 'raw': raw}, 11)
+    real, formatted = events.text, []
+    def text(value):
+        if isinstance(value, dict) and 'large_recording' in value:
+            formatted.append(True)
+        return real(value)
+    monkeypatch.setattr(events, 'text', text)
+    session['execution'] = EventLogView(None).read(session)
+    assert not formatted
+    reference = session['execution']['nodes'][0][field + 'Detail']
+    assert reference['digestKind'] == 'event-field-v1' and 'length' not in reference
+    assert json.loads(read_text(session, {**reference, 'complete': 'true'})['value']) == raw
+    assert formatted == [True]
+    with pytest.raises(ValueError, match='changed'):
+        read_text(session, {**reference, 'digest': '0' * 64})

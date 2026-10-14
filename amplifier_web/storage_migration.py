@@ -118,7 +118,7 @@ def maintenance(service):
     """Admit at most one owned sweep after committing the state snapshot.
 
     Synchronous callers retain the old synchronous boundary. Live services defer
-    body traversal to workers while their owner retains lock/DB authority.
+    body traversal to workers and revalidate before taking deletion authority.
     """
     now = time.monotonic()
     if getattr(service, 'closed', False) or getattr(service, 'backup_in_progress', False):
@@ -172,20 +172,64 @@ def _maintenance_sync(service):
 
 
 async def _maintenance_async(service):
-    from .resource_files import marked_references_async
-    async with service.lock:
-        if service.closed or getattr(service, 'backup_in_progress', False):
-            return
-        try:
+    """Optimistic immutable-resource walk; only capture and prune hold app.lock.
+
+    No writer transaction or application lock spans file/JSON traversal. Before
+    deletion, recheck every root and source index under the writer boundary.
+    A changed, unavailable or uncertain graph defers the sweep in its entirety.
+    """
+    from .resource_files import retained_references, detach, detached_references, settle_worker
+
+    def roots():
+        state = _roots(service)
+        rows = state if isinstance(state, list) else [state]
+        if any(isinstance(row, dict) and row.get('_viewRecoveryPending') for row in rows):
+            return None
+        return set(retained_references(service.db, state))
+
+    def unavailable():
+        return service.closed or getattr(service, 'backup_in_progress', False)
+
+    try:
+        async with service.lock:
+            if unavailable():
+                return
+            initial = roots()
+        pending, sources = list(initial or ()), {}
+        valid = initial is not None
+        while pending and valid:
+            identity = pending.pop()
+            if identity in sources:
+                continue
+            try:
+                async with service.lock:
+                    if unavailable():
+                        return
+                    source = detach(service.db, identity)
+                pending.extend(await settle_worker(detached_references, source))
+                sources[identity] = source
+            except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                valid = False
+        async with service.lock:
+            if unavailable():
+                return
             service.db.execute('BEGIN IMMEDIATE')
-            _finish(service, await marked_references_async(service.db, _roots(service)))
-        except BaseException as exc:
-            # settle_worker waits for a cancelled read before this rollback.
-            service.db.rollback()
-            if isinstance(exc, asyncio.CancelledError):
+            try:
+                valid = valid and roots() == initial
+                if valid:
+                    try:
+                        valid = all(detach(service.db, key) == value for key, value in sources.items())
+                    except ValueError:
+                        valid = False
+                _finish(service, set(sources) if valid else None)
+            except BaseException:
+                service.db.rollback()
                 raise
-            service._storage_maintenance_error = type(exc).__name__
-            logging.getLogger(__name__).warning('Storage maintenance deferred.', exc_info=True)
+    except asyncio.CancelledError:
+        raise  # Detached readers have settled; no writer boundary is retained.
+    except Exception as exc:
+        service._storage_maintenance_error = type(exc).__name__
+        logging.getLogger(__name__).warning('Storage maintenance deferred.', exc_info=True)
 
 
 async def close_maintenance(service):

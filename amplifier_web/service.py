@@ -1765,14 +1765,17 @@ class AppService:
             prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
             prepared_health['capture']['limitations'].append('Request timings cover handler execution, not time before the server accepts a connection.')
         if action == 'session.plans':
-            from .chat_plan import overview
             if args.get('includeItems') and len(args['ids']) != 1:
                 raise AppError('Inspect one chat at a time for plan details.')
-            rows = []
+            sources = []
             for identity in args['ids']:
-                session = self._session(identity)
-                await self.event_log_view.refresh(session['id'])
-                rows.append(overview(session, include_items=args.get('includeItems', False)))
+                session = self._session(identity, hydrate=False)
+                sources.append({key: session[key] for key in
+                    ('id', 'nativeIdentity', 'runtimeSessionId', 'workspace', 'nativeProject') if key in session})
+            rows = []
+            for source in sources:
+                rows.append(await asyncio.to_thread(self.event_log_view.read_plan, source,
+                    include_items=args.get('includeItems', False)))
             return {'accepted': True, 'result': {'items': rows}, 'effects': []}
         prepared_export = None
         prepared_share = None

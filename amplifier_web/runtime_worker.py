@@ -65,7 +65,10 @@ class Worker:
         self.context_bindings = {}
         self.context_inputs = []
         self.root_generation_outcome = None
-        from amplifier_web.response_completion import ResponseBlocks
+        if __package__:
+            from .response_completion import ResponseBlocks
+        else:
+            from response_completion import ResponseBlocks
         self.response_blocks = ResponseBlocks()
         self.terminal_response_refs = None
         self.terminal_checkpointed = False

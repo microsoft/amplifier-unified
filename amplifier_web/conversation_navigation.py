@@ -3,6 +3,7 @@ from collections import Counter
 from hashlib import sha256
 
 from .browser_detail import MESSAGE_LIMIT, TEXT_LIMIT, compact, work_segments
+from .history_read_retry import retry_indexed_read
 
 
 def source(session):
@@ -62,6 +63,7 @@ def group_source(session, window_message_id=None):
     return with_window(session, read(range(start, min(len(facts), start + MESSAGE_LIMIT))))
 
 
+@retry_indexed_read
 def query(session, *, message_id=None, window=False, _raw_window=False):
     """Pure public queries stay neutral; the host may request bounded raw rows.
 

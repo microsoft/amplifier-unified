@@ -33,8 +33,15 @@ export function ModelControl({state,session,act,working,embedded=false}){
  const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.context===defaultsContext?previousDefaults.current.value:defaults;
  const checkingDefaults=isDraft&&defaults.phase!=='ready'&&defaults.phase!=='error';
  const unavailable=!!state.navigationPending||session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||session?.historyLoaded===false;
- const shared=state.view?.composerModel||EMPTY,[draft,setDraft]=useState(shared),[error,setError]=useState('');
- useEffect(()=>setDraft(shared),[shared]);
+ const shared=state.view?.composerModel||EMPTY,[draft,setDraft]=useState(shared),[error,setError]=useState(''),effortPending=useRef(null);
+ useEffect(()=>{
+  const pending=effortPending.current;
+  // A poll can replace an equal view object during a slider gesture. Preserve
+  // that gesture only within its original chat/provider/model selection.
+  if(pending&&pending.sessionId===sessionId&&pending.instance===shared.instance&&pending.model===shared.model)
+   setDraft({...shared,effort:pending.effort});
+  else{effortPending.current=null;setDraft(shared)}
+ },[shared,sessionId]);
  const edit=patch=>{const next={...draft,...patch,...(embedded?{open:true,sessionId}:{})};setDraft(next);act('view.update',{patch:{composerModel:next}})};
  const managed=setup.location?.kind==='managed';
  const location=managed?{location:{kind:'managed'}}:{};
@@ -84,7 +91,6 @@ export function ModelControl({state,session,act,working,embedded=false}){
  const metadata=entry?.metadata||selected||{};
  const choices=providerFields(metadata,{model:draft.model,default_model:draft.model}).find(field=>field.id==='reasoning_effort')?.choices||[];
  const effort=draft.effort||configuredEffort(selected,draft.model)||configuredEffort(metadata,draft.model);
- const effortPending=useRef(false);
  const request=useRef(''),touched=useRef(false);
  useEffect(()=>{
   if(!isDraft||(!setup.workspace&&!managed))return;
@@ -116,8 +122,8 @@ export function ModelControl({state,session,act,working,embedded=false}){
   if(isDraft&&!draftCatalog.providerCatalogs?.[value])act('providers.models',{id:value,workspace:setup.workspace,...location});
   else if(!isDraft&&!state.modelCatalogs?.[row.sharedCatalogKey]&&!controls.modelCatalogs?.[value])act('runtime.control',{sessionId,operation:'configuration.catalog',args:{}});
  }
- function previewEffort(event){touched.current=true;effortPending.current=true;setDraft({...draft,effort:choices[Number(event.currentTarget.value)]});}
- function commitEffort(event){if(!effortPending.current)return;effortPending.current=false;const value=choices[Number(event.currentTarget.value)];if(value)apply({effort:value});}
+ function previewEffort(event){const value=choices[Number(event.currentTarget.value)];touched.current=true;effortPending.current={sessionId,instance:draft.instance,model:draft.model,effort:value};setDraft({...draft,effort:value});}
+ function commitEffort(){const pending=effortPending.current;effortPending.current=null;if(pending&&pending.sessionId===sessionId&&pending.instance===draft.instance&&pending.model===draft.model&&choices.includes(pending.effort))apply({effort:pending.effort});}
  const catalogRequest=useRef('');
  const missingCatalogs=providers.filter(row=>row.sharedCatalogKey&&!state.modelCatalogs?.[row.sharedCatalogKey]).map(row=>row.sharedCatalogKey).join('|');
  useEffect(()=>{

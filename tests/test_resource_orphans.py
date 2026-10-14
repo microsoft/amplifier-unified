@@ -141,6 +141,9 @@ async def test_refused_and_successful_preview_do_not_sweep_files(app_factory):
     app.clients.attach('web')
     made=await command(app,'web','session.create',{'location':{'kind':'managed'}})
     sid=made['sessionId']
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task is not None:
+        await task  # Settle creation's independent automatic sweep before injecting an orphan.
     failed=files.put(app.db,{'failed':'unique orphan'});app.db.rollback()
     path=files.root(app.db)/(failed['$resource']+'.json')
     app._session(sid)['status']='working'
@@ -189,10 +192,10 @@ async def test_maintenance_commit_gate_cursor_and_backup_deferral(app_factory,mo
     for i in range(260):
         files.put(app.db,{'orphan-maintenance':i});app.db.rollback()
     calls=[]
-    original=files.marked_references_async
-    async def mark(*args):
-        calls.append(1);return await original(*args)
-    monkeypatch.setattr(files,'marked_references_async',mark)
+    original=storage_migration._finish
+    def finish(*args):
+        calls.append(1);return original(*args)
+    monkeypatch.setattr(storage_migration,'_finish',finish)
     app.backup_in_progress=True
     app._last_storage_sweep=0
     storage_migration.maintenance(app)

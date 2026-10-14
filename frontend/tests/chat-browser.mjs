@@ -21,6 +21,17 @@ try{
  await page.locator('#chat-effort').press('End');
  await page.waitForFunction(()=>window.amplifier.getState().view.composerModel?.effort==='high');
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.pinned&&c['configuration.catalog']?.selection?.effort==='high'));
+ // A host view refresh during a pointer gesture must not restore the old
+ // effort before pointer-up. The selected value persists on release/reopen.
+ const slider=page.locator('#chat-effort'),box=await slider.boundingBox();
+ await page.mouse.move(box.x+box.width-8,box.y+box.height/2);await page.mouse.down();
+ await page.mouse.move(box.x+8,box.y+box.height/2);
+ await action('view.update',{patch:{composerModel:await page.evaluate(()=>({...window.amplifier.getState().view.composerModel}))}});
+ assert.equal(await slider.getAttribute('aria-valuetext'),'low');
+ await page.mouse.up();
+ await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.selection?.effort==='low'));
+ await slider.press('End');
+ await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.selection?.effort==='high'));
  await page.getByRole('button',{name:'Close model settings'}).click();
  assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision/);
  assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision \(high\)/);

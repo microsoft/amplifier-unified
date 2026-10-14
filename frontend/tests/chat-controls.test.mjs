@@ -7,6 +7,24 @@ const server=await createServer({server:{middlewareMode:true,hmr:false},appType:
 const {ModelControl,readAttachment}=await server.ssrLoadModule('/src/chat-controls.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
+for(const commit of ['onPointerUp','onKeyUp','onBlur'])test('reasoning effort survives a background view refresh until '+commit,async()=>{
+ const calls=[],session={id:'chat',status:'idle'},selection={instance:'one',model:'model',effort:'high'};
+ let state={view:{composerModel:{open:true,sessionId:'chat',...selection}},runtimeControl:{chat:{'configuration.catalog':{configurationRevision:0,providers:[{id:'one',info:{defaults:{model:'model'},config_fields:[{id:'reasoning_effort',choices:['low','medium','high']}] }}],effective:selection}}}},root;
+ const render=()=>React.createElement(ModelControl,{state,session,act:async(name,args)=>calls.push({name,args}),working:false});
+ try{
+  await renderAct(async()=>root=create(render()));
+  const slider=()=>root.root.findByProps({id:'chat-effort'});
+  await renderAct(async()=>slider().props.onChange({currentTarget:{value:'1'}}));
+  // Streaming/view polling can replace an equal server object before release.
+  state={...state,view:{...state.view,composerModel:{...state.view.composerModel}}};
+  await renderAct(async()=>root.update(render()));
+  assert.equal(slider().props['aria-valuetext'],'medium');
+  await renderAct(async()=>slider().props[commit]({currentTarget:{value:String(slider().props.value)}}));
+  assert.deepEqual(calls.filter(c=>c.args.operation==='provider.queueSelection').map(c=>c.args.args),[{...selection,effort:'medium'}]);
+  await renderAct(async()=>slider().props.onBlur({currentTarget:{value:'1'}}));
+  assert.equal(calls.filter(c=>c.args.operation==='provider.queueSelection').length,1);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
 test('attachment intake accepts 32 MiB and rejects oversized files before reading',async()=>{
  const previous=globalThis.FileReader;let reads=0;
  globalThis.FileReader=class{readAsDataURL(){reads++;this.result='data:image/png;base64,fixture';this.onload()}};
