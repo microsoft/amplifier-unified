@@ -230,6 +230,18 @@ async def test_bundle_selected_matrix_is_refreshed_without_settings_default(app,
     assert app.runtime.stops == [row['id']]
 
 
+async def test_saved_runtime_routing_override_is_not_mistaken_for_unused_matrix(app, tmp_path):
+    row = app._session()
+    plan = app.data_dir / 'sessions' / row['id'] / 'configuration.json'
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(json.dumps({'hooks': [{'module': 'hooks-routing', 'config': {'default_matrix': 'fixture-routing'}}]}))
+    app.runtime.workers[row['id']] = object()
+    app.runtime.finish.set()
+    await app.management.command('routing.save', routing_args(), 'saved-plan-default')
+    await settled(app)
+    assert app.runtime.stops == [row['id']]
+
+
 @pytest.mark.parametrize('problem', ['missing-workspace', 'broken-matrix'])
 async def test_unrelated_unavailable_routing_owner_does_not_block_save(app, tmp_path, problem):
     other = tmp_path / 'unavailable'; other.mkdir()

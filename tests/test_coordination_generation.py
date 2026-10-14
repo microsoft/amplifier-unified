@@ -152,7 +152,10 @@ async def test_notify_alias_and_exact_message_inspection_preserve_selection(app)
 
 
 @pytest.mark.parametrize('stopped', [False, True])
-async def test_peer_input_waits_for_configuration_retirement_and_rechecks_stop(app, monkeypatch, stopped):
+@pytest.mark.parametrize('second_save', [False, True])
+async def test_peer_input_waits_for_configuration_retirement_and_rechecks_stop(app, monkeypatch, stopped, second_save):
+    from amplifier_web.management import Management
+    app.management = Management(app)
     source, peer = app.state['sessions']
     entered, finish = asyncio.Event(), asyncio.Event()
     async def retire(sid, *, reason='stopped'):
@@ -164,6 +167,11 @@ async def test_peer_input_waits_for_configuration_retirement_and_rechecks_stop(a
     peer.update(configurationPending=True, configurationPendingRevision=1)
     refresh = asyncio.create_task(app.refresh_configuration(peer['id']))
     await entered.wait()
+    if second_save:
+        app.state['configurationRevision'] = 1
+        await app.management.invalidate_configuration(warm=False, session_ids={peer['id']})
+        assert peer['configurationPendingRevision'] == 2
+        assert peer['configurationRefresh']['phase'] == 'applying'
     receipt = await agent(app, source, 'coordination.send',
                           {'sessionId': peer['id'], 'text': 'After the saved settings'}, 'held-by-refresh')
     await app.collaboration.drain(peer['id'])

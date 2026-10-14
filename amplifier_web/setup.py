@@ -521,6 +521,20 @@ class SetupManager:
             self._config_snapshot = (workspace, config)
             routing = copy.deepcopy(config.settings.get('routing', {}))
             name = routing.get('matrix')
+            if session_id:
+                override = self.home / 'sessions' / session_id / 'configuration.json'
+                if override.exists():
+                    plan = json.loads(override.read_text())
+                    hook = next((row for row in plan.get('hooks', []) if row.get('module') == 'hooks-routing'), None)
+                    if 'hooks' in plan and hook is None:
+                        return {'routing': None, 'matrix': None}
+                    if hook and (hook.get('config', {}).get('default_matrix', 'balanced') != (name or 'balanced')
+                                 or hook.get('config', {}).get('custom_routing_dirs') !=
+                                 [str(path) for path in routing_dirs(workspace, shared_home=self.store.shared_home)]):
+                        # Saved runtime plans replace the normal merged hook.
+                        # Do not misclassify that independently selected source
+                        # as an unused preset; conservatively refresh its owner.
+                        return None
             if not name and session_id:
                 path = self.home / 'sessions' / session_id / 'effective-configuration.json'
                 if path.exists():
@@ -542,7 +556,7 @@ class SetupManager:
             if matrix is not None:
                 matrix.pop('description', None)
             return {'routing': routing, 'matrix': matrix}
-        except (OSError, ValueError, yaml.YAMLError):
+        except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
             # A missing unrelated workspace or broken local preset must not
             # prevent saving valid settings. Retire only this uncertain owner.
             return None

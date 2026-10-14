@@ -204,6 +204,29 @@ async def test_queued_mount_changes_can_be_cancelled(app):
     assert 'pendingConfiguration' not in session
 
 
+async def test_ui_stop_during_configuration_shutdown_does_not_restart(app, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+    session = app._session()
+    entered, finish = asyncio.Event(), asyncio.Event()
+    calls = []
+    async def stop(sid, *, reason='stopped'):
+        calls.append(('stop', reason)); entered.set(); await finish.wait()
+    async def start(*args): calls.append(('start', None))
+    monkeypatch.setattr(app.management, 'ensure_runtime', AsyncMock())
+    app.runtime.stop = stop
+    app.runtime.start = start
+    app.runtime.control = AsyncMock(return_value={'requiresRestart': True})
+    applying = asyncio.create_task(app.management.perform('runtime.control',
+        {'sessionId': session['id'], 'operation': 'configuration.apply', 'args': {'config': {}}}))
+    await entered.wait()
+    await app.dispatch('conversation.stop', {'sessionId': session['id']})
+    finish.set()
+    with pytest.raises(ValueError, match='stopped before restart'):
+        await applying
+    assert not any(kind == 'start' for kind, _ in calls)
+
+
 async def test_native_export_uses_backup_without_repair_or_execution(app):
     from unittest.mock import AsyncMock
     from amplifier_web.session_files import project_slug

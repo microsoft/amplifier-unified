@@ -515,7 +515,8 @@ class Management:
                     changed.add(session['id'])
                     session['configurationPending']=True
                     session['configurationPendingRevision']=self.service.state['configurationRevision']
-                    session['configurationRefresh']={'phase':'pending','revision':self.service.state['configurationRevision']}
+                    if not session.get('configurationBusy'):
+                        session['configurationRefresh']={'phase':'pending','revision':self.service.state['configurationRevision']}
                     refresh=self.service._claim_configuration_refresh(session)
                     if refresh:claimed.append(refresh)
             if publish:self.service._publish_changes(sessions=changed, globals={'configurationRevision','draftDefaults','setup'})
@@ -816,8 +817,11 @@ class Management:
                     result=await self.service.runtime.control(session['id'],args['operation'],args.get('args',{}))
                 if result.get('requiresRestart'):
                     check_current()
+                    interruption_revision = session.get('interruptionRevision', 0)
                     await self.service.runtime.stop(session['id'], reason='configuration')
                     check_current()
+                    if self.service._session(session['id']).get('interruptionRevision', 0) != interruption_revision:
+                        raise ValueError('The settings were saved, but the conversation was stopped before restart. It was not restarted.')
                     await self.service.runtime.start(session,self.service.on_runtime_event)
                     inspected=await self.service.runtime.control(session['id'],'configuration.inspect',{})
                     result['configuration']=inspected
