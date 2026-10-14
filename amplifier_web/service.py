@@ -3475,6 +3475,9 @@ class AppService:
             await self.set_voice_status({"status": "error", "error": str(exc)})
 
     async def _stop(self, sid):
+        # The Stop revision is already durable. Release invalidated inbox slots
+        # even while the actual worker interruption is slow or unavailable.
+        await self.collaboration.drain(sid)
         if self.runtime:
             await self.runtime.stop(sid)
         await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})

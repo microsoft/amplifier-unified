@@ -718,8 +718,6 @@ class Collaboration:
                         self.cancel_expiry(identity)
                         continue
                     target = self.service._session(sid)
-                    if target.get("status") in BUSY:
-                        break
                     reason = self.guard(receipt)
                     if reason:
                         receipt.update(delivery='expired' if receipt.get('expiresAt', float('inf')) <= time.time() else 'suppressed', detail=reason)
@@ -727,6 +725,8 @@ class Collaboration:
                         self.publish_receipt(receipt)
                         self.cancel_expiry(identity)
                         continue
+                    if target.get("status") in BUSY:
+                        break
                     # Durable claim precedes any runtime effect. Unknown never
                     # returns to queued, including cancellation and restart.
                     receipt['admissionOrder'] = self.service.db.execute("""SELECT coalesce(max(json_extract(receipt,'$.admissionOrder')),0)+1
