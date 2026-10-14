@@ -31,6 +31,9 @@ An isolated working directory is not a security sandbox.
 2. **Chosen folders are real working folders.** Ordinary chat edits use the
    selected workspace folder. A terminal or editor there sees the same files.
    Attachment cannot silently substitute a hidden working copy for the user's folder.
+   An explicit move to an associated checkout verifies that checkout's recorded
+   repository. Returning to the exact canonical home remains valid when that home
+   is a non-Git folder containing several repositories.
 
 3. **One checkout has one writer.** Owner generations fence managed writes.
    Old processes must be quiesced or reconciled before reassignment. Stale writes
@@ -82,5 +85,6 @@ An isolated working directory is not a security sandbox.
 |---|---|---|
 | 2026-09-22 | Initial execution contract. | Successful shared-clone/worktree workflow and observed shared-environment limitations. |
 | 2026-09-22 | Folder-first execution; task-level concurrency only. | User rejected attachment-time developer modes and required terminal-visible edits. |
+| 2026-10-14 | Clarify selected-repository handoff and non-Git canonical home return. | Multi-repository handoff acceptance exposed a Git-home assumption. |
 
 Design direction accepted by the user on 2026-09-22. Acceptance is not a claim of implementation conformance; see [implementation status](../IMPLEMENTATION.md).

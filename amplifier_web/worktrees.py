@@ -158,6 +158,34 @@ class Worktrees:
         if record.get('sessionId') != sid: raise ValueError('This checkout belongs to another task')
         return record
 
+    def placement_binding(self, session, path, checkout_id=None):
+        """Bind an exact home or associated checkout, never an arbitrary folder."""
+        if checkout_id is None and path == session['workspace']:
+            return {'kind': 'home', 'path': path}
+        if checkout_id is None:
+            # Also resolves the source of older durable receipts. Only an exact
+            # associated placement is recoverable; Git membership is not authority.
+            checkout_id = next((row['id'] for row in session.get('worktrees', [])
+                if row['path'] == path and row['status'] == 'ready'), None)
+            if checkout_id is None: raise ValueError('The folder is not this task’s canonical home or an associated checkout')
+        checkout = self.record(session['id'], checkout_id)
+        self.check_host(checkout)
+        if checkout['status'] != 'ready': raise ValueError('The checkout is not ready; inspect its conflicts first')
+        if checkout['path'] != path: raise ValueError('The checkout folder changed; inspect it again')
+        return {'kind': 'checkout', 'path': path, 'checkoutId': checkout_id, 'repository': checkout['repository']}
+
+    def preflight(self, record, session):
+        binding = record['targetBinding']
+        expected = self.placement_binding(session, record['target'], binding.get('checkoutId'))
+        if binding != expected: raise ValueError('The target checkout binding changed; inspect it again')
+        target = Path(record['target'])
+        if not target.is_dir() or target.resolve(strict=True) != target:
+            raise ValueError('The target folder is unavailable or no longer its recorded canonical path')
+        if binding['kind'] == 'checkout':
+            checked = self.git.inspect(target)
+            if checked['root'] != binding['path'] or checked['repository'] != binding['repository']:
+                raise ValueError('The target is no longer in the recorded repository')
+
     def require_available_path(self, path):
         """Fence admission without scanning dormant histories or Git records."""
         roots = (*self._moving_paths, *self._uncertain_paths)
@@ -362,13 +390,16 @@ class Worktrees:
                     source = next((m for m in session['messages'] if m['id'] == args.get('sourceMessageId') and m.get('role') == 'user' and m.get('inputOrigin') in {'ui', 'user', 'voice'} and not m.get('questionId') and not m.get('scheduledRunId')), None)
                     if not source or source.get('createdAt', 0) < previous['createdAt']: raise ValueError('Cite the user’s actual finding after this handoff')
                 target = previous[args['destination']]
+                if previous['historyHome'] != session['workspace']: raise ValueError('The canonical home changed; inspect the handoff before reconciliation')
+                target_binding = copy.deepcopy(previous.get(args['destination'] + 'Binding') or self.placement_binding(session, target))
             else:
                 if session.get('configurationBusy'): raise ValueError('Another configuration change or handoff is unresolved')
                 if session.get('executionRevision', 0) != args['expectedExecutionRevision']: raise ValueError('The execution folder revision changed; inspect it again')
-                if args.get('id'): self.check_host(self.record(sid, args['id']))
                 target = self.record(sid, args['id'])['path'] if args.get('id') else session['workspace']
-                if args.get('id') and self.record(sid, args['id'])['status'] != 'ready': raise ValueError('The checkout is not ready; inspect its conflicts first')
+                target_binding = self.placement_binding(session, target, args.get('id'))
             record = {'id': identity, 'sessionId': sid, 'signature': signature, 'revision': 1, 'phase': 'pending', 'executionHost': local_host_identity(), 'source': session.get('workingDirectory') or session['workspace'], 'target': target, 'historyHome': session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'createdAt': time.time(), 'inputsReplayed': False, 'origin': origin, 'detail': 'Saving and releasing the old runtime before changing its execution folder.', 'preserved': {'messageIds': [m['id'] for m in session['messages']], 'taskId': session.get('task', {}).get('id') if session.get('task') else None}, 'reconciles': previous['id'] if previous else None, 'evidence': args.get('evidence')}
+            record['sourceBinding'] = self.placement_binding(session, record['source'])
+            record['targetBinding'] = target_binding
             record['step'] = 'preflight'
             self.save(record)
             session['configurationBusy'] = True
@@ -385,14 +416,19 @@ class Worktrees:
             # Quiescence never waits on a model-held command lock.
             await asyncio.sleep(0)
             self.check_host(record)
-            checked = await asyncio.to_thread(self.git.inspect, record['target'])
-            home = await asyncio.to_thread(self.git.inspect, record['historyHome'])
-            if checked['repository'] != home['repository']: raise ValueError('The target is no longer in the original repository')
+            await asyncio.to_thread(self.preflight, record, session)
             if not self.app.runtime or not hasattr(self.app.runtime, 'quiesce_for_handoff'): raise ValueError('This runtime cannot confirm safe handoff')
             # Persist before crossing the effect boundary. A lost release
             # response is uncertain; a failed read-only preflight is not.
-            record['step'] = 'releasing'
-            self.save(record)
+            async with self.app.lock:
+                current = self.app._session(record['sessionId'])
+                self.check_host(current)
+                if (current.get('executionRevision', 0) != record['executionRevision']
+                        or current['workspace'] != record['historyHome']
+                        or (current.get('workingDirectory') or current['workspace']) != record['source']):
+                    raise ValueError('The execution folder changed during handoff')
+                record['step'] = 'releasing'
+                self.save(record)
             evidence = await self.app.runtime.quiesce_for_handoff(session, record['id'])
             self.check_host(evidence)
             if not evidence.get('quiesced'): raise RuntimeError('Runtime release was not confirmed')

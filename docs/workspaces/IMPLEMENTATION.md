@@ -568,6 +568,22 @@ reservation checks pass against that wheel outside the source checkout.
 This qualifies explicit selection through the
 actual agent tool, not automatic dependency mapping or concurrent model efficacy.
 
+The later multi-repository acceptance journey exposed a gap in that evidence:
+creation under a non-Git home and handoff from a Git home had passed separately,
+but moving the existing non-Git-home conversation failed before runtime release.
+Handoff now retains exact home/associated-checkout bindings in its receipt and
+checks a destination against its recorded repository, rather than treating the
+canonical history home as a repository. Returning home checks the exact existing
+canonical directory. Reconciliation uses the retained binding; older receipts can
+resolve only an exact home or an associated ready checkout. Host, root authority,
+execution revisions, runtime release and uncertain-effect fences still apply.
+
+Focused source tests cover both UI and agent moves between two child repositories
+and home, staged/unstaged/untracked preservation, unknown source/target recovery,
+restart and retry, substituted-repository refusal, and rejection of an unassociated
+legacy destination or replaced home path before release. These are source tests
+with controlled runtime release; packaged and browser acceptance remain separate.
+
 ## Cooperative resource reservations — 2026-10-13
 
 The existing workspace resource owner now provides explicit reservations in
