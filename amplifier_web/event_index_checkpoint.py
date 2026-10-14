@@ -1,0 +1,135 @@
+"""Bounded, disposable event-index checkpoints in the host's cache directory.
+
+Canonical events remain the authority. A checkpoint retains parsed descriptors,
+not raw provider bodies, so evicting a large RAM index need not parse the entire
+log again. EventIndex still validates source identity/tail before incremental use.
+"""
+from collections import OrderedDict
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import tempfile
+import zlib
+
+SCHEMA = 1
+MAX_DECODED = 64 * 1024 * 1024
+MAX_FILE = 16 * 1024 * 1024
+MAX_TOTAL = 256 * 1024 * 1024
+MAX_FILES = 1024
+
+
+def tuples(value):
+    return tuple(tuples(item) for item in value) if isinstance(value, list) else value
+
+
+def encode(index):
+    events = []
+    for row in index.association_events:
+        data = row.get('data', {})
+        digest = data.get('_prompt_digest')
+        events.append({**row, 'data': {**data, '_prompt_digest': digest.hex()}}
+                      if isinstance(digest, bytes) else row)
+    return {'schema': SCHEMA, 'path': str(index.path), 'identity': index.identity,
+        **{key: getattr(index, key) for key in ('offset', 'file_id', 'revision', 'last',
+           'children', 'worker_runs', 'tool_owners', 'diagnostics', 'association_revision', 'association_cache')},
+        'nodes': list(index.nodes.items()), 'pending': list(index.pending.items()), 'association_events': events}
+
+
+def restore(index, value):
+    if value.get('schema') != SCHEMA or value.get('path') != str(index.path) or value.get('identity') != index.identity:
+        raise ValueError('Different index source or format')
+    if type(value.get('offset')) is not int or value['offset'] < 0:
+        raise ValueError('Invalid index offset')
+    index.offset = value['offset']
+    for key in ('file_id', 'revision', 'association_revision'):
+        setattr(index, key, tuples(value[key]))
+    for key in ('last', 'children', 'worker_runs', 'tool_owners', 'diagnostics', 'association_events'):
+        setattr(index, key, value[key])
+    index.nodes = OrderedDict(value['nodes'])
+    index.pending = {tuple(key): [index.nodes.get(row['id'], row) for row in rows]
+                     for key, rows in value['pending']}
+    # These maps originally share the same worker descriptor objects.
+    index.children = {key: index.worker_runs.get(row['id'], row) for key, row in index.children.items()}
+    index.association_cache = {int(key): row for key, row in value['association_cache'].items()}
+    for row in index.association_events:
+        digest = row.get('data', {}).get('_prompt_digest')
+        if isinstance(digest, str):
+            if len(digest) > 128:
+                raise ValueError('Invalid prompt fingerprint')
+            row['data']['_prompt_digest'] = bytes.fromhex(digest)
+    # A cache cannot redirect an exact payload read to another source file.
+    for row in [*index.nodes.values(), *(row for rows in index.pending.values() for row in rows)]:
+        for reference in row.get('_eventFields', {}).values():
+            if reference.get('path') != str(index.path):
+                raise ValueError('Invalid indexed event source')
+    if index.last and index.last.get('path') != str(index.path):
+        raise ValueError('Invalid indexed tail source')
+    index._checkpoint_signature = (index.revision, index.association_revision)
+
+
+class Checkpoints:
+    def __init__(self, home):
+        self.directory = Path(home) / 'cache' / 'event-index-v1'
+
+    def path(self, source, identity):
+        key = hashlib.sha256((str(source) + '\0' + identity).encode()).hexdigest()
+        return self.directory / (key + '.json.gz')
+
+    def load(self, index):
+        path = self.path(index.path, index.identity)
+        try:
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE:
+                return False
+            with os.fdopen(os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)), 'rb') as stream:
+                with gzip.GzipFile(fileobj=stream) as compressed:
+                    raw = compressed.read(MAX_DECODED + 1)
+            if len(raw) > MAX_DECODED:
+                return False
+            restore(index, json.loads(raw))
+            os.utime(path, None, follow_symlinks=False)
+            return True
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, EOFError, zlib.error):
+            index.reset()
+            return False
+
+    def save(self, index):
+        signature = (index.revision, index.association_revision)
+        if getattr(index, '_checkpoint_signature', None) == signature:
+            return
+        raw = json.dumps(encode(index), separators=(',', ':'), ensure_ascii=False).encode()
+        if len(raw) > MAX_DECODED:
+            return
+        payload = gzip.compress(raw, compresslevel=1, mtime=0)
+        if len(payload) > MAX_FILE:
+            return
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = self.path(index.path, index.identity)
+        descriptor, temporary = tempfile.mkstemp(prefix='.index-', dir=self.directory)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(payload)
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        index._checkpoint_signature = signature
+        self.prune()
+
+    def prune(self):
+        rows = []
+        for path in self.directory.glob('*.json.gz'):
+            try:
+                info = path.lstat()
+                if stat.S_ISREG(info.st_mode):
+                    rows.append((info.st_mtime_ns, info.st_size, path))
+            except FileNotFoundError:
+                pass
+        size, count = 0, 0
+        for _, length, path in sorted(rows, reverse=True):
+            size += length
+            count += 1
+            if size > MAX_TOTAL or count > MAX_FILES:
+                path.unlink(missing_ok=True)

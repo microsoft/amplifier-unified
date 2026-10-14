@@ -112,7 +112,7 @@ def owned_nodes(session):
     return result
 
 
-def work_segments(session, nodes=None):
+def work_segments(session, nodes=None, *, select_groups=None):
     """Summaries cover the whole source view, even when action rows are paged."""
     messages=session.get('messages',[])
     timed=sorted((row['createdAt'],index) for index,row in enumerate(messages)
@@ -137,15 +137,27 @@ def work_segments(session, nodes=None):
         group=groups.setdefault(identity,{'id':identity,'anchorMessageId':anchor,'turnId':node.get('turnId'),'members':[]})
         group['members'].append(node)
         order=(at if isinstance(at,(int,float)) else float('-inf'),len(anchors))
-        if node.get('turnId') not in last_groups or order >= last_groups[node.get('turnId')][0]:
+        if node.get('kind') != 'exchange' and (node.get('turnId') not in last_groups or order >= last_groups[node.get('turnId')][0]):
             last_groups[node.get('turnId')]=(order,identity)
+    # Group membership is metadata; only summarize/hash the requested page.
+    # A compact view must not recursively visit every old tool payload merely
+    # to throw all but its last hundred group summaries away afterward.
+    positions = {row['id']: index for index, row in enumerate(messages) if row.get('id')}
+    def order(group):
+        starts = [row['startedAt'] for row in group['members']
+                  if isinstance(row.get('startedAt'), (int, float))]
+        started = min(starts) if starts else (None if all(row.get('kind') == 'exchange' for row in group['members'])
+                                             else turns.get(group['turnId'], {}).get('startedAt'))
+        return (positions.get(group['anchorMessageId'], -1),
+                started if isinstance(started, (int, float)) else float('-inf'))
+    ordered = sorted(groups.values(), key=order)
     result=[]
-    for group in groups.values():
+    for group in select_groups(ordered) if select_groups else ordered:
         nodes=group.pop('members');turn=turns.get(group['turnId'],{})
         starts=[row['startedAt'] for row in nodes if isinstance(row.get('startedAt'),(int,float))]
         ends=[row['endedAt'] for row in nodes if isinstance(row.get('endedAt'),(int,float))]
         running=any(row.get('status',row.get('phase')) in LIVE_PHASES and not row.get('endedAt') for row in nodes)
-        last_group=last_groups[group['turnId']][1]==group['id']
+        last_group=last_groups.get(group['turnId'], (None, None))[1]==group['id']
         running=running or (last_group and (turn.get('status') or turn.get('phase')) in LIVE_PHASES and not turn.get('endedAt'))
         calls=[row for row in nodes if row.get('kind')=='llm']
         failure=None
@@ -167,6 +179,11 @@ def work_segments(session, nodes=None):
                      nodeCounts={'tools':sum(row.get('kind')=='tool' for row in nodes),'models':sum(row.get('kind')=='llm' for row in nodes)},
                      aggregateUsage=rollup(calls) if calls else None)
         group['detailRevision']=str(detail_version(nodes))
+        if all(row.get('kind') == 'exchange' for row in nodes):
+            # Returned reports keep their delivery position but do not inherit
+            # the duration or failure of an earlier manager/worker execution.
+            group.update(startedAt=min(starts) if starts else None,
+                         endedAt=max(ends) if ends else None, phase='completed')
         result.append(group)
     return anchors,result
 
@@ -175,13 +192,16 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         from .conversation_navigation import group_source
         session = group_source(session, window_message_id)
     if part == 'groups':
-        _, segments = work_segments(session)
-        end = len(segments)
-        if before is not None:
-            end = next((i for i, row in enumerate(segments) if row['id'] == before), None)
-            if end is None:raise ValueError('This history changed. Refresh this conversation.')
-        start = max(0, end - NODE_LIMIT)
-        items = segments[start:end]
+        bounds = {}
+        def select(segments):
+            end = len(segments)
+            if before is not None:
+                end = next((i for i, row in enumerate(segments) if row['id'] == before), None)
+                if end is None:raise ValueError('This history changed. Refresh this conversation.')
+            bounds.update(start=max(0, end - NODE_LIMIT), total=len(segments))
+            return segments[bounds['start']:end]
+        _, items = work_segments(session, select_groups=select)
+        start = bounds['start']
         ids = {row['turnId'] for row in items}
         source_turns = generation_turns(session)
         active = [row['id'] for row in source_turns if row.get('phase') in LIVE_PHASES and not row.get('endedAt')][-20:]
@@ -189,11 +209,12 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         known = {row['id'] for row in turns}
         turns.extend({'id': identity} for identity in dict.fromkeys(row['turnId'] for row in items) if identity not in known)
         return deepcopy({'items': items, 'turns': turns, 'offset': start,
-                         'total': len(segments), 'before': items[0]['id'] if start and items else None})
+                         'total': bounds['total'], 'before': items[0]['id'] if start and items else None})
     if part not in {'messages','nodes','workers'}:raise ValueError('Choose messages, nodes, workers or groups.')
     rows=owned_nodes(session) if part=='nodes' else session.get(part,[])
     source_nodes = rows if part == 'nodes' else None
-    segments_view = work_segments(session, source_nodes) if part == 'nodes' else None
+    segments_view = work_segments(session, source_nodes,
+        select_groups=(lambda rows: [row for row in rows if row['id'] == group]) if group is not None else None) if part == 'nodes' else None
     group_revision = None
     if group is not None:
         if part != 'nodes':raise ValueError('Work details require nodes.')
@@ -278,7 +299,8 @@ def sync_work(session, group, known, *, window_message_id=None):
     from .conversation_navigation import group_source
     session = group_source(session, window_message_id)
     source_nodes = owned_nodes(session)
-    anchors, segments = work_segments(session, source_nodes)
+    anchors, segments = work_segments(session, source_nodes,
+        select_groups=lambda rows: [row for row in rows if row['id'] == group])
     segment = next((row for row in segments if row['id'] == group), None)
     if segment is None:raise ValueError('This work is no longer available. Refresh this conversation.')
     rows = [row for row in source_nodes

@@ -45,8 +45,8 @@ try{
   await expect(body.getByRole('heading',{level:1,name:workspace.name,exact:true})).toBeVisible();
   await expect(shortcut(workspace)).toHaveAttribute('aria-pressed','true');
   await expect(shortcut(other)).toHaveAttribute('aria-pressed','false');
-  await expect(body.getByText(workspace.name+' chat',{exact:true})).toBeVisible();
-  await expect(body.getByText(other.name+' chat',{exact:true})).toHaveCount(0);
+  await expect(body.locator('[data-session-id]').getByRole('button',{name:workspace.name+' chat',exact:true})).toBeVisible();
+  await expect(body.locator('[data-session-id]').getByRole('button',{name:other.name+' chat',exact:true})).toHaveCount(0);
   const current=await state();assert.equal(current.selectedSessionId,aChat);assert.equal(current.selectedWorkspaceId,a.id);
   await expect(page.getByRole('status').filter({hasText:'Project A chat · Working…'})).toHaveCount(0);
   await expect(page.getByRole('button',{name:/^Back(?: to chat)?$/})).toHaveCount(0);
@@ -157,7 +157,7 @@ try{
  await action('canvas.visibility',{sessionId:aChat,canvasId:(await state()).canvas.id,open:false});
  await page.getByRole('button',{name:'Stop response',exact:true}).click();
  await expect.poll(async()=>(await (await page.request.get(url+'/fixture')).json()).stopped).toEqual([aChat]);
- await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect(body.getByText('Project A chat',{exact:true})).toBeVisible();await expect(body.getByText('Project B chat',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect(body.locator('[data-session-id]').getByRole('button',{name:'Project A chat',exact:true})).toBeVisible();await expect(body.locator('[data-session-id]').getByRole('button',{name:'Project B chat',exact:true})).toBeVisible();
  await page.request.post(url+'/fixture/activity',{data:{sessionId:aChat,status:'error'}});
  await expect(pinStatus).toHaveAttribute('data-kind','attention');await expectColor(pinStatus,'--a-danger');
  const recentId=await page.locator('[data-sidebar-section=recent] [data-session-id]').first().getAttribute('data-session-id');

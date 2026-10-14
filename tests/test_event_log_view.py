@@ -318,7 +318,7 @@ async def test_background_reader_observes_external_append_without_runtime_captur
         async with asyncio.timeout(3):
             while not session.get('execution',{}).get('nodes'):await asyncio.sleep(.02)
         assert session['execution']['nodes'][0]['output']=='from the CLI'
-        assert publications == [{'session_ids': {'app'}, 'record_only': True}]
+        assert publications == [{'session_ids': {'app'}, 'record_only': True, 'detail_only': True}]
         assert not list(path.parent.glob('*.index*'))
     finally:
         service.closed=True;await view.close()
@@ -1129,3 +1129,21 @@ def test_model_recording_is_not_formatted_until_explicit_read(source, monkeypatc
     assert formatted == [True]
     with pytest.raises(ValueError, match='changed'):
         read_text(session, {**reference, 'digest': '0' * 64})
+
+
+def test_completed_call_index_preserves_exact_matching_and_bounds_candidates():
+    from amplifier_web.event_log_view import CompletedModelCalls, same_model_call
+    rows = [{'id': str(i), 'kind': 'llm', 'model': 'test', 'provider': 'test',
+             'startedAt': i * 5, 'endedAt': i * 5 + 2, 'usage': {'inputTokens': i}}
+            for i in range(10000)]
+    index = CompletedModelCalls(rows)
+    for ended in (0, 1.01, 2, 2.99, 3, 20002, 49997, float('nan'), float('inf'), None):
+        observed = dict(rows[4000], endedAt=ended)
+        candidates = list(index.candidates(observed))
+        assert len(candidates) <= 1
+        assert [row['id'] for row in candidates if same_model_call(observed, row)] == [
+            row['id'] for row in rows if same_model_call(observed, row)]
+    # Appended host-only observations participate in later duplicate matching.
+    appended = dict(rows[0], id='later', endedAt=100000)
+    index.add(appended)
+    assert list(index.candidates(appended)) == [appended]

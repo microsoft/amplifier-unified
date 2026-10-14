@@ -20,6 +20,7 @@ import sys
 import threading
 
 from .history_read_retry import retry_indexed_read
+from .performance_diagnostics import measured, measure, count, TimedLock
 from .execution import LIVE_PHASES, refresh_usage
 from .execution_events import public_usage
 from .session_files import amplifier_home, project_slug
@@ -44,6 +45,27 @@ def same_model_call(observed, native):
             and all((observed.get('usage') or {}).get(key) is None or (native.get('usage') or {}).get(key) is None or
                     observed['usage'][key] == native['usage'][key]
                     for key in ('inputTokens', 'outputTokens')))
+
+
+class CompletedModelCalls:
+    """Disposable lookup for the necessary end-time condition, never identity."""
+    def __init__(self, nodes):
+        self.buckets = {}
+        for node in nodes:
+            self.add(node)
+
+    def add(self, node):
+        ended = node.get('endedAt')
+        if node.get('kind') == 'llm' and isinstance(ended, (int, float)) and math.isfinite(ended):
+            self.buckets.setdefault(math.floor(ended), []).append(node)
+
+    def candidates(self, row):
+        ended = row.get('endedAt')
+        if not isinstance(ended, (int, float)) or not math.isfinite(ended):
+            return ()
+        bucket = math.floor(ended)
+        return (node for key in (bucket - 1, bucket, bucket + 1)
+                for node in self.buckets.get(key, ()))
 
 
 def merge_model_observations(rows, *, aliases=()):
@@ -155,6 +177,8 @@ class EventIndex:
         self.reset()
 
     def reset(self):
+        self.read_bytes = 0
+        self._checkpoint_signature = None
         self.offset = 0
         self.file_id = None
         self.nodes = OrderedDict()
@@ -170,6 +194,7 @@ class EventIndex:
         self.association_cache = {}
 
     def refresh(self):
+        self.read_bytes = 0
         try:
             stat = self.path.stat()
         except FileNotFoundError:
@@ -193,6 +218,7 @@ class EventIndex:
             # Parsing runs off the app's event loop. A partial final line is
             # retried on the next append, never committed to the index.
             while raw := stream.readline():
+                self.read_bytes += len(raw)
                 offset = self.offset
                 if not raw.endswith(b'\n'):
                     break
@@ -480,6 +506,8 @@ class EventLogView:
 
     def __init__(self, service):
         self.service = service
+        from .event_index_checkpoint import Checkpoints
+        self.checkpoints = Checkpoints(service.data_dir) if getattr(service, 'data_dir', None) else None
         self.indexes = OrderedDict()
         self._index_sizes = {}
         self.retained_index_bytes = 0
@@ -487,10 +515,27 @@ class EventLogView:
         # Keep cache accounting serialized until the actual reader has exited.
         self._read_lock = threading.RLock()
         self.task = None
-        self.lock = asyncio.Lock()
+        self.lock = TimedLock(service, 'events.lock.wait')
         self.projected = OrderedDict()
         self.read_paths = {}
         self.read_revisions = {}
+
+    def _new_index(self, path, identity):
+        index = EventIndex(path, identity)
+        if self.checkpoints:
+            with measure(self.service, 'events.checkpoint.load', synchronous=True):
+                hit = self.checkpoints.load(index)
+            count(self.service, 'events.checkpoint.hit' if hit else 'events.checkpoint.miss')
+        return index
+
+    def _checkpoint(self, index):
+        if self.checkpoints:
+            try:
+                with measure(self.service, 'events.checkpoint.save', synchronous=True):
+                    self.checkpoints.save(index)
+            except (OSError, ValueError, TypeError):
+                # A disposable cache failure cannot fail a canonical read.
+                count(self.service, 'events.checkpoint.write_failed')
 
     def _forget_index(self, key):
         self.indexes.pop(key, None)
@@ -511,12 +556,17 @@ class EventLogView:
         # A large history can still be read exactly for this request, but it
         # cannot permanently displace the entire bounded recent working set.
         if size > self.MAX_INDEX_BYTES:
+            count(self.service, 'events.index.oversize')
+            self._checkpoint(index)
             return
         self.indexes[key] = index
         self._index_sizes[key] = (signature, size)
         self.retained_index_bytes += size
         while len(self.indexes) > self.MAX_INDEXES or self.retained_index_bytes > self.MAX_INDEX_BYTES:
-            self._forget_index(next(iter(self.indexes)))
+            count(self.service, 'events.index.evicted')
+            retired = next(iter(self.indexes))
+            self._checkpoint(self.indexes[retired])
+            self._forget_index(retired)
 
     @staticmethod
     def projection_input(session):
@@ -549,6 +599,7 @@ class EventLogView:
                     logger.exception('Could not refresh the event-log view for %s', identity)
             await asyncio.sleep(1)
 
+    @measured('events.read', session=True)
     def read(self, session):
         with self._read_lock:
             self._read_touched = set()
@@ -563,6 +614,7 @@ class EventLogView:
             finally:
                 self._read_touched = set()
 
+    @measured('events.project', session=True)
     def _read(self, session):
         root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
         queue = [root, session['id']]
@@ -580,11 +632,13 @@ class EventLogView:
                 if sid == root:raise
                 continue
             index = self.indexes.get(str(path))
+            count(self.service, 'events.index.hit' if index is not None else 'events.index.miss')
             if index is None:
-                index = EventIndex(path, sid)
+                index = self._new_index(path, sid)
             self._read_touched.add(str(path))
             try:
                 available = index.refresh()
+                count(self.service, 'events.canonical.bytes_read', index.read_bytes)
             except BaseException:
                 # A failed refresh may already have grown the mutable index.
                 # Do not retain an unmeasured partial result over the budget.
@@ -768,11 +822,16 @@ class EventLogView:
                 if node.get(field + 'Detail'):
                     node[field + 'Detail'].update(id=node['id'], sessionId=session['id'])
         by_id = {row['id']: row for row in nodes}
+        nodes_by_session, runs_by_session = {}, {}
+        for row in nodes:
+            nodes_by_session.setdefault(row.get('sessionId'), []).append(row)
+        for row in workers.values():
+            runs_by_session.setdefault(row.get('sessionId'), []).append(row)
         for worker in workers.values():
             child = worker['sessionId']
             worker = copy.deepcopy(worker)
             worker['parentId'] = remap.get(worker['parentId'], worker['parentId'])
-            runs = [row for row in workers.values() if row.get('sessionId') == child]
+            runs = runs_by_session[child]
             # Keep exact old accounting identities when unambiguous. A resumed
             # session with several admissions must never borrow this fallback.
             legacy = bindings.get(model_key({'id': 'worker:' + child, 'sessionId': child}))
@@ -791,7 +850,7 @@ class EventLogView:
                     parent['turnId'] = bound_turn
                     if parent.get('anchorMessageId') is None:
                         parent.pop('anchorMessageId', None)
-                members = [row for row in nodes if row.get('sessionId') == child and
+                members = [row for row in nodes_by_session.get(child, ()) if
                            (row.get('parentId') == worker['id'] or len(runs) == 1 and not row.get('parentId'))]
                 for row in members:
                     row['parentId'] = worker['id']
@@ -810,15 +869,17 @@ class EventLogView:
                         if field in live_worker:
                             worker[field] = live_worker[field]
                 nodes.append(worker)
+                nodes_by_session.setdefault(worker.get('sessionId'), []).append(worker)
         # Metadata may arrive just before the logging hook flushes. It can
         # describe in-flight work, but never supplies an alternate tool body.
         ids = {row['id'] for row in nodes}
+        completed_calls = CompletedModelCalls(nodes)
         for row in live_nodes:
             if row['id'] not in ids and not row.get('canonicalHistory') and not row.get('nativeHistory'):
                 if row.get('kind') == 'llm' and row.get('endedAt') and any(
                     node['kind'] == 'llm' and same_model_call(row, node) and
                     (node.get('sessionId') == row.get('sessionId') or node.get('sessionId') in aliases and row.get('sessionId') in aliases)
-                    for node in nodes):
+                    for node in completed_calls.candidates(row)):
                     continue  # Ambiguous parallel IDs: show the canonical calls, never both sets.
                 if row.get('liveObservation'):
                     nodes.append({key: value for key, value in row.items() if key not in
@@ -827,6 +888,7 @@ class EventLogView:
                     # Do not erase older saved history when its native log is
                     # incomplete. This is pre-existing data, never a new capture.
                     nodes.append(copy.deepcopy(row))
+                completed_calls.add(nodes[-1])
         nodes.sort(key=lambda row: (row.get('startedAt') or 0, row.get('eventOrder', 0)))
         foreground_by_turn = {}
         for row in nodes:
@@ -873,9 +935,11 @@ class EventLogView:
         path = event_path(session, identity)
         key = str(path)
         with self._read_lock:
-            index = self.indexes.get(key) or EventIndex(path, identity)
+            index = self.indexes.get(key) or self._new_index(path, identity)
             try:
-                if not index.refresh():
+                available = index.refresh()
+                count(self.service, 'events.canonical.bytes_read', index.read_bytes)
+                if not available:
                     self._forget_index(key)
                     return {'sessionId': session['id'], 'plan': None}
                 aliases = {identity, session['id']}
@@ -889,6 +953,7 @@ class EventLogView:
                 self._forget_index(key)
                 raise
 
+    @measured('events.refresh', session=True)
     async def refresh(self, identity):
         async with self.lock:
             session = self.service._session(identity)
@@ -911,7 +976,9 @@ class EventLogView:
             root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
             same_root = paths and paths[0] == event_path(session, root)
             if cached and same_root and cached[0] == inputs and cached[1] == before:
+                count(self.service, 'events.projection.reused')
                 return
+            count(self.service, 'events.projection.rebuilt')
             previous = copy.deepcopy(inputs)
             tree = await asyncio.to_thread(self.read, previous)
             if self.service.closed:
@@ -919,14 +986,15 @@ class EventLogView:
             async with self.service.lock:
                 session = self.service._session(identity)
                 if self.projection_input(session) != previous:
+                    count(self.service, 'events.projection.superseded')
                     return  # A newer live update won; retry from it next tick.
                 if tree is not None and session.get('execution') != tree:
                     session['execution'] = tree
                     # Only this chat's execution changed. A global publication
                     # also serializes unrelated state and invalidates the native
                     # catalog, forcing its next scan to reconcile every chat.
-                    # Keep navigation/usage invalidation (not detail_only).
-                    self.service._publish(session_ids={session['id']}, record_only=True)
+                    # The save guard widens if shared navigation facts changed.
+                    self.service._publish(session_ids={session['id']}, record_only=True, detail_only=True)
                 # Use the signatures actually read, not a later stat that may
                 # already describe bytes appended after the projection.
                 self.projected[identity] = (copy.deepcopy(self.projection_input(session)), self.read_revisions[identity])
