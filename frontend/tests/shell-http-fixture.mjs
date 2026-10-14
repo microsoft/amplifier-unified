@@ -61,3 +61,19 @@ export function createShellHttpFixture(readState){
  }
  return {state,response};
 }
+
+// Install with page.addInitScript. Initial state must follow client attachment,
+// and every later injected frame uses the same adapter as HTTP action receipts.
+export function installFixtureEvents(){
+ const sources=new Set();
+ window.EventSource=class extends EventTarget{
+  constructor(){super();this.readyState=0;sources.add(this);queueMicrotask(async()=>{
+   const state=await fetch('/api/state').then(response=>response.json());
+   if(this.readyState===2)return;
+   this.readyState=1;this.onopen?.();this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)}));
+  });}
+  close(){this.readyState=2;sources.delete(this);}
+ };
+ window.emitState=window.emitFixtureState=state=>sources.forEach(source=>
+  source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})));
+}
