@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import signal
 import sys
 import tempfile
 
@@ -158,11 +159,19 @@ async def main(home):
     port = site._server.sockets[0].getsockname()[1]
     url = f"http://127.0.0.1:{port}"
     app["allowed_origins"] = app["allowed_origins"] | {url}
+    stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(signum, stopped.set)
     print(json.dumps({"url": url}), flush=True)
     try:
-        await asyncio.Event().wait()
+        await stopped.wait()
     finally:
-        await runner.cleanup()
+        try:
+            await runner.cleanup()
+        finally:
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                loop.remove_signal_handler(signum)
 
 
 if __name__ == "__main__":

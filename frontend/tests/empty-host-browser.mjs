@@ -4,8 +4,22 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
-let browser;
+// Delivery/draft recovery uses the fixture's synthetic provider discovery too;
+// these scenarios must not provision a real Foundation runtime in background.
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
+let browser,primaryError;
+async function stopFixture(){
+ let escalated=false;
+ const result=await new Promise((resolve,reject)=>{
+  if(fixture.exitCode!==null||fixture.signalCode!==null)return resolve([fixture.exitCode,fixture.signalCode]);
+  const kill=setTimeout(()=>{escalated=true;fixture.kill('SIGKILL')},10000);
+  const timeout=setTimeout(()=>reject(Error('Empty host did not exit after cleanup escalation')),15000);
+  fixture.once('exit',(code,signal)=>{clearTimeout(kill);clearTimeout(timeout);resolve([code,signal])});
+  fixture.kill('SIGTERM');
+ });
+ assert.equal(escalated,false,'Fixture cleanup exceeded its graceful shutdown budget');
+ assert.deepEqual(result,[0,null],'Fixture must finish application and temporary-directory cleanup');
+}
 try{
  const url=await new Promise((resolve,reject)=>{
   const timeout=setTimeout(()=>reject(Error('Empty host startup timed out')),15000);let output='';
@@ -107,6 +121,7 @@ try{
  await expect(page.getByText('Sending message…',{exact:true})).toHaveCount(0);
  assert.equal(await page.locator('.a-message.a-user').count(),1);
  const sent=await (await page.request.get(url+'/fixture')).json();
+ assert.equal(sent.foundationCachePresent,false,'Synthetic delivery must not provision a Foundation runtime');
  assert.equal(sent.sent.length,1);
  assert.equal(sent.sent[0].text,'First input on an empty host');
  assert.equal(createAttempts,process.argv.includes('--fail-create')?2:1);
@@ -126,4 +141,13 @@ try{
  assert.equal(await page.locator('.a-message.a-user').count(),1);
  assert.deepEqual(errors,[]);
  console.log('Empty host passed: debounced draft before any conversation, delayed creation '+(process.argv.includes('--fail-create')?'failure/retry':'success')+', next draft preserved, exactly one first delivery, draft and selection after reload; synthetic runtime only.');
-}finally{await browser?.close();fixture.kill();}
+}catch(error){primaryError=error;throw error}
+finally{
+ const failures=[];
+ try{await browser?.close()}catch(error){failures.push(error)}
+ try{await stopFixture()}catch(error){failures.push(error)}
+ if(failures.length){
+  if(primaryError)console.error('Empty host cleanup also failed',new AggregateError(failures));
+  else throw new AggregateError(failures,'Empty host cleanup failed');
+ }
+}
