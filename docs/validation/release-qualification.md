@@ -103,6 +103,24 @@ Each scenario records existing PID/start-time pairs before launch. Unchanged
 pre-existing processes are outside its inherited-token ownership; unreadable
 new or reused identities still stop cleanup rather than being assumed unrelated.
 
+Identical source-mode browser journeys have one background owner: extended
+browser checks runs interim replies, draft reload, draft switch, activity feedback
+and conversation navigation. Readiness does not repeat those five commands. Both
+lanes check out the exact release, use Python 3.13 / Node 22, install the same
+locked development dependencies and rebuild the frontend; these five invocations
+have no distinct flags or environment. Their original assertions remain unchanged.
+
+Other overlaps are retained for distinct setup: readiness runs feedback, message
+outbox and canonical Work **after** reinstalling the package in its environment,
+whereas the extended lane keeps its source environment. This is additional
+package-install interaction coverage, not a claim of an isolated installed-wheel
+probe (that has its own lane). Canonical Work explicitly selects multiprocess
+Chromium there; its extended default is also multiprocess. Empty-host failure and
+lost-response modes and the four session-health modes in the extended plan remain
+separate because their arguments exercise different behavior. The full Python
+suite remains the complete source oracle; readiness's focused Python checks are
+retained as earlier recovery diagnostics, not a substitute for full-suite success.
+
 Do not infer complete history from DOM Work-group counts. The reusable
 `scripts/browser_dom_recorder.js` probe reports grouped headers and standalone
 single-turn headers separately, excluding embedded turns inside expanded groups.
