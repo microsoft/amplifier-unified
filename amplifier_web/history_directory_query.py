@@ -28,8 +28,8 @@ def _registry(state, archive=None):
     return rows, by_path
 
 
-def _base(directory, state, *, archive=None):
-    sql, params = directory.effective(state)
+def _base(directory, state, *, archive=None, public_ids=None):
+    sql, params = directory.effective(state, public_ids=public_ids)
     rows, by_path = _registry(state, archive)
     directory.db.create_function('directory_lower', 1, lambda text: str(text or '').lower(), deterministic=True)
     directory.db.create_function('directory_match', 7,
@@ -81,8 +81,13 @@ def _base(directory, state, *, archive=None):
     return sql, params, rows
 
 
-def _chat_query(directory, state, section):
-    sql, params, workspaces = _base(directory, state)
+def _chat_query(directory, state, section, *, activity_counts=True):
+    from .history_directory import PUBLIC_ID_BATCH
+    pins = state.get('pinnedSessionIds', [])
+    # Exact public IDs preserve canonical overlays and suppression. Larger pin
+    # sets keep the original globally ordered query rather than page per batch.
+    public_ids = pins if section == 'pinned' and len(pins) <= PUBLIC_ID_BATCH else None
+    sql, params, workspaces = _base(directory, state, public_ids=public_ids)
     view = state.get('view', {})
     by_id = {row['id']: row for row in workspaces}
     selected = by_id.get(state.get('selectedWorkspaceId'))
@@ -119,8 +124,13 @@ def _chat_query(directory, state, section):
                 params.append(state.get('selectedSessionId'))
     sql += ', eligible AS (SELECT * FROM navigation_rows WHERE ' + ' AND '.join(where) + ')'
     counts = dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)
-    for kind, count in directory.db.execute(sql + ' SELECT activity_kind,COUNT(*) FROM eligible GROUP BY activity_kind', params):
-        if kind in counts: counts[kind] = count
+    total = 0
+    if activity_counts:
+        for kind, count in directory.db.execute(sql + ' SELECT activity_kind,COUNT(*) FROM eligible GROUP BY activity_kind', params):
+            if kind in counts: counts[kind] = count
+            # Include every group, even an unfamiliar activity kind. The public
+            # four counters and the complete filtered count have distinct jobs.
+            if status == 'all' or kind == status: total += count
     if status != 'all':
         sql += ', filtered AS (SELECT * FROM eligible WHERE activity_kind=?)'
         params.append(status)
@@ -128,7 +138,7 @@ def _chat_query(directory, state, section):
         sql += ', filtered AS (SELECT * FROM eligible)'
     ordering = 'directory_lower(title)' if sort == 'name' else '-COALESCE(created,0)' if sort == 'created' else '-COALESCE(recent,0)'
     order = f'pin_position IS NULL,CASE WHEN pin_position IS NOT NULL THEN pin_position END,CASE WHEN pin_position IS NULL THEN {ordering} END,ordinal,id'
-    return sql, params, scope, counts, order, workspaces
+    return sql, params, scope, counts, order, workspaces, total
 
 
 def _chat_row(directory, row, labels):
@@ -151,8 +161,7 @@ def _chat_row(directory, row, labels):
 
 
 def chats(directory, state, *, section=None):
-    sql, params, scope, counts, order, workspaces = _chat_query(directory, state, section)
-    total = directory.db.execute(sql + ' SELECT COUNT(*) FROM filtered', params).fetchone()[0]
+    sql, params, scope, counts, order, workspaces, total = _chat_query(directory, state, section)
     view = state.get('view', {})
     if section == 'shortcuts':
         limit = view.get('navRecentLimit', 20)
@@ -165,11 +174,12 @@ def chats(directory, state, *, section=None):
         size = (40 if total > 50 else 50) if section else PAGE_SIZE
         saved = view.get('navChatPage')
         matched = isinstance(saved, dict) and saved.get('sort', 'activity') == scope.get('sort', 'activity') and all(saved.get(k) == v for k,v in scope.items())
+        saved_page = matched and type(saved.get('index')) is int
         inferred = 0
-        if scope['mode'] == 'workspace' and section != 'recent' and scope['selectedSessionId']:
+        if not saved_page and scope['mode'] == 'workspace' and section not in {'recent', 'pinned'} and scope['selectedSessionId']:
             found = directory.db.execute(sql + f', ranked AS (SELECT id,ROW_NUMBER() OVER (ORDER BY {order})-1 position FROM filtered) SELECT position FROM ranked WHERE id=?', [*params, scope['selectedSessionId']]).fetchone()
             if found: inferred = found[0] // size
-        requested = saved['index'] if matched and type(saved.get('index')) is int else inferred
+        requested = saved['index'] if saved_page else inferred
         if section == 'pinned': requested = view.get('navPinnedPage', 0)
         pages = max(1, (total+size-1)//size)
         index = max(0, min(pages-1, requested))
@@ -227,7 +237,7 @@ def pinned_navigation(directory, state, workspaces):
     """Combine typed pin identities in SQL before decoding the visible page."""
     from .pinned_navigation import ordered_ids
     scoped = {**state, 'view': {**state.get('view', {}), 'navStatusFilter': 'all'}}
-    sql, params, _, _, _, registrations = _chat_query(directory, scoped, 'pinned')
+    sql, params, _, _, _, registrations, _ = _chat_query(directory, scoped, 'pinned', activity_counts=False)
     workspace_rows = {f'workspace:{row["workspaceId"]}': row for row in workspaces}
     sql += """, pin_order AS (SELECT value id,CAST(key AS INTEGER) position FROM json_each(?)),
       pin_members AS (SELECT 'session:'||id id FROM filtered UNION ALL SELECT value id FROM json_each(?)),
@@ -250,6 +260,10 @@ def archived_count(directory, state):
     archived = state.get('conversationOrganization',{}).get('archived',{})
     if not archived:
         return 0
-    sql,params = directory.effective(state)
-    excluded = directory.db.execute(sql+" SELECT COUNT(*) FROM directory_rows WHERE session_kind!='root' AND id IN (SELECT value FROM json_each(?))",[*params,json.dumps(list(archived))]).fetchone()[0]
+    from .history_directory import PUBLIC_ID_BATCH
+    identities = list(archived)
+    excluded = 0
+    for start in range(0, len(identities), PUBLIC_ID_BATCH):
+        sql, params = directory.effective(state, public_ids=identities[start:start+PUBLIC_ID_BATCH])
+        excluded += directory.db.execute(sql+" SELECT COUNT(*) FROM directory_rows WHERE session_kind!='root'", params).fetchone()[0]
     return len(archived)-excluded
