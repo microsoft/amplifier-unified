@@ -16,6 +16,9 @@ try{
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const inspect=async()=>await(await page.request.get(url+'/fixture')).json();
+ // Ordinary browser frames contain selected context, not catalog membership.
+ // A two-row bounded page proves both the exact owner and no extra creation.
+ const expectCatalog=async ids=>{const response=await page.request.get(url+'/api/sessions?kind=root&limit=2',{headers:{'X-Amplifier-Client':(await state()).client.id}});assert.equal(response.status(),200);const pageValue=await response.json();assert.deepEqual(pageValue.items.map(row=>row.id).sort(),[...ids].sort());assert.equal(pageValue.nextOffset,null)};
  await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  await action('view.update',{patch:{navPinned:true}});
  const launcher=page.getByRole('button',{name:'New chat',exact:true});await expect(launcher).toHaveCount(1);
@@ -27,7 +30,7 @@ try{
  await expect(page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true})).toContainText('Work');
  assert.deepEqual((await state()).view.newSessionDraft?.selection||{},{});
 
- await launcher.click();await launcher.click();assert.equal((await state()).sessions.length,0);
+ await launcher.click();await launcher.click();assert.equal((await state()).sessions.length,0);await expectCatalog([]);
  await expect(page.getByText('Chat settings',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Notify me when ready',exact:true})).toHaveCount(0);
  await page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true}).click();
@@ -73,7 +76,7 @@ try{
  await activity('idle',[{id:'worker',status:'running',title:'Background work'}]);await expect(stop).toBeEnabled();await activity('idle');
  // The damaged source stays referenced and the drawer still opens.
  await action('canvas.show',{kind:'markdown',title:'Recoverable artifact',content:'# Saved artifact'});const aid=(await state()).canvas.id;await action('canvas.close');assert.equal((await page.request.post(url+'/fixture/damage',{data:{artifactId:aid}})).status(),200);await page.getByRole('button',{name:'Open canvas',exact:true}).click();await expect(page.getByRole('complementary',{name:'Agent canvas'})).toBeVisible();await expect(page.getByText('The saved artifact source is unavailable.',{exact:true}).first()).toBeVisible();assert.equal((await state()).canvas.id,aid);assert.equal((await state()).selectedSessionId,sid);await page.screenshot({path:out+'/unavailable-artifact.png'});await action('canvas.close');
- await composer.fill('Keep this existing chat draft');await launcher.click();await expect(page.getByRole('region',{name:'New chat',exact:true})).toBeVisible();await expect(composer).toHaveDraft('');assert.equal((await state()).sessions.length,1);await composer.fill('A different new draft');await action('session.select',{id:sid});await expect(composer).toHaveDraft('Keep this existing chat draft');await launcher.click();await expect(composer).toHaveDraft('A different new draft');
+ await composer.fill('Keep this existing chat draft');await launcher.click();await expect(page.getByRole('region',{name:'New chat',exact:true})).toBeVisible();await expect(composer).toHaveDraft('');await expectCatalog([sid]);await composer.fill('A different new draft');await action('session.select',{id:sid});await expect(composer).toHaveDraft('Keep this existing chat draft');await launcher.click();await expect(composer).toHaveDraft('A different new draft');
  assert.deepEqual(errors,[]);assert.equal(calls.filter(row=>row.action==='session.create').length,1);
  console.log('New chat browser passed: one launcher, uncommitted configurable draft, reload and attachments, exact first submission, composer controls, header identity/export, send/stop transitions, damaged canvas, draft isolation, desktop/mobile.');
 }finally{await browser?.close();fixture.kill()}
