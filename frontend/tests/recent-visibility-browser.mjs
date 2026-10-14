@@ -244,17 +244,29 @@ try{
   generation:preColdView.generation,action:'canvas.report',args:{id:canvasId,part:'stale-fixture',status:'ready',message:'Must not be accepted'}}));
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.renderReports?.['stale-fixture']),undefined);
  await dispatch(page,'canvas.visibility',{open:false,sessionId:initial.selected,canvasId});
- // Ordinary query failure: keep previous 40 rows and explicitly read on Retry.
- const kept=await order();let failReads=true;
- await page.route('**/api/shell?**',route=>failReads?route.abort('failed'):route.continue());
+ // A committed view without its requested streamed page keeps the old rows.
+ // Retry is a read-only resource POST; a failed read must not become success.
+ const kept=await order();let failReads=true,retryReads=0;
+ await control({holdRecentFor:(await shell(page)).clientId});
+ await page.route('**/api/shell/resources',async route=>{
+  retryReads++;
+  if(failReads)return route.abort('failed');
+  await control({holdRecentFor:null});
+  await route.continue();
+ });
  await sidebar().getByRole('button',{name:'Load older chats',exact:true}).click();
- await expect(sidebar().getByRole('alert')).toContainText('previous chats are kept');
- assert.deepEqual(await order(),kept);
+ await expect(sidebar().getByRole('alert')).toContainText('previous chats are kept',{timeout:15000});
+ assert.deepEqual(await order(),kept);assert.ok((await metrics()).withheldRecentProjections>0);
  const countBeforeRetry=(await metrics()).mutations.filter(row=>row.action==='shell.view.update').length;
  await sidebar().getByRole('button',{name:'Retry',exact:true}).click();
- await waitForRows(60);
+ await expect.poll(()=>retryReads).toBe(1);
+ await expect(sidebar().getByRole('alert')).toContainText('Navigation resources could not be refreshed.');
+ assert.deepEqual(await order(),kept);
+ failReads=false;
+ await sidebar().getByRole('button',{name:'Retry',exact:true}).click();
+ await waitForRows(60);assert.equal(retryReads,2);
  assert.equal((await metrics()).mutations.filter(row=>row.action==='shell.view.update').length,countBeforeRetry);
- failReads=false;await page.unroute('**/api/shell?**');
+ await page.unroute('**/api/shell/resources');
  // An unknown write is read back, never automatically replayed.
  let lost=true;
  await page.route('**/api/actions',async route=>{
@@ -287,20 +299,13 @@ try{
  // add messages or hydrate a transcript to arrange the scenario.
  const unnamedId=(await projection()).items[70].id;
  await rail.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'))});
- await page.route('**/api/shell?**',async route=>{
-  const response=await route.fetch(),raw=await response.json();
-  const body=JSON.parse(JSON.stringify(raw,(_key,value)=>value?.id===unnamedId
-   ?{...value,title:'Conversation lazy0001',titleSource:'unnamed',nativeNameSource:'unnamed'}:value));
-  await route.fulfill({response,json:body});
- });
  await page.route('**/api/actions',async route=>{
   const body=route.request().postDataJSON();
   if(body?.action==='session.titlePreview'&&body.args.sessionId===unnamedId)
    return route.fulfill({json:{accepted:true,result:{title:'Lazy first user message',source:'first-message'}}});
   await route.continue();
  });
- await page.evaluate(()=>window.dispatchEvent(new CustomEvent('amplifier-shell',{
-  detail:{shellClientId:window.amplifier.getShellState().clientId}})));
+ await control({unnamedSummary:unnamedId,clientId:(await shell(page)).clientId});
  const unnamedRow=sidebar().locator(`[data-session-id="${unnamedId}"]`);
  await expect(unnamedRow).toContainText('Untitled chat');
  assert.equal(await unnamedRow.evaluate(node=>{
@@ -315,7 +320,7 @@ try{
  await rail.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'))});
  await unnamedRow.scrollIntoViewIfNeeded();
  assert.equal(previewReads.filter(body=>body.args.sessionId===unnamedId).length,1,'revisiting a visible row reuses the bounded preview');
- await page.unroute('**/api/shell?**');await page.unroute('**/api/actions');
+ await page.unroute('**/api/actions');
  // Narrow/coarse touch: unchanged finite limit, 44px controls, same one context.
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>matchMedia('(pointer:coarse)').matches),true);
@@ -342,7 +347,7 @@ try{
   limits:[20,40,60,80,100,120,140],naturalExhaustion:true,noMountResizeFill:true,userDownwardOnly:true,
   programmaticAnchorPassive:true,staleFocusIntentPassive:true,hiddenInertCollapsedPassive:true,namedPreviewReads:0,
   offscreenUnnamedSummaryLazy:true,visibleUnnamedReadCached:true,visibilityAt20And100:true,currentRank25NotForced:true,
-  pinsDistinct:true,legacyForkVisible:true,queryFailureRetainedRows:true,retryReadOnly:true,unknownWriteNotReplayed:true,
+  pinsDistinct:true,legacyForkVisible:true,queryFailureRetainedRows:true,streamProjectionTimeout:true,retryFailureRetainedRows:true,retryResourceReads:retryReads,retryReadOnly:true,unknownWriteNotReplayed:true,
   twoClientsTwoModulesReload:true,keyboardFocus:true,narrowCoarseTouch:true,progressAnchor:true,countShrink:true,
   draftAttachmentsCanvasModelBundleRetained:true,modelCalls:0};
  if(evidence){

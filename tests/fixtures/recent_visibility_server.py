@@ -17,6 +17,8 @@ import uuid
 from aiohttp import web
 import amplifier_web.server as application
 from amplifier_web.session_files import project_slug, amplifier_home
+from amplifier_web.native_catalog import NativeCatalog
+from amplifier_web.native_history import NativeHistory
 
 
 class NoModelRuntime:
@@ -80,16 +82,30 @@ async def main():
         expected = os.environ.get('AMPLIFIER_RECENT_EXPECTED_PACKAGE')
         if expected and Path(application.__file__).resolve().parent != Path(expected).resolve():
             raise AssertionError('Imported application package does not match the declared installed package')
+        from configured_browser import seed_connection
+        seed_connection(root / 'native')
         catalog = make_catalog(root / 'workspaces')
+        (root / 'app').mkdir()
+        native = NativeCatalog(root / 'app' / 'native-catalog.sqlite3', root / 'native')
+        projects = {row['nativeProject']: {'workspace': row, 'sessions': []} for row in catalog['workspaces']}
+        for row in catalog['sessions']:
+            projects[row['nativeProject']]['sessions'].append(row)
+        native.save(projects, {}, {}, set())
         runtime = NoModelRuntime()
         app = await application.create_app(root / 'app', workspace=catalog['workspaces'][0]['path'],
                                runtime=runtime, voice=False, background_updates=False,
                                preload_providers=False)
         app['control_token'] = 'fixture-recent-visibility-token'
         service = app['service']
+        await service.dispatch('view.update', {'patch': {'setupJourney': 'done'}})
         await service.history.close()
-        service.history.index.scan_if_changed = lambda **kwargs: (object(), copy.deepcopy(catalog))
-        await service.history.refresh()
+        service.history.index = NativeHistory(root / 'native', watch=False, cache_path=native.path, directory=True)
+        # Frozen synthetic catalog; this journey exercises presentation rather
+        # than discovery. Exact canonical bytes still back selected chat reads.
+        service.history.index._invalidations = lambda: (True, set())
+        service.history.index._reconcile_at = time.monotonic() + 900
+        await service.history.refresh(force=False)
+        assert native.count() == 136
         assert not service.state['sharedHistory'].get('error')
         sessions = [service._session(row['id']) for row in catalog['sessions']]
         for index, session in enumerate(sessions):
@@ -112,7 +128,8 @@ async def main():
                              pinnedSessionIds=[pinned['id']])
         service.state['view'].update(navPinned=True, navChatScope='all')
         service.state.setdefault('setup', {}).update(providersLoadedAt=time.time(),
-                                                     providersWorkspace=selected['workspace'])
+            providersWorkspace=selected['workspace'], providers=[{'id': 'fixture-provider',
+                'enabled': True, 'config': {'default_model': 'fixture-model'}}])
         service._publish()
         initial_sessions = copy.deepcopy(service.state['sessions'])
         mutations = []
@@ -139,8 +156,55 @@ async def main():
             return await original_dispatch(action, args, *positional, **kwargs)
         service.dispatch = observed_dispatch
 
+        # Faults affect only this requested presentation resource, leaving
+        # commands, client state, canonical history and other clients intact.
+        faults = {'holdClient': None, 'omissions': 0, 'unnamedId': None, 'unnamedClient': None}
+        original_resources = service.shell.resources.snapshot
+        original_navigation = service.shell.navigation
+
+        def resources(identity):
+            result = original_resources(identity)
+            if result is not None and identity == faults['holdClient']:
+                result = copy.deepcopy(result)
+                entry = result.get('instances', {}).get('chats', {})
+                if entry.get('resources', {}).pop('recentNavigation', None) is not None:
+                    faults['omissions'] += 1
+            return result
+
+        def navigation(*args, **kwargs):
+            result = original_navigation(*args, **kwargs)
+            if (faults['unnamedId'] is None or kwargs.get('identity') != faults['unnamedClient']
+                    or args[1]['id'] != 'chats'):
+                return result
+            result = copy.deepcopy(result)
+            pending = [result]
+            while pending:
+                value = pending.pop()
+                if isinstance(value, dict):
+                    if value.get('id') == faults['unnamedId']:
+                        value.update(title='Conversation lazy0001', titleSource='unnamed', nativeNameSource='unnamed')
+                    pending.extend(value.values())
+                elif isinstance(value, list):
+                    pending.extend(value)
+            return result
+
+        service.shell.resources.snapshot = resources
+        service.shell.navigation = navigation
+
         async def control(request):
             args = await request.json()
+            if 'holdRecentFor' in args:
+                identity = args['holdRecentFor']
+                assert identity is None or identity in service.clients.records
+                faults['holdClient'] = identity
+            if 'unnamedSummary' in args:
+                identity = args['clientId']
+                assert identity in service.clients.records
+                assert args['unnamedSummary'] in {row['id'] for row in sessions}
+                faults['unnamedId'] = args['unnamedSummary']
+                faults['unnamedClient'] = identity
+                service.shell.resources.invalidate()
+                service.shell.notify(identity)
             if args.get('progress'):
                 await service.on_runtime_event('runtime.status', {'sessionId': selected['id'], 'status': 'working'})
                 await service.on_runtime_event('assistant.delta', {'sessionId': selected['id'], 'text': ' synthetic progress'})
@@ -152,8 +216,14 @@ async def main():
             if args.get('shrink'):
                 # Deliberately shrink only this synthetic catalog, not user history.
                 keep = {row['id'] for row in sessions[:7]}
+                removed = {row['id'] for row in sessions} - keep
                 service.state['sessions'] = [row for row in service.state['sessions'] if row['id'] in keep]
+                service.forget_session_records(removed)
+                smaller = {name: {**project, 'sessions': [row for row in project['sessions'] if row['id'] in keep]}
+                           for name, project in projects.items()}
+                native.save(smaller, projects, {}, set())
                 service._publish()
+                assert all(service.directory.resolve(identity) is None for identity in removed)
             return web.json_response({'ok': True})
 
         async def metrics(request):
@@ -174,7 +244,7 @@ async def main():
             return web.json_response({'selected': selected['id'], 'commissioned': commissioned['id'],
                 'pinned': pinned['id'], 'fork': fork['id'], 'legacy': legacy['id'],
                 'excluded': [row['id'] for row in sessions[-2:]], 'runtimeCalls': runtime.calls,
-                'mutations': mutations, 'sessionCount': len(service.state['sessions']),
+                'mutations': mutations, 'withheldRecentProjections': faults['omissions'], 'sessionCount': len(service.state['sessions']),
                 'sessionsUnchanged': service.state['sessions'] == initial_sessions,
                 'sessionDifferences': differences, 'durableClients': durable_clients,
                 'bundle': selected['bundle'], 'selection': selected.get('selection')})
