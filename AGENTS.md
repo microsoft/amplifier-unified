@@ -21,10 +21,13 @@ Amplifier Agent is separate from Unified's Core/Foundation runtime.
 
 ## Keep the development release loop fast
 
-User direction, October 13, 2026: qualify affected behavior locally in the owned
-DTU before requesting merge, retaining exact-source evidence and explicit limits.
-Use the full local suite and real-runtime/browser checks for substantial
-integrations. Do not defer routine defect discovery to release CI.
+User direction, October 14, 2026: keep the foreground development-to-release loop
+to a few minutes. Qualify affected behavior locally in the owned DTU, retaining
+exact-source evidence and explicit limits. Aim for 1–3 minutes of focused checks
+and about five minutes for the normal local budget. Run relevant browser/runtime
+smoke tests; do not make the full local suite a merge or release prerequisite.
+Use specific pre-release checks for material risks such as destructive migrations
+or changed authorization, instead of automatically running every unrelated test.
 
 Keep publication on the short package/frontend/native-runtime path, targeting
 roughly two minutes when warm. Broad readiness, full Python and extended browser
@@ -33,3 +36,11 @@ Do not add exhaustive PR/main/publication gates without an explicit decision and
 an update to [the release policy](docs/validation/release-qualification.md).
 Published does not mean post-release checks passed. Investigate failures and ship
 corrections; never move published tags or replace released bytes to hide a failure.
+
+Full suites, broad browser/platform coverage and stress tests run in the background.
+Delegate their monitoring and triage and continue foreground work as soon as the
+release is published. Report actionable changes, not routine polling. Fold failures
+into the next release when one is in progress, or address them directly when idle;
+newly discovered urgent regressions still warrant prompt attention. Reuse verified
+qualification only when the exact tested inputs match the candidate being shipped;
+changed inputs require the affected checks again.

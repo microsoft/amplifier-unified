@@ -67,6 +67,9 @@ try{
   await expect.poll(()=>selectionHeld).toBe(true);
   await expect(draft).toHaveDraft('Keep this unfinished draft.');await expect(draft).toBeVisible();
   await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect(area).toBeVisible();await search.fill('Beta 002');
+  // This unrelated filter receipt drains the command queue without releasing
+  // selection. Older code accepted browse on that queue before this barrier.
+  await action('view.update',{patch:{navFilter:'Beta 002'}});
   releaseSelection();
   await expect.poll(()=>page.evaluate(()=>Boolean(window.amplifier.getState().navigationPending))).toBe(false);
   await expect(results).toHaveCount(1);
