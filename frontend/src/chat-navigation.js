@@ -85,29 +85,19 @@ export function chatPage(state,workspace,{section=null}={}){
  const start=index*pageSize,end=Math.min(chats.length,start+pageSize);
  return {items:chats.slice(start,end),total:chats.length,index,pages,start,end,scope,activityCounts};
 }
-export function headerChatChoices(state){
- if(!state)return {items:[],total:0};
- if(Array.isArray(state.headerChatNavigation?.items))return state.headerChatNavigation;
- const workspace=state.workspaces?.find(row=>row.id===state.selectedWorkspaceId),selected=state.sessions?.find(row=>row.id===state.selectedSessionId);
- const chats=orderedChats({...state,view:{...state.view,navArchive:'active',navCollection:null}},workspace),items=chats.slice(0,CHAT_PAGE_SIZE);
- if(selected&&isTopLevelChat(selected)&&!items.some(row=>row.id===selected.id))items.splice(Math.max(0,CHAT_PAGE_SIZE-1),1,selected);
- return {items,total:chats.length};
-}
-
 export function subagentCount(state,parent){
- if(Number.isSafeInteger(parent?.subagentCount)&&parent.subagentCount>=0)return parent.subagentCount;
- const projection=state.subagentNavigation;
- if(parent&&projection?.scope?.sessionId===parent.id&&Number.isSafeInteger(projection.unfilteredTotal))return projection.unfilteredTotal;
- return directSubagentChats(state.sessions,parent).length;
+ return Number.isSafeInteger(parent?.subagentCount)&&parent.subagentCount>=0?parent.subagentCount:0;
 }
 export function subagentPage(state,parent){
- const saved=state.view?.subagentHistory||{},filter=saved.filter||'',scope={sessionId:parent?.id,filter},projection=state.subagentNavigation;
- const requested=Number.isSafeInteger(saved.index)?saved.index:0;
- if(projection?.scope&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&projection.index===Math.max(0,Math.min(projection.pages-1,requested)))return projection;
- if(state.library?.bounded)return {items:[],total:0,unfilteredTotal:subagentCount(state,parent),index:0,pages:1,start:0,end:0,scope,pending:true};
- const children=directSubagentChats(state.sessions,parent),rows=filterList(children,filter,row=>[row.title,row.description,row.id,row.nativeIdentity]);
- const pages=Math.max(1,Math.ceil(rows.length/50)),index=Math.max(0,Math.min(pages-1,requested)),start=index*50,end=Math.min(rows.length,start+50);
- return {items:rows.slice(start,end),total:rows.length,unfilteredTotal:children.length,index,pages,start,end,scope};
+ const saved=state.view?.subagentHistory||{},filter=saved.filter||'',projection=state.subagentNavigation;
+ const requested=Number.isSafeInteger(saved.index)?Math.max(0,saved.index):0;
+ const scope={sessionId:parent?.id,filter,index:requested},coverage=state.browserResources;
+ if(Array.isArray(coverage)&&coverage.includes('selectedContext')&&coverage.includes('subagentNavigation')
+  &&projection?.scope&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)
+  &&projection.index===Math.max(0,Math.min(projection.pages-1,requested)))return projection;
+ // Only an explicitly covered server page answers this dialog. Selected context
+ // is not a child catalog, and omitted/stale rows must never look like no results.
+ return {items:[],total:0,unfilteredTotal:subagentCount(state,parent),index:0,pages:1,start:0,end:0,scope,pending:true};
 }
 
 // Move one pin relative to another without dropping pins hidden by a filter/page.

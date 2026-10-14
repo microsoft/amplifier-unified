@@ -14,7 +14,8 @@ try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
  browser=await chromium.launch({headless:true});
  page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ const errors=[],chatQueries=[];page.on('pageerror',error=>errors.push(error.message));
+ page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/sessions')chatQueries.push(Object.fromEntries(url.searchParams))});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
@@ -22,6 +23,8 @@ try{
  const first=await action('session.create',{workspace:workspace.path,title:'Preview owner'});
  const second=await action('session.create',{workspace:workspace.path,title:'Independent peer',select:false});
  assert.ok(first.accepted&&second.accepted);
+ assert.equal((await state()).sessions.some(row=>row.id===second.sessionId),false,'The picker must discover an unselected chat');
+ assert.equal(chatQueries.length,0,'Closed resource controls do not request a chat catalog');
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Private unrelated draft');
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace.id,workWorkspaceTab:'details'}});
  await page.getByText('Resource reservations',{exact:true}).click();
@@ -79,8 +82,9 @@ try{
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Private unrelated draft');
  const runtime=await page.request.get(url+'/fixture').then(response=>response.json());
  assert.equal(runtime.sent.length,0);
- assert.deepEqual(errors,[]);
- const report={status:'passed',scenarios:9,runtime:'scripted; no model input',reservationCount:1};
+ assert.deepEqual(errors,[]);assert.ok(chatQueries.length);
+ assert.ok(chatQueries.every(query=>query.kind==='root'&&query.workspace===workspace.path&&query.limit==='50'),'Picker reads are explicit bounded workspace-root pages');
+ const report={status:'passed',scenarios:9,chatQueries,runtime:'scripted; no model input',reservationCount:1};
  await writeFile(output+'/report.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }catch(error){await page?.screenshot({path:output+'/failure.png'}).catch(()=>{});console.error((await page?.locator('body').innerText())?.slice(-5000));throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}

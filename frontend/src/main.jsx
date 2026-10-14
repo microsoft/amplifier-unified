@@ -73,7 +73,7 @@ import {createActionFeedback} from './action-feedback';
 import './action-feedback.css';
 import {createChatScroll} from './chat-scroll';
 import {followEarlierHistory} from './history-scroll';
-import {headerChatChoices,isTopLevelChat} from './chat-navigation';
+import {isTopLevelChat} from './chat-navigation';
 import {SubagentHistory} from './subagent-history';
 import {McpAppThemeProvider} from './mcp-app-theme';
 const logo='/branding/icons/amplifier-icon-128.png';
@@ -511,7 +511,6 @@ function App(){
  useWindowChrome({root,state,shell,mode:themeScheme,css:activeCss});
  useAppearanceCache({root,state,shell,scheme:requestedScheme,mode:themeScheme,preview,css:activeCss});
  useLayoutEffect(()=>bindWindowControlsOverlay(root.current),[shell.ready,!!state]);
- const conversationChoices=headerChatChoices(state);
  const newChatPending=!session&&outbox.entries.some(row=>row.sessionId===null&&['sending','unknown'].includes(row.status));
  const responseActive=working||(session?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
  const sendingHere=outbox.entries.some(row=>row.sessionId===(session?.id??null)&&row.status==='sending');

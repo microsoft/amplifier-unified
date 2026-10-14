@@ -61,12 +61,18 @@ are independent of observation support.
 
 | Endpoint | Contract |
 | --- | --- |
-| `GET /api/sessions?offset=0&limit=100` | Bounded summaries, optional `workspace` path, and `nextOffset`. |
+| `GET /api/sessions?offset=0&limit=100` | Bounded summaries, optional exact `workspace` path and `kind=root` filter, and `nextOffset`. Filters apply before pagination; omitting `kind` includes all session kinds. |
 | `GET /api/sessions/{id}` | Full current session snapshot without changing selection. |
 | `POST /api/sessions/{id}/commands` | Explicit session target and stable command ID. |
 | `GET /api/sessions/{id}/events` | SSE `snapshot` events containing the complete current session. |
 | `POST /api/actions` | Existing app operations, including creation and client-local presentation. |
 | `GET /api/actions` | Discover current action names and schemas. |
+
+Offset pages are stateless current catalog reads, not a retained snapshot or a
+full-library enumeration. Workspace resource pickers request a root-chat page
+only while open, retain the explicit selection when paging, and refresh on demand.
+Concurrent catalog changes can alter later pages; accepted commands revalidate
+the selected chat's workspace and authority independently of the discovery row.
 
 Example command body:
 ```json

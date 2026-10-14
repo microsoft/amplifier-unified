@@ -1,11 +1,12 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
+import {useWorkspaceChats,WorkspaceChatChoices} from './workspace-chat-choices';
 
 export function ResourceReservations({workspace,state,act,active,readOnly}){
  const formId=useId();
  const [opened,setOpened]=useState(false),[page,setPage]=useState(null),[offset,setOffset]=useState(0),[error,setError]=useState(''),[busy,setBusy]=useState(false);
- const [draft,setDraft]=useState({sessionId:'',resourceKey:'',mode:'exclusive',note:''}),[editing,setEditing]=useState(null),[evidence,setEvidence]=useState('');
+ const [draft,setDraft]=useState({resourceKey:'',mode:'exclusive',note:''}),[editing,setEditing]=useState(null),[evidence,setEvidence]=useState('');
  const visit=useRef(0);
- const chats=(state.sessions||[]).filter(row=>row.workspace===workspace.path&&(row.sessionKind||'root')==='root');
+ const choices=useWorkspaceChats(workspace,active&&opened,state.selectedSessionId),chats=choices.options;
  const dirty=!!(draft.resourceKey||draft.note||evidence);
  useEffect(()=>{if(!dirty)return;const prevent=event=>{event.preventDefault();event.returnValue=''};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[dirty]);
  const run=async(action,args={})=>{
@@ -48,15 +49,15 @@ export function ResourceReservations({workspace,state,act,active,readOnly}){
      await run(action,{id:editing.id,expectedRevision:editing.revision,evidence});setEditing(null);setEvidence('');
     })}>{label}</button>)}<button className="a-soft" type="button" disabled={busy} onClick={()=>{setEditing(null);setEvidence('')}}>Cancel reconciliation</button></div>
    </form>}
-   {!readOnly&&(chats.length?<form aria-label="Reserve a resource" onSubmit={event=>{event.preventDefault();mutate(async()=>{
-    await run('reserve',{...draft,sessionId:draft.sessionId||chats[0].id});setDraft({...draft,resourceKey:'',note:''});
+   {!readOnly&&<form aria-label="Reserve a resource" onSubmit={event=>{event.preventDefault();if(!choices.selectedId)return;mutate(async()=>{
+    await run('reserve',{...draft,sessionId:choices.selectedId});setDraft({...draft,resourceKey:'',note:''});
    })}}>
-    <label htmlFor={formId+'-chat'}>Reserve for chat</label><select id={formId+'-chat'} disabled={busy} value={draft.sessionId||chats[0].id} onChange={event=>setDraft({...draft,sessionId:event.target.value})}>{chats.map(chat=><option key={chat.id} value={chat.id}>{chat.title||'Untitled chat'}</option>)}</select>
+    <WorkspaceChatChoices choices={choices} id={formId+'-chat'} label="Reserve for chat" disabled={busy}/>
     <label htmlFor={formId+'-key'}>Resource key</label><input id={formId+'-key'} disabled={busy} required maxLength={500} placeholder="preview:my-project" value={draft.resourceKey} onChange={event=>setDraft({...draft,resourceKey:event.target.value})}/>
     <label htmlFor={formId+'-sharing'}>Resource sharing</label><select id={formId+'-sharing'} disabled={busy} value={draft.mode} onChange={event=>setDraft({...draft,mode:event.target.value})}><option value="exclusive">One owner</option><option value="shared">Explicitly shared</option></select>
     <label htmlFor={formId+'-note'}>Reservation note</label><input id={formId+'-note'} disabled={busy} maxLength={1000} value={draft.note} onChange={event=>setDraft({...draft,note:event.target.value})}/>
-    <button className="a-primary" type="submit" disabled={busy||!draft.resourceKey.trim()}>Reserve resource</button>
-   </form>:<p>Open a chat in this workspace to reserve a resource for it.</p>)}
+    <button className="a-primary" type="submit" disabled={busy||!choices.selectedId||!draft.resourceKey.trim()}>Reserve resource</button>
+   </form>}
   </section>
  </details>;
 }

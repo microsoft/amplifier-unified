@@ -54,6 +54,20 @@ jobs:
           name: state-transport-diagnostics
           path: output/state-transport-browser/
           if-no-files-found: ignore
+      - name: Verify scoped navigation and selected chat context
+        working-directory: frontend
+        run: |
+          AMPLIFIER_TEST_OUTPUT="$GITHUB_WORKSPACE/output/scoped-navigation" node tests/scoped-navigation-browser.mjs
+          AMPLIFIER_TEST_OUTPUT="$GITHUB_WORKSPACE/output/selected-context" node tests/selected-context-browser.mjs
+      - name: Retain scoped browser demand diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scoped-browser-demand
+          path: |
+            output/scoped-navigation/
+            output/selected-context/
+          if-no-files-found: ignore
       - name: Verify candidate module source validation
         if: ${{ hashFiles('frontend/tests/registry-validation-browser.mjs') != '' }}
         working-directory: frontend

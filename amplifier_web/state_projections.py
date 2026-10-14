@@ -255,10 +255,24 @@ class StateProjections:
         return self.get(('workspace-shortcuts', self.directory.navigation_revision if self.directory else None, *self.workspace_scope(scoped)),
                         lambda: snapshot(scoped, index=index, exclude_pinned=True)['rows'])
 
-    def browser(self, state):
-        from .browser_state import navigation
+    def browser(self, state, *, selected_context=False):
+        from .browser_state import navigation, subagent_navigation
         attention = self.attention(state)
         scoped = {**state, 'attention': attention}
+        if selected_context:
+            result = {'attention': attention, 'browserResources': ['selectedContext']}
+            if state.get('view', {}).get('panel') == 'subagent-history':
+                key = ('browser-navigation', state.get('selectedSessionId'),
+                       self.directory.navigation_revision if self.directory else None,
+                       self.view_scope(state, ('subagentHistory',)))
+                page = self.get(key, lambda: subagent_navigation(scoped, index=self.sessions(state), directory=self.directory))
+                requested = state.get('view', {}).get('subagentHistory', {})
+                requested = requested if isinstance(requested, dict) else {}
+                requested_index = requested.get('index', 0)
+                result['subagentNavigation'] = {**page, 'scope': {**page['scope'],
+                    'index': max(0, requested_index) if type(requested_index) is int else 0}}
+                result['browserResources'].append('subagentNavigation')
+            return result
         # Layout/drafts do not affect navigation. Workspace controls belong to
         # their own explorer query, while worker history only affects this one.
         key = ('browser-navigation', *self.chat_scope(state), self.directory.navigation_revision if self.directory else None, self.view_scope(state, ('subagentHistory',)))

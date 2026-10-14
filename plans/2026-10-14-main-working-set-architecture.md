@@ -53,8 +53,10 @@ flowchart LR
 ```
 
 The boxes are responsibilities, not a requirement for one network service per box.
-Keep the existing transport while introducing internal interfaces and negotiated
-resource capabilities. Never label the existing REST/SSE transport AHP.
+Keep the existing transport while introducing internal interfaces and explicit
+resource demand. The bundled client and server adopt each change together;
+capability negotiation is only for independently versioned contracts that need
+it. Never label the existing REST/SSE transport AHP.
 
 | Owner | Authority | Rebuildable or disposable state |
 | --- | --- | --- |
@@ -359,7 +361,8 @@ is not a claim that background verification passed.
 
 Introduce new indexes as disposable sidecars. During qualification, compare old/new
 results on owned synthetic or explicitly scoped copied data; don't double all live
-reads indefinitely. Capability flags permit per-surface rollout and rollback.
+reads indefinitely. Qualification flags permit per-surface comparison and rollback;
+they do not introduce compatibility with older bundled clients.
 Keep schema compatibility or rebuild under a new generation; never require an
 irreversible canonical migration to try the read model. A rollback retains the
 last compatible package, native data and command receipts. Record actual installed

@@ -37,7 +37,12 @@ def recovery_workers(session, messages):
     for row in session.get('workers', []):
         for call in (row.get('callId'), row.get('toolCallId')):
             if call in calls and call not in found:
-                found[call] = {key: row[key] for key in ('id', 'sessionId', 'name', 'agent') if key in row}
+                found[call] = {key: row[key] for key in ('id', 'sessionId', 'name', 'agent', 'kind') if key in row}
+                if row.get('kind') == 'session' or row.get('sessionId'):
+                    from .session_identity import project
+                    scope = project(session)
+                    if scope:
+                        found[call]['nativeProject'] = scope
     for message in messages:
         observation = message.get('observation', {})
         if observation.get('source') == 'local-job-recovery':

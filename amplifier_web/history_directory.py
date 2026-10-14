@@ -715,6 +715,10 @@ class HistoryDirectory:
         from .history_directory_query import chats
         return chats(self, state, section=section)
 
+    def child_count(self, state, parent):
+        from .history_directory_query import child_count
+        return child_count(self, state, parent)
+
     def children(self, state, parent, query='', index=0):
         from .history_directory_query import children
         return children(self, state, parent, query=query, index=index)

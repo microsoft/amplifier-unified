@@ -7,7 +7,14 @@ const server=await createServer({configFile:false,server:{middlewareMode:true,hm
 const {ManagedResources}=await server.ssrLoadModule('/src/workspace-managed-resources.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
-const workspace={id:'w',path:'/work'},state={sessions:[{id:'a',title:'Owner A',workspace:'/work'},{id:'b',title:'Owner B',workspace:'/work'}],selectedSessionId:'a'};
+const workspace={id:'w',path:'/work'},state={sessions:[{id:'a',title:'Owner A',workspace:'/work'}],selectedSessionId:'a'};
+const originalFetch=globalThis.fetch;
+test.beforeEach(()=>{globalThis.fetch=async url=>{
+ const query=new URL(url,'http://fixture').searchParams;
+ assert.equal(query.get('workspace'),'/work');assert.equal(query.get('kind'),'root');assert.equal(query.get('limit'),'50');
+ return new Response(JSON.stringify({items:[{id:'a',title:'Owner A'},{id:'b',title:'Owner B'}],nextOffset:null}));
+}});
+test.afterEach(()=>{globalThis.fetch=originalFetch});
 const result=sid=>({accepted:true,result:{sessionId:sid,publishing:{items:[{id:sid,kind:'preview',status:'running',port:12345,url:'http://127.0.0.1:12345/',releaseId:'release',releaseDirectory:'/retained/release/files'}]},operations:{items:[{id:'p-'+sid,kind:'process',state:'outcome_unknown'}]}}});
 for(const transition of ['selected task','inactive workspace','closed panel'])for(const fail of [false,true]){
  test(`ignores late ${fail?'error':'page'} after ${transition}`,async()=>{

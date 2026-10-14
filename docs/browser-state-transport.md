@@ -29,8 +29,35 @@ needs it. Demand and workspace tab participate in request identity. Superseded
 responses cannot populate a newly selected surface; absent/mismatched pages show
 loading until their matching resource arrives. Retained controller/draft state
 does not require constructing a hidden workspace page. Releasing read demand
-does not cancel accepted work or replay commands. This changes the current bundled navigation transport. Stream snapshots and
-the separate AHP development track are unchanged.
+does not cancel accepted work or replay commands. This changes the current bundled navigation transport; the separate AHP
+development track remains unchanged.
+
+## Selected browser context
+
+Ordinary attached web snapshots and action receipts carry the selected chat's
+context. `/api/shell` owns chat/header/sidebar and workspace navigation pages;
+the stream does not construct or include `chatNavigation`,
+`headerChatNavigation`, or `workspaceExplorer`. The bundled client and server
+use this contract together, without an old-bundle fallback.
+
+Every such snapshot carries sorted `browserResources` coverage containing
+`selectedContext`. Only an open `view.panel = "subagent-history"` adds
+`subagentNavigation` and its bounded child page. Its `scope` identifies the exact
+requested `sessionId`, `filter`, and `index`; the page's own `index` is the
+clamped result index. Missing or mismatched coverage means not loaded, never an
+empty history. Closing the dialog retires its page from the next stream frame.
+
+The selected summary retains `subagentCount`, obtained by the canonical indexed
+parent predicate without decoding a child page. A selected child's exact parent
+summary remains available for Open parent. Selected messages, Work details,
+approvals/questions, private drafts and Canvas, voice context, attention and
+receipts keep their existing behavior. Shell changes still use their existing
+change token and data key. This slice does not suspend selected-chat history or
+Work when another surface is open.
+
+Explicit complete-state reads, custom component context, unbound/integration
+clients and independent single-session streams retain their existing contracts.
+No omitted browser page changes durable membership, execution, or persistence.
 
 ## Existing stream and receipt behavior
 

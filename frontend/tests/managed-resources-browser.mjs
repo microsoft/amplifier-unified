@@ -69,8 +69,9 @@ try{
  assert.equal(await readFile(scratch.path+'/retained.txt','utf8'),'Preserve unknown user content');
  await page.screenshot({path:output+'/desktop.png'});
  const peer=await action('session.create',{workspace:workspace.path,title:'Unallocated peer',select:false});
- const latest=await page.evaluate(()=>window.amplifier.getState());
- const peerId=latest.sessions.find(row=>row.title==='Unallocated peer').id;
+ const peerId=peer.sessionId;assert.ok(peerId);
+ assert.equal((await page.evaluate(()=>window.amplifier.getState())).sessions.some(row=>row.id===peerId),false,'Other owners come from the explicit picker query');
+ await panel.getByRole('button',{name:'Refresh chats',exact:true}).click();
  await panel.getByLabel('Resources for chat',{exact:true}).selectOption(peerId);
  await expect(panel.getByText('No local publishing listeners on this page.',{exact:true})).toBeVisible();
  await expect(storage.getByText('No task storage on this page.',{exact:true})).toBeVisible();

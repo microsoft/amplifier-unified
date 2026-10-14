@@ -1,12 +1,12 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
+import {useWorkspaceChats,WorkspaceChatChoices} from './workspace-chat-choices';
 import {TaskStorage} from './workspace-task-storage';
 
 export function ManagedResources({workspace,state,act,active,readOnly}){
  const selectId=useId(),visit=useRef(0);
- const [opened,setOpened]=useState(false),[selected,setSelected]=useState(''),[page,setPage]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const [opened,setOpened]=useState(false),[page,setPage]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const [cursors,setCursors]=useState({});
- const chats=(state.sessions||[]).filter(row=>row.workspace===workspace.path&&(row.sessionKind||'root')==='root');
- const sid=chats.find(row=>row.id===selected)?.id||chats.find(row=>row.id===state.selectedSessionId)?.id||chats[0]?.id;
+ const choices=useWorkspaceChats(workspace,active&&opened,state.selectedSessionId),sid=choices.selectedId;
  const refresh=async(next={})=>{
   const current=++visit.current;setBusy(true);setError('');
   try{
@@ -22,13 +22,13 @@ export function ManagedResources({workspace,state,act,active,readOnly}){
   if(active&&opened&&sid)refresh();
   return()=>{visit.current++};
  },[active,opened,workspace.id,sid]);
- const owner=chats.find(row=>row.id===sid)?.title||'Conversation';
+ const owner=choices.selected?.title||'Conversation';
  return <details className="a-workspace-setup" onToggle={event=>{if(!event.target||event.target===event.currentTarget)setOpened(event.currentTarget.open)}}>
   <summary>Managed resources</summary>
   <section aria-label="Managed resources">
    <p>Inspect resources recorded for one chat. Refreshing observes their owners; it does not start, stop or reserve anything.</p>
-   {chats.length?<><label htmlFor={selectId}>Resources for chat</label><select id={selectId} value={sid} onChange={event=>setSelected(event.target.value)}>{chats.map(row=><option key={row.id} value={row.id}>{row.title||'Untitled chat'}</option>)}</select>
-   <button className="a-soft" type="button" disabled={busy} onClick={()=>refresh()}>Refresh managed resources</button></>:<p>Open a chat in this workspace to inspect its resources.</p>}
+   <WorkspaceChatChoices choices={choices} id={selectId} label="Resources for chat"/>
+   <button className="a-soft" type="button" disabled={busy||!sid} onClick={()=>refresh()}>Refresh managed resources</button>
    {error&&<p role="alert">{error}</p>}{busy&&<p role="status">Reading resource owners…</p>}
    {page&&<>
     <h4>Local publishing</h4>

@@ -11,15 +11,26 @@ export function recoveryPresentation(message,session){
  return {facts,node,worker,status,explanation};
 }
 
+export function recoveryWorkerTarget(worker,session,state){
+ if(!worker||worker.kind==='job')return null;
+ const identity=worker.sessionId||(worker.kind==='session'?worker.id:null);
+ const nativeProject=worker.nativeProject||session?.nativeProject;
+ if(typeof identity==='string'&&identity&&typeof nativeProject==='string'&&nativeProject)return {id:identity,nativeProject};
+ // Old receipts may carry only an app identity. Use an exact supplied summary,
+ // never infer that a job ID or an ambiguous native alias is a chat.
+ const row=(state.sessions||[]).find(row=>row.id===worker.id);
+ return row?{id:row.id,...(row.nativeProject?{nativeProject:row.nativeProject}:{})}:null;
+}
+
 export function RecoveryNotice({message,session,state,act}){
  const [resultOpened,setResultOpened]=useState(false);
  const {facts,node,worker,status,explanation}=recoveryPresentation(message,session);
- const workerSession=worker&&(state.sessions||[]).find(s=>s.id===worker.id||s.runtimeSessionId===worker.sessionId);
+ const workerTarget=recoveryWorkerTarget(worker,session,state);
  const result=node?.output,reference=node?.outputDetail;
  return <div className="a-recovery-notice">
   <p><strong>{worker?.name||worker?.agent||node?.label||'Background work'} · {status}</strong></p>
   <p>{explanation} This notice does not mean the work ran again.</p>
-  {workerSession&&<button type="button" className="a-link" data-action="session.select" onClick={()=>act('session.select',{id:workerSession.id})}>Open worker chat</button>}
+  {workerTarget&&<button type="button" className="a-link" data-action="session.select" onClick={()=>act('session.select',workerTarget)}>Open worker chat</button>}
   {(typeof result==='string'||reference)&&<details onToggle={e=>{if(e.currentTarget.open)setResultOpened(true)}}><summary>View saved result</summary>{resultOpened&&<DetailText text={result||''} reference={reference} automatic/>}</details>}
   <details><summary>Technical details</summary>
    {facts.job_id&&<p>Job: <code>{facts.job_id}</code><br/>Call: <code>{facts.call_id}</code></p>}

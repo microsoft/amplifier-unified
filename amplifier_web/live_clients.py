@@ -69,8 +69,11 @@ def setup_routes(app, streams):
         if any(key in request.query for key in ('view', 'cursor', 'activity', 'pinned', 'scope')):
             return await app['observations'].sessions(request)
         from .browser_state import summary
-        if set(request.query) - {'offset', 'limit', 'workspace', 'clientId'}:
+        if set(request.query) - {'offset', 'limit', 'workspace', 'kind', 'clientId'}:
             raise AppError('Unsupported session catalog parameter.')
+        kind = request.query.get('kind')
+        if kind not in (None, 'root'):
+            raise AppError('Choose kind=root or omit the kind filter.')
         try:
             offset, limit = int(request.query.get("offset", 0)), int(request.query.get("limit", 100))
         except ValueError:
@@ -80,11 +83,20 @@ def setup_routes(app, streams):
         workspace = request.query.get("workspace")
         directory = getattr(service, "directory", None)
         if directory is not None:
-            rows = directory.select("workspace=?" if workspace is not None else "1",
-                [workspace] if workspace is not None else [], offset=offset, limit=limit+1, state=service.state)
+            where, params = [], []
+            if workspace is not None:
+                where.append('workspace=?')
+                params.append(workspace)
+            if kind == 'root':
+                where.append("session_kind='root'")
+            rows = directory.select(' AND '.join(where) or '1', params,
+                offset=offset, limit=limit+1, state=service.state)
             page, more = rows[:limit], len(rows)>limit
         else:
-            rows = [row for row in service.state["sessions"] if workspace is None or row.get("workspace") == workspace]
+            from .session_navigation import is_top_level
+            rows = [row for row in service.state["sessions"]
+                    if (workspace is None or row.get("workspace") == workspace)
+                    and (kind is None or is_top_level(row))]
             page, more = rows[offset:offset+limit], offset+limit<len(rows)
         return web.json_response({"protocolVersion": 1, "items": [summary(row) for row in page],
             "nextOffset": offset+limit if more else None})

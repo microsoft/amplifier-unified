@@ -68,3 +68,17 @@ slowing A; arbitrary state-action loss or private reconciliation is not permitte
 This is a target for scoped publication. The pinned baseline performed broad
 publication; [CS3's assessment](assessment.md) records that observation. A current
 implementation and performance check is required before claiming this target.
+
+## Bundled browser implementation
+
+The bundled web client and server ship together. Their current transport is
+documented in [Browser state transport](../browser-state-transport.md): shell
+reads request visible navigation resources, while ordinary attached browser
+frames carry `selectedContext` and request a bounded `subagentNavigation` page
+only for an open worker-history dialog. Coverage and page scope are explicit;
+omitted pages are not empty results. Independently released clients and explicit
+complete-state APIs retain their separate contracts.
+
+This removes duplicate navigation construction, but does not yet suspend
+selected messages or Work details while another surface is open. It is an
+incremental implementation of the subscription target above.
