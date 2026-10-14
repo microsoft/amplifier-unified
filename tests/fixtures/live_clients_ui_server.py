@@ -26,7 +26,7 @@ class Runtime(fixture.Runtime):
             await emit("runtime.status", {"sessionId": sid, "status": "idle"})
             self.pending.pop(input_id)
 
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         self.stopped.append(sid)
 
 

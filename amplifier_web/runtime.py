@@ -706,6 +706,12 @@ class RuntimeManager:
                         data["sessionId"] = sid if identity == row["runtime_id"] else identity
                         data["rootSessionId"] = sid if root == row["runtime_id"] else root
                     normalized = normalize_event(data, sid, row["inputId"])
+                    if (normalized and normalized[0] == 'runtime.status'
+                            and normalized[1].get('status') == 'stopped'
+                            and row.get('stop_reason') == 'configuration'):
+                        # The process closed to replace its mounted settings.
+                        # This is not a durable user interruption of the chat.
+                        normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
                     if normalized:
                         await row["emit"](*normalized)
             code = await row["process"].wait()
@@ -1171,7 +1177,7 @@ class RuntimeManager:
     async def stop_worker(self, session_id, worker_id):
         return await self._request(session_id, "worker.stop", worker_id=worker_id)
 
-    async def stop(self, session_id):
+    async def stop(self, session_id, *, reason="stopped"):
         self._retired.pop(session_id, None)
         preparation = self._preparations.get(session_id)
         if preparation:
@@ -1182,6 +1188,10 @@ class RuntimeManager:
         row = self.workers.get(session_id)
         if not row:
             return
+        # A real Stop wins even if maintenance already started shutdown. A later
+        # refresh cannot downgrade an explicit Stop that owns this process.
+        if reason != 'configuration' or 'stop_reason' not in row:
+            row['stop_reason'] = reason
         retirement = row.get('retirement_task')
         if retirement and retirement is not asyncio.current_task() and not retirement.done():
             retirement.cancel()
@@ -1218,8 +1228,9 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
-        await row["emit"]("runtime.warmth" if row.get("retiring") else "runtime.status",
-                          {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
+        cold = row.get("retiring") or row.get('stop_reason') == 'configuration'
+        await row["emit"]("runtime.warmth" if cold else "runtime.status",
+                          {"sessionId": session_id, "status": "cold" if cold else "stopped"})
         if self.workers.get(session_id) is row:
             self.workers.pop(session_id, None)
             if row.get('generation_lease'):

@@ -26,7 +26,7 @@ class Runtime:
         await emit('assistant.message', {'sessionId':session['id'], 'text':'Synthetic reply.', 'inputId':input_id})
         await emit('runtime.status', {'sessionId':session['id'], 'status':'idle'})
     async def control(self, *args): return {}
-    async def stop(self, *args): pass
+    async def stop(self, *args, reason="stopped"): pass
     async def close(self): pass
 
 async def main():

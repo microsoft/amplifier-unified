@@ -35,7 +35,7 @@ class NoModelRuntime:
         self.calls.append('control')
         raise AssertionError('Recent must not inspect providers')
 
-    async def stop(self, *args):
+    async def stop(self, *args, reason="stopped"):
         self.calls.append('stop')
         raise AssertionError('Recent must not stop a task')
 

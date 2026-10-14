@@ -9,7 +9,7 @@ from amplifier_web.preferences import SettingsStore
 from amplifier_web.service import AppError
 
 class Runtime:
-    async def stop(self,*args):pass
+    async def stop(self,*args,reason="stopped"):pass
     async def close(self):pass
 
 @pytest.fixture
@@ -176,7 +176,7 @@ async def test_running_mount_plan_changes_queue_then_remount_same_conversation(a
     calls=[]
     class LiveRuntime:
         async def start(self,session,emit):calls.append(('start',session['id']))
-        async def stop(self,sid):calls.append(('stop',sid))
+        async def stop(self,sid,*,reason="stopped"):calls.append(('stop',sid))
         async def close(self):pass
         async def control(self,sid,op,args):
             calls.append((op,sid))

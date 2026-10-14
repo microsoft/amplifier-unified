@@ -737,7 +737,8 @@ class Collaboration:
                         self.publish_receipt(receipt)
                         self.cancel_expiry(identity)
                         continue
-                    if target.get("status") in BUSY:
+                    if (target.get("status") in BUSY or target.get('configurationBusy')
+                            and target.get('configurationRefresh', {}).get('phase') == 'applying'):
                         break
                     # Durable claim precedes any runtime effect. Unknown never
                     # returns to queued, including cancellation and restart.

@@ -57,7 +57,7 @@ class Transport:
     async def close(self):
         pass
 
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         await self.app.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})
 
 
@@ -149,6 +149,36 @@ async def test_notify_alias_and_exact_message_inspection_preserve_selection(app)
     assert app.state["selectedSessionId"] == source["id"]
     assert app.state["view"]["draft"] == "Private source draft"
     assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize('stopped', [False, True])
+async def test_peer_input_waits_for_configuration_retirement_and_rechecks_stop(app, monkeypatch, stopped):
+    source, peer = app.state['sessions']
+    entered, finish = asyncio.Event(), asyncio.Event()
+    async def retire(sid, *, reason='stopped'):
+        assert sid == peer['id'] and reason == 'configuration'
+        entered.set()
+        await finish.wait()
+        await app.on_runtime_event('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
+    monkeypatch.setattr(app.runtime, 'stop', retire)
+    peer.update(configurationPending=True, configurationPendingRevision=1)
+    refresh = asyncio.create_task(app.refresh_configuration(peer['id']))
+    await entered.wait()
+    receipt = await agent(app, source, 'coordination.send',
+                          {'sessionId': peer['id'], 'text': 'After the saved settings'}, 'held-by-refresh')
+    await app.collaboration.drain(peer['id'])
+    assert app.collaboration.receipt(receipt['requestId'])['delivery'] == 'queued'
+    assert not app.runtime.inputs
+    if stopped:
+        # The same durable boundary written by the accepted Stop command.
+        peer['interruptionRevision'] = peer.get('interruptionRevision', 0) + 1
+        peer['status'] = 'stopping'
+    finish.set()
+    await refresh
+    await until(lambda: app.collaboration.receipt(receipt['requestId'])['delivery'] != 'queued')
+    result = app.collaboration.receipt(receipt['requestId'])
+    assert result['delivery'] == ('suppressed' if stopped else 'accepted')
+    assert len(app.runtime.inputs) == (0 if stopped else 1)
 
 
 async def test_upgrade_retains_evidence_and_suppresses_legacy_before_drain(app):

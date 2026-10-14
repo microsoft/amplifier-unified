@@ -41,7 +41,7 @@ class ObservedRuntime:
     async def control(self, *args):
         return {}
 
-    async def stop(self, *args):
+    async def stop(self, *args, reason="stopped"):
         pass
 
     async def close(self):

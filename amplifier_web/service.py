@@ -4077,7 +4077,7 @@ class AppService:
     async def _refresh_claimed_configuration(self,identity,revision):
         succeeded=False
         try:
-            if self.runtime:await self.runtime.stop(identity)
+            if self.runtime:await self.runtime.stop(identity, reason='configuration')
             succeeded=True
         except asyncio.CancelledError:
             raise
@@ -4099,6 +4099,10 @@ class AppService:
                 self._publish_progress(session_ids={identity}, record_only=True)
                 if succeeded and session.get('configurationPending'):
                     self._task(self.refresh_configuration(identity))
+                elif succeeded:
+                    # Peer input held by the refresh reservation may now try
+                    # its existing durable guards. A real Stop still suppresses it.
+                    self._task(self.collaboration.drain(identity))
 
     async def refresh_configuration(self,identity):
         # Ordinary requests must keep their existing admission-lock order.

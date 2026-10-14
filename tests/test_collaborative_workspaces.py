@@ -33,7 +33,7 @@ class Runtime:
         self.inputs.append((session["id"], input_id, text))
         return {"accepted": True}
 
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         await self.app.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})
 
     async def close(self):

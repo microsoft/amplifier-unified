@@ -509,6 +509,46 @@ class SetupManager:
                 return {**validate_matrix(yaml.safe_load(path.read_text())),'name':name}
         raise ValueError('The routing matrix does not exist.')
 
+    def effective_routing(self, workspace, session_id=None, require_mounted=False):
+        """Resolved routing dependency, or None when this owner is uncertain.
+
+        A bundle can choose its own default. Never guess balanced for an
+        already-mounted owner whose effective hook is unavailable.
+        """
+        previous = getattr(self, '_config_snapshot', None)
+        try:
+            config = load_config(workspace, home=self.home, session_id=session_id) if session_id else self.config(workspace)
+            self._config_snapshot = (workspace, config)
+            routing = copy.deepcopy(config.settings.get('routing', {}))
+            name = routing.get('matrix')
+            if not name and session_id:
+                path = self.home / 'sessions' / session_id / 'effective-configuration.json'
+                if path.exists():
+                    plan = json.loads(path.read_text())
+                    hook = next((row for row in plan.get('hooks', []) if row.get('module') == 'hooks-routing'), None)
+                    if hook is None:
+                        return {'routing': routing, 'matrix': None}
+                    name = hook.get('config', {}).get('default_matrix', 'balanced')
+                elif require_mounted:
+                    return None
+            if not name:
+                hooks = config.settings.get('modules', {}).get('hooks', []) + config.settings.get('config', {}).get('hooks', [])
+                name = next((row.get('config', {}).get('default_matrix') for row in reversed(hooks)
+                             if row.get('module') == 'hooks-routing' and row.get('config', {}).get('default_matrix')), 'balanced')
+            try:
+                matrix = self.matrix(workspace, name)
+            except ValueError:
+                matrix = None
+            if matrix is not None:
+                matrix.pop('description', None)
+            return {'routing': routing, 'matrix': matrix}
+        except (OSError, ValueError, yaml.YAMLError):
+            # A missing unrelated workspace or broken local preset must not
+            # prevent saving valid settings. Retire only this uncertain owner.
+            return None
+        finally:
+            self._config_snapshot = previous
+
     async def perform(self,action,args):
         workspace=args.get('workspace') or str(Path.cwd());scope=args.get('scope','global')
         self.store.path(workspace,scope) # Validate scope even on reads.

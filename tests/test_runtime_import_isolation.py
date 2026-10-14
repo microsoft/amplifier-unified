@@ -29,6 +29,7 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     shutil.copytree(PACKAGE.parent / "amplifier_operations", outer / "amplifier_operations")
+    shutil.copytree(PACKAGE.parent / "amplifier_kernels", outer / "amplifier_kernels")
     (outer / "host_only_dependency.py").write_text("HOST_ONLY = True\n")
     metadata = outer / "amplifier_bundle_context_intelligence-0.1.3.dist-info"
     metadata.mkdir()
@@ -163,10 +164,18 @@ assert bootstrap.bootstrap_app_package() is web
 from amplifier_web.collaboration_input import checkpoint_anchors, admit, steer
 from amplifier_operations.coordination import fingerprint
 import amplifier_operations
+import amplifier_kernels
+from amplifier_web.computation import KERNEL_TRANSPORT, Kernels, tool_schema
+assert callable(Kernels) and 'execute' in tool_schema()['properties']['action']['enum']
+assert KERNEL_TRANSPORT.get() is False
+token = KERNEL_TRANSPORT.set(True)
+assert KERNEL_TRANSPORT.get() is True
+KERNEL_TRANSPORT.reset(token)
 assert checkpoint_anchors([], SimpleNamespace(generation=None)) == []
 assert callable(admit) and callable(steer) and callable(fingerprint)
 assert Path(web.__file__).resolve() == site / "amplifier_web/__init__.py"
 assert Path(amplifier_operations.__file__).resolve() == site / "amplifier_operations/__init__.py"
+assert Path(amplifier_kernels.__file__).resolve() == site / "amplifier_kernels/__init__.py"
 assert sys.path == paths and str(site) not in sys.path
 assert importlib.util.find_spec("host_only_dependency") is None
 try:
@@ -178,7 +187,7 @@ else:
 """)
 
 
-@pytest.mark.parametrize("name", ["amplifier_web", "amplifier_operations"])
+@pytest.mark.parametrize("name", ["amplifier_web", "amplifier_operations", "amplifier_kernels"])
 def test_bootstrap_rejects_wrong_origin_before_loading(installed_app, name):
     run_bootstrap_check(installed_app, f"""
 from types import ModuleType
@@ -193,12 +202,12 @@ except ImportError as exc:
 else:
     raise AssertionError("wrong-origin package accepted")
 assert sys.modules[{name!r}] is foreign
-assert not (set(sys.modules) - before) & {{"amplifier_web", "amplifier_operations"}}
+assert not (set(sys.modules) - before) & {{"amplifier_web", "amplifier_operations", "amplifier_kernels"}}
 assert sys.path == paths
 """)
 
 
-@pytest.mark.parametrize("name", ["amplifier_web", "amplifier_operations"])
+@pytest.mark.parametrize("name", ["amplifier_web", "amplifier_operations", "amplifier_kernels"])
 def test_bootstrap_rejects_blocked_module_entries(installed_app, name):
     run_bootstrap_check(installed_app, f"""
 sys.modules[{name!r}] = None
@@ -210,7 +219,7 @@ except ImportError as exc:
 else:
     raise AssertionError("blocked module entry accepted")
 assert sys.modules[{name!r}] is None
-assert not (set(sys.modules) - before) & {{"amplifier_web", "amplifier_operations"}}
+assert not (set(sys.modules) - before) & {{"amplifier_web", "amplifier_operations", "amplifier_kernels"}}
 assert sys.path == paths
 """)
 

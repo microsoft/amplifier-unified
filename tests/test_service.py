@@ -18,7 +18,7 @@ class Runtime:
             "generation_id": "test-generation", "input_ids": [input_id], "text": "Test transport result",
             "active_job_ids": [], "disposition": "manager_turn_finished"})
         await emit("runtime.status", {"sessionId": session["id"], "status": "idle"})
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         self.stopped.append(sid)
     async def close(self):
         pass

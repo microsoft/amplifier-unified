@@ -27,7 +27,7 @@ class Runtime:
             return {'providers': []}
         return {}
 
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         self.calls.append(('stop', sid))
 
     async def close(self):

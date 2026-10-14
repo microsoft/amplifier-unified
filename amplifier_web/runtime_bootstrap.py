@@ -6,7 +6,7 @@ import sys
 
 def bootstrap_app_package():
     app_root = Path(__file__).resolve().parent.parent
-    packages = ("amplifier_web", "amplifier_operations")
+    packages = ("amplifier_web", "amplifier_operations", "amplifier_kernels")
     # Validate every existing package before registering any missing sibling.
     for name in packages:
         if name in sys.modules:
@@ -17,7 +17,8 @@ def bootstrap_app_package():
     # Adding app_root to sys.path would expose the outer tool venv's
     # site-packages, including distribution metadata absent from this runtime.
     # Expose only these app-owned packages; dependencies still resolve in the
-    # runtime environment. Operations is needed by checkpoints and peer input.
+    # runtime environment. Operations serves checkpoints and peer input; kernels
+    # serves the mounted computation tool and its trusted process observer.
     before = set(sys.modules)
     try:
         for name in packages:
