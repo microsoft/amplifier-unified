@@ -16,6 +16,8 @@ import shutil
 import sys
 import threading
 
+from .history_projection_failure import STAGES, capture_failure
+
 INPUT_LIMIT = 32 * 1024 * 1024
 OUTPUT_LIMIT = 64 * 1024 * 1024
 MEMORY_LIMIT = 768 * 1024 * 1024
@@ -132,6 +134,16 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
             sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
 
     def compute():
+        stage = 'setup'
+        def failed(reason, identity=None):
+            value = {'type': 'retry', 'reason': reason, 'failure': capture_failure(stage)}
+            if identity is not None:
+                value['id'] = identity
+            reply(value)
+        def set_stage(value):
+            nonlocal stage
+            if isinstance(value, str) and value in STAGES:
+                stage = value
         try:
             guard = memory_policy(memory_limit)
             factory = model_factory
@@ -141,9 +153,9 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
             model = factory(cache_home)
             reply({'type': 'ready'})
         except (MemoryError, MemoryLimit, OSError, ValueError):
-            reply({'type': 'retry', 'reason': 'memory_limit'}); return
+            failed('memory_limit'); return
         except Exception:
-            reply({'type': 'retry', 'reason': 'worker_failed'}); return
+            failed('worker_failed'); return
         while not stopped.is_set():
             descriptor = work.get()
             if descriptor is None:
@@ -154,7 +166,9 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 if stopped.is_set():
                     raise InterruptedError()
                 guard()
+            check_budget.stage = set_stage
             try:
+                stage = 'input_decode'
                 check_budget()
                 with source.open('rb') as stream:
                     data = stream.read(INPUT_LIMIT + 1)
@@ -165,9 +179,11 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 inputs = json.loads(data); del data
                 if not isinstance(inputs, dict):
                     raise ValueError('Expected mapping')
+                stage = 'model'
                 result = model.project(inputs, check_budget=check_budget)
                 del inputs
                 check_budget()
+                stage = 'output_encode'
                 try:
                     size, digest = write_json(target, result, OUTPUT_LIMIT)
                 except OverflowError:
@@ -180,7 +196,7 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 reply({'type': 'result', 'id': identity, 'bytes': size, 'digest': digest})
             except (MemoryError, MemoryLimit):
                 target.unlink(missing_ok=True)
-                reply({'type': 'retry', 'id': identity, 'reason': 'memory_limit'})
+                failed('memory_limit', identity)
                 return
             except OverflowError as exc:
                 reply({'type': 'retry', 'id': identity,
@@ -189,7 +205,7 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 return
             except Exception:
                 target.unlink(missing_ok=True)
-                reply({'type': 'retry', 'id': identity, 'reason': 'worker_failed'})
+                failed('worker_failed', identity)
 
     thread = threading.Thread(target=compute, daemon=True)
     thread.start()

@@ -21,6 +21,8 @@ from .history_projection_worker import (
     DESCRIPTOR_LIMIT, INPUT_LIMIT, MEMORY_LIMIT, OUTPUT_LIMIT, source_receipt,
 )
 
+from .history_projection_failure import sanitize_failure
+
 REASONS = frozenset({'queue_full', 'input_limit', 'output_limit', 'spool_limit',
     'memory_limit', 'timeout', 'worker_stopped', 'source_changed', 'closed', 'worker_failed'})
 
@@ -35,8 +37,12 @@ async def _blocking(call, *args, **kwargs):
         raise
 
 
-def retry(reason):
-    return {'status': 'retry', 'reason': reason if reason in REASONS else 'worker_failed'}
+def retry(reason, failure=None):
+    result = {'status': 'retry', 'reason': reason if reason in REASONS else 'worker_failed'}
+    facts = sanitize_failure(failure)
+    if facts is not None:
+        result['failure'] = facts
+    return result
 
 
 class _Limit(Exception):
@@ -209,8 +215,9 @@ class ProcessProjector:
             raise
         message = await self._message()
         if message.get('type') == 'retry':
+            result = retry(message.get('reason'), message.get('failure'))
             await self._retire()
-            return retry(message.get('reason'))
+            return result
         if message != {'type': 'ready'}:
             raise ValueError('Invalid worker readiness')
         return None
@@ -231,7 +238,7 @@ class ProcessProjector:
             if message.get('id') != identity:
                 raise ValueError('Wrong worker identity')
             if message.get('type') == 'retry':
-                result = retry(message.get('reason'))
+                result = retry(message.get('reason'), message.get('failure'))
                 if result['reason'] in {'memory_limit', 'output_limit', 'worker_failed', 'worker_stopped'}:
                     await self._retire()
                 return result
