@@ -114,8 +114,17 @@ committing or discarding unrelated caller work. Maintenance marks the retained
 graph once and inspects at most 128 artifact-directory entries per sweep, retaining
 a scan cursor. It removes only unindexed hash files and abandoned atomic-writer
 temporary files. Missing retained resources or uncertain presentation recovery
-block cleanup. A complete graph walk remains part of periodic GC; this is not a
-claim that all GC work fits a fixed time budget. The expensive immutable-resource
+block cleanup. Background root admission now cooperatively checks a 20 ms deadline,
+a 50,000-field work limit, and a 256 Ki-character limit per durable JSON record.
+If either initial or final root proof exceeds those limits, the entire collection
+is deferred: indexed candidates and unindexed files are retained, with a
+`root-budget-exhausted` status and diagnostic counter. Live and durable root costs
+are recorded separately. This protects responsiveness; it is not incremental GC.
+Large mutable graphs can postpone reclamation until a later smaller proof or
+explicit maintenance. JSON decoding, individual database operations and custom
+mapping access are indivisible, so the deadline is cooperative, not a strict
+wall-clock ceiling. Explicit/offline collection keeps its complete proof.
+The expensive immutable-resource
 walk runs without the application lock or a SQLite writer transaction. The
 collector reacquires those boundaries and rechecks the complete root set and
 all source-index bindings before pruning. Any change, missing body, uncertainty

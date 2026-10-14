@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.136",
+      "title": "Keep initial chat reads and background cleanup responsive",
+      "changes": [
+        "Idle chats wait for their initial transcript read before background work reconstruction, avoiding an immediately stale duplicate read. Active workers and explicitly requested work remain observable, and cancelled reads cannot leave reconstruction deferred.",
+        "Background cleanup uses a cooperative work budget for its complete safety checks. If those checks cannot finish within the budget, all files are retained and cleanup reports that it was deferred. Large retained reference graphs may therefore defer automatic storage reclamation; this is a background work limit rather than incremental garbage collection.",
+        "Performance diagnostics separate transcript loading, activity scanning, event associations, work reconstruction and cleanup root checks without recording conversation content. Post-release composer checks follow the current accessible controls."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.135",
       "title": "Keep background history work out of everyday chat navigation",
       "changes": [

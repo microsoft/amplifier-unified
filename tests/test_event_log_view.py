@@ -1259,3 +1259,69 @@ def test_completed_call_index_preserves_exact_matching_and_bounds_candidates():
     appended = dict(rows[0], id='later', endedAt=100000)
     index.add(appended)
     assert list(index.candidates(appended)) == [appended]
+
+
+def test_projection_diagnostics_count_requested_descendants_without_contents(source):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'delegate-a', 'tool_name': 'delegate'})
+    append(path, 'delegate:agent_spawned', {'tool_call_id': 'delegate-a', 'sub_session_id': 'child-a'})
+    child_path = event_path(session, 'child-a')
+    append(child_path, 'tool:pre', {'session_id': 'child-a', 'tool_call_id': 'delegate-b', 'tool_name': 'delegate'})
+    append(child_path, 'delegate:agent_spawned', {'session_id': 'child-a', 'tool_call_id': 'delegate-b', 'sub_session_id': 'child-b'})
+    append(event_path(session, 'child-b'), 'tool:post',
+           {'session_id': 'child-b', 'tool_call_id': 'leaf', 'result': 'private diagnostic sentinel'})
+    session['workers'] = [{'id': 'child-a', 'sessionId': 'child-a'}]
+    expected = EventLogView(None).read(copy.deepcopy(session))
+    diagnostics = PerformanceDiagnostics()
+    view = EventLogView(SimpleNamespace(performance_diagnostics=diagnostics))
+    assert view.read(session) == expected
+    snapshot = diagnostics.snapshot()
+    assert {key: snapshot['counters']['events.project.' + key] for key in ('indexes', 'paths', 'workers', 'nodes')} == {
+        'indexes': 3, 'paths': 4, 'workers': 2, 'nodes': 3}
+    for stage in ('scan', 'bindings', 'rows', 'associate', 'join', 'plan', 'usage', 'retain'):
+        assert snapshot['operations']['events.' + stage]['count'] == 1
+    encoded = json.dumps(snapshot)
+    assert str(path) not in encoded and 'private diagnostic sentinel' not in encoded
+
+
+async def test_projection_rebuild_diagnostics_distinguish_input_source_and_root(source):
+    import asyncio
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'})
+    diagnostics = PerformanceDiagnostics()
+    service = SimpleNamespace(_session=lambda _: session, lock=asyncio.Lock(), closed=False,
+                              _publish=lambda **kwargs: None, performance_diagnostics=diagnostics)
+    view = EventLogView(service)
+    await view.refresh(session['id'])
+    await view.refresh(session['id'])
+    append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'complete'})
+    await view.refresh(session['id'])
+    session['messages'].append({'id': 'next', 'role': 'user', 'createdAt': 11})
+    await view.refresh(session['id'])
+    session['runtimeSessionId'] = 'changed-root'
+    await view.refresh(session['id'])
+    counters = diagnostics.snapshot()['counters']
+    assert {key: counters['events.rebuild.' + key] for key in ('cold', 'input', 'source', 'root')} == {
+        'cold': 1, 'input': 1, 'source': 1, 'root': 1}
+    assert counters['events.projection.reused'] == 1
+
+
+def test_projection_stage_failure_closes_measurement_and_preserves_retry(source, monkeypatch):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    session, path = source
+    append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'saved'})
+    diagnostics = PerformanceDiagnostics()
+    view = EventLogView(SimpleNamespace(performance_diagnostics=diagnostics))
+    def failed_rows(*args, **kwargs):
+        raise ValueError('private diagnostic sentinel')
+    with monkeypatch.context() as patch:
+        patch.setattr(EventIndex, 'rows', failed_rows)
+        with pytest.raises(ValueError, match='sentinel'):
+            view.read(session)
+    assert not view.indexes
+    assert diagnostics.snapshot()['operations']['events.rows']['count'] == 1
+    assert view.read(session)['nodes'][0]['output'] == 'saved'
+    assert diagnostics.snapshot()['operations']['events.rows']['count'] == 2
+    assert 'private diagnostic sentinel' not in json.dumps(diagnostics.snapshot())
