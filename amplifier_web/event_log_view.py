@@ -177,6 +177,7 @@ class EventIndex:
         self.reset()
 
     def reset(self):
+        self.read_bytes = 0
         self._checkpoint_signature = None
         self.offset = 0
         self.file_id = None
