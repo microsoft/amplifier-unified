@@ -110,6 +110,7 @@ def setup_routes(app, streams):
             "session.warm": "id", "session.naming": "id",
             "assignment.read": "sessionId", "assignment.start": "sessionId",
             "assignment.set": "sessionId", "assignment.stop": "sessionId", "assignment.detach": "sessionId",
+            "coordination.watch": "sessionId", "coordination.watch.read": "sessionId", "coordination.watch.cancel": "sessionId",
         }.get(action)
         if key is None:
             raise AppError("This action is not a session command.")

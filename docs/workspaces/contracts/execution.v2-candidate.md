@@ -248,3 +248,45 @@ pending assignment input without substituting a whole-conversation interruption.
 When a token or cost limit is enabled, new queue/steer requests to independent
 peers are refused with this limitation; commissioned helpers share the budget.
 Informational notices remain available and do not start independent work.
+
+## Reply revisions and bounded observations — 2026-10-14
+
+A delivered request remains addressable by its original recipient in a later
+current root generation, within its unchanged workspace, task and interruption
+boundary. Later declarations require the observed response revision. Every
+accepted declaration has a monotonic revision and a stable operation identity;
+exact retries return the same receipt and conflicting payloads are rejected.
+Earlier declarations remain in existing command receipts. A question or deferral
+is a report, not request completion. At most 32 declarations and 32 automatic
+outcome notifications belong to one request; reaching the bound is visible and
+requires a new intentional request rather than silent replay or unbounded loops.
+
+Typed negative reports and questions can notify the requester immediately as
+unqualified agent claims. Exact successful root terminal evidence can qualify a
+result separately; unrelated background jobs do not erase that evidence. Only a
+qualified successful result satisfies the dependency. Each report revision
+produces at most one automatic continuation, while rejection or unknown terminal
+qualification remains inspectable. Every continuation retains the requester's
+saved task and Stop boundary. A newer meaningful report supersedes an
+unsubmitted earlier success notification, preserving both receipts and preventing
+stale dependency success. Requests made under older single-notification
+subscriptions keep that behavior until explicitly replaced by a new request.
+
+One-shot status/idle watches are explicit commands with an expiry and cancellation.
+They observe only the named root's public lifecycle, do not load its history or
+start it, and notify through the same bounded guarded inbox. Expiry is a visible
+outcome, not approval or denial. Restart preserves pending watch receipts and
+never replays a claimed notification. Idle means a root status boundary, not proof
+that external effects or all background work have finished.
+
+A destination retains at most 64 queued inputs and reserved reply slots, with
+16 queued inputs from one sender and 32 from one assignment. Admission rotates
+between pending senders using retained admission order. New queued instructions
+expire after a caller-selected duration (default and maximum one day);
+expiration remains an inspectable failed dependency without executing the input.
+Accepted substantive inputs are never silently coalesced or dropped. Informational
+notices still do not start execution; unsupported safe-boundary delivery remains
+an adapter limitation rather than cancellation and resend. Host-retained causal
+input lineage bounds a peer-driven chain to 16 hops regardless of new command IDs
+or wording. A new actual human input resets that bound; observations, peer text
+and model assertions of approval do not.

@@ -21,22 +21,30 @@ BUSY = {"working", "starting", "running", "busy", "stopping", "ready"}
 PROTOCOL = 2
 MAX_PENDING_INPUTS = 64
 MAX_PAIR_MESSAGES_PER_MINUTE = 32
+MAX_SENDER_INPUTS = 16
+MAX_ASSIGNMENT_INPUTS = 32
+MAX_RESPONSE_REVISIONS = 32
+MAX_CAUSAL_HOPS = 16
+DEFAULT_QUEUE_SECONDS = 86400
+REPORT_OUTCOMES = {'failed', 'deferred', 'declined', 'question', 'conflict', 'cancelled'}
 
 
 def response_ready(response):
     """A verified negative report can wake a waiter without satisfying its work."""
-    return (response.get("status") == "sealed" and response.get("kind") != "ack"
-            and (response.get("qualified") is True
-                 or response.get("outcome") in {"failed", "deferred", "declined"}))
+    return (response.get("kind") != "ack" and (
+        response.get("status") in {"rejected", "unknown"}
+        or response.get("status") in {"staged", "sealed"} and (
+            response.get("qualified") is True or response.get("outcome") in REPORT_OUTCOMES
+            or response.get('status') == 'sealed' and response.get('kind') == 'result')))
+
 
 
 def continuation_outcome(request):
     response = request.get('response') or {}
-    if response_ready(response):
-        return response
     terminal = request.get('terminalOutcome') or {}
-    if terminal.get('status') == 'observed' and terminal.get('outcome') in {'failed', 'unknown'}:
-        return terminal
+    candidates = ([response] if response_ready(response) else []) + (
+        [terminal] if terminal.get('status') == 'observed' else [])
+    return max(candidates, key=lambda row: row.get('outcomeRevision', 0)) if candidates else None
 
 
 def outcome_sender(request):
@@ -53,11 +61,14 @@ def definitions(schema, string):
                "text": {**string(16000), "minLength": 1},
                "mode": {"enum": ["notify", "queue", "steer"]},
                "replyToRequestId": string(200), "references": references,
+               "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
                "scheduleRepair": schema({"sourceMessageId": string(200),
                    "schedules": {"type": "array", "minItems": 1, "maxItems": 16,
                        "items": schema({"id": string(200), "expectedRevision": {"type": "integer", "minimum": 0}}, ["id", "expectedRevision"])}},
                    ["sourceMessageId", "schedules"])}
+    from .coordination_watches import definitions as watch_definitions
     return {
+        **watch_definitions(schema, string),
         "coordination.grant": ("Retired. Historical grants remain readable; fresh collaboration uses authenticated root generations.", schema({
             **sid, "participants": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": True, "items": string(200)},
             "sourceMessageId": string(200),
@@ -82,13 +93,14 @@ def definitions(schema, string):
             "textLimit": {"type": "integer", "minimum": 1, "maximum": 4000},
         }, ["sessionId"])),
         "coordination.result": ("Inspect admission and exact qualified final result links for one request. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200)}, ["requestId"])),
-        "coordination.reply": ("Declare result, ack, defer or decline for one delivered request during your actual generation. The host seals only at matching successful root termination; an agent claim is not independently checked correctness.", schema({
-            "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline"]},
-            "outcome": {"enum": ["success", "failed", "deferred", "declined"]},
+        "coordination.reply": ("Record a typed reply to your exact delivered request. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. At most 32 revisions per request.", schema({
+            "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline", "question", "conflict"]},
+            "expectedResponseRevision": {"type": "integer", "minimum": 0, "maximum": MAX_RESPONSE_REVISIONS},
+            "outcome": {"enum": ["success", "failed", "deferred", "declined", "question", "conflict", "cancelled"]},
             "text": {**string(4000), "minLength": 1}, "references": references,
             "messageIds": {"type": "array", "maxItems": 16, "items": string(200)},
         }, ["requestId", "kind", "outcome", "text"])),
-        "coordination.subscribe": ("Save one request-specific wait and stable continuation. Sealed success, failure, deferral or decline may wake once through guarded input; only qualified success satisfies a dependency. Cursor reads confer no authority.", schema({
+        "coordination.subscribe": ("Subscribe to meaningful revisions of one exact request, at most 32 automatic notifications. Questions, deferrals and negative outcomes never satisfy a dependency; only qualified success does. Every continuation rechecks the saved task/Stop boundary. Cursor reads confer no authority.", schema({
             **sid, "requestId": string(200), "grantId": string(200),
         }, ["sessionId", "requestId"])),
     }
@@ -99,6 +111,7 @@ class Collaboration:
         self.service = service
         self.draining = set()
         self.creating = set()
+        self.expiry_handles = {}
         # Private preparation configuration, never returned by receipt APIs.
         # Native conversation history and existing command receipts stay authoritative.
         service.db.execute('''CREATE TABLE IF NOT EXISTS collaboration_preparations(
@@ -115,6 +128,16 @@ class Collaboration:
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.target.sessionId'))""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_sender ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.senderSessionId'))""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_admission_order ON commands(
+            json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.admissionOrder'))
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_pending_outcomes ON commands(
+            json_extract(receipt,'$.subscription.status'), json_extract(receipt,'$.senderSessionId'))
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch')
+            AND (coalesce(json_extract(receipt,'$.outcomeRevision'),0)>coalesce(json_extract(receipt,'$.subscription.lastClaimedRevision'),0)
+                OR json_extract(receipt,'$.subscription.status')='waiting')""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_replies ON commands(
+            json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.result.requestId'))""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_pair_window ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.senderSessionId'),
             json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.acceptedAt'))""")
@@ -138,7 +161,10 @@ class Collaboration:
             value = json.loads(encoded)
             value["response"].update(status="unknown", qualified=False,
                 detail="Host restarted before terminal proof; declaration retained, no replay.")
-            if value.get("subscription"):
+            value['response'].pop('outcomeRevision', None)
+            self.record_outcome(value, value['response'])
+            self.save_response(value)
+            if value.get("subscription") and value['subscription'].get('notificationVersion') != 2:
                 value["subscription"].update(status="needs_attention", detail=value["response"]["detail"])
             self.save(identity, value)
         # Suppress old automatic work before start() or runtime events can drain
@@ -160,6 +186,8 @@ class Collaboration:
                 changed = True
             if changed:
                 self.save(identity, value)
+        from .coordination_watches import Watches
+        self.watches = Watches(self)
         service.db.commit()
 
     def error(self, text, status=403):
@@ -190,8 +218,8 @@ class Collaboration:
             self.error("The collaboration grant's workspace changed.")
         return value
 
-    def authorize(self, source, args):
-        target = self.service._session(args["sessionId"])
+    def authorize(self, source, args, *, hydrate=True):
+        target = self.service._session(args["sessionId"], hydrate=hydrate)
         if target["workspace"] != source["workspace"]:
             self.error("The target is outside this caller's workspace.")
         if target.get("sessionKind", "root") != "root":
@@ -231,9 +259,10 @@ class Collaboration:
                                 (identity, digest, json.dumps(receipt)))
         self.refresh_reference(receipt)
 
-    def require_inbox_slot(self, sid):
-        # A saved wait reserves one slot for its eventual outcome. Converting
-        # that wait into a queued continuation does not increase this total.
+    def require_inbox_slot(self, sid, sender=None, assignment=None):
+        # A saved wait reserves one slot for its eventual outcome. Interim
+        # notifications retain a slot for the next revision as well as their
+        # queued input, and both count against this bound.
         pending = self.service.db.execute("""SELECT count(*) FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.target.sessionId')=?
@@ -241,15 +270,49 @@ class Collaboration:
         session = self.service._session(sid)
         task = session.get('task') or self.service.coordination.task(sid)
         waiting = self.service.db.execute("""SELECT count(*) FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch')
             AND json_extract(receipt,'$.senderSessionId')=?
-            AND json_extract(receipt,'$.subscription.status') IN ('waiting','reserved')
+            AND (json_extract(receipt,'$.subscription.status') IN ('waiting','reserved','backpressured')
+                OR json_extract(receipt,'$.subscription.open')=1)
             AND json_extract(receipt,'$.subscription.interruptionRevision')=?
             AND json_extract(receipt,'$.subscription.taskId') IS ?
             AND json_extract(receipt,'$.subscription.taskRevision') IS ?""",
             (sid, session.get('interruptionRevision', 0), task.get('id'), task.get('revision'))).fetchone()[0]
         if pending + waiting >= MAX_PENDING_INPUTS:
             self.error('This conversation inbox is full, including reserved replies. Wait for pending work to settle; no input was added.', 429)
+        for key, value, limit, label in [('senderSessionId', sender, MAX_SENDER_INPUTS, 'sender'),
+                                        ('assignmentId', assignment, MAX_ASSIGNMENT_INPUTS, 'assignment')]:
+            if not value:
+                continue
+            count = self.service.db.execute(f"""SELECT count(*) FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                AND json_extract(receipt,'$.target.sessionId')=?
+                AND json_extract(receipt,'$.{key}')=?
+                AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""", (sid, value)).fetchone()[0]
+            if count >= limit:
+                self.error(f'This {label} has {limit} pending inputs in the conversation inbox. Wait for admission before adding more work.', 429)
+
+    def causal_depth(self, source, lineage, origin):
+        if origin in {'ui', 'user'}:
+            return 0
+        inputs = set(lineage.get('sourceInputIds', []))
+        # Only retained host provenance can reset a causal chain. Equal prose,
+        # a role=user native row, or a model's claimed human approval cannot.
+        if any(row.get('inputId') in inputs and row.get('inputOrigin') in {'ui', 'user'}
+               for row in source.get('messages', [])):
+            return 0
+        depth = 0
+        for identity in inputs:
+            row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
+            if row:
+                receipt = json.loads(row[0])
+                if receipt.get('commandAction') == 'coordination.send' and receipt.get('target', {}).get('sessionId') == source['id']:
+                    depth = max(depth, receipt.get('causalDepth', 0))
+        return depth + 1
+
+    def require_causal_depth(self, depth):
+        if depth > MAX_CAUSAL_HOPS:
+            self.error('This causal peer-input chain reached 16 hops. Inspect the retained work and wait for explicit human direction; changing IDs or wording does not reset the bound.', 429)
 
     def require_message_rate(self, source, target):
         count = self.service.db.execute("""SELECT count(*) FROM commands
@@ -263,7 +326,9 @@ class Collaboration:
 
     def refresh_reference(self, receipt):
         """Only affected roots retain a tiny reference projection, not bodies."""
-        if receipt.get("commandAction") == "coordination.grant":
+        if receipt.get('commandAction') == 'coordination.watch':
+            sids = [receipt.get('senderSessionId')]
+        elif receipt.get("commandAction") == "coordination.grant":
             sids = receipt["result"]["participants"]
         else:
             sids = [receipt.get("senderSessionId"), receipt.get("target", {}).get("sessionId")]
@@ -295,7 +360,10 @@ class Collaboration:
             WHERE json_extract(receipt,'$.commandAction')='coordination.grant.pending'
             AND EXISTS (SELECT 1 FROM json_each(json_extract(receipt,'$.result.participants')) WHERE value=?)
             ORDER BY rowid DESC LIMIT 32""", (sid,)).fetchall()]
-        return {"grants": [row for row in grants if sid in row["participants"]], "proposals": proposals,
+        watches = [json.loads(row[0]) for row in self.service.db.execute("""SELECT receipt FROM commands
+            WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
+            AND json_extract(receipt,'$.senderSessionId')=? ORDER BY rowid DESC LIMIT 16""", (sid,)).fetchall()]
+        return {"grants": [row for row in grants if sid in row["participants"]], "proposals": proposals, 'watches': watches,
                 "workspace": self.service._session(sid)["workspace"],
                 "requests": requests, "capturedAt": time.time(),
                 "continuation": {"supported": hasattr(self.service.runtime, "collaboration_input"),
@@ -355,6 +423,8 @@ class Collaboration:
         ids = {receipt.get('senderSessionId'), receipt.get('sourceSessionId'),
                receipt.get('sessionId'), (receipt.get('target') or {}).get('sessionId')}
         ids.discard(None)
+        if receipt.get('commandAction') == 'coordination.watch':
+            ids = {receipt['senderSessionId']}
         self.service._publish_changes(sessions=ids)
 
     async def decide(self, args, origin):
@@ -369,16 +439,64 @@ class Collaboration:
         return {'requestId': request_id, 'taskId': task.get('id'), 'taskRevision': task.get('revision'),
                 'interruptionRevision': source.get('interruptionRevision', 0), 'status': status,
                 'continuationId': str(uuid.uuid5(uuid.NAMESPACE_URL, 'collaboration-wait:' + source['id'] + ':' + request_id)),
+                'notificationVersion': 2, 'lastClaimedRevision': 0, 'open': True,
                 'supported': hasattr(self.service.runtime, 'collaboration_input')}
+
+    def record_outcome(self, request, outcome):
+        if outcome.get('outcomeRevision') is None:
+            request['outcomeRevision'] = request.get('outcomeRevision', 0) + 1
+            outcome['outcomeRevision'] = request['outcomeRevision']
+        return outcome['outcomeRevision']
+
+    def save_response(self, request):
+        response = request.get('response') or {}
+        operation = response.get('operationId')
+        if operation:
+            row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (operation,)).fetchone()
+            if row:
+                receipt = json.loads(row[0])
+                receipt['result'] = copy.deepcopy(response)
+                self.save(operation, receipt)
+
+    def expire_later(self, receipt):
+        identity, deadline = receipt.get('requestId'), receipt.get('expiresAt')
+        if not identity or not deadline or identity in self.expiry_handles:
+            return
+        def wake():
+            self.expiry_handles.pop(identity, None)
+            if not self.service.closed:
+                self.service._task(self.expire(identity))
+        self.expiry_handles[identity] = asyncio.get_running_loop().call_later(max(0, deadline-time.time()), wake)
+
+    def cancel_expiry(self, identity):
+        handle = self.expiry_handles.pop(identity, None)
+        if handle:
+            handle.cancel()
+
+    async def expire(self, identity):
+        async with self.service.lock:
+            receipt = self.receipt(identity)
+            if receipt.get('delivery') != 'queued' or receipt.get('expiresAt', float('inf')) > time.time():
+                return
+            receipt.update(delivery='expired', detail='The queued request expired before runtime admission; its input was not executed.')
+            self.observe_admission(receipt)
+            self.publish_receipt(receipt)
+
+    def close(self):
+        self.watches.close()
+        for handle in self.expiry_handles.values():
+            handle.cancel()
+        self.expiry_handles.clear()
 
     def observe_admission(self, receipt, *, notify=True):
         phase = receipt.get('delivery')
-        if phase in {'unknown', 'not_sent', 'suppressed'}:
+        if phase in {'unknown', 'not_sent', 'suppressed', 'expired'}:
             detail = (receipt.get('admission') or {}).get('reason') or receipt.get('detail') or 'Inspect the retained admission receipt.'
             receipt['terminalOutcome'] = {'status': 'observed', 'kind': 'admission',
                 'outcome': 'unknown' if phase == 'unknown' else 'failed', 'qualified': False,
                 'requestId': receipt['requestId'], 'observedAt': time.time(),
                 'text': f'The host recorded input admission as {phase}. {detail}'}
+            self.record_outcome(receipt, receipt['terminalOutcome'])
         self.save(receipt['requestId'], receipt)
         if notify and receipt.get('subscription') and continuation_outcome(receipt):
             self.enqueue_continuation(receipt)
@@ -411,6 +529,8 @@ class Collaboration:
 
     def guard(self, receipt):
         try:
+            if receipt.get('delivery') == 'queued' and receipt.get('expiresAt', float('inf')) <= time.time():
+                return 'The queued request expired before runtime admission.'
             if receipt.get("protocol") != PROTOCOL:
                 return "Legacy coordination is read-only; automatic admission is suppressed."
             from .updates import work_paused
@@ -425,6 +545,12 @@ class Collaboration:
                 reason = self.creation_guard(creation)
                 if reason:
                     return reason
+            if receipt.get('dependencyRequestId'):
+                dependency = self.receipt(receipt['dependencyRequestId'])
+                if dependency.get('commandAction') == 'coordination.watch' and dependency.get('watch', {}).get('status') == 'cancelled':
+                    return 'The one-shot watch was cancelled.'
+                if receipt.get('dependencyOutcomeRevision') and not self.claim_matches(dependency, receipt):
+                    return 'This outcome notification was superseded or its qualification changed; inspect the current result.'
             target = self.authorize(source, {"sessionId": receipt["target"]["sessionId"]})
             reason = self.service.assignments.blocked(target)
             if reason:
@@ -467,8 +593,9 @@ class Collaboration:
             wait, response = request.get("subscription") or {}, request.get("response") or {}
             if (request.get("protocol") == PROTOCOL and request.get("senderSessionId") == sid
                     and outcome_sender(request) == receipt.get("senderSessionId")
-                    and wait.get("status") == "claimed" and wait.get("continuationId") == receipt.get("inputId") == receipt.get("requestId")
-                    and continuation_outcome(request) is not None
+                    and receipt.get('inputId') == receipt.get('requestId')
+                    and self.claim_matches(request, receipt)
+                    and (receipt.get('outcomeSnapshot') is not None or continuation_outcome(request) is not None)
                     and any(m.get("id") == receipt.get("messageId") and m.get("inputId") == receipt["inputId"]
                             and m.get("inputOrigin") == "peer"
                             for m in self.service._session(sid).get("messages", []))):
@@ -485,40 +612,87 @@ class Collaboration:
             return {"ready": False}
         return {"ready": self.pending_continuation(sid) is not None}
 
+    def claim_matches(self, request, receipt):
+        wait = request.get('subscription') or {}
+        revision = receipt.get('dependencyOutcomeRevision')
+        if wait.get('notificationVersion') == 2 and revision:
+            identity = self.continuation_identity(wait, revision)
+            snapshot = receipt.get('outcomeSnapshot') or {}
+            # A staged report may later seal, but changed qualification of the
+            # very same outcome cannot retain an earlier success claim.
+            current = next((row for row in (request.get('response') or {}, request.get('terminalOutcome') or {})
+                            if row.get('outcomeRevision') == revision), None)
+            if current is not None and current.get('qualified') is not snapshot.get('qualified'):
+                return False
+            if receipt.get('dependencySatisfied') and request.get('outcomeRevision', revision) > revision:
+                return False  # A later report superseded the old successful dependency.
+            return revision <= wait.get('lastClaimedRevision', 0) and identity == receipt.get('requestId')
+        return wait.get('status') == 'claimed' and wait.get('continuationId') == receipt.get('requestId')
+
+    def fair_rows(self, sid):
+        rows = self.service.db.execute("""SELECT id,receipt FROM commands
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.target.sessionId')=?
+            AND json_extract(receipt,'$.delivery')='queued' ORDER BY rowid LIMIT 64""", (sid,)).fetchall()
+        groups = {}
+        for row in rows:
+            groups.setdefault(json.loads(row[1]).get('senderSessionId'), []).append(row)
+        last = self.service.db.execute("""SELECT json_extract(receipt,'$.senderSessionId') FROM commands
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.target.sessionId')=?
+            AND json_extract(receipt,'$.admissionOrder') IS NOT NULL
+            ORDER BY json_extract(receipt,'$.admissionOrder') DESC LIMIT 1""", (sid,)).fetchone()
+        senders = list(groups)
+        if last and last[0] in senders:
+            offset = senders.index(last[0])+1
+            senders = senders[offset:]+senders[:offset]
+        result = []
+        while any(groups.values()):
+            for sender in senders:
+                if groups[sender]:
+                    result.append(groups[sender].pop(0))
+        return result
+
+    def resume_outcomes(self, sid):
+        for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch')
+            AND json_extract(receipt,'$.senderSessionId')=?
+            AND json_extract(receipt,'$.subscription.status')='backpressured' LIMIT 64""", (sid,)).fetchall():
+            self.enqueue_continuation(json.loads(encoded))
+
     async def drain(self, sid):
         if sid in self.draining:
             return
         self.draining.add(sid)
         try:
-            rows = self.service.db.execute("""SELECT id,receipt FROM commands
-                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
-                AND json_extract(receipt,'$.target.sessionId')=?
-                AND json_extract(receipt,'$.delivery')='queued' ORDER BY rowid LIMIT 32""", (sid,)).fetchall()
-            # A valid saved dependency must not sit behind unrelated or stale
-            # queues (including more than one drain page of suppressed input).
-            continuation = self.pending_continuation(sid)
-            if continuation:
-                identity = continuation["requestId"]
-                rows = [(identity, None), *[row for row in rows if row[0] != identity]]
+            self.resume_outcomes(sid)
+            rows = self.fair_rows(sid)
             for identity, encoded in rows:
                 async with self.service.lock:
                     receipt = self.receipt(identity)
                     if receipt.get("delivery") != "queued":
+                        self.cancel_expiry(identity)
                         continue
                     target = self.service._session(sid)
                     if target.get("status") in BUSY:
                         break
                     reason = self.guard(receipt)
                     if reason:
-                        receipt.update(delivery="suppressed", detail=reason)
+                        receipt.update(delivery='expired' if receipt.get('expiresAt', float('inf')) <= time.time() else 'suppressed', detail=reason)
                         self.observe_admission(receipt)
                         self.publish_receipt(receipt)
+                        self.cancel_expiry(identity)
                         continue
                     # Durable claim precedes any runtime effect. Unknown never
                     # returns to queued, including cancellation and restart.
+                    receipt['admissionOrder'] = self.service.db.execute("""SELECT coalesce(max(json_extract(receipt,'$.admissionOrder')),0)+1
+                        FROM commands WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                        AND json_extract(receipt,'$.target.sessionId')=?""", (sid,)).fetchone()[0]
+                    receipt['admittedAt'] = time.time()
                     receipt["delivery"] = "submitting"
                     self.save(identity, receipt)
                     self.service.db.commit()
+                    self.cancel_expiry(identity)
                     snapshot = copy.deepcopy(target)
                 arguments = {"inputId": identity,
                              "taskId": receipt.get("taskId"), "taskRevision": receipt.get("taskRevision")}
@@ -602,7 +776,7 @@ class Collaboration:
 
     def observe(self, session, kind, payload):
         """Host event linkage, never prose classification or semantic success."""
-        changed = set()
+        changed = self.watches.observe(session, kind, payload)
         if kind == "runtime.collaboration_checkpoint":
             active = session.get("collaborationGeneration") or {}
             if (payload.get("sessionId") == session["id"] and payload.get("rootSessionId") == session["id"]
@@ -656,8 +830,9 @@ class Collaboration:
             response = receipt["response"]
             if response["generationId"] != payload.get("generation_id"):
                 continue
-            valid = (payload.get("event") == "generation.finished" and identity in payload.get("input_ids", [])
-                     and not payload.get("active_job_ids") and bool(payload.get("text", "").strip())
+            valid = (payload.get("event") == "generation.finished"
+                     and bool(set(response.get('admittedInputIds') or [identity]) & set(payload.get('input_ids', [])))
+                     and bool(payload.get("text", "").strip())
                      and payload.get("disposition") == "manager_turn_finished"
                      and receipt.get("delivery") in {"accepted", "applied", "submitting"})
             from .service import AppError
@@ -687,9 +862,14 @@ class Collaboration:
                     independentArtifactVerification=False)
             else:
                 response.update(status="rejected", qualified=False, detail="Terminal evidence or exact linkage failed.")
+            if response.get('status') == 'rejected':
+                response.pop('outcomeRevision', None)
+            if response_ready(response) and payload.get('event') != 'generation.failed':
+                self.record_outcome(receipt, response)
+            self.save_response(receipt)
             self.save(identity, receipt)
             changed.update({receipt["senderSessionId"], session["id"]})
-            if response_ready(response) and receipt.get("subscription"):
+            if response_ready(response) and payload.get('event') != 'generation.failed' and receipt.get("subscription"):
                 self.enqueue_continuation(receipt)
         if payload.get('event') == 'generation.failed':
             # A host-observed failure is useful even if the model never managed
@@ -708,67 +888,144 @@ class Collaboration:
                     'qualified': False, 'requestId': identity, 'generationId': active['id'],
                     'recipientSessionId': session['id'], 'observedAt': time.time(),
                     'text': 'The recipient runtime reported a failed generation for this delivered request. Inspect its retained history before deciding whether to retry.'}
+                self.record_outcome(receipt, receipt['terminalOutcome'])
                 self.save(identity, receipt)
                 changed.update({receipt['senderSessionId'], session['id']})
                 if receipt.get('subscription'):
                     self.enqueue_continuation(receipt)
         return changed
 
+    def committed(self, identity):
+        # Only the failure path needs a second connection: reading our own
+        # transaction cannot establish whether a lost acknowledgement committed.
+        import sqlite3
+        path = self.service.db.execute('PRAGMA database_list').fetchone()[2]
+        with sqlite3.connect(path) as database:
+            return database.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone() is not None
+
+    def continuation_identity(self, wait, revision):
+        return wait['continuationId'] if revision == 1 else str(uuid.uuid5(
+            uuid.NAMESPACE_URL, wait['continuationId'] + ':' + str(revision)))
+
     def enqueue_continuation(self, request):
-        """Turn one sealed wait into one durable queue claim, using existing drain."""
-        wait = request["subscription"]
-        if request.get("protocol") != PROTOCOL or wait.get("status") != "waiting":
+        """Commit at most one guarded input for a meaningful outcome revision."""
+        wait = request['subscription']
+        versioned = wait.get('notificationVersion') == 2
+        if request.get('protocol') != PROTOCOL or wait.get('status') not in (
+                {'waiting', 'claimed', 'backpressured'} if versioned else {'waiting'}):
             return
-        identity = wait["continuationId"]
-        if self.service.db.execute("SELECT 1 FROM commands WHERE id=?", (identity,)).fetchone():
-            return
-        sender = self.service._session(request["senderSessionId"])
-        if self.service.assignments.blocked(sender, request.get('assignmentId')):
-            wait.update(status='suppressed', detail='The assignment was stopped; late evidence remains inspectable.')
-            self.save(request['requestId'], request)
-            self.service.db.commit()
-            return
-        sender["historyManaged"] = False
         response = continuation_outcome(request)
         if response is None:
             return
+        revision = self.record_outcome(request, response)
+        if versioned and revision <= wait.get('lastClaimedRevision', 0):
+            return
+        if revision > MAX_RESPONSE_REVISIONS:
+            wait.update(status='limit_reached', open=False, detail='Automatic outcome notification limit reached; inspect the retained result.')
+            self.save(request['requestId'], request)
+            return
+        identity = self.continuation_identity(wait, revision) if versioned else wait['continuationId']
+        if self.service.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
+            return
+        sender = self.service._session(request['senderSessionId'])
+        if self.service.assignments.blocked(sender, request.get('assignmentId')):
+            wait.update(status='suppressed', open=False, detail='The assignment was stopped; late evidence remains inspectable.')
+            self.save(request['requestId'], request)
+            self.service.db.commit()
+            return
         producer = outcome_sender(request)
-        envelope = {"senderSessionId": producer, "recipientSessionId": sender["id"],
-                    "requestId": identity, "inputId": identity, "replyToRequestId": request["requestId"],
-                    "mode": "queue", "purpose": "Resume the saved request-specific wait",
-                    "references": ([response['terminalMessageId']] if response.get('terminalMessageId') else []) + response.get('references', [])[:15]}
-        if response.get("qualified"):
-            text = "A recipient declared a successful result and its root generation terminated. Independently check the referenced artifact before using it.\n"
-        elif request.get('commandAction') == 'coordination.create':
-            text = 'The host reported a preparation outcome for your commissioned task. This does not authorize replaying uncertain effects.\n'
-        elif response.get('status') == 'observed':
-            text = f"The host observed {response['outcome']} for the saved request. This does not satisfy the dependency or authorize a retry.\n"
-        else:
-            text = (f"A recipient reported {response['outcome']} for the saved request. "
-                    "This does not satisfy the dependency or authorize a retry. Review the report and decide how to proceed within the original task.\n")
-        text += response["text"]
-        message = self.service._message(sender, "user", text, "peer", inputId=identity, inputOrigin="peer",
-                                        peerEnvelope=envelope)
-        receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity, "inputId": identity,
-                   "messageId": message["id"], "senderSessionId": producer,
-                   "target": {"sessionId": sender["id"]}, "protocol": PROTOCOL, "workspace": request["workspace"],
-                   "mode": "queue", "delivery": "queued", "interruptionRevision": wait["interruptionRevision"],
-                   "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"],
-                   "dependencySatisfied": response.get("qualified") is True, "continuationReason": response["outcome"],
-                   "origin": "system", "displayBinding": fingerprint([envelope, text])}
-        receipt['assignmentId'] = request.get('assignmentId')
-        wait["status"] = "claimed"
-        self.insert(identity, fingerprint(["continuation", request["requestId"], wait]), receipt)
-        self.save(request["requestId"], request)
-        self.service._publish_changes(sessions={sender['id'], producer})  # Payload and claim commit together.
-        self.service._task(self.drain(sender["id"]))
+        depth = max(request.get('causalDepth', 0), response.get('causalDepth', 0))+1
+        if depth > MAX_CAUSAL_HOPS:
+            wait.update(status='limit_reached', open=False, detail='The causal peer-input chain reached 16 hops; its report remains inspectable.')
+            self.save(request['requestId'], request)
+            self.service.db.commit()
+            return
+        # A report remains durable even if its independent notification cannot
+        # commit. The payload and claim below are one transaction.
+        self.save(request['requestId'], request)
+        self.service.db.commit()
+        prior_wait = copy.deepcopy(wait)
+        prior_messages = list(sender.get('messages', []))
+        prior_history = sender.get('historyManaged')
+        try:
+            if versioned:
+                from .service import AppError
+                # Temporarily release this wait's reserved slot before exchanging it
+                # for a queued notification. Preserve a slot for further interim reports.
+                wait['open'] = response.get('outcome') in {'deferred', 'question', 'conflict'}
+                wait['status'] = 'claiming'
+                self.save(request['requestId'], request)
+                try:
+                    self.require_inbox_slot(sender['id'], producer, request.get('assignmentId'))
+                except AppError as exc:
+                    wait.update(status='backpressured', open=True, detail=str(exc))
+                    self.save(request['requestId'], request)
+                    self.service.db.commit()
+                    return
+            sender['historyManaged'] = False
+            envelope = {"senderSessionId": producer, "recipientSessionId": sender["id"],
+                        "requestId": identity, "inputId": identity, "replyToRequestId": request["requestId"],
+                        "mode": "queue", "purpose": "Resume the saved request-specific wait",
+                        "references": ([response['terminalMessageId']] if response.get('terminalMessageId') else []) + response.get('references', [])[:15]}
+            if response.get("qualified"):
+                text = "A recipient declared a successful result and its root generation terminated. Independently check the referenced artifact before using it.\n"
+            elif request.get('commandAction') == 'coordination.create':
+                text = 'The host reported a preparation outcome for your commissioned task. This does not authorize replaying uncertain effects.\n'
+            elif response.get('status') == 'observed':
+                text = f"The host observed {response['outcome']} for the saved request. This does not satisfy the dependency or authorize a retry.\n"
+            else:
+                text = (f"A recipient reported {response['outcome']} for the saved request. "
+                        "This does not satisfy the dependency or authorize a retry. Review the report and decide how to proceed within the original task.\n")
+            if response.get('status') in {'rejected', 'unknown'}:
+                text = f"The request report has {response['status']} terminal evidence. This does not satisfy the dependency or authorize replay.\n"
+            text += response["text"]
+            message = self.service._message(sender, "user", text, "peer", inputId=identity, inputOrigin="peer",
+                                            peerEnvelope=envelope)
+            receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity, "inputId": identity,
+                       "messageId": message["id"], "senderSessionId": producer,
+                       "target": {"sessionId": sender["id"]}, "protocol": PROTOCOL, "workspace": request["workspace"],
+                       "mode": "queue", "delivery": "queued", "interruptionRevision": wait["interruptionRevision"],
+                       "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"],
+                       "dependencySatisfied": response.get("qualified") is True, "continuationReason": response.get('notificationOutcome') or response["outcome"],
+                       'dependencyOutcomeRevision': revision, 'outcomeSnapshot': {key: copy.deepcopy(response[key]) for key in ('outcomeRevision', 'responseRevision', 'operationId', 'status', 'outcome', 'qualified', 'text') if key in response},
+                       'expiresAt': time.time()+DEFAULT_QUEUE_SECONDS, 'causalDepth': depth,
+                       "origin": "system", "displayBinding": fingerprint([envelope, text])}
+            receipt['assignmentId'] = request.get('assignmentId')
+            wait.update(status='claimed', lastClaimedRevision=revision,
+                        open=versioned and response.get('outcome') in {'deferred', 'question', 'conflict'})
+            wait.pop('detail', None)
+            self.insert(identity, fingerprint(["continuation", request["requestId"], wait]), receipt)
+            self.save(request["requestId"], request)
+            self.service._publish_changes(sessions={sender['id'], producer})  # Payload and claim commit together.
+            self.expire_later(receipt)
+            self.service._task(self.drain(sender["id"]))
+        except BaseException:
+            if not self.committed(identity):
+                self.service.db.rollback()
+                sender['messages'] = prior_messages
+                if prior_history is None:
+                    sender.pop('historyManaged', None)
+                else:
+                    sender['historyManaged'] = prior_history
+                wait.clear()
+                wait.update(prior_wait)
+                self.refresh_reference(request)
+            else:
+                # Lost response after durable commit: the known queue still
+                # belongs to the service and must not wait for caller retry.
+                retained = self.receipt(identity)
+                self.expire_later(retained)
+                self.service._task(self.drain(sender['id']))
+            raise
 
     def start(self):
         """One recovery pass over known unsubmitted queues, not a scheduler."""
+        self.watches.start()
         for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'
-                AND json_extract(receipt,'$.subscription.status')='waiting'
-                AND json_extract(receipt,'$.terminalOutcome.status')='observed' ''').fetchall():
+                AND json_extract(receipt,'$.subscription.status') IN ('waiting','claimed','backpressured')
+                AND (coalesce(json_extract(receipt,'$.outcomeRevision'),0)>coalesce(json_extract(receipt,'$.subscription.lastClaimedRevision'),0)
+                    OR json_extract(receipt,'$.subscription.status')='waiting') ''').fetchall():
             self.enqueue_continuation(json.loads(encoded))
         for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.create'
@@ -780,6 +1037,11 @@ class Collaboration:
             AND json_extract(receipt,'$.delivery')='queued'""").fetchall()
         for (sid,) in targets:
             self.service._task(self.drain(sid))
+        for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                AND json_extract(receipt,'$.delivery')='queued'
+                AND json_extract(receipt,'$.expiresAt') IS NOT NULL""").fetchall():
+            self.expire_later(json.loads(encoded))
 
     async def route(self, action, args, origin, command_id, caller):
         """One gate for equivalent old/new host entry points."""
@@ -834,6 +1096,8 @@ class Collaboration:
         return None
 
     async def dispatch(self, action, args, origin, command_id, caller):
+        if action.startswith('coordination.watch'):
+            return await self.watches.dispatch(action, args, origin, command_id, caller)
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
         source = self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None
@@ -914,11 +1178,16 @@ class Collaboration:
                         and candidate.get('target', {}).get('sessionId') == sid):
                     initial = candidate
             results = []
-            response = (initial or receipt).get("response") or {}
+            report = initial or receipt
+            revisions = [json.loads(row[0])['result'] for row in self.service.db.execute("""SELECT receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.reply'
+                AND json_extract(receipt,'$.result.requestId')=? ORDER BY rowid DESC LIMIT 32""", (report['requestId'],)).fetchall()]
+            response = report.get("response") or {}
             if response.get("qualified") and response.get("status") == "sealed":
                 results.append({"messageId": response["terminalMessageId"], "sessionId": sid,
                                 "inputId": (initial or receipt)['requestId'], "declaration": response})
             return {"accepted": True, "result": {"receipt": receipt, "results": results,
+                'responseRevision': report.get('responseRevision', 1 if response else 0), 'revisions': revisions,
                 **({'initialRequest': initial} if initial is not None else {}),
                 "preparation": copy.deepcopy((target or {}).get("activity")),
                 "qualified": bool(results), "qualificationSupported": True,
@@ -964,27 +1233,42 @@ class Collaboration:
                 request["subscription"] = wait
                 self.save(args["requestId"], request)
                 receipt = {"accepted": wait["supported"], "commandAction": action, "result": wait}
-                if continuation_outcome(request) is not None:
-                    self.enqueue_continuation(request)
             elif action == "coordination.reply":
                 if origin != "agent":
                     self.error("Response declarations require the actual recipient agent generation.")
                 binding, active = self.active_binding(source)
                 request = self.receipt(args["requestId"])
-                if (request.get("commandAction") != "coordination.send" or request.get("target", {}).get("sessionId") != source["id"]
-                        or args["requestId"] not in active.get("inputIds", [])
-                        or args["requestId"] not in {row.get("inputId") for row in binding.get("_inputBindings", [])}
-                        or request.get("delivery") not in {"accepted", "applied", "submitting"}):
-                    self.error("Declare only the exact delivered request in your current root generation.")
-                if request.get("protocol") != PROTOCOL:
-                    self.error("Legacy requests cannot receive fresh response declarations.", 410)
-                if request.get("response"):
-                    self.error("This request already has a response declaration; retain its exact evidence.", 409)
-                response = {**copy.deepcopy(args), "generationId": active["id"], "recipientSessionId": source["id"],
-                            "executionDirectory": source.get("workingDirectory") or source["workspace"],
-                            "status": "staged", "qualified": False, "declaredAt": time.time()}
-                request["response"] = response
-                self.save(args["requestId"], request)
+                delivered = set(active.get('inputIds', [])) & {row.get('inputId') for row in binding.get('_inputBindings', [])}
+                if (request.get('commandAction') != 'coordination.send'
+                        or request.get('target', {}).get('sessionId') != source['id']
+                        or not delivered or request.get('delivery') not in {'accepted', 'applied', 'submitting'}):
+                    self.error('Declare only your exact delivered request from a current root generation.')
+                if request.get('protocol') != PROTOCOL:
+                    self.error('Legacy requests cannot receive fresh response declarations.', 410)
+                revision = request.get('responseRevision', 1 if request.get('response') else 0)
+                if args.get('expectedResponseRevision', 0) != revision:
+                    self.error('The response revision changed. Read the retained result and use its expectedResponseRevision.', 409)
+                if revision >= MAX_RESPONSE_REVISIONS:
+                    self.error('This request reached its 32 reply revisions. Start a new intentional request; retained reports were not replaced.', 429)
+                if request.get('response', {}).get('status') == 'staged':
+                    self.error('The previous report is awaiting terminal evidence. Inspect it before submitting another revision.', 409)
+                if args['requestId'] not in delivered:
+                    if request.get('delivery') not in {'accepted', 'applied'}:
+                        self.error('A later generation needs confirmed prior input admission.', 409)
+                    reason = self.guard(request)
+                    if reason:
+                        self.error('The original request boundary no longer permits a later reply: ' + reason, 409)
+                response = {**copy.deepcopy(args), 'generationId': active['id'], 'recipientSessionId': source['id'],
+                            'operationId': identity, 'responseRevision': revision+1,
+                            'causalDepth': self.causal_depth(source, lineage, origin),
+                            'admittedInputIds': sorted(delivered),
+                            'executionDirectory': source.get('workingDirectory') or source['workspace'],
+                            'status': 'staged', 'qualified': False, 'declaredAt': time.time()}
+                request['responseRevision'] = revision+1
+                request['response'] = response
+                if response_ready(response):
+                    self.record_outcome(request, response)
+                self.save(args['requestId'], request)
                 receipt = {"accepted": True, "commandAction": action, "result": response}
             elif action == "coordination.create":
                 # Creation is handled outside the service lock below.
@@ -1008,8 +1292,10 @@ class Collaboration:
                 if not args["text"].strip():
                     self.error("Enter a peer message.", 400)
                 self.require_message_rate(source['id'], target['id'])
+                depth = self.causal_depth(source, lineage, origin)
                 if mode != 'notify':
-                    self.require_inbox_slot(target['id'])
+                    self.require_causal_depth(depth)
+                    self.require_inbox_slot(target['id'], source['id'], source.get('assignmentId') or (source.get('collaboration') or {}).get('assignmentId'))
                 if args.get("replyToRequestId"):
                     previous = self.receipt(args["replyToRequestId"])
                     if (previous.get("commandAction") != "coordination.send" or previous["target"]["sessionId"] != source["id"]
@@ -1036,11 +1322,12 @@ class Collaboration:
                 receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity,
                     "inputId": identity, "messageId": message["id"], "senderSessionId": source["id"],
                     "target": {"sessionId": target["id"]}, "protocol": PROTOCOL, "workspace": source["workspace"], **lineage,
-                    "mode": mode, "delivery": "notified" if mode == "notify" else "queued",
+                    "mode": mode, 'causalDepth': depth, "delivery": "notified" if mode == "notify" else "queued",
                     "interruptionRevision": target.get("interruptionRevision", 0),
                     "taskId": task.get("id"), "taskRevision": task.get("revision"),
                     # Dispatcher provenance is host-owned. Never copy actor
                     # claims from args, message prose, or the peer envelope.
+                    **({'expiresAt': time.time()+args.get('expiresInSeconds', DEFAULT_QUEUE_SECONDS)} if mode != 'notify' else {}),
                     "origin": origin if origin in {"agent", "ui", "user"} else None,
                     "displayBinding": fingerprint([envelope, args["text"]])}
                 receipt['assignmentId'] = (self.service.assignments.current(source) or {}).get('id')
@@ -1055,7 +1342,7 @@ class Collaboration:
                         wait = operation.get('subscription')
                         if wait:
                             receipt['subscription'] = {**wait, 'requestId': identity, 'status': 'waiting'}
-                            operation['subscription'] = {**wait, 'requestId': identity, 'status': 'linked'}
+                            operation['subscription'] = {**wait, 'requestId': identity, 'status': 'linked', 'open': False}
                         operation.update(delivery='created', phase='input_committed', initialDelivery=receipt['delivery'],
                                          detail='Peer, initial request and return policy committed before admission.')
                         self.save(operation['requestId'], operation)
@@ -1063,12 +1350,15 @@ class Collaboration:
             if receipt is not None:
                 self.insert(identity, digest, receipt)
                 self.publish_receipt(receipt)
+                if action in {'coordination.reply', 'coordination.subscribe'} and continuation_outcome(request) is not None and request.get('subscription'):
+                    self.enqueue_continuation(request)
         if action == "coordination.create":
             return await self.create(source, args, origin, identity, digest, lineage)
         if receipt.get("delivery") == "pending_steer":
             return await self.submit_steer(identity)
         if receipt.get("delivery") == "queued":
             # The committed receipt owns the operation, not the request socket.
+            self.expire_later(receipt)
             self.service._task(self.drain(receipt["target"]["sessionId"]))
         return receipt
 
@@ -1122,6 +1412,7 @@ class Collaboration:
                 self.error("At most eight outstanding task chats per source root.", 409)
             if not args['title'].strip() or not args['text'].strip():
                 self.error('Enter a task title and brief.', 400)
+            self.require_causal_depth(self.causal_depth(source, lineage, origin))
             notify = args.get('returnNotification', True)
             if notify:
                 self.require_inbox_slot(source['id'])

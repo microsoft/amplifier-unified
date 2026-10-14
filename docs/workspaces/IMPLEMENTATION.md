@@ -376,6 +376,55 @@ multi-round, multi-repository and multi-client qualification. The narrow
 installed-package and real-provider creation checks above do not complete
 those broader acceptance journeys.
 
+## Reply revisions, watches and fair inbox admission — 2026-10-14
+
+A recipient can explicitly correlate a later current root generation with its
+original delivered request using the observed `expectedResponseRevision`. The
+workspace, task, delivery and Stop boundary must still match. Each reply has a
+monotonic revision and stable operation identity; earlier full declarations and
+terminal evidence remain in existing reply command receipts. Questions, deferrals
+and conflicts remain open reports. Exact retries return their retained revision;
+new payloads cannot reuse the same command ID.
+
+Negative reports notify immediately as unqualified claims. Successful dependency
+acceptance still needs the exact checkpointed native terminal row, root,
+generation, delivered input and digest. Unrelated background jobs no longer
+invalidate a proven manager result. Missing anchors, unrelated inputs and
+background-only dispositions never qualify. Rejected/unknown terminal evidence
+notifies without becoming success. A later meaningful report suppresses an
+unsubmitted earlier success notification; both receipts remain inspectable.
+New subscriptions claim at most one continuation per meaningful revision, capped
+at 32 notifications. Old single-notification waits retain their original policy.
+
+One-shot `coordination.watch` actions observe a named root's status or idle
+boundary with explicit expiry and cancellation. They do not load its transcript,
+warm it or start a turn. Pending watches recover after restart, and claimed
+notifications never replay. Their returns use the ordinary guarded inbox and
+cannot satisfy a dependency. The actions are available through the agent bridge,
+generic shared dispatcher and per-session HTTP API used by terminal clients.
+
+Inbox admission retains the existing 64-slot destination bound, including saved
+reply/watch slots, and adds 16 pending inputs per sender and 32 per assignment.
+Pending senders rotate using durable admission order. Accepted substantive input
+remains retained when a caller-selected deadline expires. The default and maximum
+queue duration is one day; callers can choose a shorter deadline. A causal chain
+is bounded to 16 peer-input hops using host-retained input provenance, independently
+of command IDs or wording. Only actual new human input resets that bound.
+Publication failure tests distinguish a rolled-back notification from a committed
+claim with a lost acknowledgement. Neither loses the underlying report or creates
+an extra model turn on retry.
+
+Validation covers service, exact retry/fingerprint, Stop/revision/scope, failure,
+backpressure, restart, passive observation and native lifecycle cases. The actual
+Core/Foundation/live-loop journey uses scripted provider output with real tool
+bridge stamping, delivered inputs, native history and terminal checkpoints. It
+proves a question followed by a later-generation result for the same request and
+two distinct notifications. It is not a real-provider efficacy or process-isolation
+claim. Source, installed-package and final delta receipts are retained separately.
+No browser rendering code, release or shared running host was changed by this slice.
+Safe tool-boundary informational delivery remains adapter-specific; notify remains
+passive and unsupported steering never becomes cancel-and-resend.
+
 ## Program delivery gates
 
 The approved program remains staged. The implementation slices above are
@@ -387,7 +436,7 @@ competing stores.
 | Next outcome | Canonical owners | Remaining acceptance gate |
 | --- | --- | --- |
 | Equivalent authority across supported routes | Host, runtime adapters, configuration controls | Explicit capability grants and revocation across schedules, recipes and background admission; preserve authorized configuration changes |
-| Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Later correlated replies, question/deferral revisions, expiring one-shot watches and fair bounded delivery; no duplicate continuation or false dependency success |
+| Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Reply revisions, question/deferral notifications, expiring one-shot watches and fair bounded admission delivered above. Remaining: repeated combined real-provider journeys, broader client presentation and supported safe tool-boundary informational delivery |
 | Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
 | Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context, advisory overlap and supported file-tool source conflicts delivered above. Remaining: broader independent/commissioned/native-worker lifecycle and concurrency acceptance |
 | Assignment control | Existing task, capacity and interruption owners | Commissioned-root aggregate admission and scoped Stop delivered above. Request-only accounting/interruption inside an independent mixed conversation remains an explicit adapter limitation; no whole-chat control is substituted. |
