@@ -20,17 +20,18 @@ worktree, resource and usage records remain authoritative.
 
 | Approved workstream | Implemented source | Limit or remaining work |
 | --- | --- | --- |
-| A Authority | Actual root/child identity, intersected file policy, reusable scoped configuration grants, native approval continuation, delayed revocation and common registered-history scope | Supported native consumers and effect families only; no OS, tenant or arbitrary executable-code confinement |
+| A Authority | Actual root/child identity, intersected file policy, reusable scoped configuration grants, per-chat write settings and inherited-default reset, native approval continuation, delayed revocation and common registered-history scope | Supported native consumers and effect families only; no OS, tenant or arbitrary executable-code confinement |
 | B Requests and continuations | Coherent peer creation, retained retry identities, later-generation replies, revision notifications and expiring one-shot watches | Notifications report outcomes; only qualified terminal evidence satisfies a dependency |
 | C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, causal-hop bounds and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
 | D Placement and resources | Explicit per-repository copies, phase-aware handoff, cooperative reservations, owner observations and retained task-owned scratch folders, browser-profile directories and SQLite files | Explicit dependency mappings; no automatic environment inference, running browser confinement, database servers or arbitrary preview discovery |
-| E Awareness and cooperation | Bounded active-work packets, advisory file intent, supported file-tool source checks and replacement of volatile guidance | No complete shared task-list/claim service, unknown external-writer detection or universal filesystem fence |
+| E Awareness and cooperation | Bounded active-work packets, advisory file intent, supported file-tool source checks, replacement of volatile guidance and optional shared assignment tasks with atomic exclusive claims | Task claims assign responsibility, not file access; no universal external-writer detection or filesystem fence |
 | F Results and integration | Retained exact reported bytes, scoped artifact reads, loaded-origin observations, explicit integration responsibility, recorded candidates and native validation/collection per repository | Qualification covers the chosen commands and observed versions; semantic correctness, complete subprocess imports and publication are not inferred |
 | G Recovery and preservation | Durable decisions, cleanup-safe bridge waits, phase-aware recovery and complete managed-checkout archive/restore | Archive retains files without reclaiming space or stopping external resource owners; uncertain effects are never replayed |
 | H Assignment lifecycle | Explicit commissioned membership, model-call allowances/reservations, usage reconciliation and scoped Stop | An independent mixed conversation has no request-only accounting/interruption adapter; unrelated work is not stopped |
-| I Experience and evidence | Shared actions, Related work/details controls, passive inspection, private drafts, per-tab return recaps and portable bounded timing/phase diagnostics | Missing samples stay unavailable; timings do not establish causation, physical paint or complete application latency |
+| I Experience and evidence | Shared actions, Workspace work overview, shared task list, simpler exact-candidate integration controls, passive inspection, private drafts, per-tab return recaps and portable bounded timing/phase diagnostics | Missing samples stay unavailable; timings do not establish causation, physical paint or complete application latency |
 
-The source mechanisms above implement the bounded October 13 program.
+The source mechanisms above implement the bounded October 13 program and the
+October 14 follow-up in [PR #706](https://github.com/microsoft/amplifier-unified/pull/706).
 [Remaining program gates](#remaining-program-gates) distinguish rollout from
 unsupported or optional capabilities. The dated sections retain each slice's
 actual revision and evidence limits. Their overlapping test counts must not be
@@ -816,10 +817,10 @@ passive and unsupported steering never becomes cancel-and-resend.
 
 ## Remaining program gates
 
-The bounded source mechanisms for the authorized October 13 program are now
-implemented. Combined qualification is recorded separately from each earlier
-slice. Source, a locally installed candidate, publication and fresh-worker
-adoption are distinct observations.
+The bounded source mechanisms for the authorized October 13 program and the
+October 14 follow-up are implemented. Combined qualification is recorded
+separately from each earlier slice. Source, a locally installed candidate,
+publication and fresh-worker adoption are distinct observations.
 
 Publication and installed-host adoption remain a separate operational step under
 the release policy. No shared running service has been replaced by this work.
@@ -827,10 +828,15 @@ A later rollout must identify its exact package and worker revisions and retain
 post-publication qualification separately; merging these changes does not
 establish that an existing user instance is running them.
 
-Optional assignment work-item claims remain outside the implemented assignment
-ledger. Commissioned membership and model-call reservations do not provide a
-shared task-list service. Universal OS confinement, cross-host filesystem
-replication and cross-engine history continuation are outside the default scope.
+[Optional assignment work items](#optional-assignment-work-items--2026-10-14)
+now provide a shared task list, dependencies and atomic exclusive claims in the
+canonical assignment record. Claims assign responsibility; they do not lock
+files, automatically start dependent work or verify reported results. Existing
+independent chats do not become assignment members automatically. Restart retains
+claims; stale responsibility after Stop or detachment needs explicit review.
+
+Universal OS confinement, cross-host filesystem replication and cross-engine
+history continuation remain outside the default scope.
 Request-only control inside an independent mixed conversation and safe tool-boundary
 notification remain adapter limitations; unsupported adapters preserve unrelated
 work rather than claiming those capabilities.
