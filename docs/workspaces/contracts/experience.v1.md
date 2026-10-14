@@ -86,6 +86,38 @@ outcomes remain distinct. Manual JSON, receipt identities, import expectations
 and publication declarations remain available under advanced disclosure. A lost
 acknowledgement retains the same invocation identity and arguments for retry.
 
+## Review before continuing
+
+Workspace work offers an optional **Review before continuing** disclosure. Opening
+it reads at most twenty saved root chats in the current workspace and preserves
+selection, drafts and ongoing work. The same `coordination.review` action is
+available to the calling root agent. Its cursor is bound to that source chat and
+workspace; pages use stable directory order and replace the visible page rather
+than accumulating the catalog. Each page is a new observation, not a frozen or
+complete-workspace readiness certificate. Refresh returns to the first page.
+
+The review identifies current observed activity separately from saved status,
+pending decisions, settings/file-permission fences, saved execution placement,
+bounded unresolved move observations, and saved response completion times.
+Saved native permission waits without an observed live owner remain unverified;
+exact chat admission reconciles them through the existing approval lifecycle. A
+completion marker means a response finished; it does not mean its PR merged,
+artifacts were independently checked, or a release was deployed. The source
+chat's assignment owner supplies stale/unavailable claim decisions through its
+existing rule. Old summaries missing the necessary authority stay unavailable
+until their ordinary owner refreshes them; inspection does not hydrate history
+to fill that gap. At most eight claims needing attention and four existing source
+observations are shown. Claims remain responsibility, not filesystem locks.
+
+Opening another chat, reviewing shared tasks, and reviewing source checks use
+existing navigation and control owners. They do not enroll independent chats,
+release claims, change settings, move files, rerun checks or send messages.
+Current source and external PR state need explicit inspection. Installed app
+identity is separate from loaded worker code; an optional explicit provenance
+read observes an already running worker without starting or refreshing one.
+Unknown and unavailable observations stay visible. Late replies from a closed,
+refreshed or different chat visit cannot replace the current review.
+
 ## Not in v1
 
 - **Custom sidebar sections** are promoted after users need organization beyond

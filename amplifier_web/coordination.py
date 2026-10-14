@@ -17,6 +17,7 @@ def definitions():
     from .service import schema, string
     target = {"sessionId": string(200), "workerId": string(200)}
     return {
+        "coordination.review": ("Read a bounded page for reviewing saved workspace work before continuing. Does not load history, start workers, inspect files or change responsibility. The source must be the calling root; cursors stay bound to its workspace. Results are observations, never permission or a readiness certificate.", schema({"sessionId": string(200), "after": string(2048), "limit": {"type": "integer", "minimum": 1, "maximum": 20}}, ["sessionId"])),
         "coordination.list": ("List scoped root summaries without selecting or starting them. Agent discovery defaults to caller workspace and roots only; scope=all explicitly reads registered own-history. includeWorkers adds actual workers.", schema({"sessionId": string(200), "scope": SCOPE, "workspace": string(4000), "includeWorkers": {"type": "boolean"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])),
         "coordination.wait": ("Wait on up to eight explicit targets for a report or attention. Carry each nextCursor after consuming results; retries retain result IDs. Does not run or replay work.", schema({
             "scope": SCOPE,
@@ -201,6 +202,10 @@ class Coordination:
 
     async def dispatch(self, action, args, origin, command_id, include_state, caller_session_id):
         from .service import AppError
+        if action == "coordination.review":
+            from .workspace_review import review
+            async with self.service.lock:
+                return {"accepted": True, "result": review(self.service, args, origin, caller_session_id)}
         if action not in definitions():
             return await self.service.collaboration.dispatch(action, args, origin, command_id, caller_session_id)
         if action in {"coordination.list", "coordination.wait"}:

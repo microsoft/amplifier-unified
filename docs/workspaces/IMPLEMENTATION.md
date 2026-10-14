@@ -1128,3 +1128,35 @@ ceilings, alter shell policy or start a turn. A pending file-access fence is
 saved before the canonical file write. Existing work may settle; new root,
 worker and voice inputs cannot bypass it, peers wait, and schedule/observation
 guards recheck it. Confirmed retirement or an absent owned mount clears it.
+
+
+## Guided review before continuing — 2026-10-14
+
+Workspace work now offers a demand-loaded review of saved workspace chats and
+next actions before continuing. `coordination.review` uses the indexed history
+directory, existing assignment claim rule, and the source chat's integration
+receipts. It returns at most twenty root summaries, eight claims needing review,
+and four prior source observations. Stable directory keyset cursors stay bound
+to the originating chat and workspace. Each page is a fresh observation; no
+whole-workspace snapshot or readiness certificate is claimed.
+
+The review distinguishes observed activity from saved status, pending decisions,
+settings/file-permission fences, saved placement, bounded unresolved move observations, and
+response completion. Its existing directory projection retains claim identity
+and interruption generation for passive checks. Older unrefreshed summaries
+remain unavailable rather than acquiring a false current claim. The bounded
+move projection examines sixteen retained receipts, disclosing older history
+when present. Opening the review does not admit dormant peers, hydrate native
+history, inspect repositories, query GitHub, warm workers, send input, change
+claims or create a new canonical ledger. Existing Open chat, shared assignment,
+and integration controls own explicit resolutions. Worker provenance remains a
+separate explicit read, and installed app version does not prove worker adoption.
+
+Focused source qualification passes 57 backend checks across review, coordination,
+assignment tasks and directory query/preservation, and 43 frontend checks across
+review, workspace work and assignment task controls. These cover native tool/UI
+read parity, child authority, scope and cursor fencing, passive restart discovery,
+canonical stale claims, old unavailable summaries, private-draft preservation,
+late replies, bounded page replacement, and explicit-only worker inspection. The
+production frontend builds successfully. Actual browser, live-provider and installed-package qualification remain the
+integration owner's separate acceptance checks.

@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import './coordination.css';
+import {WorkspaceReview} from './workspace-review.jsx';
 import {WorkspaceAwareness} from './workspace-awareness.jsx';
 import {AssignmentControls} from './assignment-controls.jsx';
 import {CoordinationObservations} from './coordination-observations.jsx';
@@ -103,7 +104,8 @@ function ResultFileStatus({response}){
 }
 
 export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
- const visit=useRef(0),openingRef=useRef(false);
+ const visit=useRef(0),openingRef=useRef(false),sectionRef=useRef(null);
+ const [review,setReview]=useState(false);
  const [opening,setOpening]=useState(null);
  const [next,setNext]=useState(null),[recap,setRecap]=useState(false);
  const [items,setItems]=useState([]),[context,setContext]=useState({requests:[]}),[error,setError]=useState(''),[inspected,setInspected]=useState({}),[original,setOriginal]=useState(null);
@@ -135,10 +137,12 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
  memberLabels[sessionId]=session?.title||memberLabels[sessionId]||'This chat';
  const name=sid=>memberLabels[sid]||'Related chat';
  const attention=items.filter(row=>row.attention);
- return <section className="a-coordination-related" aria-label="Workspace work overview">
+ const showSection=name=>{const target=sectionRef.current?.querySelector('[data-review-target="'+name+'"]');if(target){target.open=true;target.scrollIntoView?.({block:'nearest'})}};
+ return <section ref={sectionRef} className="a-coordination-related" aria-label="Workspace work overview">
   <p>See what is happening around this chat. Inspecting keeps your conversation and draft in place.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh workspace work</button>
+  <details onToggle={event=>{if(event.target===event.currentTarget)setReview(event.currentTarget.open)}}><summary>Review before continuing</summary>{review&&<WorkspaceReview key={'review:'+sessionId} dispatch={dispatch} sessionId={sessionId} workspace={context.workspace} requests={context.requests} onOpenChat={onOpenChat} onShowSection={showSection}/>}</details>
   <WorkspaceAwareness key={'workspace:'+sessionId} dispatch={dispatch} sessionId={sessionId} context={context} refresh={refresh}/>
   <section aria-label="Attention and requests"><h3>Attention and requests</h3>
    {attention.map(row=><p key={row.target.sessionId}><strong>{row.title||'Untitled chat'}</strong> · {labels[row.status]||row.status}{!['error','interrupted','cancelled','stopped'].includes(row.status)&&' · Needs attention'}</p>)}
