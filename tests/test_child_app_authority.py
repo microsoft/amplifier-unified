@@ -114,6 +114,8 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
     app.state['sessions'] = [root]
     app.state['selectedSessionId'] = root['id']
     app._publish()
+    from amplifier_web.management import Management
+    app.management = Management(app)
     await app.dispatch('capability.grant', {'sessionId':root['id'], 'effects':['file_access'], 'scopes':['global'], 'reason':'Explicit setup'})
     worker = Worker()
     worker.session = parent
@@ -144,6 +146,12 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
             await registry.resume('child', 'continue', parent)
         assert len(observed) == (2 if mode in {'resumed','nested'} else 1)
         assert app.configuration_authority.snapshot(root)['grants'][0]['usable']
+        result = await parent.coordinator.get('tools')['app_control'].execute({'operation':'dispatch','args':{
+            'action':'permissions.save','id':'native-root-admin','args':{'scope':'global','allowed':[],'denied':[]}}})
+        assert result.success, result.error
+        from test_coordination_generation import until
+        await until(lambda: 'native-root-admin' in app.state.get('managementResults', {}))
+        assert app.state['managementResults']['native-root-admin']['phase']=='ready'
     finally:
         _PERSISTENT.reset(token)
         await parent.cleanup()

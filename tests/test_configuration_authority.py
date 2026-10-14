@@ -317,3 +317,32 @@ async def test_saved_own_dependency_return_keeps_authorized_administration(app):
     source['collaborationGeneration']={'id':'returned','inputIds':['own-return'],'terminal':False}
     await agent(app,source,'permissions.save',{'scope':'local','allowed':[],'denied':[]},'continue-admin')
     assert (await finished(app,'continue-admin'))['phase']=='ready'
+
+
+async def test_alternate_global_default_routes_have_equivalent_grants(app):
+    source=app.state['sessions'][0]
+    with pytest.raises(AppError,match='Configuration authority is required'):
+        await agent(app,source,'settings.update',{'patch':{'bundle':'new-root'}},'ungranted-default')
+    await grant(app,['bundles'],['global'])
+    await agent(app,source,'settings.update',{'patch':{'bundle':'new-root'}},'granted-default')
+    assert SettingsStore(app.data_dir).read(source['workspace'],'global')['bundle']['active']=='new-root'
+    with pytest.raises(AppError,match='Configuration authority is required'):
+        await agent(app,source,'settings.update',{'patch':{'bundle':'different','updates':{'autoInstall':True}}},'mixed-default')
+    assert app.state['settings']['bundle']=='new-root'
+    with pytest.raises(AppError,match='Configuration authority is required'):
+        await agent(app,source,'runtime.retention.update',{'patch':{'prewarm_on_select':True}},'background-policy')
+
+
+async def test_assignment_stop_fences_queued_configuration(app):
+    source=app.state['sessions'][0]
+    await grant(app,['file_access'],['local'])
+    assignment=(await app.dispatch('assignment.start',{'sessionId':source['id']}))['result']
+    await app.management.lock.acquire()
+    try:
+        await agent(app,source,'permissions.save',{'scope':'local','allowed':[],'denied':[]},'assignment-queued')
+        await app.dispatch('assignment.stop',{'sessionId':source['id'],'expectedRevision':assignment['assignment']['revision']})
+    finally:
+        app.management.lock.release()
+    result=await finished(app,'assignment-queued')
+    assert result['phase']=='error' and 'stopped' in result['error']
+    assert SettingsStore(app.data_dir).read(source['workspace'],'local')=={}

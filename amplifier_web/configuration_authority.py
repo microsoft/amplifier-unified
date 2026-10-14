@@ -10,7 +10,8 @@ import uuid
 CURRENT = ContextVar('configuration_authority', default=None)
 EFFECTS = {
     'file_access': 'Change file-access settings',
-    'connections': 'Change connections and credential sources',
+    'connections': 'Change provider connections, executable sources and credentials',
+    'host_defaults': 'Change app-wide settings and background preparation policy',
     'model_defaults': 'Change saved model and routing defaults',
     'modules': 'Configure or validate executable modules and sources',
     'bundles': 'Change bundles and behavior defaults',
@@ -172,8 +173,23 @@ class ConfigurationAuthority:
     def capture(self, action, args, origin, caller):
         if origin in {'ui', 'user'}:
             return None
+        if action == 'settings.update':
+            patch = args.get('patch', {})
+            effects = []
+            if 'bundle' in patch:
+                effects.append('bundles')
+            if set(patch) - {'bundle'}:
+                effects.append('host_defaults')
+            return {'chain': [self._capture(action, args, origin, caller, (effect, 'global')) for effect in effects]}
+        if action == 'runtime.retention.update':
+            return self._capture(action, args, origin, caller, ('host_defaults', 'global'))
+        return self._capture(action, args, origin, caller)
+
+    def _capture(self, action, args, origin, caller, needed=None):
+        if origin in {'ui', 'user'}:
+            return None
         try:
-            needed = requirement(action, args)
+            needed = needed or requirement(action, args)
         except ValueError as exc:
             self.error(str(exc), 400)
         if needed is None:
@@ -209,6 +225,10 @@ class ConfigurationAuthority:
 
     def check(self, authority, *, workspace=None, scope=None):
         if authority is None:
+            return
+        if 'chain' in authority:
+            for item in authority['chain']:
+                self.check(item, workspace=workspace, scope=scope)
             return
         session = self.service._session(authority['sessionId'], hydrate=False)
         grant = self.record(authority['grantId'])
