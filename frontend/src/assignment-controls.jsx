@@ -1,21 +1,36 @@
-import React,{useCallback,useState} from 'react';
+import React,{useCallback,useRef,useState} from 'react';
 import {AssignmentTaskList} from './assignment-task-list.jsx';
 
 export function AssignmentControls({dispatch,sessionId,memberLabels={}}){
  const [expanded,setExpanded]=useState(false);
- const label=id=>id===sessionId?'This conversation':memberLabels[id]||'Member chat';
+ const label=id=>id===sessionId?'This conversation':memberLabels[id]||'Member chat · '+id;
  const metric=row=>row?.value==null?'Unknown':String(row.value)+(row.status==='known'?'':` (${row.status})`);
  const key='amplifier-assignment-draft:'+sessionId;
  const [value,setValue]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
- const applyAssignment=useCallback(assignment=>setValue(current=>current?{...current,assignment}:current),[]);
+ const valueRef=useRef(null),observationEpoch=useRef(0),[observationVersion,setObservationVersion]=useState(0);
+ const invalidate=useCallback(()=>{const epoch=++observationEpoch.current;setObservationVersion(epoch)},[]);
+ const applyAssignment=useCallback(assignment=>{
+  if(observationVersion!==observationEpoch.current)return false;
+  const current=valueRef.current;if(!current)return false;
+  if(current.assignment?.id===assignment?.id&&current.assignment?.revision>assignment?.revision)return false;
+  const next={...current,assignment};valueRef.current=next;setValue(next);
+  if(current.assignment?.id!==assignment?.id)invalidate();
+  return true;
+ },[observationVersion,invalidate]);
  const [integrationOwner,setIntegrationOwner]=useState(null);
  const [draft,setDraft]=useState(()=>{try{return JSON.parse(sessionStorage.getItem(key)||'null')}catch{return null}});
  const save=value=>{setDraft(value);try{value?sessionStorage.setItem(key,JSON.stringify(value)):sessionStorage.removeItem(key)}catch{}};
- const read=async()=>{try{const response=await dispatch('assignment.read',{sessionId},{feedback:false});setValue(response.result)}catch(error){setError(error.message)}};
+ const read=async()=>{const epoch=observationEpoch.current;try{
+  const response=await dispatch('assignment.read',{sessionId},{feedback:false});
+  if(epoch!==observationEpoch.current)return;
+  const current=valueRef.current?.assignment,next=response.result.assignment;
+  if(current?.id===next?.id&&current?.revision>next?.revision)return;
+  valueRef.current=response.result;setValue(response.result);invalidate();
+ }catch(error){if(epoch===observationEpoch.current)setError(error.message)}};
  const assignment=value?.assignment,limits=draft?.limits||assignment?.limits;
  const change=(name,val)=>save({id:crypto.randomUUID(),revision:draft?.revision??assignment.revision,limits:{...limits,[name]:val}});
  const run=async(action,args,identity)=>{
-  if(busy)return;setBusy(true);setError('');
+  if(busy)return;invalidate();setBusy(true);setError('');
   // Retain the exact action and identity through an uncertain response/reload.
   const pending=draft?.pending||{action,args,id:identity||crypto.randomUUID()};
   save({...draft,pending});
@@ -24,7 +39,7 @@ export function AssignmentControls({dispatch,sessionId,memberLabels={}}){
    save(null);await read();
   }catch(error){setError(error.message)}finally{setBusy(false)}
  };
- return <details className="a-assignment" onToggle={event=>{if(event.target!==event.currentTarget)return;setExpanded(event.currentTarget.open);if(event.currentTarget.open&&!value)read()}}>
+ return <details className="a-assignment" onToggle={event=>{if(event.target!==event.currentTarget)return;invalidate();setExpanded(event.currentTarget.open);if(event.currentTarget.open&&!value)read()}}>
   <summary>Shared tasks and assignment</summary>
   <p>Manage this chat and its commissioned helpers together. Existing independent chats keep their own controls.</p>
   {error&&<p role="alert">{error}</p>}
@@ -48,7 +63,7 @@ export function AssignmentControls({dispatch,sessionId,memberLabels={}}){
     </details>
    </>}
    {draft&&<button className="a-link" disabled={busy} onClick={()=>{save(null);setError('')}}>Discard draft and use latest</button>}
-   <AssignmentTaskList dispatch={dispatch} sessionId={sessionId} compact enabled={expanded} onAssignmentChange={applyAssignment}/>
+   <AssignmentTaskList dispatch={dispatch} sessionId={sessionId} compact enabled={expanded&&!busy} onAssignmentChange={applyAssignment}/>
    <details><summary>Membership and accounting details</summary><p>{value.enforcement}</p><pre>{JSON.stringify(assignment.members,null,2)}</pre><p>{value.usage?.coverage}</p><button className="a-link" disabled={busy||!!draft?.pending} onClick={()=>run('assignment.detach',{sessionId,expectedRevision:assignment.revision})}>Detach this settled chat</button></details>
   </>}
  </details>;

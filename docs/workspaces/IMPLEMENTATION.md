@@ -1060,8 +1060,13 @@ The bundled Shared task list uses these same actions and readable scoped member
 and prerequisite names. Open views wait passively on scoped versions; hidden or
 closed views cancel their wait. Read paths inspect metadata and command receipts,
 not history or assignment usage. Private form/pending request state stays in the
-browser tab and uncertain mutations retry the same command ID. Mutation receipts
-retain only the changed item, not repeated copies of the entire board.
+browser tab and uncertain mutations retry the same command ID. Confirmed client
+rejections clear only the pending request and refresh the list, retaining drafts.
+Older observations cannot replace a newer assignment revision; mutation, closure
+and visibility boundaries invalidate outstanding task observations. Completion
+drafts retain their original claim identity and require explicit review before
+use for a replacement claim. Free-text drafts are excluded from UI observations.
+Mutation receipts retain only the changed item, not repeated copies of the board.
 
 Source checks cover concurrent claims, dependencies and cycles, old-holder fencing,
 Stop/detachment, restart with explicit later completion, delayed admission, durable
