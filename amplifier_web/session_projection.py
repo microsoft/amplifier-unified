@@ -182,7 +182,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
         # new live observations or event-log-derived action bodies here.
         from .cold_display import saved as saved_cold, MARKER
         value = {key: item for key, item in saved_cold(session).items()
-                 if key not in {'historyActivity', 'questions'}}
+                 if key not in {'historyActivity', 'questions', 'workProjection'}}
         if 'execution' in value:
             value['execution'] = stored_execution(value['execution'])
             tree = value['execution']

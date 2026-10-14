@@ -9,13 +9,14 @@ import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const evidencePath=process.env.AMPLIFIER_PERF_EVIDENCE||root+'output/state-transport-browser/evidence.json';
 const tracePath=evidencePath.replace(/\.json$/,'')+'.trace.zip';
-const errors=[],responses=[],frames=[],paint=[],pending=new Map();
+const errors=[],responses=[],frames=[],initialFrames=[],paint=[],pending=new Map();
 const evidence={status:'running',stage:'fixture',thresholdMs:250,paint,diagnostics:[],rendererUnits:'Seconds except LayoutCount and RecalcStyleCount',errors,modelCalls:0,
  runner:{platform:process.platform,arch:process.arch,node:process.version,parallelism:availableParallelism(),ci:process.env.CI==='true',loadAverage:loadavg()}};
 const persist=async()=>{await mkdir(dirname(evidencePath),{recursive:true});await writeFile(evidencePath,JSON.stringify(evidence,null,2)+'\n')};
+const recordFrame=(kind,bytes)=>{if(measured)frames.push({kind,bytes});else if(!evidence.initialCoverageSettled){initialFrameCount++;initialMaxBytes=Math.max(initialMaxBytes,bytes);if(initialFrames.length<256)initialFrames.push({kind,bytes})}};
 const pendingActions=()=>[...pending.values()].slice(0,32);
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/active_client_performance_server.py'],{stdio:['ignore','pipe','inherit'],env:{...process.env,AMPLIFIER_TRANSPORT_FIXTURE:'1'}});
-let browser,context,page,cdp,tracing=false,failed=false,measured=false,heldPrepares=0,persistenceReleased=false;
+let browser,context,page,cdp,tracing=false,failed=false,measured=false,heldPrepares=0,persistenceReleased=false,initialFrameCount=0,initialMaxBytes=0;
 let releasePersistence;const persistenceGate=new Promise(resolve=>{releasePersistence=()=>{persistenceReleased=true;resolve()}});
 const metricNames=['Timestamp','TaskDuration','ScriptDuration','LayoutDuration','RecalcStyleDuration','LayoutCount','RecalcStyleCount'];
 const rendererMetrics=async()=>Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.filter(row=>metricNames.includes(row.name)).map(row=>[row.name,row.value]));
@@ -61,12 +62,26 @@ try{
  page.on('requestfinished',request=>pending.delete(request));page.on('requestfailed',request=>pending.delete(request));
  page.on('response',response=>{if(measured&&response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions')responses.push(response.body().then(body=>({action:response.request().postDataJSON().action,bytes:body.length})))});
  cdp=await context.newCDPSession(page);await cdp.send('Network.enable');await cdp.send('Performance.enable');
- cdp.on('Network.eventSourceMessageReceived',event=>{if(measured)frames.push({kind:event.eventName,bytes:Buffer.byteLength(event.data)})});
- cdp.on('Network.webSocketFrameReceived',event=>{if(measured)try{const frame=JSON.parse(event.response.payloadData);frames.push({kind:frame.event,bytes:Buffer.byteLength(event.response.payloadData)})}catch{}});
+ cdp.on('Network.eventSourceMessageReceived',event=>{recordFrame(event.eventName,Buffer.byteLength(event.data))});
+ cdp.on('Network.webSocketFrameReceived',event=>{try{const frame=JSON.parse(event.response.payloadData);recordFrame(frame.event,Buffer.byteLength(event.response.payloadData))}catch{}});
  await page.goto(url);await page.getByRole('button',{name:'App options',exact:true}).waitFor();
  evidence.stage='baseline';const initialBytes=await page.evaluate(()=>JSON.stringify(window.amplifier.getState()).length);evidence.initialBytes=initialBytes;await persist();
  assert.ok(initialBytes<1_000_000,`Chat baseline should omit settings history: ${initialBytes}`);
  assert.equal(await page.evaluate(()=>!!window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).execution.retiredUsageNodes),false);
+ // Initial asynchronous page delivery belongs to the bounded baseline, not
+ // ordinary view-only deltas. Wait for actual requested coverage once; the
+ // Settings/gallery interactions below remain cold and do not wait for idle.
+ await expect.poll(()=>page.evaluate(()=>{
+  const instances=window.amplifier.getState().shellResources?.instances;
+  return ['chats','workspaces'].every(id=>{
+   const entry=instances?.[id];return entry&&Object.keys(entry.pending||{}).length===0
+    &&['context','pinnedNavigation','recentNavigation','workspaceShortcuts'].every(name=>entry.resources?.[name]);
+  });
+ }),{timeout:10000}).toBe(true);
+ evidence.settledBaselineBytes=await page.evaluate(()=>JSON.stringify(window.amplifier.getState()).length);
+ Object.assign(evidence,{initialFrames,initialFrameCount,initialMaxBytes,initialCoverageSettled:true});
+ assert.ok(evidence.settledBaselineBytes<1_000_000,`Settled baseline should remain bounded: ${evidence.settledBaselineBytes}`);
+ assert.ok(initialMaxBytes<1_000_000,JSON.stringify({initialFrameCount,initialMaxBytes}));
  measured=true;
  for(let i=0;i<12;i++)await page.evaluate(value=>window.amplifier.dispatch('view.update',{patch:{navWidth:300+value}}),i);
  // Preserve simulated transport latency; the explicit gate proves persistence is still blocked.

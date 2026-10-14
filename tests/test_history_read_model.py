@@ -291,13 +291,14 @@ async def test_async_owner_builds_and_validates_off_event_loop(source, model, tm
     monkeypatch.setattr(view, 'projection_input', checked)
     await view.refresh('app', passive=True)
     assert seen and all(identity != threading.get_ident() for identity in seen)
-    assert len(published) == 2 and isinstance(view.projected['app'][0], str)
+    assert len(published) == 1 and isinstance(view.projected['app'][0], str)
     assert not view._pending_inputs
     expected = EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
     assert session['execution'] == expected
     append(path, 'session:end', {}, 90)
     await view.refresh('app', passive=True)
-    assert len(published) == 2  # Receipt only, no browser publication.
+    assert len(published) == 1  # Pending/ready are ephemeral; unchanged Work is not saved.
+    assert session['execution'] == expected
 
 
 @pytest.mark.parametrize('mutation', ['published', 'unpublished', 'replacement', 'source', 'retry'])
@@ -533,19 +534,21 @@ async def test_real_process_host_publication_and_passive_receipt(source, tmp_pat
     view.projector = ProcessProjector(tmp_path / 'process-cache')
     try:
         await view.refresh('app', passive=True)
-        assert session['workProjection'] == {'status': 'ready'}
+        assert session['workProjection']['status'] == 'ready'
+        assert session['workProjection']['current'] is True
+        assert session['workProjection']['receipt']['nodeCount'] == len(session['execution']['nodes'])
         expected = EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
         assert session['execution'] == expected
-        assert len(notices) == 2
+        assert len(notices) == 1
         before = copy.deepcopy(session['execution'])
         original = view.projection_input
         monkeypatch.setattr(view, 'projection_input', lambda _: pytest.fail('unchanged passive receipt reconstructed inputs'))
         await view.refresh('app', passive=True)
-        assert session['execution'] == before and len(notices) == 2
+        assert session['execution'] == before and len(notices) == 1
         monkeypatch.setattr(view, 'projection_input', original)
         append(child, 'tool:post', {'session_id': 'child-0', 'tool_call_id': 'leaf', 'result': 'complete'}, 90)
         await view.refresh('app', passive=True)
-        assert len(notices) == 3
+        assert len(notices) == 2  # Only changed execution is durably published.
         assert session['execution'] == EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
     finally:
         await view.close()
@@ -633,13 +636,13 @@ async def test_deterministic_limit_waits_for_changed_generation_without_reencodi
             return await asyncio.to_thread(model.project, inputs)
     view.projector = Projector()
     await view.refresh('app', passive=True)
-    assert session['workProjection'] == {'status': 'unavailable', 'reason': reason}
-    assert len(notices) == 2 and len(calls) == 1
+    assert session['workProjection'] == {'status': 'unavailable', 'reason': reason, 'current': False}
+    assert len(notices) == 0 and len(calls) == 1
     projection_input = view.projection_input
     monkeypatch.setattr(view, 'projection_input', lambda _: pytest.fail('same refused generation reconstructed inputs'))
     for _ in range(12):
         await view.refresh('app', passive=True)
-    assert len(calls) == 1 and len(notices) == 2
+    assert len(calls) == 1 and len(notices) == 0
     monkeypatch.setattr(view, 'projection_input', projection_input)
     view.invalidate({'app'})  # An unrelated publication cannot replay an identical failed input.
     await view.refresh('app', passive=True)
@@ -650,7 +653,8 @@ async def test_deterministic_limit_waits_for_changed_generation_without_reencodi
     else:
         append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'complete'}, 90)
     await view.refresh('app', passive=True)
-    assert len(calls) == 2 and session['workProjection'] == {'status': 'ready'}
+    assert len(calls) == 2 and session['workProjection']['status'] == 'ready'
+    assert session['workProjection']['current'] is True
     assert not view._refused
     assert session['execution'] == EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
 

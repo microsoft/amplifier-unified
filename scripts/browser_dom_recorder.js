@@ -31,6 +31,23 @@
     id: identity(button), title: label(button), selected: button.getAttribute('aria-current') === 'page',
     location: button.closest('.a-work-browser') ? 'workspace-list' : 'sidebar', disabled: button.disabled
   }));
+  const projectionReceipt = pane => {
+    const raw = pane?.getAttribute('data-work-projection');
+    if (!raw || raw.length > 1024) return null;
+    try {
+      const value = JSON.parse(raw), receipt = value.receipt;
+      if (value.version !== 1 || value.sessionId !== pane.getAttribute('data-session-id') ||
+          value.hostInstanceId !== pane.getAttribute('data-host-instance-id') ||
+          typeof value.hostInstanceId !== 'string' || !value.hostInstanceId || value.hostInstanceId.length > 200 ||
+          !['loading','retrying','unavailable','ready'].includes(value.status)) return null;
+      const valid = receipt && Number.isSafeInteger(receipt.generation) && receipt.generation > 0 &&
+        ['sourceCount','nodeCount','turnCount'].every(key => Number.isSafeInteger(receipt[key]) && receipt[key] >= 0);
+      return {hostInstanceId:value.hostInstanceId, sessionId:value.sessionId, status:value.status,
+        current:value.current === true && value.status === 'ready' && !!valid,
+        receipt:valid ? {generation:receipt.generation,sourceCount:receipt.sourceCount,
+          nodeCount:receipt.nodeCount,turnCount:receipt.turnCount} : null};
+    } catch { return null; }
+  };
   const snapshot = () => {
     const app = document.getElementById('amp-one');
     const pane = app?.querySelector('[data-part="messages"][role="log"]') ||
@@ -52,6 +69,8 @@
       title: document.title, header: trim(header?.getAttribute('title') || header?.textContent),
       surface: app?.getAttribute('data-work-surface') || null, selected,
       paneSessionId: pane?.getAttribute('data-session-id') ?? null,
+      paneHostInstanceId: pane?.getAttribute('data-host-instance-id') ?? null,
+      workProjection: projectionReceipt(pane),
       paneVisible: shown(pane), busy: pane?.getAttribute('aria-busy') || null,
       draftLength: composer ? (composer.value ?? composer.textContent ?? '').length : null,
       unsavedCanvas: !!app?.querySelector('.a-canvas-unsaved'),
@@ -118,7 +137,10 @@
     mark('messagesMs', contentSelected && chat && newContent && state.messages >= run.minMessages);
     mark('firstWorkHeaderMs', contentSelected && chat && newContent && state.workHeaders > 0);
     mark('minimumWorkHeadersMs', contentSelected && chat && newContent && state.workHeaders >= run.minWorkHeaders);
-    const ready = contentSelected && headerMatches && chat && newContent && state.busy === 'false' &&
+    const projectionReady = contentSelected && chat && state.workProjection?.current === true &&
+      state.workProjection.hostInstanceId === run.hostInstanceId;
+    mark('projectionReadyMs', projectionReady);
+    const ready = (!run.expectWork || projectionReady) && contentSelected && headerMatches && chat && newContent && state.busy === 'false' &&
       state.messages >= run.minMessages && state.workHeaders >= run.minWorkHeaders && !state.historyError;
     mark('readyCandidateMs', ready);
     if (run.lastSample != null && now - run.lastSample > 250) {
@@ -150,7 +172,7 @@
     if (before.draftLength !== 0 || before.unsavedCanvas) return {error: 'Nonempty or unknown draft, or unsaved Canvas: no navigation performed.', draftLength:before.draftLength,unsavedCanvas:before.unsavedCanvas};
     if (before.surface === 'chat' && before.paneSessionId === ids[0]) return {error: 'Target chat is already selected; choose a different chat.'};
     run = {
-      schemaVersion: 5, started: performance.now(), capturedAt: new Date().toISOString(),
+      schemaVersion: 6, hostInstanceId:before.paneHostInstanceId, started: performance.now(), capturedAt: new Date().toISOString(),
       timeOrigin: performance.timeOrigin, target: {id: ids[0], title: label(button)},
       location: button.closest('.a-work-browser') ? 'workspace-list' : 'sidebar',
       timeoutMs: Math.min(180000, Math.max(2000, Number(options.timeoutMs) || 60000)),
@@ -167,6 +189,8 @@
         'Resource timing includes completed requests only; absent entries do not establish no pending requests.',
         'Main-thread delays include hidden-tab throttling and host suspension; they do not identify the cause.',
         'Ready-observed means expected DOM content settled, not verified server quiescence.',
+        'With expectWork, readiness also requires an explicit current host/session projection receipt; absent receipts remain unqualified.',
+        'Projection readiness covers the accepted display generation, not runtime completion or eventual discovery of unknown sources.',
         'Work counts are rendered top-level headers (grouped and single-turn), not canonical turns, events or complete history. Regrouping can change counts without losing work.'
       ]
     };

@@ -23,6 +23,7 @@ from .session_files import project_slug
 
 SCHEMA = 1
 MAX_MODELS = 6
+MAX_RECEIPT_BYTES = 1024 * 1024
 MAX_MODEL_BYTES = 64 * 1024 * 1024
 MAX_MEMORY_BYTES = 96 * 1024 * 1024
 MAX_DISK_BYTES = 256 * 1024 * 1024
@@ -137,15 +138,17 @@ class ModelStore:
                 self.db.execute('DELETE FROM nodes WHERE identity=?', (identity,))
                 self.db.execute('DELETE FROM models WHERE identity=?', (identity,))
 
-    def load(self, key):
-        actual = self.db.execute('SELECT length(CAST(receipt AS BLOB))+length(CAST(body AS BLOB)) + (SELECT coalesce(sum(length(CAST(body AS BLOB))),0) FROM nodes WHERE identity=?) FROM models WHERE identity=?', (key, key)).fetchone()
-        if actual is None or actual[0] > MAX_MODEL_BYTES:
+    def load(self, key, digest):
+        # Reject known input misses before reading either the tree or its nodes.
+        # Bound the receipt in SQLite before returning its text to Python.
+        size = self.db.execute('SELECT length(CAST(receipt AS BLOB)),bytes FROM models WHERE identity=?', (key,)).fetchone()
+        if size is None or size[0] > MAX_RECEIPT_BYTES or size[1] > MAX_MODEL_BYTES:
             return None
-        row = self.db.execute('SELECT receipt,body,bytes FROM models WHERE identity=?', (key,)).fetchone()
-        if row is None or row[2] > MAX_MODEL_BYTES:
+        row = self.db.execute('SELECT receipt FROM models WHERE identity=?', (key,)).fetchone()
+        if row is None:
             return None
-        receipt, body = json.loads(row[0]), json.loads(row[1])
-        if (not isinstance(receipt, dict) or not isinstance(body, dict)
+        receipt = json.loads(row[0])
+        if (not isinstance(receipt, dict)
                 or not isinstance(receipt.get('inputDigest'), str)
                 or not isinstance(receipt.get('paths'), list)
                 or not isinstance(receipt.get('revisions'), list)
@@ -154,6 +157,17 @@ class ModelStore:
         if receipt.get('schema') != SCHEMA:
             self.remove(key)
             return None
+        if receipt['inputDigest'] != digest:
+            return None
+        actual = self.db.execute('SELECT length(CAST(receipt AS BLOB))+length(CAST(body AS BLOB)) + (SELECT coalesce(sum(length(CAST(body AS BLOB))),0) FROM nodes WHERE identity=?) FROM models WHERE identity=?', (key, key)).fetchone()
+        if actual is None or actual[0] > MAX_MODEL_BYTES:
+            return None
+        row = self.db.execute('SELECT body,bytes FROM models WHERE identity=?', (key,)).fetchone()
+        if row is None or row[1] > MAX_MODEL_BYTES:
+            return None
+        body = json.loads(row[0])
+        if not isinstance(body, dict):
+            raise ValueError('Invalid cached model body')
         body['nodes'] = [json.loads(row[0]) for row in self.db.execute(
             'SELECT body FROM nodes WHERE identity=? ORDER BY position', (key,))]
         if not all(isinstance(node, dict) and isinstance(node.get('id'), str) for node in body['nodes']):
@@ -163,15 +177,19 @@ class ModelStore:
                     or proof['offset'] < 0 or not isinstance(proof.get('identity'), str)
                     or not isinstance(proof.get('sha256'), str) or len(proof['sha256']) != 64):
                 raise ValueError('Invalid cached source proof')
-        return {**receipt, 'tree': body, 'bytes': row[2]}
+        return {**receipt, 'tree': body, 'bytes': row[1]}
 
     def save(self, key, value, *, source_only=False, positions=None):
         receipt = {name: value[name] for name in ('schema', 'inputDigest', 'paths', 'revisions', 'proofs')}
+        receipt_bytes = encoded(receipt)
+        if len(receipt_bytes) > MAX_RECEIPT_BYTES:
+            self.remove(key)
+            return
+        receipt_text = receipt_bytes.decode()
         if source_only:
             with self.db:
-                body = encoded(receipt).decode()
                 self.db.execute('UPDATE models SET bytes=bytes-length(CAST(receipt AS BLOB))+?,receipt=?,touched=? WHERE identity=?',
-                                (len(body.encode()), body, time.time(), key))
+                                (len(receipt_bytes), receipt_text, time.time(), key))
                 self._prune()
             return
         tree = value['tree']
@@ -182,7 +200,7 @@ class ModelStore:
             prior = self.db.execute('SELECT receipt,body,bytes FROM models WHERE identity=?', (key,)).fetchone()
             if prior is not None:
                 changes = [(position, encoded(tree['nodes'][position]).decode()) for position in positions]
-                size = prior[2] - len(prior[0].encode()) - len(prior[1].encode()) + len(encoded(receipt)) + len(encoded(body))
+                size = prior[2] - len(prior[0].encode()) - len(prior[1].encode()) + len(receipt_bytes) + len(encoded(body))
                 for position, row in changes:
                     old = self.db.execute('SELECT length(CAST(body AS BLOB)) FROM nodes WHERE identity=? AND position=?', (key, position)).fetchone()
                     size += len(row.encode()) - (old[0] if old else 0)
@@ -193,11 +211,11 @@ class ModelStore:
                     self.db.executemany('UPDATE nodes SET body=? WHERE identity=? AND position=?',
                                         ((row, key, position) for position, row in changes))
                     self.db.execute('UPDATE models SET receipt=?,body=?,bytes=?,touched=? WHERE identity=?',
-                                    (encoded(receipt).decode(), encoded(body).decode(), size, time.time(), key))
+                                    (receipt_text, encoded(body).decode(), size, time.time(), key))
                     self._prune()
                 return
         rows = [encoded(row).decode() for row in tree.get('nodes', ())]
-        size = len(encoded(receipt)) + len(encoded(body)) + sum(len(row.encode()) for row in rows)
+        size = len(receipt_bytes) + len(encoded(body)) + sum(len(row.encode()) for row in rows)
         if size > MAX_MODEL_BYTES:
             self.remove(key)
             return
@@ -206,7 +224,7 @@ class ModelStore:
             self.db.executemany('INSERT INTO nodes VALUES (?,?,?)',
                                 ((key, position, row) for position, row in enumerate(rows)))
             self.db.execute('INSERT OR REPLACE INTO models VALUES (?,?,?,?,?)',
-                            (key, encoded(receipt).decode(), encoded(body).decode(), size, time.time()))
+                            (key, receipt_text, encoded(body).decode(), size, time.time()))
             self._prune()
 
     def remove(self, key):
@@ -259,14 +277,20 @@ class SelectedHistoryReadModel:
                 if identity not in self.models:
                     mapping.pop(identity, None)
 
-    def _load(self, key):
+    def _load(self, key, digest):
         value = self.models.get(key)
         if value is not None:
-            self.models.move_to_end(key)
-            return value
+            if value['inputDigest'] == digest:
+                self.models.move_to_end(key)
+                return value
+            self.models.pop(key)
+            self.model_bytes -= value['bytes']
+            del value
+            self._prune_reader_receipts()
+        value = None
         if self.store is not None:
             try:
-                value = self.store.load(key)
+                value = self.store.load(key, digest)
             except (OSError, sqlite3.Error, ValueError, KeyError, TypeError):
                 self._count('cache_invalid')
                 return None
@@ -436,7 +460,7 @@ class SelectedHistoryReadModel:
         stage('model_cache_load')
         key = inputs['id']
         digest = input_digest(inputs)
-        value = self._load(key)
+        value = self._load(key, digest)
         if value is not None and value['inputDigest'] == digest and self._valid_sources(inputs, value):
             # A failed source fence must not mutate the retained generation.
             # Node rows are immutable; only the receipt is copied here.
