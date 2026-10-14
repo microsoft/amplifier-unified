@@ -136,8 +136,10 @@ is transitional; the connected TUI becomes the maintained live client.
 
 Persisted does not mean indexed in RAM; indexed does not mean subscribed; subscribed
 does not mean an agent is warm. Only explicit execution admission prepares a cold
-runtime by default. Optional prewarming is a measured policy with a small budget,
-not a consequence of every selection.
+runtime by default. Reading or selecting a conversation never schedules runtime
+preparation. Explicit `session.warm` remains optional and obeys the host’s idle
+count, lifetime and background-start budget. The retired `prewarm_on_select`
+preference is removed from effective persisted policy; it cannot authorize work.
 
 Use separate budgets for concurrent execution, idle agents, display bytes, native
 history windows, replay bytes/age, resource bodies and outbound subscriber queues.

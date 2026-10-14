@@ -49,16 +49,16 @@ async def service(tmp_path):
     await result.close()
 
 
-async def test_selection_returns_before_preparation_finishes_and_preserves_draft(service):
+async def test_explicit_warm_returns_before_preparation_finishes_and_preserves_draft(service):
     sid = service.state['selectedSessionId']
     await service.dispatch('view.update', {'patch': {'draft': 'unsent'}, 'sessionId': sid})
-    response = await asyncio.wait_for(service.dispatch('session.select', {'id': sid}), 1)
+    response = await asyncio.wait_for(service.dispatch('session.warm', {'id': sid}), 1)
     await asyncio.wait_for(service.runtime.ready.wait(), 1)
     assert response['accepted'] and not service.runtime.release.is_set()
     assert service.state['view']['draft'] == 'unsent'
     assert service.state['sessions'][0]['status'] == 'idle'
-    # Repeated selection shares the same preparation.
-    await service.dispatch('session.select', {'id': sid})
+    # Repeated explicit preparation shares the same preparation.
+    await service.dispatch('session.warm', {'id': sid})
     await asyncio.sleep(.02)
     assert service.runtime.started == [sid]
     service.runtime.release.set()

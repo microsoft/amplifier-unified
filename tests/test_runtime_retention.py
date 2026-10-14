@@ -228,7 +228,7 @@ async def test_background_startup_is_bounded_and_disabled_policy_does_not_start(
         release.set()
         await asyncio.gather(*pending)
     assert len(manager.workers) == 4
-    manager.retention.settings['prewarm_on_select'] = False
+    manager.retention.settings['max_warm_workers'] = 0
     await manager.prewarm({'id': 'not-started'}, manager.emit)
     assert 'not-started' not in manager.workers
 
@@ -238,7 +238,7 @@ async def test_disabling_preparation_skips_starts_already_waiting_in_queue(manag
     await manager.retention.background.acquire()
     queued = asyncio.create_task(manager.prewarm({'id': 'queued'}, manager.emit))
     await asyncio.sleep(0)
-    manager.configure_retention({**manager.retention.settings, 'prewarm_on_select': False})
+    manager.configure_retention({**manager.retention.settings, 'max_warm_workers': 0})
     manager.retention.background.release()
     manager.retention.background.release()
     await queued
@@ -325,3 +325,87 @@ async def test_shared_settings_action_persists_and_applies_without_restart(tmp_p
     ('idle_timeout_hours', True), ('max_background_starts', 0), ('prewarm_on_select', 'true')])
 def test_invalid_limits(setting, value):
     with pytest.raises(ValueError): validate_server({'runtime': {setting: value}})
+
+
+@pytest.mark.parametrize('client_kind', [None, 'web', 'tui'])
+@pytest.mark.parametrize('old_preference', [False, True])
+async def test_selecting_six_chats_starts_no_workers_but_explicit_warm_and_send_do(
+        tmp_path, monkeypatch, client_kind, old_preference):
+    from contextlib import nullcontext
+    from amplifier_web.service import AppService
+
+    runtime = RuntimeManager(command=[sys.executable, '-c', SCRIPT],
+                             retention={'prewarm_on_select': old_preference})
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    starts = []
+    original = runtime.start
+    async def start(session, emit):
+        starts.append(session['id'])
+        return await original(session, emit)
+    monkeypatch.setattr(runtime, 'start', start)
+    try:
+        ids = []
+        for index in range(6):
+            receipt = await app.dispatch('session.create', {'title': f'Chat {index}'})
+            ids.append(receipt['result']['sessionId'])
+        if client_kind:
+            app.clients.attach('reader', kind=client_kind)
+        with app.clients.bind('reader') if client_kind else nullcontext():
+            for sid in ids:
+                assert (await app.dispatch('session.select', {'id': sid}))['accepted']
+                await asyncio.sleep(0)  # Let any incorrectly queued preparation run.
+            await asyncio.gather(*list(app.tasks), return_exceptions=True)
+            await asyncio.gather(*list(app.warmup.pending.values()))
+            assert starts == []
+            assert runtime.workers == {}
+            assert all(app._session(sid)['messages'] == [] for sid in ids)
+
+            assert (await app.dispatch('session.warm', {'id': ids[0]}))['accepted']
+            await asyncio.gather(*list(app.tasks), return_exceptions=True)
+            await asyncio.gather(*list(app.warmup.pending.values()))
+            assert starts == [ids[0]]
+            assert runtime.workers[ids[0]]['parked']
+            assert app._session(ids[0])['messages'] == []
+
+            result = await app.dispatch('conversation.send',
+                {'sessionId': ids[1], 'text': 'One explicit input'}, command_id='one-input')
+            assert result['accepted']
+            assert starts == [ids[0], ids[1]]
+            messages = app._session(ids[1])['messages']
+            assert len(messages) == 1
+            assert messages[0]['delivery']['status'] == 'accepted'
+            assert set(runtime.workers) == {ids[0], ids[1]}
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('old_preference', [False, True])
+def test_retired_selection_preference_is_removed_from_stored_policy(tmp_path, old_preference):
+    from amplifier_web.deployment import config_path, load_server_config, save_server_config
+    from amplifier_web.runtime_retention import validate_retention
+
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    original = f'runtime:\n  max_warm_workers: 3\n  prewarm_on_select: {str(old_preference).lower()}\n'
+    path.write_text(original)
+    policy = load_server_config(tmp_path)
+    assert 'prewarm_on_select' not in policy['runtime']
+    assert policy['runtime']['max_warm_workers'] == 3
+    assert path.read_text() == original  # Loading does not rewrite private configuration.
+    save_server_config(tmp_path, policy)
+    assert 'prewarm_on_select' not in path.read_text()
+    with pytest.raises(ValueError):
+        validate_retention({'prewarm_on_select': old_preference})
+
+
+async def test_retired_selection_preference_is_not_an_action_setting(tmp_path):
+    from amplifier_web.service import AppError, AppService
+    runtime = RuntimeManager()
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    try:
+        with pytest.raises(AppError):
+            await app.dispatch('runtime.retention.update', {'patch': {'prewarm_on_select': True}})
+        assert not runtime.workers
+        assert 'prewarm_on_select' not in runtime.retention.settings
+    finally:
+        await app.close()

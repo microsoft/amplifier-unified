@@ -401,7 +401,7 @@ async def test_alternate_global_default_routes_have_equivalent_grants(app):
         await agent(app,source,'settings.update',{'patch':{'bundle':'different','updates':{'autoInstall':True}}},'mixed-default')
     assert app.state['settings']['bundle']=='new-root'
     with pytest.raises(AppError,match='Configuration authority is required'):
-        await agent(app,source,'runtime.retention.update',{'patch':{'prewarm_on_select':True}},'background-policy')
+        await agent(app,source,'runtime.retention.update',{'patch':{'max_warm_workers':2}},'background-policy')
 
 
 async def test_assignment_stop_fences_queued_configuration(app):

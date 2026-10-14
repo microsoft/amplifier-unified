@@ -106,16 +106,16 @@ The optional `expectedRevision` checks the app's global state revision, includin
 presentation changes; it is not a per-session revision. Do not use it as a
 mandatory send precondition during active streaming.
 
-### Optional preparation on navigation
+### Explicit optional preparation
 
 After discovering `session.warm` in `GET /api/actions`, a client can issue it
 through the session command endpoint with empty arguments. It schedules
 background preparation under the host's policy without submitting input or
 changing the client's selection. Acceptance means scheduled, not ready.
 `session.preparation.status` exposes `preparing`, `ready`, `warm`, `active`,
-`cold`, or `unavailable` when known. The web's `session.select` schedules the
-same preparation automatically; a TUI that keeps navigation local can call
-`session.warm` immediately when a conversation is selected.
+`cold`, or `unavailable` when known. Preparation requires an explicit request;
+`session.select`, history reads and stream attachment never schedule it. Clients
+must not send `session.warm` merely because the user selected a conversation.
 
 Reading a session or opening its event stream does not itself warm it. Warmth
 is advisory: a worker can retire or another host can acquire ownership before

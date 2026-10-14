@@ -1,5 +1,10 @@
 # Warm conversations and navigation validation
 
+Historical qualification: the selection-triggered preparation described below
+was subsequently removed under the working-set contract. Current navigation
+never prepares a runtime; explicit `session.warm` and accepted execution retain
+the worker lifecycle and retention rules.
+
 This change was developed from Unified 0.12.0 and integrated with the current
 0.13.1 main (`0ea0566`). The final integration preserved the local CLI bundle
 resolution and bundle-choice fixes; only generated browser assets conflicted

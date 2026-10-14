@@ -71,7 +71,7 @@ preferences must never generate an image.
 | Notifications | Badge, desktop, preview and enabling/disabling an existing phone connection save immediately as single-field patches. Keep phone connection save for server/topic/token and first-time enablement. |
 | Diagnostic capture | Capture/recording/stream switches save immediately; numeric limits save on valid blur. Host merges narrow patches so an unfinished destination cannot be activated. |
 | Diagnostic destinations | Keep Save destination: URL, authentication reference, routing streams, workspace filter and enabled state form one outbound policy. Test is a separate explicit network operation. |
-| Ready conversations | Background preparation saves immediately. Count/lifetime save on valid blur or Enter. Each write changes only that field. |
+| Ready conversations | Count/lifetime save on valid blur or Enter. Opening history does not prepare a runtime. Each write changes only that field. |
 | File permissions | Keep Save permissions for coordinated allowed/denied paths and scope; deny precedence must be validated on the complete policy. |
 | Updates | Preferences already apply on change; checking, installing and rollback are explicit operations. |
 | Saved work, backup, repair and reset | Import/export/backup saves are operations. Keep reviewed destructive-action confirmation; these are not preference controls. |

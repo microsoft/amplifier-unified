@@ -8,12 +8,17 @@ import time
 DEFAULT_RETENTION = {
     "max_warm_workers": 32,
     "idle_timeout_hours": 12,
-    "prewarm_on_select": True,
     "max_background_starts": 2,
 }
 
 
-def validate_retention(value):
+def validate_retention(value, *, stored=False):
+    # Older server.yaml files and initialization callers may contain this retired
+    # preference. It no longer authorizes runtime work when viewing a chat.
+    if stored and isinstance(value, dict) and "prewarm_on_select" in value:
+        if type(value["prewarm_on_select"]) is not bool:
+            raise ValueError("runtime.prewarm_on_select must be true or false.")
+        value = {key: item for key, item in value.items() if key != "prewarm_on_select"}
     if not isinstance(value, dict) or set(value) - set(DEFAULT_RETENTION):
         raise ValueError("runtime must contain only the documented worker retention settings.")
     result = {**DEFAULT_RETENTION, **value}
@@ -23,15 +28,13 @@ def validate_retention(value):
     hours = result["idle_timeout_hours"]
     if type(hours) not in (int, float) or not math.isfinite(hours) or hours < 0:
         raise ValueError("runtime.idle_timeout_hours must be a finite nonnegative number.")
-    if type(result["prewarm_on_select"]) is not bool:
-        raise ValueError("runtime.prewarm_on_select must be true or false.")
     return result
 
 
 class WorkerRetention:
     def __init__(self, manager, settings=None, *, clock=time.monotonic):
         self.manager = manager
-        self.settings = validate_retention(settings or {})
+        self.settings = validate_retention(settings or {}, stored=True)
         self.clock = clock
         self.changed = asyncio.Event()
         self.task = None
