@@ -130,6 +130,13 @@ updates only affected node rows. A cold rebuild atomically replaces one generati
 The sidecar is never an execution checkpoint. Cache failure falls back to native
 reads, and source-path checks prevent a cached receipt from granting a new scope.
 
+Before loading a stored tree, the worker reads only that requested model's receipt,
+bounded to 1 MiB encoded, and compares its exact input digest. A mismatch or an
+oversized receipt takes the canonical read without fetching tree headers or node
+rows. A mismatched in-memory model is released before that read; unrelated bounded
+models remain available. This avoids retaining an already-unusable graph during a
+cold rebuild. It does not change source validation or make a receipt authoritative.
+
 Retain at most six selected/recent model generations, 96 MiB of logical decoded
 model payload, 64 MiB encoded per model, and 256 MiB total encoded model rows.
 SQLite also has a 512 MiB allocated-page cap; reusable free pages are not live
