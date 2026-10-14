@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.150",
+      "title": "Make release verification failures easier to diagnose",
+      "changes": [
+        "Background browser verification records each scenario and continues independent checks after a safely cleaned failure, while incomplete or unsafe checks remain explicit failures.",
+        "Desktop setup, message recovery, and read-only Work checks now use current fixtures without weakening their original assertions.",
+        "The working-set architecture plan now distinguishes delivered improvements through 0.20.149 from the remaining catalog and selected-history work."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.149",
       "title": "Keep unchanged chat navigation stable",
       "changes": [
