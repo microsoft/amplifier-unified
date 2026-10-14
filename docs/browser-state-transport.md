@@ -70,7 +70,14 @@ Independent custom packages still receive their complete existing snapshot via
 retain their contracts. This is not compatibility negotiation for older bundled
 clients: web and server adopt this protocol together. The separate AHP track is
 unchanged. DOM diagnostics expose bounded reason labels, resource names, request
-IDs and timings only, never titles, filters, paths, prompts or drafts.
+IDs, timings and numeric revision-change counts only, never titles, filters,
+paths, prompts or drafts. The `data-amplifier-shell-diagnostics` attribute retains
+at most 24 entries and 8 KiB. Its `resourceRevisions` totals distinguish accepted
+envelopes from unchanged revision tuples, and changed context, page and custom
+records by fixed resource name. They compare accepted metadata after stale-version
+rejection, without inspecting values; replacement host/demand/scope/instance
+identities count as removed and newly installed records. These are client receipt
+counts, not wire frames, transferred bytes, payload equality or server builds.
 
 ## Selected browser context
 
