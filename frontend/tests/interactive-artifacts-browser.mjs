@@ -36,6 +36,7 @@ const surface=revision=>({
     token:'obsolete-token',editVersion:canvasApp.getEditVersion(),blocked:true,quiescent:true,
     localPending:false,queued:0,pending:0,gestures:0,draftPending:false,uncertain:false},'*');
   }
+  if(data?.prepareTransition)window.lastPreparation=data;
   if(window.staleTransition&&data?.releaseTransition)document.documentElement.inert=false;
  },true);
  </script>`
@@ -266,6 +267,41 @@ try{
   await one.getByRole('button',{name:'Go to Latest',exact:true}).click();
   await expect(appFrame(one).getByRole('heading',{name:'Native revision 4'})).toBeVisible();
  }
+ // An adversarial queued editor callback arrives after disabled-input
+ // acknowledgement, while the actual follow request is in flight. This is not
+ // a claim that the inert iframe accepts keyboard input.
+ let releaseConflict,conflictPosted=false;
+ const conflictGate=new Promise(resolve=>{releaseConflict=resolve});
+ const lateEditingFollow=async route=>{
+  if(route.request().postDataJSON()?.action!=='canvas.views.follow')return route.continue();
+  conflictPosted=true;await conflictGate;return route.continue();
+ };
+ await nativeInput().evaluate(node=>{window.originalNativeInput=node});
+ await page.route('**/api/actions',lateEditingFollow);postedBefore=followPosts();
+ await one.getByRole('button',{name:'Return to published version',exact:true}).click();
+ await expect.poll(()=>conflictPosted).toBe(true);
+ await expect(one.locator('iframe')).toHaveAttribute('inert','');
+ await nativeInput().evaluate(node=>{
+  node.value='Late private callback value';
+  const prepared=window.lastPreparation;
+  if(!prepared)throw Error('No actual preparation channel observed');
+  parent.postMessage({type:'canvas-app',id:canvasApp.getSnapshot().id,channel:prepared.channel,
+   op:'editing',editVersion:canvasApp.getEditVersion()+1},'*');
+ });
+ await expect(one.locator('.a-canvas-unsaved')).toHaveText('Unsaved input');
+ releaseConflict();
+ await expect(one.locator('.a-inline-artifact-notice')).toContainText('newer private input was retained');
+ const discard=one.getByRole('button',{name:'Discard private input and show confirmed version',exact:true});
+ await expect(discard).toBeVisible();await sameNativeInput();
+ await expect(nativeInput()).toHaveValue('Late private callback value');
+ page.once('dialog',dialog=>dialog.dismiss());await discard.click();
+ await sameNativeInput();await expect(nativeInput()).toHaveValue('Late private callback value');
+ page.once('dialog',dialog=>dialog.accept());await discard.click();
+ await expect(appFrame(one).getByRole('heading',{name:'Native revision 1'})).toBeVisible();
+ assert.equal(followPosts(),postedBefore+1,'Explicit discard never posts follow again');
+ await page.unroute('**/api/actions',lateEditingFollow);
+ await one.getByRole('button',{name:'Go to Latest',exact:true}).click();
+ await expect(appFrame(one).getByRole('heading',{name:'Native revision 4'})).toBeVisible();
  const peer=await context.newPage();await peer.goto(url);await peer.getByRole('textbox',{name:'Message Amplifier'}).waitFor();await action(peer,'session.select',{id:sid});
  await card(peer,id,1).scrollIntoViewIfNeeded();await expect(card(peer,id,1)).toContainText('Published version 1 · Read only');
  await one.getByRole('button',{name:'Collapse Shared native counter',exact:true}).click();
