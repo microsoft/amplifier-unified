@@ -168,7 +168,7 @@ async def test_transport_bound_protocol_returns_are_small_lossless_and_wake_once
     subscribed, _ = await compact_call(app, bridge_probe, source, "coordination.subscribe", {
         "sessionId": source["id"], "requestId": request,
     }, "subscribe")
-    reference = "candidate.txt@sha256:fixture"
+    reference = "urn:fixture:candidate"
     reply, _ = await compact_call(app, bridge_probe, target, "coordination.reply", {
         "requestId": request, "kind": "result", "outcome": "success",
         "text": "Checked candidate claim", "references": [reference],
@@ -340,7 +340,7 @@ async def test_terminal_failure_information_and_no_automatic_success_survive(
     assert not result["result"]["qualified"] and result["result"]["results"] == []
     response = result["result"]["receipt"]["response"]
     assert response["requestId"] == request and response["generationId"] == "recipient-" + request
-    assert response["references"] == ["candidate.txt@sha256:fixture"]
+    assert response["references"] == ["urn:fixture:candidate"]
     if failure == "generation":
         assert response["status"] == "rejected"
         assert response["detail"] == "Terminal evidence or exact linkage failed."

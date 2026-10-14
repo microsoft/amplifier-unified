@@ -82,7 +82,7 @@ async def test_creation_handle_resolves_exact_outcome_and_returns_once(app, outc
     await generation(app, target, 'recipient-' + request, [request])
     await agent_action(app, target, 'coordination.reply', {
         'requestId': request, 'kind': 'decline' if outcome == 'declined' else 'result',
-        'outcome': outcome, 'text': 'Observed result', 'references': ['candidate.txt@sha256:fixture'],
+        'outcome': outcome, 'text': 'Observed result', 'references': ['urn:fixture:candidate'],
     }, 'reply')
     await finish(app, target, request)
     await finish(app, target, request)

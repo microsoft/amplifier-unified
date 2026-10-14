@@ -55,6 +55,7 @@ def outcome_sender(request):
 
 
 def definitions(schema, string):
+    from .result_artifacts import REFERENCE_HELP
     sid = {"sessionId": string(200)}
     references = {"type": "array", "maxItems": 16, "items": string(2000)}
     message = {**sid, "senderSessionId": string(200), "grantId": string(200),
@@ -98,11 +99,13 @@ def definitions(schema, string):
         "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
-        "coordination.reply": ("Record a typed reply to your exact delivered request. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. At most 32 revisions per request.", schema({
+        "coordination.reply": ("Record a typed reply to your exact delivered request. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. At most 32 revisions per request.", schema({
             "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline", "question", "conflict"]},
             "expectedResponseRevision": {"type": "integer", "minimum": 0, "maximum": MAX_RESPONSE_REVISIONS},
             "outcome": {"enum": ["success", "failed", "deferred", "declined", "question", "conflict", "cancelled"]},
-            "text": {**string(4000), "minLength": 1}, "references": references,
+            "text": {**string(4000), "minLength": 1}, "references": {**references,
+                "description": REFERENCE_HELP,
+                "items": {**string(2000), "description": "Exact retained local file reference or opaque non-file citation."}},
             "messageIds": {"type": "array", "maxItems": 16, "items": string(200)},
         }, ["requestId", "kind", "outcome", "text"])),
         "coordination.subscribe": ("Subscribe to meaningful revisions of one exact request, at most 32 automatic notifications. Questions, deferrals and negative outcomes never satisfy a dependency; only qualified success does. Every continuation rechecks the saved task/Stop boundary. Cursor reads confer no authority.", schema({

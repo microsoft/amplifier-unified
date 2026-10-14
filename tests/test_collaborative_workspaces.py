@@ -728,9 +728,10 @@ async def declared_result(app, request="result-request", kind="result", outcome=
     assert receipt["delivery"] == "queued"
     await settled(app, request, "accepted")
     await generation(app, target, "recipient-" + request, [request])
+    # Linkage-only cases use an opaque citation; retained-file cases pass real hashes.
     declaration = await agent_action(app, target, "coordination.reply", {
         "requestId": request, "kind": kind, "outcome": outcome, "text": "Checked candidate claim",
-        "references": ["candidate.txt@sha256:fixture"] if refs is None else refs,
+        "references": ["urn:fixture:candidate"] if refs is None else refs,
     }, "declare-" + request, [request])
     assert declaration["result"]["status"] == "staged"
     return receipt
@@ -1540,7 +1541,7 @@ async def staged_message_link(app, request, *, references_only=False, message_id
     declaration = await agent_action(app, target, "coordination.reply", {
         "requestId": request, "kind": "result", "outcome": "success", "text": "Checked evidence",
         "messageIds": [] if references_only else [message_id or canonical],
-        "references": ["candidate.txt@sha256:fixture"] if references_only else [],
+        "references": ["urn:fixture:candidate"] if references_only else [],
     }, "declare-" + request)
     assert declaration["result"]["status"] == "staged"
     wait = await agent_action(app, source, "coordination.subscribe",

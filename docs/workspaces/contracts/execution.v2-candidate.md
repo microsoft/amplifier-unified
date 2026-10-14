@@ -238,6 +238,17 @@ retroactively labeled retained. Request-scoped artifact reads expose only the
 declared artifact to the request participants in the recorded workspace; they do
 not grant general access to the producing conversation's output library.
 
+The discovered reply schema and shipped coordination skill describe the exact
+syntax, an executable example and the acknowledgement's retention status. A
+local reference with an explicit but malformed `@sha256` or `#sha256` marker,
+or an unsupported `file:` prefix, records an `unsupported` artifact with repair
+guidance, without reading a file. Such a declaration is incomplete and cannot
+qualify as a successful dependency. Remote URLs and ordinary opaque citations
+remain references, without filesystem authority. A plain path alone does not
+request retention. Replies distinguish no saved files from incomplete retention
+and saved exact bytes; terminal sealing cannot change a retention failure into
+saved bytes. Correction uses a later response revision, preserving the original.
+
 ### Observed dependency provenance and combined candidates — 2026-10-14
 
 An explicit passive worker inspection reports already-loaded module origins,

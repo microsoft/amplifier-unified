@@ -105,9 +105,12 @@ compare those exact links, not equal message text.
    Messages between a pair of conversations are limited to 32 per minute,
    including notify. On backpressure, wait or combine updates; do not change
    identities to evade a limit. Identical retries still return their receipts.
-   To open a reported file version, use `canvas.openFile` with the calling
-   session/workspace, the reference path and `expectedSha256`, and the original
-   `referenceRequestId`. The host checks bytes in the recorded execution folder.
+   Read a retained file with `coordination.artifact`, using the calling session,
+   original requestId and exact reference string; supply responseRevision to
+   inspect an earlier reply. To preview it, use `canvas.openFile` with the calling
+   session/workspace, the reference path and `expectedSha256`, the original
+   `referenceRequestId` and optional `referenceResponseRevision`. Current replies
+   open their saved bytes even after the source changes or disappears.
    Changed, missing and legacy unbound references remain explicit; never strip
    the digest and present current bytes as the reported version.
 
@@ -135,6 +138,37 @@ request. Exact command retries retain their original response revision. Optional
 an attributed peer note, not the sealing protocol. Give artifact revision/hash/commit,
 checks and limits.
 A peer's passing check is not your independent artifact verification.
+
+### Returning a retained local file
+
+Use `path@sha256:<64 lowercase hex digits>` in `coordination.reply.references`.
+The path is relative to your actual execution folder (an absolute path must also
+stay inside it). Paths containing `@` or a newline are unsupported. Compute the
+hash of the finished file's actual bytes. Do not use `file:`, `#sha256=`, a plain
+path, or a digest mentioned only in reply text to request retention. Ordinary
+non-file citations remain opaque references and do not save bytes.
+
+For example, if `report.txt` contains exactly `hello` with no trailing newline,
+its reference is:
+
+```text
+report.txt@sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+```
+
+Before ending your generation, inspect the reply acknowledgement:
+`artifactVerification: verified` and each requested file's `artifacts[].status:
+retained` confirm that matching bytes were saved. `not_requested` means no file
+versions were saved; `incomplete` means at least one requested version failed.
+Read `artifactDetail` and each artifact's `detail` for repair guidance. Saving
+happens before acknowledgement, not after terminal completion. Ending the turn
+seals its evidence but cannot repair missing bytes. Do not claim retained delivery
+from `accepted: true`, a sealed reply, or a success outcome alone.
+
+If retention failed, report that limitation and finish the current turn. A later
+authorized generation can inspect `coordination.result` and submit a corrected
+reply with a new command ID and the current `expectedResponseRevision`, preserving
+the earlier reply. Do not retry an acknowledged command expecting different bytes,
+overwrite unrelated work, or start another generation yourself to bypass Stop.
 
 ## Example brief and result
 

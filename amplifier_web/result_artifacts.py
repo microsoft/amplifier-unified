@@ -11,6 +11,16 @@ from .outputs import file_bytes, MAX_FILE
 
 MAX_DECLARATION = 2 * MAX_FILE
 EXACT = re.compile(r'([^@\n]+)@sha256:([a-f0-9]{64})\Z')
+FILE_DIGEST = re.compile(r'[@#]sha256\b', re.IGNORECASE)
+URI = re.compile(r'^[a-z][a-z0-9+.-]*:', re.IGNORECASE)
+DRIVE_PATH = re.compile(r'^[a-z]:[/\\]', re.IGNORECASE)
+REFERENCE_HELP = (
+    'To retain a local file, use path@sha256:<64 lowercase hex digits>, for example '
+    'report.txt@sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824 '
+    'for the exact bytes hello (no newline). Use the actual file hash. Paths resolve inside '
+    'the producing execution folder; do not use file: or #sha256= syntax. A plain path or '
+    'opaque citation does not save file bytes.'
+)
 
 
 def fence(source, request):
@@ -25,7 +35,13 @@ def prepare_files(root, references):
     items, total = [], 0
     for reference in dict.fromkeys(references):
         match = EXACT.fullmatch(reference)
-        if not match or '://' in match[1]:
+        file_uri = reference.lower().startswith('file:')
+        if not file_uri and URI.match(reference) and not DRIVE_PATH.match(reference):
+            continue  # A URL, URN or other non-file URI is only a citation.
+        if file_uri or not match or '://' in match[1]:
+            if file_uri or ('://' not in reference and FILE_DIGEST.search(reference)):
+                items.append({'reference': reference, 'status': 'unsupported',
+                              'detail': 'Unsupported retained-file reference. ' + REFERENCE_HELP})
             continue  # Opaque references are not filesystem authority.
         path, expected = match.groups()
         item = {'reference': reference, 'sha256': expected}
@@ -94,6 +110,11 @@ async def store(collaboration, source, request, response, prepared, command_id):
     response['artifacts'] = artifacts
     response['artifactVerification'] = ('incomplete' if any(row['status'] != 'retained' for row in artifacts)
                                         else 'verified' if artifacts else 'not_requested')
+    if not artifacts and response.get('references'):
+        response['artifactDetail'] = 'No file versions were saved. ' + REFERENCE_HELP
+    elif response['artifactVerification'] == 'incomplete':
+        response['artifactDetail'] = ('Some file versions were not saved. Inspect artifacts[].status and detail '
+                                      'before finishing the turn; terminal sealing does not repair retention.')
 
 
 def resolve(collaboration, sid, request_id, reference, response_revision=None):

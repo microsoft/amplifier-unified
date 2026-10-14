@@ -412,23 +412,47 @@ try{
  // Revise one original request across new generations. Refresh must discard a
  // stale inspection, and an earlier saved file remains reachable from the UI.
  const originalRound=rounds[0],revisedTask=originalRound.task;
- for(const [revision,outcome] of [[2,'failed'],[3,'success']]){
+ for(const [revision,outcome] of [[2,'failed'],[3,'success'],[4,'malformed'],[5,'opaque'],[6,'success']]){
   const inputId='browser-revision-input-'+revision;
   await page.evaluate(({sender,target,inputId})=>window.amplifier.dispatch('coordination.send',{
    senderSessionId:sender,sessionId:target,mode:'queue',text:'Updated candidate '+inputId,
   },{id:inputId}),{sender:current.selected,target:revisedTask.id,inputId});
   await expect.poll(async()=>(await inspect()).contexts[revisedTask.id]?.inputIds[0]).toBe(inputId);
   const candidate=await readCandidate(revisedTask.actor,inputId);
-  await agent(revisedTask.actor,'coordination.reply',{
-   requestId:originalRound.requestId,expectedResponseRevision:revision-1,kind:'result',outcome,
-   text:revision===2?'Needs another correction':'Latest correction complete',
-   references:[candidate.path+'@sha256:'+candidate.sha256],
+  const replyText=revision===2?'Needs another correction':revision===4?'Malformed file declaration':revision===5?'Plain path citation':'Latest correction complete';
+  const reference=revision===4?'file:'+candidate.path+'#sha256='+candidate.sha256:revision===5?candidate.path:candidate.path+'@sha256:'+candidate.sha256;
+  const declaration=await agent(revisedTask.actor,'coordination.reply',{
+   requestId:originalRound.requestId,expectedResponseRevision:revision-1,kind:'result',outcome:outcome==='failed'?'failed':'success',
+   text:replyText,references:[reference],
   },'browser-revision-'+revision);
   await finish(revisedTask.actor);
   await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
   const row=related.locator('[data-request-id="'+originalRound.requestId+'"]');
   await row.getByRole('button',{name:'Inspect exact result',exact:true}).click();
-  await expect(row.locator('[data-part="exact-result"]')).toContainText(revision===2?'Needs another correction':'Latest correction complete');
+  await expect(row.locator('[data-part="exact-result"]')).toContainText(replyText);
+  if(revision===4||revision===5){
+   const result=row.locator('[data-part="exact-result"]');
+   assert.equal(declaration.result.artifactVerification,revision===4?'incomplete':'not_requested');
+   await expect(result).toContainText(revision===4?'Some file versions were not saved':'No file versions saved');
+   if(revision===4){
+    await expect(result).toContainText('Not qualified');
+    await expect(result).toContainText('Unsupported retained-file reference');
+    await expect(result).toContainText('path@sha256:');
+   }
+   await expect(result.getByRole('button',{name:'Open referenced artifact',exact:true})).toHaveCount(0);
+   await expect(result.getByRole('link',{name:'Download saved version',exact:true})).toHaveCount(0);
+   await result.getByText(revision===4?'Some file versions were not saved. Check the reference details.':'No file versions saved. These references are citations only.',{exact:true}).scrollIntoViewIfNeeded();
+   await page.screenshot({path:join(outputDir,'amplifier-coordination-'+outcome+'.png'),animations:'disabled'});
+  }
+  if(revision===6){
+   assert.equal(declaration.result.artifactVerification,'verified');
+   await expect(row.locator('[data-part="exact-result"]')).toContainText('Exact version saved');
+   await expect(row.locator('[data-part="exact-result"]')).toContainText('Qualified terminal evidence');
+   await row.getByText('Earlier replies',{exact:true}).click();
+   await expect(row.locator('[data-response-revision="4"]')).toContainText('Unsupported retained-file reference');
+   await expect(row.locator('[data-response-revision="4"]')).toContainText('Not qualified');
+   await expect(row.locator('[data-response-revision="5"]')).toContainText('No file versions saved');
+  }
   if(revision===3){
    await unlink(candidate.path);
    await expect(row.locator('[data-part="exact-result"]')).toContainText('Qualified terminal evidence');
@@ -442,5 +466,5 @@ try{
  }
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await preserve();
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,noCoordinationForms:true,noGrantRequired:true,runtimeOwnedBindings:true,twoDistinctTaskRoots:true,twoArtifactRoundsPerRoot:true,firstRoundBytesRetained:true,laterReplyVersionsInspectable:true,latestOutcomeAfterRefresh:true,peerWokenGeneration:true,notifyNeverWakes:true,exactResultInspector:true,referencedArtifactOpen:true,qualifiedScriptedTerminal:true,continuationOncePerRequest:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false,outputDir}));
+ console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,noCoordinationForms:true,noGrantRequired:true,runtimeOwnedBindings:true,twoDistinctTaskRoots:true,twoArtifactRoundsPerRoot:true,firstRoundBytesRetained:true,laterReplyVersionsInspectable:true,malformedReferenceRepair:true,opaqueReferenceNotSaved:true,correctedRetentionRevision:true,latestOutcomeAfterRefresh:true,peerWokenGeneration:true,notifyNeverWakes:true,exactResultInspector:true,referencedArtifactOpen:true,qualifiedScriptedTerminal:true,continuationOncePerRequest:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false,outputDir}));
 }catch(error){await page?.screenshot({path:join(outputDir,'amplifier-coordination-failure.png')});console.error((await page?.locator("body").innerText())?.slice(-5000));throw error}finally{await browser?.close();fixture.kill()}
