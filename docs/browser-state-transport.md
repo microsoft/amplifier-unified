@@ -1,5 +1,30 @@
 # Browser state transport and idle work
 
+## Installed interface discovery
+
+Bound web state baselines include `client.build` with `serverVersion` and
+`frontend: {version, id}`, captured once from the serving host's package at
+startup. `client.hostInstanceId` identifies that lifetime. Reconnect supplies
+the current identity through the same state stream; unchanged deltas do not
+repeat it. A validated baseline, rather than socket-open alone, suppresses
+`build.json` requests. Focus and visibility do not poll a healthy connection.
+
+This identifies the installed interface, not available published releases.
+The server's configured release-check interval and explicit update actions are
+unchanged. A different installed frontend offers the existing explicit reload,
+after pending actions, Canvas edits and drafts are saved; a failed save prevents
+reload. Discovery and the reload notice also work before shell startup completes.
+
+If React starts but no valid baseline arrives within ten seconds, or an established
+connection remains unavailable for sixty seconds, a visible tab may read the
+small `build.json` fallback. Reads have a five-second deadline, a 1 KiB body
+limit, one request at a time, and retry delays of sixty seconds, two minutes,
+then five minutes. Hidden tabs stop reads; baseline recovery cancels pending
+reads and fences late results. A known changed build stops further fallback
+polling. This does not add a second stream or replay commands. Existing offline
+entry recovery remains separate; a missing or malformed main JavaScript module
+still requires browser/manual reload because it cannot run this React recovery.
+
 ## Shell bootstrap and active resources
 
 The bundled browser gets shell descriptors once from `GET /api/shell?bundled=1`,

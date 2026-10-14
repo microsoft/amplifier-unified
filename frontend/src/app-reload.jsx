@@ -1,24 +1,20 @@
 import React,{createContext,useContext,useEffect,useRef,useState} from 'react';
 import {RefreshCw} from 'lucide-react';
 import {frontendBuild} from './feedback-diagnostics';
-import {changedFrontend,reloadWhenSaved} from './app-reload.js';
+import {createBuildDiscovery,reloadWhenSaved} from './app-reload.js';
 import './app-reload.css';
 
 export const AppReloadContext=createContext(null);
-export function useAppReload({enabled,blocked,prepare}){
+export function useAppReload({client,blocked,prepare}){
  const [installed,setInstalled]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const pending=useRef(false),preparation=useRef(prepare);preparation.current=prepare;
+ const discovery=useRef(null);
  useEffect(()=>{
-  if(!enabled)return;
-  let alive=true,checking=false;const controller=new AbortController();
-  const check=async()=>{
-   if(checking||document.hidden)return;checking=true;
-   try{const response=await fetch('/build.json',{cache:'no-store',credentials:'same-origin',signal:controller.signal});if(response.ok){const value=await response.json();if(alive)setInstalled(changedFrontend(frontendBuild,value)?value:null)}}catch{}finally{checking=false}
-  };
-  check();const timer=setInterval(check,60000);
-  window.addEventListener('focus',check);window.addEventListener('amplifier-reconnected',check);document.addEventListener('visibilitychange',check);
-  return()=>{alive=false;controller.abort();clearInterval(timer);window.removeEventListener('focus',check);window.removeEventListener('amplifier-reconnected',check);document.removeEventListener('visibilitychange',check)};
- },[enabled]);
+  const owner=createBuildDiscovery({loaded:frontendBuild,onInstalled:setInstalled});discovery.current=owner;
+  window.addEventListener('focus',owner.wake);window.addEventListener('online',owner.wake);document.addEventListener('visibilitychange',owner.wake);
+  return()=>{owner.dispose();discovery.current=null;window.removeEventListener('focus',owner.wake);window.removeEventListener('online',owner.wake);document.removeEventListener('visibilitychange',owner.wake)};
+ },[]);
+ useEffect(()=>discovery.current?.observe(client),[client]);
  const reload=async()=>{
   if(!installed||blocked||pending.current)return;
   pending.current=true;setBusy(true);setError('');
