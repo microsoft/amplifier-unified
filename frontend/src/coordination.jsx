@@ -86,6 +86,7 @@ export function RelatedWork({dispatch,sessionId}){
   const peers=await dispatch('coordination.list',{workspace,limit:50,includeWorkers:false},{feedback:false});
   if(current!==visit.current)return;
   setContext(state.result);
+  setInspected({});
   setItems(peers.result.items.filter(row=>row.kind==='conversation'&&row.target.sessionId!==sessionId));
  };
  useEffect(()=>{setInspected({});setOriginal(null);setContext({requests:[]});setItems([]);setError('');refresh().catch(error=>setError(error.message));return()=>{visit.current++}},[sessionId]);
@@ -112,7 +113,16 @@ export function RelatedWork({dispatch,sessionId}){
     {response.terminalMessageId&&response.status==='sealed'&&<button className="a-link" data-message-id={response.terminalMessageId} onClick={()=>reveal(row.target.sessionId,response.terminalMessageId)}>Open exact terminal message</button>}
     {(response.references||[]).map(reference=>{const artifact=response.artifacts?.find(item=>item.reference===reference);return <p key={reference}><code>{reference}</code>{artifact&&<small> · {artifact.status==='retained'?'Exact version saved':artifact.detail||artifact.status}</small>}{/^[^@\n]+@sha256:[a-f0-9]{64}$/.test(reference)&&!reference.includes('://')&&<button className="a-link" onClick={()=>openArtifact(row.requestId,reference,response.responseRevision)}>Open referenced artifact</button>}{artifact?.status==='retained'&&<a className="a-link" href={'/api/outputs/'+artifact.outputId+'/content'} download>Download saved version</a>}</p>})}
     {(response.messageIds||[]).map(messageId=><button key={messageId} className="a-link" onClick={()=>reveal(row.target.sessionId,messageId)}>Open evidence message {messageId}</button>)}
-   </div>}{result&&<p className="a-caption">{result.detail}</p>}
+   </div>}{result?.revisions?.some(item=>item.responseRevision!==receipt.response?.responseRevision)&&<details>
+    <summary>Earlier replies</summary>
+    {result.revisions.filter(item=>item.responseRevision!==receipt.response?.responseRevision).map(item=><div key={item.responseRevision} data-response-revision={item.responseRevision}>
+     <p>Reply {item.responseRevision} · {item.outcome} · {item.qualified?'Qualified terminal evidence':'Not qualified'}</p><p>{item.text}</p>
+     {(item.artifacts||[]).filter(artifact=>artifact.status==='retained').map(artifact=><p key={artifact.outputId}>
+      <button className="a-link" onClick={()=>openArtifact(row.requestId,artifact.reference,item.responseRevision)}>Open saved reply {item.responseRevision}</button>
+      <a className="a-link" href={'/api/outputs/'+artifact.outputId+'/content'} download>Download saved reply {item.responseRevision}</a>
+     </p>)}
+    </div>)}
+   </details>}{result&&<p className="a-caption">{result.detail}</p>}
   </article>})}
  </section>;
 }

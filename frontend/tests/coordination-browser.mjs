@@ -409,7 +409,38 @@ try{
  assert.equal(peerState.nativeRuntime,false);assert.equal(peerState.providerCalls,false);
  assert.equal(peerState.bridgeCalls.filter(row=>['coordination.grant','coordination.decide','coordination.revoke'].includes(row.action)).length,0);
  assert.equal(uiActions.filter(row=>['coordination.grant','coordination.decide','coordination.revoke','coordination.create','coordination.send','coordination.subscribe'].includes(row.action)).length,0);
+ // Revise one original request across new generations. Refresh must discard a
+ // stale inspection, and an earlier saved file remains reachable from the UI.
+ const originalRound=rounds[0],revisedTask=originalRound.task;
+ for(const [revision,outcome] of [[2,'failed'],[3,'success']]){
+  const inputId='browser-revision-input-'+revision;
+  await page.evaluate(({sender,target,inputId})=>window.amplifier.dispatch('coordination.send',{
+   senderSessionId:sender,sessionId:target,mode:'queue',text:'Updated candidate '+inputId,
+  },{id:inputId}),{sender:current.selected,target:revisedTask.id,inputId});
+  await expect.poll(async()=>(await inspect()).contexts[revisedTask.id]?.inputIds[0]).toBe(inputId);
+  const candidate=await readCandidate(revisedTask.actor,inputId);
+  await agent(revisedTask.actor,'coordination.reply',{
+   requestId:originalRound.requestId,expectedResponseRevision:revision-1,kind:'result',outcome,
+   text:revision===2?'Needs another correction':'Latest correction complete',
+   references:[candidate.path+'@sha256:'+candidate.sha256],
+  },'browser-revision-'+revision);
+  await finish(revisedTask.actor);
+  await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
+  const row=related.locator('[data-request-id="'+originalRound.requestId+'"]');
+  await row.getByRole('button',{name:'Inspect exact result',exact:true}).click();
+  await expect(row.locator('[data-part="exact-result"]')).toContainText(revision===2?'Needs another correction':'Latest correction complete');
+  if(revision===3){
+   await unlink(candidate.path);
+   await expect(row.locator('[data-part="exact-result"]')).toContainText('Qualified terminal evidence');
+   await row.getByText('Earlier replies',{exact:true}).click();
+   await row.getByRole('button',{name:'Open saved reply 1',exact:true}).click();
+   await page.waitForFunction(text=>window.amplifier.getState().canvas?.content===text,originalRound.candidate.text);
+   const savedUrl=await row.getByRole('link',{name:'Download saved reply 1',exact:true}).getAttribute('href');
+   assert.equal(await page.request.get(new URL(savedUrl,page.url()).href).then(response=>response.text()),originalRound.candidate.text);
+   await preserve();
+  }
+ }
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await preserve();
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,noCoordinationForms:true,noGrantRequired:true,runtimeOwnedBindings:true,twoDistinctTaskRoots:true,twoArtifactRoundsPerRoot:true,firstRoundBytesRetained:true,peerWokenGeneration:true,notifyNeverWakes:true,exactResultInspector:true,referencedArtifactOpen:true,qualifiedScriptedTerminal:true,continuationOncePerRequest:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false,outputDir}));
+ console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,noCoordinationForms:true,noGrantRequired:true,runtimeOwnedBindings:true,twoDistinctTaskRoots:true,twoArtifactRoundsPerRoot:true,firstRoundBytesRetained:true,laterReplyVersionsInspectable:true,latestOutcomeAfterRefresh:true,peerWokenGeneration:true,notifyNeverWakes:true,exactResultInspector:true,referencedArtifactOpen:true,qualifiedScriptedTerminal:true,continuationOncePerRequest:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false,outputDir}));
 }catch(error){await page?.screenshot({path:join(outputDir,'amplifier-coordination-failure.png')});console.error((await page?.locator("body").innerText())?.slice(-5000));throw error}finally{await browser?.close();fixture.kill()}
