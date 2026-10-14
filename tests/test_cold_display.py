@@ -530,7 +530,9 @@ def test_cold_detail_miss_loads_each_body_once_and_warm_hit_loads_none(app, monk
     assert counts == {'messages': 0, 'execution': 0}
     assert warmed == expected
     assert cold_display.raw(row) == {**before, 'status': 'error', 'title': 'Current scalar facts'}
-    assert cold_display.is_cold(row)
+    assert isinstance(row, cold_display.ColdRecord)
+    assert set(dict.__getitem__(row, cold_display.MARKER)) >= {'messages', 'execution'}
+    assert not dict.__contains__(row, 'messages') and not dict.__contains__(row, 'execution')
 
 
 @pytest.mark.parametrize('invalidation', ['scoped', 'detail-only', 'all'])

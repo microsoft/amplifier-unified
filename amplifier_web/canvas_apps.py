@@ -316,7 +316,11 @@ def command(service, action, args, origin):
     app['stateRevision'] += 1
     row['app'] = app
     sync(service)
-    if name == 'restore' and state.get('canvas', {}).get('id') == row['id']:
+    if (name == 'restore' and args.get('viewId', 'primary') == 'primary'
+            and state.get('canvas', {}).get('id') == row['id']):
         from .canvas_library import load
+        published = state['canvas'].get('publishedVersion')
         load(state, db, row['id'], open_panel=state['canvas'].get('open', False))
+        if published is not None:
+            state['canvas']['publishedVersion'] = published
     return snapshot(row, db)

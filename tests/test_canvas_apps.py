@@ -285,6 +285,42 @@ async def test_follow_retains_original_publication_identity_and_dirty_guard(app)
         await dispatch(app, 'canvas.views.follow', {**view_target(live), 'followLatest': True})
 
 
+async def test_inline_restore_preserves_independent_numbered_primary(app):
+    row = await create(app)
+    row = await edit(app, row, 'revise', content='<h1>Revision two</h1>')
+    live = await inline(app, row, 'restore-owner', follow=True)
+    await dispatch(app, 'canvas.select', {'id': row['id'], 'version': 1})
+    with app.clients.bind('one'):
+        app.state['canvas']['publishedVersion'] = 1
+        before = deepcopy(app.state['canvas'])
+    row = await edit(app, row, 'restore', **view_target(live), version=1)
+    assert row['app']['revision'] == 3
+    with app.clients.bind('one'):
+        assert app.state['canvas'] == before
+        restored = app.canvas_views.summary(live['viewId'])
+        assert restored['followLatest'] and restored['app']['revision'] == 3
+        assert restored['publishedVersion'] == 1
+
+
+async def test_inspecting_bindings_never_reconciles_other_clients(app, monkeypatch):
+    row = await create(app)
+    other = await inline(app, row, 'other-client', follow=True, client='two')
+    record = app.clients.records['two']
+    preference = record['canvasViews']['preferences'][other['viewId'] + ':' + row['id']]
+    preference.update(dirty=True, activation={'status': 'ready'}, mcp={'context': {'local': 'kept'}})
+    # The canonical definition advances before the other client observes it.
+    app.state['canvasArtifacts'][0]['app']['revision'] += 1
+    before = deepcopy(record)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Passive binding inspection reconciled a client')
+    monkeypatch.setattr(app.clients, 'bind', forbidden)
+    inspected = app.canvas_views.bindings(row['id'])
+    observed = next(view for view in inspected if view['viewId'] == other['viewId'])
+    assert observed['dirty'] and observed['generation'] == other['generation']
+    assert observed['resourceRevision'] == other['resourceRevision']
+    assert record == before
+
+
 async def test_actual_live_bindings_share_state_but_keep_private_dirty_edits(app):
     row = await create(app)
     one = await inline(app, row, 'one-live', follow=True)

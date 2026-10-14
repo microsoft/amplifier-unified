@@ -210,7 +210,6 @@ class CanvasViews:
 
     def bindings(self, identity):
         """Only actual mounted bindings count; saved preferences are not leases."""
-        from .service import AppError
         result = []
         for client_id, client in self.service.clients.records.items():
             views = client.get('canvasViews', {})
@@ -219,18 +218,20 @@ class CanvasViews:
             if client.get('canvas', {}).get('id') == identity and (
                     client.get('canvas', {}).get('open') or views.get('retained')):
                 ids.insert(0, 'primary')
-            if not ids:
-                continue
-            with self.service.clients.bind(client_id):
-                for view_id in ids:
-                    try:
-                        summary = self.summary(view_id)
-                    except AppError:
-                        continue
-                    if summary['resourceId'] == identity:
-                        result.append({**{key: summary[key] for key in
-                            ('viewId', 'resourceId', 'resourceRevision', 'generation', 'selectedVersion', 'dirty')},
-                            'clientId': client_id, 'renderStatus': summary.get('activation')})
+            for view_id in ids:
+                preference = views.get('preferences', {}).get(view_id + ':' + identity, {})
+                binding = client.get('canvas', {}) if view_id == 'primary' else views['inline'][view_id]
+                observed = views.get(view_id + 'Binding')
+                result.append({
+                    'viewId': view_id, 'resourceId': identity, 'clientId': client_id,
+                    # Report the last admitted target, never advance another
+                    # client's generation merely to inspect its dirty lease.
+                    'resourceRevision': observed[1] if observed and observed[0] == identity else None,
+                    'generation': preference.get('generation', 0),
+                    'selectedVersion': binding.get('selectedVersion'),
+                    'dirty': bool(preference.get('dirty')),
+                    'renderStatus': copy.deepcopy(preference.get('activation')),
+                })
         return result
 
     def manifest(self, renderer):
