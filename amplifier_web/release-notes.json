@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.134",
+      "title": "Faster warm chat opening and update activation",
+      "changes": [
+        "Opening a saved chat prepares only the identity, workspace and model configuration it needs, avoiding copies of retained activity and message history. Explicit fork context is preserved.",
+        "Background cleanup verifies old runtime generations without blocking current update activation. Proven unused generations are retired with fresh ownership checks, then deleted outside the activation lock. Interrupted cleanup retains its recovery receipt.",
+        "Post-release browser checks now exercise the current original-submission retry and new-chat recovery controls."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.133",
       "title": "Reduce historical work during live chat updates",
       "changes": [
