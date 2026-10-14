@@ -822,3 +822,28 @@ without inventing a claim-to-process mapping or automatic cleanup.
 This is read-only provenance, not generic resource allocation. Scratch/database/
 browser-profile isolation, arbitrary dynamic preview ports, operation cwd missing
 from its owner, remote targets and external processes remain explicit limits.
+
+## Return recaps and portable work diagnostics — 2026-10-14
+
+`coordination.recap` compares a caller-owned cursor with bounded saved request,
+reply, chat and resource-reservation observations. It returns eight changed
+items at a time, leaving undisplayed changes unacknowledged. Related work keeps
+its cursor per chat in tab-local storage and advances it only after a visible
+response is presented. Closing the view, changing chats or hiding the tab fences
+late responses. Reading does not alter shared read state, navigation or drafts.
+
+`coordination.diagnostics` exports numeric and enumerated observations from the
+same scoped receipts, already loaded native provider/bridge records and existing
+process loop-delay samples. Correlation IDs are hashed; message content, paths,
+tool payloads and private drafts are excluded. The browser adds bounded numeric
+action/network samples from its existing telemetry, without routes or command
+names. Missing samples and uncollected rendering measurements remain explicit;
+inclusive, overlapping timings do not establish cause or end-to-end latency.
+
+Both passive actions share UI, session HTTP and agent dispatch, recheck scope
+after asynchronous owner reads, and do not hydrate history or start workers.
+Version/scope mismatches reset the comparison explicitly. Bounded page gaps are
+reported rather than treated as deletion, completion or released resources.
+Provider/bridge export coverage uses recorded metadata fixtures; the production
+browser journey uses a scripted runtime without model calls. Release, installed
+worker and provider acceptance remain the integration owner's separate checks.

@@ -110,6 +110,7 @@ def setup_routes(app, streams):
             "session.warm": "id", "session.naming": "id",
             **{name: "sessionId" for name in ("worktree.inspect", "worktree.list", "worktree.status", "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile")},
             "coordination.artifact": "sessionId",
+            "coordination.recap": "sessionId", "coordination.diagnostics": "sessionId",
             "capability.read": "sessionId", "capability.request": "sessionId",
             "capability.grant": "sessionId", "capability.revoke": "sessionId",
             "runtime.provenance": "sessionId", "integration.capture": "sessionId",

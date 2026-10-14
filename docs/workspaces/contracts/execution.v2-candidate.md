@@ -452,3 +452,32 @@ current qualification, permission or successful dependency completion. Same-root
 preparation updates require the same exact system claim; arbitrary self-messages
 and imported or prose-only attribution remain unverified. Reads use only the
 requested page's bounded command identities and never open the producing chat.
+
+### Return recaps and portable phase observations — 2026-10-14
+
+Explicit recap and diagnostic reads reuse existing request, reply, observation,
+resource and native runtime records. They do not load peer transcripts, call a
+model, admit work, replay effects or establish execution/configuration authority.
+Agents inspect their bound root; users may inspect a selected root. Workspace
+and actor scope is rechecked after detached owner reads. Reads remain bounded
+and indexed even when many dormant conversations exist.
+
+A recap compares an optional caller-held cursor with current bounded facts.
+The cursor stores only version signatures and scope, not text or drafts. It is
+untrusted presentation state, never evidence of completion or authorization.
+Missing, malformed, foreign or obsolete cursors reset explicitly. Reports use
+existing names and declared/observed outcomes; reported success is distinguished
+from terminal qualification. Page gaps remain explicit. Only displayed changes
+advance the returned cursor; further changes stay available on the next read.
+Browser cursors are private to their tab and conversation and advance only after
+the returned view is visible. Hidden, cancelled and stale responses must not mark
+changes seen. Other clients may maintain independent cursors through the same API.
+
+Portable diagnostics distinguish admission queue timing, retained preparation,
+reply/claim phases, observed native provider/bridge timing and sampled host loop
+delay. Correlation uses hashed actor and operation identities; arbitrary content,
+paths, titles, tool arguments, credentials and private drafts are excluded.
+Browser action/request timing is attached locally, never synchronized as shared
+conversation state. Inclusive measurements may overlap and must not be summed.
+Unavailable samples and unmeasured rendering time remain explicit; a recorded
+phase or timing is not proof of correctness, live liveness or external effects.

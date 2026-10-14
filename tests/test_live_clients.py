@@ -664,6 +664,27 @@ async def test_session_commands_share_one_shot_watch_retry_scope_and_private_sta
     assert service.state['selectedSessionId'] == target
 
 
+@pytest.mark.parametrize('action', ['coordination.recap', 'coordination.diagnostics'])
+async def test_observation_reads_share_session_http_scope_without_moving_clients(authenticated_client, tmp_path, action):
+    app = await create_app(tmp_path/'app', workspace=tmp_path, runtime=Runtime(),
+        voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(app)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Owner'})
+    owner = service._session()['id']
+    await service.dispatch('session.create', {'title': 'Other selected chat'})
+    other = service._session()['id']
+    await client.post('/api/clients/attach', json={'clientId': 'observation-reader', 'kind': 'tui'})
+    headers = {'X-Amplifier-Client': 'observation-reader'}
+    endpoint = f'/api/sessions/{owner}/commands'
+    response = await client.post(endpoint, headers=headers, json={'id': 'passive-read', 'action': action, 'args': {}})
+    assert response.status == 200, await response.text()
+    assert (await response.json())['result']
+    mismatch = await client.post(endpoint, headers=headers, json={'id': 'wrong-root', 'action': action, 'args': {'sessionId': other}})
+    assert mismatch.status == 400
+    assert service.state['selectedSessionId'] == other and not service.runtime.sent
+
+
 async def test_configuration_grant_actions_share_session_http_scope(authenticated_client,tmp_path,monkeypatch):
     monkeypatch.setenv('AMPLIFIER_HOME',str(tmp_path/'native'))
     app=await create_app(tmp_path/'app',workspace=tmp_path,runtime=Runtime(),voice=False,background_updates=False)

@@ -4111,7 +4111,7 @@ class AppService:
                 action_args.setdefault('id', session_id)
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
-                action_args.setdefault('nativeProject', native_project(self._session(session_id, hydrate=args['action'] != 'workspace.resources.managed')))
+                action_args.setdefault('nativeProject', native_project(self._session(session_id, hydrate=args['action'] not in {'workspace.resources.managed', 'coordination.recap', 'coordination.diagnostics'})))
             if args['action'] == 'canvas.views.command' and action_args.get('action') == 'canvas.reference':
                 if action_args.get('args', {}).get('sessionId') != session_id:
                     raise AppError('References must target the calling conversation.', 409)

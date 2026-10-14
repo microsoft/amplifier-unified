@@ -142,7 +142,7 @@ async def dispatch_reservation(app, action, args, origin, command_id, caller):
         sid = args.get('sessionId') if user else caller
         if not sid or not user and args.get('sessionId', sid) != sid:
             raise AppError('Choose the calling conversation as resource owner.', 403)
-        session = app._session(sid)
+        session = app._session(sid, hydrate=action != 'workspace.resources.reservations')
         if session.get('sessionKind', 'root') != 'root':
             raise AppError('Resource owners require their host-bound root conversation.', 403)
         if action not in {'workspace.resources.release', 'workspace.resources.uncertain'} and (workspace is None or session.get('workspace') != workspace['path']):

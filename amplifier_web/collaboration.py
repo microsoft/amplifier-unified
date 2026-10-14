@@ -78,6 +78,8 @@ def definitions(schema, string):
         }, ["sessionId", "participants", "purpose", "modes"])),
         "coordination.revoke": ("Retired. Legacy work cannot resume; use ordinary human Stop for current task work.", schema({**sid, "grantId": string(200)}, ["sessionId", "grantId"])),
         "coordination.context": ("Read bounded related request receipts and historical grants without loading peer transcripts.", schema(sid, ["sessionId"])),
+        "coordination.recap": ("Compare bounded saved work with an optional private caller cursor. Passive; no model, history hydration or shared read-state write. nextCursor advances only returned changes; retain it only after presenting those changes.", schema({**sid, "cursor": string(16000)}, ["sessionId"])),
+        "coordination.diagnostics": ("Read portable bounded phase/timing metadata for this root. Hashed correlation IDs, no prompts, drafts, paths or tool payloads; unavailable timing remains explicit. Does not start work.", schema(sid, ["sessionId"])),
         "coordination.decide": ("Retired. Legacy pending proposals cannot authorize new work.", schema({
             **sid, "proposalId": string(200), "decision": {"enum": ["allow", "deny"]},
         }, ["sessionId", "proposalId", "decision"])),
@@ -197,11 +199,11 @@ class Collaboration:
         from .service import AppError
         raise AppError(text, status)
 
-    def source(self, args, origin, caller):
+    def source(self, args, origin, caller, *, hydrate=True):
         sid = caller if origin not in {"ui", "user"} else args.get("senderSessionId") or args.get("sessionId")
         if not sid:
             self.error("A user must explicitly authorize a calling conversation.")
-        source = self.service._session(sid)
+        source = self.service._session(sid, hydrate=hydrate)
         actor = PRINCIPAL.get()
         native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
         if origin not in {"ui", "user"} and actor and actor != native:
@@ -1141,6 +1143,9 @@ class Collaboration:
         return None
 
     async def dispatch(self, action, args, origin, command_id, caller):
+        if action in {'coordination.recap', 'coordination.diagnostics'}:
+            from .collaboration_observations import read
+            return {'accepted': True, 'result': await read(self, action, args, origin, caller)}
         if action.startswith('coordination.watch'):
             return await self.watches.dispatch(action, args, origin, command_id, caller)
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
