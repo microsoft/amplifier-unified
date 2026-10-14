@@ -25,6 +25,8 @@ class OperationJournal:
             CREATE TABLE IF NOT EXISTS operations (
               id TEXT PRIMARY KEY, session_id TEXT NOT NULL, value TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS operations_session ON operations(session_id);
+            CREATE INDEX IF NOT EXISTS operations_resources ON operations(
+              session_id, json_extract(value,'$.createdAt') DESC, id DESC);
             CREATE TABLE IF NOT EXISTS operation_events (
               operation_id TEXT NOT NULL, sequence INTEGER NOT NULL,
               event_id TEXT NOT NULL, value TEXT NOT NULL,
@@ -340,6 +342,46 @@ class OperationJournal:
                     raise ValueError("Unknown operation page cursor")
                 values = values[index + 1 :]
             return values[:limit]
+
+    def resources(self, session_id, limit=25, before=None):
+        """Bounded lifecycle observations; never infer liveness from a PID.
+
+        Whitelist in SQL so commands, output, kernel code and evidence do not
+        enter this projection. The index bounds both session and page position.
+        """
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Resource page size must be between 1 and 100")
+        with self.lock:
+            where, params = "session_id=?", [session_id]
+            if before:
+                cursor = self.db.execute(
+                    "SELECT json_extract(value,'$.createdAt') FROM operations WHERE session_id=? AND id=?",
+                    (session_id, before),
+                ).fetchone()
+                if cursor is None:
+                    raise ValueError("Unknown operation resource cursor")
+                where += " AND (json_extract(value,'$.createdAt'),id)<(?,?)"
+                params.extend((cursor[0], before))
+            rows = self.db.execute("""
+                SELECT json_object('id',id,
+                  'sessionId',session_id,
+                  'kind',json_extract(value,'$.kind'),
+                  'producer',json_extract(value,'$.producer'),
+                  'state',json_extract(value,'$.state'),
+                  'revision',json_extract(value,'$.revision'),
+                  'createdAt',json_extract(value,'$.createdAt'),
+                  'updatedAt',json_extract(value,'$.updatedAt'),
+                  'pid',json_extract(value,'$.pid'),
+                  'returncode',json_extract(value,'$.returncode'),
+                  'processId',substr(json_extract(value,'$.metadata.processId'),1,200),
+                  'language',substr(json_extract(value,'$.metadata.language'),1,100))
+                FROM operations WHERE """ + where + """
+                ORDER BY json_extract(value,'$.createdAt') DESC,id DESC LIMIT ?
+                """, (*params, limit + 1)).fetchall()
+            items = [dict(json.loads(row[0]), owner='operations',
+                          evidence='recorded-lifecycle', workingDirectory=None)
+                     for row in rows[:limit]]
+            return {'items': items, 'nextCursor': items[-1]['id'] if len(rows) > limit else None}
 
     def read(self, session_id, identity, cursor=0, max_bytes=16384):
         if isinstance(cursor, bool) or not isinstance(cursor, int) or cursor < 0:

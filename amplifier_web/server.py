@@ -255,7 +255,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         record=service.outputs.store.read(request.match_info['identity'])
         if record.get('kind') == 'media':
             raise AppError('Use the exact client/session/message media route.',403)
-        data=service.outputs.content(record)
+        data=await service.outputs.content_async(record)
         if data is None:
             raise AppError('This output is an external reference without saved content.',404)
         filename=Path(record.get('filename','output')).name

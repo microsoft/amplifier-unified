@@ -32,33 +32,52 @@ See [implementation and evidence](workspaces/IMPLEMENTATION.md) for qualificatio
 
 | Need | Existing access |
 | --- | --- |
-| Find/read other conversations | `app_control` operation `history`, actions `list`, `search`, `read`; bounded pages, workspace scope by default |
+| Find/read other conversations | `app_control` operation `history`, actions `list`, `search`, `read`; bounded pages and workspace scope by default. Explicit `scope=all` uses the registered same-user library. Coordination and recall use the same selector; exact request results and artifacts retain their narrower participant scope. See [read authority](workspaces/owned-history-scope.md). |
 | Manage conversations/workspaces | `app_control` operation `list_actions` with `session.` or `workspace.` prefix, followed by `dispatch` |
+| Commission a durable peer | `coordination.create` establishes the ordinary peer, explicit placement, initial request and return subscription before releasing work; stable command retries inspect the retained operation rather than create another peer. |
+| See active work and declare file intent | `coordination.context/awareness`, `coordination.intent` and `coordination.intent.read` expose bounded active-work context and revision-aware declarations. Overlap is advisory; a declaration grants no file or peer-control authority. |
+| Catch up after returning and inspect work timing | `coordination.recap` reads bounded changes from a caller-owned cursor; Related work retains its cursor per browser tab. `coordination.diagnostics` exports scoped numeric phase observations without private content or waking workers. Missing timing samples remain unavailable. |
+| Select a repository working copy | Discover `worktree.*` actions for explicit repository selection, create/attach, handoff and reconciliation. Canonical history stays separate from the selected execution folder; no automatic dependency rebinding or sandbox is implied. |
 | Diagnose/recover a failed conversation | `session.inspect`, `session.recover`; recovery creates an idle copy and never replays tools |
 | Show and revisit artifacts | `canvas.show`, `canvas.select`, canvas application/view actions |
+| Inspect exact peer results after source changes | `coordination.reply` retains supported local `path@sha256:<digest>` references when reported; `coordination.artifact` reads bounded saved text/downloads within the exact request relationship. Related work opens the saved version. A snapshot is not independent correctness or integration evidence. |
+| Inspect loaded dependencies and detect candidate drift | `runtime.provenance` observes already-loaded worker modules without importing code or warming a worker. `integration.capture/check/read/list` retain explicit repository revisions and expected module origins/current hashes in existing command receipts. Advanced task execution controls use the same actions. Mismatch/unknown are explicit; matching files never certify tests, exact imported bytes or isolation. |
+| Validate an exact combined candidate | `assignment.integration` explicitly names a commissioned member responsible for combining assignment work. `integration.validate` runs one chosen command through Operations and ordinary shell policy; `integration.collect` records native outcomes, pre/post candidate checks, retained files and partial results per repository. Publication reports are labeled reports; these actions never merge, publish or deploy. Independent chats can validate their own candidates without assignment enrollment. |
 | Discover connected tools/resources | `smartTools.*` actions and the mounted tool catalog; availability does not imply a connected account |
 | Discover/use skills | Mounted `load_skill` from the configured skills behavior |
 | Delegate and steer workers | Mounted `delegate` and `live_worker`; async opt-in and pending receipts remain distinct from completion |
 | Control commissioned work together | `assignment.read/start/set/stop`; new commissioned roots and scheduled descendants share bounded admission. Independent existing chats remain separate. `assignment.detach` is an explicit user action after work settles. |
 | Retire a checkout without discarding files | `worktree.archive/restore` through UI, agent and attached session clients; retains the complete unused app-created Git worktree, including ignored files. No deletion, execution or disk reclamation. |
+| Follow exact work outcomes | `coordination.reply/result/subscribe` retain response revisions and guarded notifications; `coordination.watch`, `coordination.watch.read` and `coordination.watch.cancel` provide expiring one-shot root observations. Negative reports never satisfy dependencies. |
+| Schedule explicitly requested work | `schedule.preview/create/update/resume` bind the reviewed prompt, timing and actual user authorization; `schedule.list/read/pause/cancel/report/reconcile` retain inspection and control. The host must be running for due checks. See [schedules](SCHEDULES.md). |
+| Run and inspect managed processes | `operations.list/status/read/wait/cancel` and `operations.submit/write/request` use the existing owner and admission receipts. Execution/stdin require a capable mounted producer and its trusted policy; they are not enabled by every bundle. See [Operations](OPERATIONS.md). |
+| Inspect and allocate task resources | `workspace.resources.managed` reads bounded local publishing, native process/kernel lifecycle and task storage. `workspace.resources.provision/read/retire` own private scratch folders, browser-profile folders and local SQLite files; retirement preserves files. They do not launch or confine browsers, provision database servers or expand file permissions. Cooperative reservations remain separate. |
 | Read original admitted history | Work's `read_transcript`, separate from cross-conversation discovery |
 | Ask durable choices while independent work continues | Shared `question.*` actions; [question and delivery contract](DURABLE-QUESTIONS.md) |
 | Voice lifecycle and scoped file access | `call.*` and `permissions.*` shared actions |
+| Authorize settings administration | `capability.read/request/grant/revoke`; existing user approval, reusable scoped root grants, delayed-effect rechecks and Advanced settings revocation. See [configuration authority and consumer audit](workspaces/configuration-authority.md). |
 
 Host services are supplied by Unified, not by the portable Work bundle. The
 agent's app-control description and runtime guidance explain these discovery
 paths; separate aliases need not duplicate the implementations.
 
-This does not establish parity with another product. Durable scheduling, a
-general managed process/stdin service, worktree handoff, and bounded cross-task
-wait subscriptions still require separate integration work. The existing web
-module is not added here: its search-error path can return mock results, which
-must be corrected before making it a default research capability.
+Availability depends on the mounted runtime and negotiated capabilities.
+Shared folders remain cooperative. Independent mixed conversations do not support
+request-only assignment interruption. Owned folders and SQLite files are supported;
+general infrastructure provisioning, isolated running browsers, database servers
+and automatic dependency mapping remain unavailable. Source provenance checks
+observe loaded origins and current files, not the exact bytes previously imported.
+Explicit integration validation separately records the named native command's
+outcome; it does not establish test quality or complete dependency isolation. The
+[implementation ledger](workspaces/IMPLEMENTATION.md) separates these limits
+from delivered behavior and remaining acceptance work.
 
-Validation includes Foundation composition, shared-policy regression tests, and
-both real patch engines operating in a disposable directory with denial and
-symlink-escape checks. No model request or live-session write is part of that
-evidence.
+Qualification includes composition and native mounted-tool checks, installed
+packages, browser journeys and bounded real-provider probes for named slices.
+Those evidence tiers do not establish general multi-agent efficacy, parity with
+another product, publication or adoption of the combined candidate. The optional
+web module remains outside this default composition; adding it still requires
+qualification of its search-error behavior.
 
 ## Ecosystem updates
 

@@ -258,6 +258,7 @@ class RuntimeControls:
                          **{key: args[key] for key in ("timeout", "pty") if key in args}}
             return await self.invoke({"name": "bash", "arguments": arguments},
                 bound_arguments=arguments, checkpoint=False,
+                integration_id=args.get('integrationId'),
                 provenance={"source": operation, "actor": args.get("actor", "ui")})
         if operation in {"operations.cancel", "operations.write"}:
             coordinator = self.coordinator
@@ -663,7 +664,7 @@ class RuntimeControls:
         await self.checkpoint()
         return await self.mode("mode.list", {})
 
-    async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True, expected_process_owner=None, generic=False):
+    async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True, expected_process_owner=None, generic=False, integration_id=None):
         coordinator = coordinator or self.coordinator
         bound_arguments = copy.deepcopy(bound_arguments)
         import jsonschema
@@ -701,6 +702,15 @@ class RuntimeControls:
         from amplifier_module_loop_live.scope import JOB_CALL
         ownership = JOB_CALL.set(call)
         try:
+            if integration_id is not None:
+                admit = coordinator.get_capability('integration.admit')
+                if not callable(admit):
+                    raise ValueError('This runtime cannot enforce integration admission.')
+                admission = await admit(integration_id, arguments['command'])
+                if admission != {'admitted': True, 'validationId': integration_id}:
+                    raise ValueError('The host did not confirm this exact validation invocation.')
+                if (coordinator.get('tools') or {}).get(name) is not tool:
+                    raise ValueError('The shell mount changed during integration admission.')
             if name == "bash" and arguments.get("question_ids"):
                 # Older mounted modules must not silently ignore new dependency
                 # arguments even if their JSON schema permits extra fields.

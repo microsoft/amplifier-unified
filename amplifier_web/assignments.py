@@ -30,6 +30,7 @@ def definitions(schema, string):
         'assignment.read': ('Inspect this explicit assignment, its members and aggregate usage without starting workers. Independent peers are not members.', schema(target, ['sessionId'])),
         'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Existing chats are never enrolled.', schema(target, ['sessionId'])),
         'assignment.set': ('Owner sets revision-bound aggregate limits. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
+        'assignment.integration': ('Owner explicitly assigns integration responsibility to a current commissioned member, or clears it. Does not start work, enroll peers or grant execution authority.', schema({**revision, 'responsibleSessionId': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 200}}, ['sessionId', 'expectedRevision', 'responsibleSessionId'])),
         'assignment.stop': ('Owner closes assignment admission before requesting interruption of still-bound roots and native children. Does not stop independent peers or remove resources.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.detach': ('User detaches this idle conversation after assignment work settles, retaining attributed usage. Does not resume or send input.', schema(revision, ['sessionId', 'expectedRevision'])),
     }
@@ -283,7 +284,17 @@ class Assignments:
                     collaboration.error('The assignment revision changed; inspect it before editing.', 409)
                 if action != 'assignment.detach' and source['id'] != value['ownerSessionId']:
                     collaboration.error('Only the commissioning owner can control this assignment.')
-                if action == 'assignment.set':
+                if action == 'assignment.integration':
+                    responsible = args['responsibleSessionId']
+                    if value['status'] != 'active':
+                        collaboration.error('A stopped assignment cannot assign integration work.', 409)
+                    if responsible is not None:
+                        member = value['members'].get(responsible, {})
+                        target = self.service._session(responsible, hydrate=False)
+                        if member.get('status') != 'bound' or (self.current(target) or {}).get('id') != value['id']:
+                            collaboration.error('Choose a current commissioned member; independent chats are not enrolled.', 409)
+                    value['integration'] = {'responsibleSessionId': responsible, 'declaredBy': source['id'], 'declaredAt': time.time()}
+                elif action == 'assignment.set':
                     if value['status'] != 'active':
                         collaboration.error('A stopped assignment cannot be resumed by changing limits.', 409)
                     limits = {**value['limits'], **{key: args[key] for key in DEFAULTS if key in args}}
@@ -359,4 +370,4 @@ class Assignments:
     def summary(self, session):
         value = self.current(session)
         if value:
-            return {key: value[key] for key in ('id', 'revision', 'status', 'ownerSessionId', 'limits')} | {'memberCount': len(value['members'])}
+            return {key: value[key] for key in ('id', 'revision', 'status', 'ownerSessionId', 'limits')} | {'memberCount': len(value['members']), 'integration': value.get('integration')}

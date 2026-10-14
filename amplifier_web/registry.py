@@ -153,6 +153,8 @@ class RegistryManager:
         return await self._validate_row(row,args)
 
     async def _validate_row(self,row,args):
+        from .configuration_authority import check_current
+        check_current()
         if self.validation_command:command=list(self.validation_command)
         else:
             from .runtime import RuntimeManager

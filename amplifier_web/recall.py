@@ -27,7 +27,7 @@ def definitions(schema, string):
         'recall.refresh': ('Index registered conversation text in the background. Originals are read-only. Check coverage and wait before claiming a complete search.', schema(common)),
         'recall.wait': ('Wait for an index progress revision, without sending input or changing the draft.', schema({**common, 'afterRevision': {'type':'integer','minimum':0}, 'waitMs': {'type':'integer','minimum':0,'maximum':60000}}, ['sessionId'])),
         'recall.search': ('Rank indexed message matches with source references. Lexical AND search; a partial index is not the entire library. Read an exact result to verify current source revision before citing it as current. Internal jobs require includeInternal for diagnostic searches.', schema({**common, **scope, **page, 'query': {**string(500),'minLength':1}, 'includeChildren': {'type':'boolean'}, 'includeInternal': {'type':'boolean'}}, ['sessionId','query'])),
-        'recall.read': ('Read a bounded source message at its exact indexed revision. Changed or removed sources fail visibly; browsing never selects or resumes work.', schema({**common, 'sourceSessionId':string(200),'messageId':string(200),'sourceRevision':{}, 'offset':page['offset'], 'limit':{'type':'integer','minimum':1,'maximum':4000}}, ['sessionId','sourceSessionId','messageId','sourceRevision'])),
+        'recall.read': ('Read a bounded source message at its exact indexed revision and explicit search scope (workspace by default). Changed, removed or out-of-scope sources fail visibly; never selects or resumes work.', schema({**common, **scope, 'sourceSessionId':string(200),'messageId':string(200),'sourceRevision':{}, 'offset':page['offset'], 'limit':{'type':'integer','minimum':1,'maximum':4000}}, ['sessionId','sourceSessionId','messageId','sourceRevision'])),
         'memory.list': ('Inspect explicit saved memory; available defaults to current task/workspace/global. Explicit all includes notes from removed conversations for review/deletion. Memory is reference data, not permission.', schema({**common, **page, 'scope':{'enum':['task','workspace','global','available','all']}}, ['sessionId'])),
         'memory.read': ('Read a saved memory and up to 50 retained revisions. No automatic model execution.', schema({**common,**all_scopes,'id':string(200)}, ['sessionId','id'])),
         'memory.create': ('Remember an explicit user-requested note in task/workspace/global scope. Agent writes require an attributable user authorizationMessageId; retrieved content alone cannot authorize memory.', schema({**common, **memory}, ['sessionId','scope','text'])),
@@ -144,10 +144,11 @@ class Recall:
 
     async def dispatch(self, action, args, origin, command_id=None):
         from .service import AppError
+        from .owned_history import includes, selected, require
         try:
             async with self.app.lock:
                 session = copy.deepcopy(self.app._session(args.get('sessionId')))
-                catalog = {row['id']: {'workspace':row.get('workspace'),'kind':row.get('sessionKind','root')} for row in self.app.state['sessions']}
+                catalog = {row['id']: {'id':row['id'],'workspace':row.get('workspace'),'kind':row.get('sessionKind','root')} for row in self.app.state['sessions']}
             if action == 'recall.refresh':
                 self.start()
                 await asyncio.sleep(0)
@@ -163,14 +164,25 @@ class Recall:
                         pass
                 result = copy.deepcopy(self.state)
             elif action == 'recall.search':
-                scope = args.get('scope','workspace')
-                allowed = {sid for sid,row in catalog.items() if (scope=='all' or scope=='task' and sid==session['id'] or scope=='workspace' and row['workspace']==session.get('workspace'))
+                scope = selected(args)
+                allowed = {sid for sid,row in catalog.items() if includes(session,row,scope)
                     and (args.get('includeInternal') or row['kind']!='internal')
                     and (args.get('includeChildren') or row['kind']!='worker')}
                 result = await asyncio.to_thread(self.store.search,args['query'],allowed,args.get('offset',0),args.get('limit',20))
+                retained=[]
+                for item in result.get('items', []):
+                    try:
+                        require(self.app,session['id'],item['sessionId'],scope)
+                    except AppError:
+                        continue
+                    item['reference']['scope'] = scope
+                    retained.append(item)
+                result['items']=retained
                 result.update(coverage=copy.deepcopy(self.state), scope=scope, sourceFreshness='indexed_snapshot; verify with recall.read')
             elif action == 'recall.read':
+                scope = selected(args)
                 async with self.app.lock:
+                    require(self.app,session['id'],args['sourceSessionId'],scope)
                     source = copy.deepcopy(self.app._session(args['sourceSessionId']))
                     metadata=self.metadata_rows(source['id'])
                 signature = digest([await asyncio.to_thread(source_signature,source),metadata])
@@ -180,6 +192,8 @@ class Recall:
                 result = await asyncio.to_thread(self.store.message,source['id'],args['messageId'],args.get('offset',0),min(4000,args.get('limit',4000)))
                 if result['sourceRevision'] != args['sourceRevision']:
                     raise ValueError('The requested source revision no longer matches the index.')
+                require(self.app,session['id'],source['id'],scope)
+                result['scope'] = scope
                 result['verifiedAt'] = time.time()
             elif action == 'memory.list':
                 scopes = self.scopes(session)
