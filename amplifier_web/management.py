@@ -218,7 +218,17 @@ class Management:
                 callbacks,self.after_publication=self.after_publication,[]
                 for callback in callbacks:self.background(callback())
 
-    async def command(self,action,args,command_id=None):
+    async def command(self,action,args,command_id=None,authority=None):
+        from .configuration_authority import CURRENT
+        from functools import partial
+        check = partial(self.service.configuration_authority.check, authority) if authority is not None else CURRENT.get()
+        token = CURRENT.set(check)
+        try:
+            return await self._command(action,args,command_id,authority)
+        finally:
+            CURRENT.reset(token)
+
+    async def _command(self,action,args,command_id=None,authority=None):
         if action == 'bundles.list':
             return await self.list_bundles(args, command_id)
         if action == 'providers.list':
@@ -246,7 +256,7 @@ class Management:
                             raise ValueError('Finish active work before saving this conversation bundle')
                         current['configurationBusy']=True;guarded=current['id']
                         self.service._publish_changes(sessions={guarded})
-                await self.perform(action,args,command_id=command_id)
+                await self.perform(action,args,command_id=command_id,**({"authority":authority} if authority is not None else {}))
             except asyncio.CancelledError:
                 phase,error='error','Settings operation cancelled.'
                 raise
@@ -254,6 +264,11 @@ class Management:
                 # Host-controlled validation text only; provider/transport errors
                 # are converted before reaching this boundary.
                 phase,error='error',str(exc)[:1000]
+                if action == 'configuration.apply' and args.get('whenIdle') and self.queued_path(args['id']).exists():
+                    async with self.service.lock:
+                        current = self.service._session(args['id'])
+                        current['pendingConfiguration'] = {**current.get('pendingConfiguration', {}), 'phase':'error', 'error':error}
+                        self.service._publish_changes(sessions={current['id']})
             finally:
                 if guarded:
                     async with self.service.lock:
@@ -406,9 +421,9 @@ class Management:
                 if self.configuration_idle(session):
                     config=json.loads(self.queued_path(identity).read_text())
                     async with self.service.lock:
-                        self.service._session(identity)['pendingConfiguration']={'phase':'applying'}
+                        self.service._session(identity)['pendingConfiguration']={**session.get('pendingConfiguration',{}),'phase':'applying'}
                         self.service._publish_changes(sessions={identity})
-                    await self.command('configuration.apply',{'id':identity,'config':config,'whenIdle':True},'queued-config-'+str(uuid.uuid4()))
+                    await self.command('configuration.apply',{'id':identity,'config':config,'whenIdle':True},'queued-config-'+str(uuid.uuid4()), session.get('pendingConfiguration',{}).get('authority'))
                     if self.service._session(identity).get('pendingConfiguration',{}).get('phase')=='queued':continue
                     return
                 await asyncio.sleep(.5)
@@ -447,6 +462,8 @@ class Management:
             session['bundle'] = bundle_replacement['bundle']
             if bundle_replacement.get('resetModel'):
                 session.pop('selection', None)
+        from .configuration_authority import check_current
+        check_current()
         await self.service.runtime.start(session,self.service.on_runtime_event)
 
     async def recover_provider_catalog(self, session, operation, args):
@@ -515,7 +532,9 @@ class Management:
             if publish:self.background(retire())
             else:self.after_publication.append(retire)
 
-    async def perform(self,action,args,command_id=None):
+    async def perform(self,action,args,command_id=None,authority=None):
+        from .configuration_authority import check_current
+        check_current()
         if action=='locations.create':
             from .locations import create_folder
             path = await asyncio.to_thread(create_folder, args['path'], args['name'])
@@ -692,7 +711,7 @@ class Management:
                 validate_plan(args['config'])
                 write_private(self.queued_path(session['id']),json.dumps(args['config']))
                 async with self.service.lock:
-                    self.service._session(session['id'])['pendingConfiguration']={'phase':'queued','detail':'Waiting for the current turn and worker lanes to finish.'}
+                    self.service._session(session['id'])['pendingConfiguration']={'phase':'queued','detail':'Waiting for the current turn and worker lanes to finish.', **({'authority':authority} if authority is not None else {})}
                     self.service._publish_changes(sessions={session['id']})
                 if session['id'] not in self.pending_config_tasks:
                     task=asyncio.create_task(self.apply_queued(session['id']))
@@ -759,9 +778,12 @@ class Management:
                     current_row=next((item for item in current.get('providers',[]) if item['id']==provider_id),None)
                     if current_row is None or self.runtime_catalog_key(session['id'],current_row,current.get('catalogRevision'))!=self.runtime_catalog_key(session['id'],row,mounted.get('catalogRevision')):return
                 else:
+                    check_current()
                     result=await self.service.runtime.control(session['id'],args['operation'],args.get('args',{}))
                 if result.get('requiresRestart'):
+                    check_current()
                     await self.service.runtime.stop(session['id'])
+                    check_current()
                     await self.service.runtime.start(session,self.service.on_runtime_event)
                     inspected=await self.service.runtime.control(session['id'],'configuration.inspect',{})
                     result['configuration']=inspected

@@ -236,6 +236,8 @@ ACTION_DEFINITIONS.update(computation_definitions())
 
 from .capacity import definitions as capacity_definitions
 ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
+from .configuration_authority import definitions as configuration_authority_definitions
+ACTION_DEFINITIONS.update(configuration_authority_definitions(schema, string))
 
 
 class AppError(Exception):
@@ -405,6 +407,11 @@ for _access, _actions in {
         }
 ACTION_POLICIES["session.create"] = {"access": "grant_creation", "target": None}
 ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
+from .configuration_authority import BUNDLE_GLOBAL
+for _action in BUNDLE_GLOBAL:
+    ACTION_POLICIES[_action] = {"access": "caller_controlled", "target": "sessionId"}
+    ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
+
 for _action in {"routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
                 "sources.save", "sources.remove", "sources.validate", "call.start"}:
     ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
@@ -623,6 +630,8 @@ class AppService:
         self.coordination = Coordination(self)
         from .collaboration import Collaboration
         self.collaboration = Collaboration(self)
+        from .configuration_authority import ConfigurationAuthority
+        self.configuration_authority = ConfigurationAuthority(self)
         from .peer_attribution import PeerAttribution
         self.peer_attribution = PeerAttribution(self.db)
         self.projections.resolver = self.peer_attribution.resolve
@@ -1444,11 +1453,16 @@ class AppService:
                 or args.get('clientId', client_id) != client_id
                 or self.clients.record().get('kind') != 'web'):
             raise AppError('Open in Canvas requires an explicit click in the originating browser client.', 403)
+        if action == "approval.respond" and args["id"].startswith("capability:"):
+            return await self.configuration_authority.decide(args, origin, command_id)
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action.startswith("capability."):
+            return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
+        configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
         if action in resource_reservation_definitions(schema, string):
             from .workspace_resources import dispatch_reservation
             return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
@@ -1886,6 +1900,7 @@ class AppService:
                     if action == 'question.answer':
                         saved_receipt['result'] = self.questions.read('question.read', args)
                     return {**saved_receipt, **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
+            self.configuration_authority.check(configuration_authority)
             if checked_session:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
@@ -2741,7 +2756,7 @@ class AppService:
                 self._refresh_shared_preferences()
             elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
-                pending.append((self.management.command,(action,copy.deepcopy(args),command_id)))
+                pending.append((self.management.command,(action,copy.deepcopy(args),command_id,configuration_authority)))
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
                 if action == 'updates.featureInstall':
@@ -4008,7 +4023,7 @@ class AppService:
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('coordination.', 'worktree.')) or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.')) or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.

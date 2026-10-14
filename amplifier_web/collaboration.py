@@ -802,9 +802,9 @@ class Collaboration:
             # that does not make root controls or configuration its authority.
             self.source({}, origin, caller)
             target = target or caller
-            if target_key:
+            if target_key and not args.get("configurationTarget"):
                 args[target_key] = target
-            elif not action.startswith("session.") and action != "configuration.apply":
+            elif not args.get("configurationTarget") and not action.startswith("session.") and action != "configuration.apply":
                 args["sessionId"] = target
             if target == caller:
                 if action == "permissions.save" and "scope" not in args:

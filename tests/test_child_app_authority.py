@@ -82,3 +82,69 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
     finally:
         _PERSISTENT.reset(token)
         await parent.cleanup()
+
+
+@pytest.mark.parametrize('mode', ['finite', 'resumed', 'persistent', 'nested', 'recipe'])
+async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeypatch, mode):
+    from amplifier_foundation.bundle import Bundle, BundleModuleResolver
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web.app_guidance import install_app_access
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.host.children import install_children, _PERSISTENT
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.host.approvals import Approvals
+    from amplifier_web.service import AppService
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path/'native'))
+    spec = importlib.util.spec_from_file_location('granted_child_fixture', Path(__file__).parent/'fixtures/standalone_children_probe.py')
+    fixture = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, fixture)
+    spec.loader.exec_module(fixture)
+    plan = {'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}},
+            'agents': {'worker': {'instruction': 'Inspect only'}}}
+    paths = {name: Path(importlib.util.find_spec('amplifier_module_'+name.replace('-', '_')).origin).parent
+             for name in ('loop-live', 'context-simple')}
+    prepared = fixture.ProbePrepared(plan, BundleModuleResolver(paths), Bundle(name='fixture', session=plan['session'], agents=plan['agents']))
+    approvals = Approvals(None, AsyncMock(return_value='deny'))
+    parent = await prepared.create_session(session_id='root', approval_system=approvals)
+    parent.coordinator.register_capability('session.working_dir', str(tmp_path))
+    app = AppService(tmp_path/'app', workspace=tmp_path)
+    root = app._new_session({'title': 'Root'})
+    root.update(runtimeSessionId='root', collaborationGeneration={'id':'generation', 'inputIds':['input'], 'terminal':False})
+    app.state['sessions'] = [root]
+    app.state['selectedSessionId'] = root['id']
+    app._publish()
+    await app.dispatch('capability.grant', {'sessionId':root['id'], 'effects':['file_access'], 'scopes':['global'], 'reason':'Explicit setup'})
+    worker = Worker()
+    worker.session = parent
+    worker.runtime = SimpleNamespace(generation={'id':'generation'})
+    worker.context_inputs = ['input']
+    worker.context_bindings = {'input': {'clientId':None, 'targets':[]}}
+    async def bridge(operation, args):
+        return await app.app_bridge(operation, args, root['id'])
+    worker.bridge = bridge
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    registry = await install_children(parent, prepared, Runtime('root'), SessionStore(tmp_path/'children'), approvals)
+    observed = []
+    async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+        result = await tools['app_control'].execute({'operation':'dispatch', 'args':{
+            'action':'permissions.save', 'args':{'scope':'global', 'allowed':[], 'denied':[]},
+            '_runtimeSessionId':'root', '_generationId':'generation'}})
+        assert not result.success
+        assert 'child cannot borrow' in str(result.error)
+        observed.append(coordinator.session_id)
+        if mode == 'nested' and coordinator.session_id == 'child':
+            await registry.spawn('worker', 'nested', registry.sessions['child'], sub_session_id='grandchild')
+        return 'done'
+    monkeypatch.setattr(fixture.FiniteOrchestrator, 'execute', execute)
+    token = _PERSISTENT.set(mode == 'persistent')
+    try:
+        await registry.spawn('worker', 'inspect', parent, sub_session_id='child', **({'use_subprocess':False} if mode=='recipe' else {}))
+        if mode == 'resumed':
+            await registry.resume('child', 'continue', parent)
+        assert len(observed) == (2 if mode in {'resumed','nested'} else 1)
+        assert app.configuration_authority.snapshot(root)['grants'][0]['usable']
+    finally:
+        _PERSISTENT.reset(token)
+        await parent.cleanup()
+        await app.close()

@@ -108,6 +108,8 @@ def setup_routes(app, streams):
             "approval.respond": "sessionId", "runtime.control": "sessionId",
             "session.takeover": "id", "session.history": "id", "session.rename": "id",
             "session.warm": "id", "session.naming": "id",
+            "capability.read": "sessionId", "capability.request": "sessionId",
+            "capability.grant": "sessionId", "capability.revoke": "sessionId",
         }.get(action)
         if key is None:
             raise AppError("This action is not a session command.")
