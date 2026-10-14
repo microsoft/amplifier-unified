@@ -4579,15 +4579,15 @@ class AppService:
             return
         self._close_started = True
         self.begin_shutdown()
+        lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
+                           if task is not asyncio.current_task()]
+        for task in lifecycle_tasks:
+            task.cancel()
         await self.shell.resources.close()
         self.collaboration.close()
         await self.performance_diagnostics.close()
         if getattr(self, "profiling_host", None):
             await self.profiling_host.close()
-        lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
-                           if task is not asyncio.current_task()]
-        for task in lifecycle_tasks:
-            task.cancel()
         from .storage_migration import close_maintenance
         await close_maintenance(self)
         if lifecycle_tasks:
