@@ -24,6 +24,25 @@ export function publicationImageGeneration(item,messageId,sessionId){
  return binding;
 }
 
+// A retained thumbnail is independent of a Canvas view. Scope and saved-body
+// identity invalidate derived pixels; they are not authority supplied to the host.
+export function retainedThumbnailTuple(item,messageId,state){
+ const {row,version,publication}=item;
+ if(state.selectedSessionId!==row.sessionId||publicationMode(item)!=='inline'||
+  !publicationImageGeneration(item,messageId,row.sessionId))return null;
+ const entries=row.versions||[];
+ const saved=entries.find(entry=>entry.version===version)||
+  (!entries.length&&version===(row.revision||1)?row:null);
+ if(!saved)return null;
+ const binding=saved.outputBinding;
+ if(binding!==undefined&&(!binding||binding.outputId!==publication.outputId||binding.sessionId!==row.sessionId||
+  !Number.isSafeInteger(binding.outputVersion)||binding.outputVersion<1||!/^[a-f0-9]{64}$/.test(binding.sha256)))return null;
+ const query={sessionId:row.sessionId,artifactId:row.id,version,messageId,...(binding?{sha256:binding.sha256}:{})};
+ const identity=JSON.stringify([state.client?.hostInstanceId,state.client?.id??state.client?.clientId,
+  state.selectedWorkspaceId,query,publication,saved.body??null,saved.contentResource??null,binding??null]);
+ return {identity,url:`/api/outputs/${encodeURIComponent(publication.outputId)}/image?`+new URLSearchParams(query),sha256:binding?.sha256};
+}
+
 export function artifactPublications(rows,messageId){
  return rows.filter(row=>row.kind!=='settings').flatMap(row=>{
   const links=row.publications??[{messageId:row.messageId,version:row.app?.revision||row.revision||1}];
