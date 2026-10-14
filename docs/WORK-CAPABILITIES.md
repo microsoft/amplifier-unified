@@ -13,6 +13,21 @@ deny lists are combined. Empty allowlists deny writes. This is a file-tool polic
 not an operating-system sandbox for arbitrary shell processes. A denied write is
 not an instruction to retry through another tool.
 
+Unified adds source-version checks to the mounted reference `read_file`,
+`write_file`, `edit_file` and both `apply_patch` engines. Read an existing file
+in the current worker before changing it. If it changed since that read, the
+tool refuses the operation; read again and reconsider the edit. A successful
+write advances that worker's observation. Children and remounted workers must
+make their own reads. Creation and patch move destinations must be absent.
+Function patches touch each path once and preflight all sources before editing.
+
+The comparison and operation share short file locks across workers in one app
+data home. They do not lock the project, fence shell commands or external
+editors, protect unknown/custom writers, or make a multi-file patch transactional.
+Failed or interrupted mutations require inspection before retrying. Source
+observations are bounded, remain in memory and are not inherited from history.
+See [implementation and evidence](workspaces/IMPLEMENTATION.md) for qualification.
+
 ## Existing capabilities to discover
 
 | Need | Existing access |

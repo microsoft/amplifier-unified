@@ -47,9 +47,11 @@ async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_pa
     async def mount(kind, tool, name):
         tools[name] = tool
 
-    coordinator = SimpleNamespace(mount=mount, get_capability=capabilities.get,
+    coordinator = SimpleNamespace(mount=mount, get=lambda kind: tools if kind == 'tools' else None, get_capability=capabilities.get,
         register_capability=capabilities.__setitem__, hooks=SimpleNamespace(emit=AsyncMock()))
     await (filesystem.mount if writer == 'filesystem' else patch.mount)(coordinator, declaration['config'])
+    from amplifier_web.file_source_guard import install_file_source_guard
+    await install_file_source_guard(coordinator, tmp_path / 'source-locks')
 
     async def write(path):
         if writer == 'filesystem':
@@ -72,3 +74,38 @@ async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_pa
     assert not (extra / 'absolute-private/denied.txt').exists()
     if execution_checkout:
         assert list(history.iterdir()) == []
+
+
+@pytest.mark.parametrize('section', ['modules', 'config', 'overrides'])
+@pytest.mark.parametrize('allowed', [[], ['src']])
+async def test_composition_preserves_declared_read_only_or_narrow_writers(tmp_path, section, allowed):
+    from amplifier_foundation import Bundle
+    filesystem = pytest.importorskip('amplifier_module_tool_filesystem')
+    patch = pytest.importorskip('amplifier_module_tool_apply_patch')
+    from amplifier_web.file_source_guard import install_file_source_guard
+    extra = tmp_path / 'extra'
+    bundle = Bundle(name='narrow', tools=[
+        {'module': 'tool-filesystem', 'config': {'allowed_write_paths': allowed}},
+        {'module': 'tool-apply-patch', 'config': {'engine': 'native'}}],
+        hooks=[{'module': 'hook-context-intelligence'}])
+    shared = {'allowed_write_paths': [str(extra)]}
+    settings = ({'overrides': {'tool-filesystem': {'config': shared}}} if section == 'overrides'
+                else {section: {'tools': [{'module': 'tool-filesystem', 'config': shared}]}})
+    config = SimpleNamespace(workspace=tmp_path, settings=settings, app_bundles=[], providers=[], module_sources={})
+    await compose_configured_bundle(None, bundle, config)
+    tools, capabilities = {}, {'session.working_dir': str(tmp_path)}
+    async def mount(kind, tool, name):
+        tools[name] = tool
+    coordinator = SimpleNamespace(mount=mount, get=lambda kind: tools if kind == 'tools' else None,
+        get_capability=capabilities.get, register_capability=capabilities.__setitem__,
+        hooks=SimpleNamespace(emit=AsyncMock()))
+    for declaration in bundle.tools:
+        await (filesystem.mount if declaration['module'] == 'tool-filesystem' else patch.mount)(coordinator, declaration['config'])
+    await install_file_source_guard(coordinator, tmp_path / 'locks')
+    for name, prefix in [('write_file', 'file'), ('apply_patch', 'patch')]:
+        for folder in ('src', 'extra', 'outside'):
+            path = f'{folder}/{prefix}.txt'
+            arguments = ({'file_path': path, 'content': 'new'} if name == 'write_file'
+                         else {'type': 'create_file', 'path': path, 'diff': '+new'})
+            result = await tools[name].execute(arguments)
+            assert result.success == bool(allowed and folder == 'src'), result

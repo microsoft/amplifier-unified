@@ -105,6 +105,8 @@ async def install_app_access(coordinator, bridge):
     """Install exactly once per coordinator; ephemeral context also covers resumes."""
     if coordinator.get_capability('web.app_access'):
         return
+    from .file_source_guard import install_file_source_guard
+    await install_file_source_guard(coordinator)
     from amplifier_core import ToolResult
     from amplifier_core.models import HookResult
     from .surface_delivery import SurfaceDelivery, POLICY

@@ -105,6 +105,7 @@ class Runtime:
         self.hooks = HookRegistry();self.messages = [Message(role='user', content='Compare the saved originals.')]
         async def mount(kind, tool, name):self.tools[name] = tool
         coordinator = SimpleNamespace(get_capability=self.capabilities.get,
+            get=lambda kind: self.tools if kind == 'tools' else None,
             register_capability=self.capabilities.__setitem__, mount=mount, hooks=self.hooks)
         async def bridge(operation, args):
             if operation == 'context.manifest':return {'surfaces': [], 'inputIds': list(self.epoch)}
