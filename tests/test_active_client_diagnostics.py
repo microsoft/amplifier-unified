@@ -1,6 +1,7 @@
 """Fixture diagnostics preserve admission behavior and isolate concurrent spans."""
 import asyncio
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -105,8 +106,15 @@ async def test_failure_and_lock_cancellation_keep_original_authority():
 def test_failed_browser_always_retains_active_client_evidence():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     steps = workflow['jobs']['browser']['steps']
-    run = next(step for step in steps if step.get('name') == 'Check active-client latency and state transport')
-    assert run['env']['AMPLIFIER_PERF_EVIDENCE'].endswith('/output/active-client-performance/report.json')
-    artifact = next(step for step in steps if step.get('name') == 'Retain active-client timing diagnostics')
+    run = next(step for step in steps if 'scripts/browser_check_runner.py' in step.get('run', '')
+               and '--initialize' not in step['run'])
+    assert '--plan frontend/tests/browser-checks.json' in run['run']
+    plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
+    for identity in ('active-client-performance', 'state-transport', 'demand'):
+        scenario = next(row for row in plan['scenarios'] if row['id'] == identity)
+        assert scenario['command'] == ['node', f'tests/{identity}-browser.mjs']
+        assert scenario['env']['AMPLIFIER_PERF_EVIDENCE'] == '{root}/output/active-client-performance/report.json'
+    artifact = next(step for step in steps if step.get('uses', '').startswith('actions/upload-artifact@')
+                    and 'output/active-client-performance/' in step.get('with', {}).get('path', '').splitlines())
     assert artifact['if'] == 'always()'
-    assert artifact['with']['path'] == 'output/active-client-performance/'
+    assert 'output/browser-checks/' in artifact['with']['path'].splitlines()

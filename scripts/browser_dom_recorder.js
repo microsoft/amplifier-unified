@@ -51,6 +51,7 @@
     return {
       title: document.title, header: trim(header?.getAttribute('title') || header?.textContent),
       surface: app?.getAttribute('data-work-surface') || null, selected,
+      paneSessionId: pane?.getAttribute('data-session-id') ?? null,
       paneVisible: shown(pane), busy: pane?.getAttribute('aria-busy') || null,
       draftLength: composer ? (composer.value ?? composer.textContent ?? '').length : null,
       unsavedCanvas: !!app?.querySelector('.a-canvas-unsaved'),
@@ -108,13 +109,16 @@
     const chat = state.surface === 'chat' && state.paneVisible;
     mark('selectionMs', selected);
     mark('headerMs', headerMatches);
-    mark('busyMs', selected && state.busy === 'true');
+    const contentSelected = state.paneSessionId === run.target.id;
+    mark('paneIdentityMs', contentSelected && chat);
+    mark('busyMs', contentSelected && chat && state.busy === 'true');
     const changedMessages = state.firstMessage !== run.before.firstMessage || state.lastMessage !== run.before.lastMessage;
-    const newContent = changedMessages || run.marks.busyMs != null;
-    mark('messagesMs', selected && chat && newContent && state.messages >= run.minMessages);
-    mark('firstWorkHeaderMs', selected && chat && newContent && state.workHeaders > 0);
-    mark('minimumWorkHeadersMs', selected && chat && newContent && state.workHeaders >= run.minWorkHeaders);
-    const ready = selected && headerMatches && chat && newContent && state.busy === 'false' &&
+    const changedPane = state.paneSessionId !== run.before.paneSessionId;
+    const newContent = changedPane || changedMessages || run.marks.busyMs != null;
+    mark('messagesMs', contentSelected && chat && newContent && state.messages >= run.minMessages);
+    mark('firstWorkHeaderMs', contentSelected && chat && newContent && state.workHeaders > 0);
+    mark('minimumWorkHeadersMs', contentSelected && chat && newContent && state.workHeaders >= run.minWorkHeaders);
+    const ready = contentSelected && headerMatches && chat && newContent && state.busy === 'false' &&
       state.messages >= run.minMessages && state.workHeaders >= run.minWorkHeaders && !state.historyError;
     mark('readyCandidateMs', ready);
     if (run.lastSample != null && now - run.lastSample > 250) {
@@ -144,9 +148,9 @@
     if (!button) return {error: 'Target control is disabled.'};
     const before = snapshot();
     if (before.draftLength !== 0 || before.unsavedCanvas) return {error: 'Nonempty or unknown draft, or unsaved Canvas: no navigation performed.', draftLength:before.draftLength,unsavedCanvas:before.unsavedCanvas};
-    if (before.surface === 'chat' && before.selected.includes(ids[0])) return {error: 'Target chat is already selected; choose a different chat.'};
+    if (before.surface === 'chat' && before.paneSessionId === ids[0]) return {error: 'Target chat is already selected; choose a different chat.'};
     run = {
-      schemaVersion: 4, started: performance.now(), capturedAt: new Date().toISOString(),
+      schemaVersion: 5, started: performance.now(), capturedAt: new Date().toISOString(),
       timeOrigin: performance.timeOrigin, target: {id: ids[0], title: label(button)},
       location: button.closest('.a-work-browser') ? 'workspace-list' : 'sidebar',
       timeoutMs: Math.min(180000, Math.max(2000, Number(options.timeoutMs) || 60000)),
@@ -157,7 +161,8 @@
       expectWork: options.expectWork === true, before, changes: [], marks: {}, requests: [],
       longTasks: [], sampleDelays: [], done: false, truncated: false,
       limitations: [
-        'Selection/header can change optimistically; message/work readiness is reported separately.',
+        'Navigation selection/header can change optimistically; content milestones require the exact messages-pane session identity.',
+        'Older bundles without a messages-pane identity cannot qualify content readiness; missing sidebar rows do not imply missing content.',
         'No conversation text, draft content, request bodies, cookies, or URL queries are collected.',
         'Resource timing includes completed requests only; absent entries do not establish no pending requests.',
         'Main-thread delays include hidden-tab throttling and host suspension; they do not identify the cause.',

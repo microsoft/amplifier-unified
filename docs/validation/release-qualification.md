@@ -124,6 +124,12 @@ retained as earlier recovery diagnostics, not a substitute for full-suite succes
 Do not infer complete history from DOM Work-group counts. The reusable
 `scripts/browser_dom_recorder.js` probe reports grouped headers and standalone
 single-turn headers separately, excluding embedded turns inside expanded groups.
+Schema 5 records the messages pane's canonical `data-session-id` separately from
+optimistic navigation selection. Content milestones require that exact target
+identity; an unpinned chat can therefore qualify after its workspace list
+unmounts, without requiring a selected sidebar row. Older bundles without the
+pane marker leave those milestones unqualified, and an old pane never qualifies
+merely because its navigation/header changed.
 Its minimum-header and settled-DOM milestones are visibility observations only.
 Canonical turn/event completeness needs an explicit source oracle; regrouping
 can raise or lower header counts without adding or losing work. Historical
