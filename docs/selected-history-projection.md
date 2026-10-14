@@ -103,6 +103,11 @@ canonical display rows during durable persistence; that changed input rebuilds
 the selected tree rather than treating a cache as authority. Logical decoded charges are not process RSS; the process budget is a separate
 limit.
 
+Failure diagnostics include the host's requested chat ID, rather than the viewer's
+current selection, so queued reads can be traced after rapid chat switches. Worker
+payloads cannot supply or override this identity; source paths and content remain
+excluded.
+
 Event-index checkpoint writes stream JSON through a 64 KiB buffer into a private
 gzip temporary file. The 64 MiB decoded and 16 MiB compressed quotas are checked
 during serialization, before the complete checkpoint is atomically installed.

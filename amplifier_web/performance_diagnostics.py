@@ -70,12 +70,16 @@ class PerformanceDiagnostics:
             self.resource_rebuilds.append({'at': time.time(), 'resource': resource,
                 'package': package, 'reasons': tuple(reasons), 'changedGlobals': tuple(globals_changed)})
 
-    def record_projection_failure(self, reason, failure):
-        """Fixed labels and bounded numeric worker measurements, never sources."""
+    def record_projection_failure(self, reason, failure, *, session_id=None):
+        """Fixed worker facts and the host's requested chat ID, never sources."""
         from .history_projection_failure import sanitize_failure
         from .history_projection_process import REASONS
         value = sanitize_failure(failure)
         if value is not None and reason in REASONS:
+            # Identity comes from the admitting host, not the worker's payload.
+            # Multiple queued reads may finish after the viewer switches chats.
+            if isinstance(session_id, str):
+                value['sessionId'] = session_id[:200]
             with self.lock:
                 self.projection_failures.append({'at': time.time(), 'reason': reason, **value})
 
