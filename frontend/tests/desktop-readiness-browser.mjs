@@ -64,7 +64,7 @@ try{
  await scenario({computerRevoke:true,sessionId:first});
  await expect(page.getByText(/Selected window: Replacement text window/)).toHaveCount(0);
  await check();await expect(page.getByText("No source is shared for this conversation in this browser.",{exact:true})).toBeVisible();
- await action('session.create',{title:'Different conversation',select:false});const second=await page.evaluate(first=>window.amplifier.getState().sessions.find(row=>row.id!==first).id,first);
+ const {sessionId:second}=await action('session.create',{title:'Different conversation',select:false});assert.ok(second);
  await scenario({delay:true});const delayed=check();await expect.poll(async()=>(await inspect()).delayEntered).toBe(true);
  await action('session.select',{id:second});assert.notEqual(first,second);
  await scenario({release:true});await delayed;await setup();await expect(page.getByText('Native observation: ready for explicit consent',{exact:true})).toHaveCount(0);

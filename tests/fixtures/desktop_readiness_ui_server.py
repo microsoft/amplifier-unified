@@ -52,6 +52,8 @@ async def main(home):
     runtime = DesktopRuntime()
     app = await create_app(home/'app', workspace=str(home), runtime=runtime, voice=False, background_updates=False, preload_providers=False)
     service = app['service']; runtime.service = service
+    # This fixture exercises desktop readiness, after synthetic account setup.
+    await service.dispatch('view.update', {'patch': {'setupJourney': 'done'}})
     app['control_token'] = 'fixture-browser-control-token'
     class Native:
         mode = 'missing'
