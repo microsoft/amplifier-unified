@@ -58,6 +58,7 @@ async function record(name,status,evidence={},required=true){
 class CantCheck extends Error{}
 const errorEvidence=error=>({name:error.name||'Error',reason:String(error.message||error),
  stack:typeof error.stack==='string'?error.stack:null,
+ ...(error.fixtureStderr?{fixtureStderr:error.fixtureStderr}:{}),
  ...(error.cleanupErrors?{cleanupErrors:error.cleanupErrors}:{})});
 async function phase(name,work,{required=true}={}){
  if(selectedPhases&&!selectedPhases.has(name)&&!['shared-setup','cleanup'].includes(name))
@@ -395,10 +396,11 @@ try{
     try{const row=JSON.parse(line);fixtureRows.push(row);if(row.url)resolveBoot(row)}catch{}
    }
   });
-  // Preserve diagnostics privately, not unchecked fixture stdout in CI uploads.
+  // Bound synthetic fixture diagnostics; evidence writing redacts private paths.
   let stderr='';fixture.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-8000)});
   exit=new Promise(done=>{
-   fixture.once('close',(code,signal)=>{done({code,signal});rejectBoot(Error('Fixture closed before boot: '+code))});
+   fixture.once('close',(code,signal)=>{done({code,signal});rejectBoot(Object.assign(
+    Error('Fixture closed before boot: '+code),{fixtureStderr:stderr}))});
    fixture.once('error',error=>{done({code:null,signal:null,spawnError:true});rejectBoot(error)});
   });
   const timeout=setTimeout(()=>rejectBoot(Error('Fixture startup deadline exceeded')),120000);

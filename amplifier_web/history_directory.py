@@ -594,8 +594,22 @@ class HistoryDirectory:
         return workspace_counts(self, state, archive=archive)
 
     def root_count(self, state=None):
+        from .history_directory_observations import revision
+        state = self._frozen_state if self.snapshot else state if state is not None else self.service._state
+        stamp = (self._native_path, self._native_namespace,
+                 tuple(sorted(revision(self, state).items())),
+                 self.db.execute('PRAGMA main.data_version').fetchone()[0],
+                 self.db.execute('PRAGMA history_native.data_version').fetchone()[0]
+                 if self._native_path else None)
+        reusable = self.snapshot or not self.db.in_transaction
+        memo = getattr(self, '_root_count_memo', None)
+        if reusable and memo is not None and memo[0] == stamp:
+            return memo[1]
         sql, params = self.effective(state)
-        return self.db.execute(sql + " SELECT count(*) FROM directory_rows WHERE session_kind='root'", params).fetchone()[0]
+        result = self.db.execute(sql + " SELECT count(*) FROM directory_rows WHERE session_kind='root'", params).fetchone()[0]
+        if reusable:
+            self._root_count_memo = (stamp, result)
+        return result
 
     def attention_rows(self, state):
         # Only owners of actual notices participate; an idle 27k native catalog

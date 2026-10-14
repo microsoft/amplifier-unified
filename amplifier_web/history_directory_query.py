@@ -34,41 +34,51 @@ def _base(directory, state, *, archive=None):
     directory.db.create_function('directory_lower', 1, lambda text: str(text or '').lower(), deterministic=True)
     directory.db.create_function('directory_match', 7,
         lambda query, *fields: int(_matches(fields, query)), deterministic=True)
-    path_expression = 'p.path=d.workspace'
-    registry = [{**row, '_pathOwner': by_path[row['path']]['id'] == row['id']} for row in rows]
+    # These are host-global registry facts, already resident independently of
+    # chat history. Resolve them once, rather than joining json_each for every
+    # catalog row (catalog size × registry size, including repeated JSON parse).
+    # The maps have the same ID/path precedence as the in-memory navigation
+    # owner; all filtering, ordering, counting and paging remain in SQLite.
+    registry = rows
+    path_key = lambda value: value
     if archive is not None:
         from .workspace_navigation import _path
         from pathlib import PureWindowsPath
+        from functools import lru_cache
+        @lru_cache(maxsize=512)
         def normalized(value):
             path = _path(value)
             return ('windows:' + str(path).casefold() if isinstance(path,PureWindowsPath) else 'posix:' + str(path)) if path is not None else None
-        directory.db.create_function('directory_path',1,normalized,deterministic=True)
-        owners = {normalized(row['path']):row['id'] for row in rows}
         paths = {}
         for row in rows:
             paths.setdefault(normalized(row['path']),row['path'])
-        registry = [{**row,'path':paths[normalized(row['path'])], '_pathOwner':owners[normalized(row['path'])]==row['id']} for row in rows]
-        path_expression = 'directory_path(p.path)=directory_path(d.workspace)'
-    sql += """, navigation_workspaces AS (
-      SELECT json_extract(value,'$.id') id,json_extract(value,'$.path') path,
-             COALESCE(json_extract(value,'$.name'),'') name,
-             json_extract(value,'$._pathOwner') path_owner FROM json_each(?)
-    ), navigation_pins AS (SELECT value id,CAST(key AS INTEGER) position FROM json_each(?)),
-    navigation_archived AS (SELECT value id FROM json_each(?)),
-    navigation_rows AS (
-      SELECT d.*, COALESCE(w.id,p.id) resolved_workspace_id,
-        COALESCE(w.path,p.path,d.workspace,'') resolved_workspace,
-        COALESCE(w.name,p.name,CASE WHEN d.managed THEN 'No workspace' ELSE '' END) workspace_name,
-        pin.position pin_position, a.id IS NOT NULL archived
+        registry = [{**row, 'path':paths[normalized(row['path'])]} for row in rows]
+        path_key = normalized
+    by_id = {row['id']: row for row in registry}
+    path_owners = {path_key(row['path']): row for row in registry}
+    def workspace(field, identity, path, managed):
+        row = by_id.get(identity)
+        if row is None:
+            row = path_owners.get(path_key(path))
+        if field == 'id':
+            return row['id'] if row else None
+        if field == 'path':
+            return row['path'] if row else path or ''
+        return (row.get('name') or '') if row else 'No workspace' if managed else ''
+    pins = {identity: position for position, identity in reversed(list(enumerate(state.get('pinnedSessionIds', []))))}
+    archived = set(state.get('conversationOrganization', {}).get('archived', {}))
+    directory.db.create_function('directory_workspace', 4, workspace, deterministic=True)
+    directory.db.create_function('directory_pin', 1, pins.get, deterministic=True)
+    directory.db.create_function('directory_archived', 1, lambda identity: int(identity in archived), deterministic=True)
+    sql += """, navigation_rows AS (
+      SELECT d.*,
+        directory_workspace('id',workspace_id,workspace,managed) resolved_workspace_id,
+        directory_workspace('path',workspace_id,workspace,managed) resolved_workspace,
+        directory_workspace('name',workspace_id,workspace,managed) workspace_name,
+        directory_pin(id) pin_position, directory_archived(id) archived
       FROM directory_rows d
-      LEFT JOIN navigation_workspaces w ON w.id=d.workspace_id
-      LEFT JOIN navigation_workspaces p ON w.id IS NULL AND PATH_EXPRESSION AND p.path_owner
-      LEFT JOIN navigation_pins pin ON pin.id=d.id
-      LEFT JOIN navigation_archived a ON a.id=d.id
     )"""
-    sql = sql.replace('PATH_EXPRESSION',path_expression)
-    return sql, [*params, json.dumps(registry), json.dumps(state.get('pinnedSessionIds', [])),
-                 json.dumps(list(state.get('conversationOrganization', {}).get('archived', {})))], rows
+    return sql, params, rows
 
 
 def _chat_query(directory, state, section):
@@ -205,7 +215,8 @@ def children(directory, state, parent, query='', index=0):
         sql += ', matched AS (SELECT * FROM child_rows WHERE directory_child_match(?,title,description,id,native_id))'
         params.append(query)
     else: sql += ', matched AS (SELECT * FROM child_rows)'
-    total = directory.db.execute(sql+' SELECT COUNT(*) FROM matched',params).fetchone()[0]
+    total = (directory.db.execute(sql+' SELECT COUNT(*) FROM matched',params).fetchone()[0]
+             if query else unfiltered)
     pages = max(1,(total+49)//50)
     index = max(0,min(pages-1,index)) if type(index) is int else 0
     start,end = index*50,min(total,(index+1)*50)
@@ -240,6 +251,8 @@ def pinned_navigation(directory, state, workspaces):
 
 def archived_count(directory, state):
     archived = state.get('conversationOrganization',{}).get('archived',{})
+    if not archived:
+        return 0
     sql,params = directory.effective(state)
     excluded = directory.db.execute(sql+" SELECT COUNT(*) FROM directory_rows WHERE session_kind!='root' AND id IN (SELECT value FROM json_each(?))",[*params,json.dumps(list(archived))]).fetchone()[0]
     return len(archived)-excluded

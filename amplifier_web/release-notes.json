@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.139",
+      "title": "Avoid repeated workspace scans in large chat libraries",
+      "changes": [
+        "Navigation resolves workspace, pin and archive membership through direct lookups instead of repeatedly scanning the workspace registry for every saved chat. This addresses severe loading delays on hosts with thousands of registered workspaces.",
+        "Unchanged directory revisions and chat counts are reused across ordinary selection and text updates. Changes to saved history, read receipts, pins and deletion state still invalidate those results.",
+        "Saved chat bodies remain on demand. List queries decode only their requested page; filtering and counts still operate on the disk directory."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.138",
       "title": "Load the chats you use without restoring the whole library",
       "changes": [

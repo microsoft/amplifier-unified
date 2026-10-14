@@ -108,6 +108,22 @@ def revision(directory,state):
             'FROM history_native.native_revisions WHERE namespace=?',(directory._native_namespace,)).fetchone()
         native = tuple(saved) if saved else native
     local = dict(directory.db.execute('SELECT collection,revision FROM history_observation_revisions'))
+    # Read the small owner generations before consulting this one-entry memo.
+    # Selection and unrelated app saves do not change directory facts. The SQL
+    # inputs include current live overlays, read receipts and deletion filters;
+    # in-place changes therefore cannot hide behind an unchanged app revision.
+    # data_version also catches external writes/rebuilt native generations.
+    layout = directory.db.execute('SELECT revision FROM history_directory_layout WHERE version=1').fetchone()
+    versions = (directory.db.execute('PRAGMA main.data_version').fetchone()[0],
+                directory.db.execute('PRAGMA history_native.data_version').fetchone()[0]
+                if directory._native_path else None)
+    stamp = (directory._native_path, native, tuple(sorted(local.items())),
+             layout[0] if layout else None, versions, sql, tuple(params),
+             tuple(state.get('pinnedSessionIds', ())))
+    reusable = directory.snapshot or not directory.db.in_transaction
+    memo = getattr(directory, '_observation_revision_memo', None)
+    if reusable and memo is not None and memo[0] == stamp:
+        return dict(memo[1])
     overlays = {key:[] for key in COLLECTIONS}
     from .history_directory import COLUMNS
     cached = getattr(directory, '_observation_parts', {})
@@ -141,6 +157,11 @@ def revision(directory,state):
                           sorted(set(state.get('hiddenNativeWorkspaces',[]))),
                           sorted(encoded((row.get('id'),row.get('project'),sorted(row.get('ids') or [])))
                                  for row in tombstones(directory.db))])
-    return {key:(directory._native_namespace,native[2 if key=='navigation' else 0 if key=='sessions' else 1],local.get(key,0),
+    result = {key:(directory._native_namespace,native[2 if key=='navigation' else 0 if key=='sessions' else 1],local.get(key,0),
                  digest(sorted(overlays[key])),digest(pins if key=='sessions' else read),suppression)
             for key in COLLECTIONS}
+    # Never remember uncommitted mutable facts: rollback followed by another
+    # transaction may reuse the same numeric generation for different content.
+    if reusable:
+        directory._observation_revision_memo = (stamp, dict(result))
+    return result
