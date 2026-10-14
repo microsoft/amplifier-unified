@@ -33,7 +33,7 @@ test('unrelated or unavailable metadata does not invent loading work',async()=>{
 });
 test('a deterministic loading limit is unavailable without an endless retry spinner',async()=>{
  let root;
- await act(async()=>{root=create(React.createElement(WorkProjectionStatus,{session:{workProjection:{status:'unavailable',reason:'output_limit'}}})))});
+ await act(async()=>{root=create(React.createElement(WorkProjectionStatus,{session:{workProjection:{status:'unavailable',reason:'output_limit'}}}))});
  assert.match(JSON.stringify(root.toJSON()),/loading limit/);
  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Retrying|output_limit/);
  assert.equal(root.root.findAllByProps({'className':'a-progress-spinner'}).length,0);
