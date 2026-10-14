@@ -13,7 +13,7 @@ export function actionContent(node,inputText=node.input,outputText=node.output){
  const input=parsed(inputText),args=record(input),result=parsed(outputText),output=resultValue(result),out=record(output);
  const tool=String(node.tool||node.label||'Tool'),name=tool.toLowerCase().replace(/.*[.:/]/,''),phase=node.status||node.phase;
  const running=['running','working','starting','pending','queued','retrying'].includes(phase);
- const failed=['error','failed','cancelled','interrupted'].includes(phase)||record(result).success===false;
+ const failed=['error','failed','cancelled','interrupted','stopped'].includes(phase)||record(result).success===false;
  const done=['completed','complete','success','done'].includes(phase)&&!failed;
  const path=first(args,['file_path','path','filename']);
  const command=first(args,['command','cmd']);

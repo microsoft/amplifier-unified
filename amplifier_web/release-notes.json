@@ -6,7 +6,8 @@
       "title": "Restore chat lists after background reader startup failures",
       "changes": [
         "Linux background readers now check their own resident memory instead of inheriting the server\u2019s historical memory peak. This restores chat and workspace lists and allows new history readers to start after the server has handled larger histories.",
-        "The existing hard memory limit remains enforced. Large selected histories that exceed that limit still report a separate failure while their memory use is investigated."
+        "The existing hard memory limit remains enforced. Large selected histories that exceed that limit still report a separate failure while their memory use is investigated.",
+        "Includes the merged workspace resume review and interrupted-outcome repair from the current main branch."
       ],
       "notices": []
     },

@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {executionData,messageTurnId,treeForTurn,usageLabel} from '../src/timeline-data.js';
+import {executionData,messageTurnId,treeForTurn,usageLabel,combinedWork,workLabel} from '../src/timeline-data.js';
+
+test('stopped work remains terminal while independent running work remains visible',()=>{
+ const stopped={phase:'stopped',startedAt:1,endedAt:10};
+ assert.equal(combinedWork([stopped],20).phase,'stopped');
+ const summary=combinedWork([stopped,{phase:'running',startedAt:11}],20);
+ assert.equal(summary.running,true);assert.equal(summary.phase,'stopped');
+ assert.equal(workLabel(summary.phase,summary.elapsed,summary.running),'Working · 18s');
+ assert.equal(workLabel('completed','9s'),'Worked for 9s');
+});
 
 test('a focused empty modern window does not synthesize a partial legacy timeline',()=>{
  const session={id:'modern',workerSummary:{bounded:true,total:900},
@@ -11,7 +20,7 @@ test('a focused empty modern window does not synthesize a partial legacy timelin
  assert.equal(executionData(session).nodes.length,1,'older servers retain legacy behavior');
 });
 
-for(const [status,expected] of [['working','running'],['starting','running'],['idle','completed'],['error','error'],['failed','failed']])test(`legacy tool errors respect the host ${status} lifecycle`,()=>{
+for(const [status,expected] of [['working','running'],['starting','running'],['idle','completed'],['error','error'],['failed','failed'],['stopped','stopped']])test(`legacy tool errors respect the host ${status} lifecycle`,()=>{
  const session={status,runtimeEvents:[{type:'runtime.tool',phase:'error',callId:'failed-fetch',tool:'web_fetch',at:100,error:'HTTP 404: Not Found'}]};
  const before=JSON.stringify(session),data=executionData(session);
  assert.equal(data.turns[0].status,expected);assert.equal(data.nodes[0].status,'error');assert.equal(JSON.stringify(session),before);

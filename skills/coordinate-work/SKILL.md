@@ -30,7 +30,16 @@ compare those exact links, not equal message text.
    Children cannot borrow it. File/tool/destructive/budget and Stop protections
    remain unchanged. Legacy grants/proposals are read-only; denied, pending,
    revoked or unknown work never gains fresh authority during an upgrade.
-2. Discover workspace root summaries using `coordination.list` with offset/limit.
+2. When returning to earlier workspace work, use `coordination.review` with your
+   root `sessionId`. Follow `nextAfter` as `after` for bounded pages; refreshing
+   without it starts a new first page. Inspect pending decisions, saved execution
+   placement, stale/unavailable assignment claims, and prior source observations.
+   This never resumes work, reads transcripts, rechecks GitHub/source, or verifies
+   worker release adoption. Old notes and response completion markers are not
+   current PR/release evidence. Resolve through the existing chat, assignment,
+   permissions and integration actions; never replay uncertain effects or enroll
+   independent chats merely because they share a workspace.
+   Discover workspace root summaries using `coordination.list` with offset/limit.
    Read only relevant peers using `coordination.read`; follow native history
    page/text offsets. Unloaded or unavailable history is not proof of no history.
    Large artifacts remain explicit references, not pasted transcripts.

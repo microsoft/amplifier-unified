@@ -168,15 +168,55 @@ def refresh_usage(tree):
 
 
 def generation_turns(session):
-    """Project authoritative root failures over older idle/completed receipts."""
-    failed = set()
-    for event in session.get('generations', []):
-        if (event.get('event') == 'generation.failed'
-                and event.get('sessionId', session.get('id')) == session.get('id')
-                and event.get('rootSessionId', session.get('id')) == session.get('id')):
-            failed.update(value for value in event.get('input_ids', []) if isinstance(value, str))
-    return [{**turn, 'phase': 'error'} if turn.get('inputId', turn.get('id')) in failed else turn
-            for turn in session.get('execution', {}).get('turns', [])]
+    """Project exact root outcomes over older idle/completed receipts."""
+    outcomes, generations = {}, {}
+    events = session.get('generations', [])
+    starts = [event for event in events if event.get('event') == 'generation.started'
+              and event.get('sessionId') == session.get('id') and event.get('rootSessionId') == session.get('id')]
+    started_generations = {event.get('generation_id') for event in starts if event.get('generation_id')}
+    started_inputs = {event.get('initial_input_id') for event in starts if isinstance(event.get('initial_input_id'), str)}
+    for order, event in enumerate(events):
+        kind = event.get('event')
+        if kind not in {'generation.started', 'generation.finished', 'generation.failed', 'generation.detached'}:
+            continue
+        # Older failure receipts omitted the owner fields. Detached recovery
+        # requires explicit root ownership; a child cannot settle its parent.
+        default = session.get('id') if kind == 'generation.failed' else None
+        if (event.get('sessionId', default) != session.get('id')
+                or event.get('rootSessionId', default) != session.get('id')):
+            continue
+        generation = event.get('generation_id') or ('legacy', order)
+        rank = generations.setdefault(generation, len(generations))
+        identities = [event.get('initial_input_id')] if kind == 'generation.started' else event.get('input_ids', [])
+        for identity in identities:
+            if not isinstance(identity, str):continue
+            if kind != 'generation.started' and identity in started_inputs and generation not in started_generations:
+                # Retention may have dropped an older generation's start. A
+                # late terminal receipt with unknown order cannot supersede
+                # this input's observed admission merely by arriving later.
+                continue
+            previous = outcomes.get(identity)
+            if previous and (previous[0] > rank or previous[0] == rank and (
+                    previous[1].get('event') == 'generation.failed' or kind == 'generation.started')):
+                continue
+            outcomes[identity] = (rank, event)
+    turns = []
+    for turn in session.get('execution', {}).get('turns', []):
+        receipt = outcomes.get(turn.get('inputId', turn.get('id')))
+        event = receipt[1] if receipt else {}
+        if event.get('event') == 'generation.failed':
+            turn = {**turn, 'phase': 'error'}
+        elif (event.get('event') == 'generation.detached'
+                and (turn.get('status') or turn.get('phase')) in {'completed', 'complete', 'done', 'success', 'recorded'}):
+            # Repair only a settled success/unknown display. Live turns still
+            # await the host's Stop outcome. An explicit retry can reuse its
+            # input ID: only the latest root generation owns that outcome.
+            turn = {**turn, 'phase': 'interrupted'}
+            turn.pop('status', None)
+            ended = event.get('at')
+            if isinstance(ended, (int, float)):turn['endedAt'] = ended
+        turns.append(turn)
+    return turns
 
 
 def fail_generation(session, input_ids):

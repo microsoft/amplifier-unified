@@ -23,7 +23,7 @@ export function executionData(session){
  // Older records contain only action observations. A known host lifecycle
  // still owns its outcome; tool errors must not invent a failed turn or settle
  // active work between calls. Independently live children stay inspectable.
- const status=['error','failed','cancelled','interrupted'].includes(session?.status)?session.status:
+ const status=['error','failed','cancelled','interrupted','stopped'].includes(session?.status)?session.status:
   ['working','starting','running','stopping'].includes(session?.status)||nodes.some(n=>['running','working','starting','queued','pending','retrying','idle'].includes(n.status))?'running':'completed';
  return {nodes,turns:[{id:turnId,label:'Recent execution activity',status}]};
 }
@@ -49,6 +49,11 @@ export function turnPlacements(messages,data){
 export function compactTokens(value){return value>=1000000?`${(value/1000000).toFixed(1).replace(/\.0$/,'')}m`:value>=1000?`${(value/1000).toFixed(1).replace(/\.0$/,'')}k`:String(value)}
 export const liveStates=new Set(['running','working','starting','queued','pending','retrying','idle']);
 export function isRunning(record){return liveStates.has(record?.status||record?.phase)&&!Number.isFinite(record?.endedAt)}
+export function workLabel(phase,elapsed,running=false){
+ if(running)return `Working${elapsed?` · ${elapsed}`:'…'}`;
+ const outcome={stopped:'Stopped',cancelled:'Cancelled',interrupted:'Interrupted',error:'Failed',failed:'Failed'}[phase];
+ return outcome?`${outcome}${elapsed?` · ${elapsed}`:''}`:elapsed?`Worked for ${elapsed}`:'Work details';
+}
 export function elapsedLabel(record,now=Date.now()/1000){
  if(!Number.isFinite(record?.startedAt))return null;
  const end=Number.isFinite(record.endedAt)?record.endedAt:isRunning(record)?now:null;
@@ -176,7 +181,7 @@ export function splitWork(messages,data){
   }
   for(const group of groups.values()){
    const starts=group.nodes.map(node=>node.startedAt).filter(Number.isFinite),ends=group.nodes.map(node=>node.endedAt).filter(Number.isFinite);
-   const turnFailure=group.id===lastGroup&&['error','failed','cancelled','interrupted'].includes(turn.status||turn.phase)?turn.status||turn.phase:null;
+   const turnFailure=group.id===lastGroup&&['error','failed','cancelled','interrupted','stopped'].includes(turn.status||turn.phase)?turn.status||turn.phase:null;
    // Tool/worker errors and recovered model attempts stay on their action rows.
    // Only the manager outcome fails a work header. Its current segment remains
    // active between calls, even when every action so far has already settled.
@@ -211,7 +216,7 @@ export function conversationWorkRows(messages,placement){
 }
 
 export function combinedWork(turns,now){
- const running=turns.some(isRunning),failure=turns.find(turn=>['error','failed','cancelled','interrupted'].includes(turn.status||turn.phase));
+ const running=turns.some(isRunning),failure=turns.find(turn=>['error','failed','cancelled','interrupted','stopped'].includes(turn.status||turn.phase));
  const intervals=turns.map(turn=>[turn.startedAt,Number.isFinite(turn.endedAt)?turn.endedAt:isRunning(turn)?now:null])
   .filter(([start,end])=>Number.isFinite(start)&&Number.isFinite(end)).sort((a,b)=>a[0]-b[0]);
  let duration=0,end=-Infinity;

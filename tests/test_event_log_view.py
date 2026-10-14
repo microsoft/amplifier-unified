@@ -979,10 +979,10 @@ def test_background_naming_cannot_reopen_completed_turn_on_restart(source):
     assert session['execution']['aggregateUsage']['calls'] == 2
 
 
-@pytest.mark.parametrize('phase', ['error','failed','cancelled','interrupted'])
-def test_host_terminal_failure_survives_successful_calls_and_native_reconciliation(source, phase):
+@pytest.mark.parametrize('phase', ['error','failed','cancelled','interrupted','stopped'])
+def test_host_terminal_outcome_survives_successful_calls_and_native_reconciliation(source, phase):
     session,path=source
-    session.update(status='error',execution={'currentTurnId':'failed','turns':[
+    session.update(status=phase,execution={'currentTurnId':'failed','turns':[
         {'id':'failed','phase':phase,'startedAt':1,'endedAt':15}], 'nodes':[]})
     append(path,'llm:response',{'id':'successful-call','kind':'llm','turnId':'failed','phase':'completed','startedAt':1,'endedAt':10},10)
     view=EventLogView(None)
@@ -991,6 +991,91 @@ def test_host_terminal_failure_survives_successful_calls_and_native_reconciliati
         assert session['execution']['turns'][0]['phase']==phase
         assert session['execution']['turns'][0]['endedAt']==15
         assert session['execution']['nodes'][0]['phase']=='completed'
+
+
+async def test_exact_detached_input_repairs_old_completed_projection_and_refresh_cache(source):
+    from amplifier_web.browser_detail import project
+    session,path=source
+    session.update(status='stopped',execution={'currentTurnId':'target','turns':[
+        {'id':'earlier','inputId':'earlier','phase':'completed','startedAt':1,'endedAt':3},
+        {'id':'target','inputId':'target','phase':'completed','startedAt':5,'endedAt':10}], 'nodes':[]})
+    append(path,'llm:response',{'id':'call','kind':'llm','turnId':'target','phase':'completed','startedAt':5,'endedAt':10},10)
+    service=SimpleNamespace(_session=lambda _:session, lock=__import__('asyncio').Lock(), closed=False,
+                            _publish=lambda **kwargs:None)
+    view=EventLogView(service)
+    await view.refresh('app')
+    assert session['execution']['turns'][1]['phase']=='completed', 'chat status alone is insufficient'
+    session['generations']=[{'event':'generation.detached','sessionId':'app','rootSessionId':'app',
+        'generation_id':'owned-generation','input_ids':['target'],'accepted_input_ids':[],
+        'at':15, 'text':'must not enter the projection input'}]
+    # No event file change: the retained exact-input receipt itself invalidates
+    # the projection cache, and survives the process reader's input boundary.
+    snapshot=view.projection_input(session)
+    assert 'text' not in snapshot['generations'][0]
+    assert EventLogView(None).read(snapshot)['turns'][1]['phase']=='interrupted'
+    for _ in range(3):
+        await view.refresh('app')
+        turns=session['execution']['turns']
+        assert [(t['phase'],t['endedAt']) for t in turns]==[('completed',3),('interrupted',15)]
+        assert session['execution']['nodes'][0]['phase']=='completed'
+        assert project(session)['execution']['segments'][-1]['phase']=='interrupted'
+
+
+def test_stop_preserves_host_turn_after_late_successful_call_without_relabeling_other_turns(source):
+    from amplifier_web.execution import ensure_turn, finish, ingest
+    session,path=source
+    session['status']='working'
+    ensure_turn(session,'earlier')
+    finish(session)
+    ensure_turn(session,'target')
+    ingest(session,{'id':'effect','kind':'tool','turnId':'target','sessionId':'app',
+                    'rootSessionId':'app','phase':'running','startedAt':5})
+    session['status']='stopped'
+    finish(session,'stopped')
+    ended=session['execution']['turns'][-1]['endedAt']
+    append(path,'llm:response',{'id':'late','kind':'llm','turnId':'target',
+        'phase':'completed','startedAt':5,'endedAt':ended+1},ended+1)
+    for _ in range(3):
+        session['execution']=EventLogView(None).read(session)
+        assert [turn['phase'] for turn in session['execution']['turns']]==['completed','stopped']
+        assert session['execution']['turns'][-1]['endedAt']==ended
+        assert next(node for node in session['execution']['nodes'] if node['id']=='late')['phase']=='completed'
+
+
+@pytest.mark.parametrize('outcome', ['generation.detached', 'generation.failed'])
+@pytest.mark.parametrize('retained_old_start', [True, False])
+def test_explicit_retry_with_same_input_supersedes_older_generation_in_process_projection(source, outcome, retained_old_start):
+    session,path=source
+    def receipt(kind, generation, **fields):
+        return {'event':kind,'generation_id':generation,'sessionId':'app','rootSessionId':'app',**fields}
+    old=receipt(outcome,'old',input_ids=['target'],at=15)
+    old_history=[receipt('generation.started','old',initial_input_id='target',at=1), old] if retained_old_start else []
+    session.update(status='working',generations=[*old_history,
+        receipt('generation.started','retry',initial_input_id='target',at=20)],
+        execution={'currentTurnId':'target','turns':[
+            {'id':'target','inputId':'target','phase':'running','startedAt':20,'retriedAt':20}], 'nodes':[]})
+    append(path,'llm:response',{'id':'call','kind':'llm','turnId':'target',
+        'phase':'completed','startedAt':21,'endedAt':25},25)
+    view=EventLogView(None)
+    assert view.read(view.projection_input(session))['turns'][0]['phase']=='running'
+    session['generations'].extend([
+        receipt('generation.finished','retry',input_ids=['target'],at=30),
+        {**old,'at':31}])  # A delayed older-generation receipt has no authority.
+    session['status']='idle'
+    session['execution']['turns'][0].update(phase='completed',endedAt=30)
+    for _ in range(3):
+        session['execution']=view.read(view.projection_input(session))
+        assert session['execution']['turns'][0]['phase']=='completed'
+        assert session['execution']['turns'][0]['endedAt']>=25
+
+
+def test_failed_generation_keeps_precedence_over_same_generation_finish(source):
+    from amplifier_web.execution import generation_turns
+    session,_=source
+    session.update(execution={'turns':[{'id':'target','phase':'completed'}]},generations=[
+        {'event':kind,'generation_id':'same','sessionId':'app','rootSessionId':'app','input_ids':['target']}
+        for kind in ('generation.failed','generation.finished','generation.detached')])
+    assert generation_turns(session)[0]['phase']=='error'
 
 
 @pytest.mark.parametrize("host_log", ["native", "app"])

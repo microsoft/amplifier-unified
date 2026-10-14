@@ -41,23 +41,25 @@ class AssignmentTasks:
     def error(self, detail, status=409):
         self.collaboration.error(detail, status)
 
-    def member(self, value, sid):
+    def member(self, value, sid, *, lookup=None):
         if value['members'].get(sid, {}).get('status') != 'bound':
             return None
         try:
-            row = self.service._session(sid, hydrate=False)
+            row = lookup(sid) if lookup else self.service._session(sid, hydrate=False)
         except Exception:
+            return None
+        if row is None:
             return None
         identity = row.get('assignmentId') or (row.get('collaboration') or {}).get('assignmentId')
         return row if identity == value['id'] else None
 
-    def claim_status(self, value, task):
+    def claim_status(self, value, task, *, lookup=None):
         claim = task.get('claim')
         if not claim:
             return None
         status, detail = 'current', 'Responsibility is retained; no execution is implied.'
         member = value['members'].get(claim['sessionId'], {})
-        holder = self.member(value, claim['sessionId'])
+        holder = self.member(value, claim['sessionId'], lookup=lookup)
         if value['status'] != 'active':
             status, detail = 'stale', 'The assignment was stopped. Inspect prior effects before explicitly releasing this claim.'
         elif member.get('status') != 'bound':
