@@ -41,6 +41,14 @@ Core/Foundation tests cover finite, resumed, persistent and nested child mounts.
 All 681 frontend tests pass. Source/package byte verification includes application
 Python and shipped frontend assets.
 
+The full local integrated run completed with 6,975 passes, six passing subtests,
+140 skips and 25 failures. Twenty-four failures reproduce on unchanged main
+`a513a177`, including an artifact-cleanup assertion that passes alone but fails
+on repeated service lifecycles. The remaining assertion expected a relative
+image read path; it now checks the intentionally normalized execution path and
+passes. The final Unicode correction and affected assertion are included in the
+397 installed-wheel checks above. This is not a green broad-suite claim.
+
 A three-round Chromium journey through the actual composer, real provider and
 fresh worker passes against the integrated wheel: read a file, introduce a
 scripted peer edit, reject a stale overwrite, reread and preserve that peer edit,
