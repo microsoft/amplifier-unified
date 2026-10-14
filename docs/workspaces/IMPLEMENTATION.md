@@ -512,3 +512,18 @@ Managed Git worktrees use `amplifier_worktrees`, with original source manifests,
 - Cross-host transfer remains the separate portability implementation's responsibility.
 
 Those are separate runtime/context conformance gates from the placement journey. Do not infer their completion from a green placement/browser suite. Existing terminal and editor edits remain visible at the chosen folder; no hidden checkout isolation was introduced.
+
+## Task resource owner projection — 2026-10-14
+
+`workspace.resources.managed` reads a selected task's local publishing listeners
+and native Operations summaries through their canonical owners, using indexed,
+bounded pages. The workspace Details resource surface exposes the same action.
+Local previews report the actual bound port, immutable release directory and
+owner-observed liveness; Operations reports retained lifecycle evidence without
+re-probing process IDs or exposing commands/output. Stopped and unknown outcomes
+remain visible. Existing reservations are presented alongside these observations
+without inventing a claim-to-process mapping or automatic cleanup.
+
+This is read-only provenance, not generic resource allocation. Scratch/database/
+browser-profile isolation, arbitrary dynamic preview ports, operation cwd missing
+from its owner, remote targets and external processes remain explicit limits.

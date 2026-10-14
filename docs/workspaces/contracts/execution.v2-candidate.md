@@ -248,3 +248,24 @@ pending assignment input without substituting a whole-conversation interruption.
 When a token or cost limit is enabled, new queue/steer requests to independent
 peers are refused with this limitation; commissioned helpers share the budget.
 Informational notices remain available and do not start independent work.
+
+### Managed resource observations — 2026-10-14
+
+The resource surface may project bounded, explicitly selected task records from
+existing physical owners. The local Publisher owns static preview/site listeners,
+OS-assigned ports, immutable release directories and stopped/interrupted receipts.
+Operations owns recorded native process/kernel lifecycle evidence; a recorded
+running state is an observation, not an independent process-liveness probe.
+The projection must preserve these different evidence levels, omit commands,
+output and environment, and never provision, replay, stop or reassign resources.
+Each owner uses an indexed task-scoped page; inspecting one task must not load
+other tasks or all retained history. Browser and agents use the same read action;
+agents may inspect only their host-bound task, while users may select a workspace
+task. Cooperative reservations remain separately labelled, with no inferred link
+between a user-chosen key and a physical resource.
+
+Dedicated scratch folders, test databases, dynamic application preview listeners
+and browser profiles remain unallocated by this workspace adapter. A documented
+working-files namespace is not provisioned isolation. Unknown operation cwd,
+remote publishing state or resources outside these owners must remain explicit
+coverage limits, never reported absent or safely isolated.

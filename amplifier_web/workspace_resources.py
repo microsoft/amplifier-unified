@@ -21,6 +21,10 @@ def definitions(schema, string):
     change = {**scope, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1},
               'evidence': {**string(4000), 'minLength': 1}}
     return {
+        'workspace.resources.managed': ('Read one task’s bounded local publishing and recorded process resources. Does not allocate, replay or stop anything. Agents inspect only their bound task. Separate scratch/database/browser isolation and dynamic preview discovery are not provided.', schema({**scope,
+            'sessionId': string(200), 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+            'operationsBefore': string(200),
+            'publishingBefore': {'type': 'array', 'items': string(200), 'minItems': 2, 'maxItems': 2}}, ['workspaceId', 'sessionId'])),
         'workspace.resources.reservations': ('List cooperative resource reservations without loading chats. Matching keys share one admission domain across this app data home; separate installations and aliases are not covered.', schema({**scope,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
             'includeReleased': {'type': 'boolean'}}, ['workspaceId'])),
@@ -128,6 +132,8 @@ async def dispatch_reservation(app, action, args, origin, command_id, caller):
     from .collaboration import PRINCIPAL
     from .service import AppError
     workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
+    if action == 'workspace.resources.managed':
+        return await managed(app, workspace, args, origin, caller)
     # Retained claims can be reconciled even after a registration is removed.
     # Only acquiring new claims requires a currently registered workspace.
     user = origin in {'ui', 'user'}
@@ -148,6 +154,39 @@ async def dispatch_reservation(app, action, args, origin, command_id, caller):
     except (ValueError, OSError, sqlite3.Error) as exc:
         raise AppError(str(exc), 409) from None
     return {'accepted': True, 'result': result}
+
+
+async def managed(app, workspace, args, origin, caller):
+    """Select explicit task scope without hydrating history or warming runtime."""
+    from .service import AppError
+    sid = args['sessionId']
+    if origin not in {'ui', 'user'} and sid != caller:
+        raise AppError('Inspect resources through the calling conversation.', 403)
+    session = app._session(sid, hydrate=False)
+    if (workspace is None or session.get('workspace') != workspace['path']
+            or session.get('sessionKind', 'root') != 'root'):
+        raise AppError('Choose a root conversation in this workspace.', 403)
+    # Capture identity before yielding; these owners bind every read to sid.
+    binding = (session.get('workspace'), session.get('sessionKind', 'root'))
+    limit = args.get('limit', 25)
+    try:
+        publishing, operations = await asyncio.gather(
+            asyncio.to_thread(app.publishing.store.resources, sid, limit, args.get('publishingBefore')),
+            asyncio.to_thread(app.operations.journal.resources, sid, limit, args.get('operationsBefore')),
+        )
+    except (ValueError, sqlite3.Error) as exc:
+        raise AppError(str(exc), 409) from None
+    current = app._session(sid, hydrate=False)
+    if binding != (current.get('workspace'), current.get('sessionKind', 'root')):
+        raise AppError('The conversation moved; inspect its current workspace.', 409)
+    return {'accepted': True, 'result': {
+        'workspaceId': workspace['id'], 'sessionId': sid, 'publishing': publishing, 'operations': operations,
+        'isolation': [{'kind': kind, 'status': 'unallocated', 'owner': None}
+                      for kind in ('scratch-directory', 'test-database', 'browser-profile')],
+        'coverage': {'publishing': 'local-static-listeners', 'operations': 'recorded-native-lifecycle',
+                     'dynamicPreviewDiscovery': 'unsupported', 'remotePublishing': 'not-inspected',
+                     'operationWorkingDirectory': 'unavailable', 'externalProcesses': 'not-inspected'},
+    }}
 
 
 def command(home, workspace_id, action, args, command_id=None):

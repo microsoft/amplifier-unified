@@ -40,6 +40,7 @@ See [implementation and evidence](workspaces/IMPLEMENTATION.md) for qualificatio
 | Discover/use skills | Mounted `load_skill` from the configured skills behavior |
 | Delegate and steer workers | Mounted `delegate` and `live_worker`; async opt-in and pending receipts remain distinct from completion |
 | Control commissioned work together | `assignment.read/start/set/stop`; new commissioned roots and scheduled descendants share bounded admission. Independent existing chats remain separate. `assignment.detach` is an explicit user action after work settles. |
+| Inspect actual task resource owners | `workspace.resources.managed` reads bounded local publishing listeners and recorded native process/kernel lifecycle; `workspace.resources.reservations` reads separate cooperative claims. Neither allocates scratch, database or browser isolation. |
 | Read original admitted history | Work's `read_transcript`, separate from cross-conversation discovery |
 | Ask durable choices while independent work continues | Shared `question.*` actions; [question and delivery contract](DURABLE-QUESTIONS.md) |
 | Voice lifecycle and scoped file access | `call.*` and `permissions.*` shared actions |

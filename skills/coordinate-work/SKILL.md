@@ -70,6 +70,13 @@ compare those exact links, not equal message text.
    The peer keeps the source's actual execution folder while retaining the
    canonical workspace for history. This shares that checkout; it does not
    allocate a second worktree or isolate ports, services, or browser state.
+   Inspect your actual owned resources with `workspace.resources.managed`, using
+   this workspace and your root session ID. Page each owner with its returned
+   cursor. Local publishing reports actual bound ports and immutable served
+   directories; Operations reports retained lifecycle observations, not a fresh
+   process probe. Reservations are separate cooperative claims. Scratch folders,
+   test databases, browser profiles and dynamic previews are not automatically
+   allocated or discovered by this view. Do not infer isolation from an empty page.
    Identical sibling plans can reuse that qualified profile; preparation is not
    execution or completion. Read elapsed progress and honor Stop rather than
    replaying a slow request. Failed/cancelled preparation retains diagnostics.
