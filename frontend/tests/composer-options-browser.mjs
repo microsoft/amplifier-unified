@@ -16,10 +16,19 @@ try{
  await expect(menu.locator('#chat-provider')).toBeFocused();
  const bundle=menu.getByRole('combobox',{name:'Registered root bundles',exact:true});
  await bundle.selectOption('work');await menu.locator('#chat-model').selectOption('chosen-model');
+ // Optimistic draft state is visible before its save is acknowledged. Reload
+ // only after this exact selection has been accepted by the server.
+ const effortSaved=page.waitForResponse(response=>{
+  if(response.request().method()!=='POST'||new URL(response.url()).pathname!=='/api/actions')return false;
+  const body=response.request().postDataJSON();
+  return body?.action==='view.update'&&body.args?.patch?.newSessionDraft?.selection?.effort==='high';
+ });
  await menu.getByText('Advanced model options',{exact:true}).click();await menu.locator('#chat-effort').press('End');
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.selection.effort)).toBe('high');
  await menu.getByRole('button',{name:'Done',exact:true}).click();await expect(composer).toHaveDraft('Use my selected model');
+ const saved=await effortSaved;assert.equal(saved.ok(),true);assert.equal((await saved.json()).accepted,true);
  await page.reload();await expect(options).toBeVisible();await options.click();await expect(menu.locator('#chat-model')).toHaveValue('chosen-model');await expect(bundle).toHaveValue('work');
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.selection.effort)).toBe('high');
  await expect(menu.getByRole('button',{name:'Refresh models',exact:true})).toBeHidden();
  await menu.getByRole('button',{name:'Done',exact:true}).click();
  // Resizing closes the narrow menu and restores independent controls.

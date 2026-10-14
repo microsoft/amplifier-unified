@@ -12,6 +12,16 @@ async def main(home):
         'id':'counter','name':'Independent counter','command':sys.executable,
         'args':[str(Path(__file__).with_name('canvas_mcp_server.py')),sys.argv[1]]})
     await service.smart_tools.execute('smartTools.connect', {'id':'counter'})
+    async def observations(request):
+        # Read-only fixture evidence: compact browser frames intentionally omit
+        # retained operation collections and unrelated saved artifacts.
+        async with service.lock:
+            return web.json_response({
+                'operations': service.smart_tools.state['operations'],
+                'servers': service.smart_tools.state['servers'],
+                'canvasArtifacts': service.state.get('canvasArtifacts', []),
+            })
+    app.router.add_get('/fixture/smart-tool-observations', observations)
     return app
 
 if __name__ == '__main__':

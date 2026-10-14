@@ -4,7 +4,7 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {build} from 'esbuild';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const temp=await mkdtemp(join(tmpdir(),'unified-mcp-browser-'));
 const source=`import {App} from '@modelcontextprotocol/ext-apps';
@@ -52,6 +52,15 @@ try{
  });
  await page.goto('http://127.0.0.1:8967/');await page.waitForSelector('#amp-one');
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ const observations=async()=>{const response=await page.request.get('http://127.0.0.1:8967/fixture/smart-tool-observations');assert.equal(response.status(),200);return response.json()};
+ const operations=async()=>(await observations()).operations;
+ const operation=async id=>(await operations()).find(row=>row.id===id);
+ const appearance=async()=>{
+  const navigation=page.getByRole('button',{name:'Open navigation',exact:true});
+  if(await navigation.isVisible())await navigation.click();
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await page.locator('[data-settings-section="appearance"]').click();
+ };
  await action('view.update',{patch:{scheme:'system'}});
  await action('canvas.show',{kind:'markdown',title:'Pinned notes',content:'# Notes beside the live tool'});
  const pinned=(await action('canvas.views.inspect',{})).result.views[0];
@@ -64,24 +73,27 @@ try{
  const stableFrame=await page.locator('.a-canvas-html').boundingBox();
  await frame.getByRole('button',{name:'Read media'}).click();
  await frame.locator('#resource').filter({hasText:'Retained preview'}).waitFor();
- let toolInFlight=false,polledCalls=0;
+ let toolInFlight=false,polledCalls=0,markToolStarted,releaseTool;
+ const toolStarted=new Promise(resolve=>markToolStarted=resolve),toolGate=new Promise(resolve=>releaseTool=resolve);
+ const toolCallURL=url=>/^\/api\/canvas\/[^/]+\/tools\/call$/.test(url.pathname);
  page.on('request',req=>{if(req.url().includes('/api/smart-tools/operations/'))polledCalls++});
- await page.route('**/api/canvas/*/tools/call',async route=>{toolInFlight=true;await new Promise(resolve=>setTimeout(resolve,400));await route.continue()});
+ await page.route(toolCallURL,async route=>{toolInFlight=true;markToolStarted();await toolGate;await route.continue()});
  const readsBefore=polledCalls;
  await frame.getByRole('button',{name:'Add one'}).click();
- await page.waitForTimeout(100);
+ await Promise.race([toolStarted,new Promise((_,reject)=>setTimeout(()=>reject(Error('Tool request did not reach the route gate')),5000))]);
  assert.equal(toolInFlight,true);
  assert.equal(await page.locator('.a-mcp-status').getAttribute('data-phase'),'ready','Interaction must not flicker the host render status');
  assert.equal(await page.locator('.a-mcp-status').isVisible(),false);
  assert.equal((await page.locator('.a-canvas-html').boundingBox()).y,stableFrame.y);
 
+ releaseTool();
  await frame.locator('#count').filter({hasText:/^1$/}).waitFor();
  assert.equal(polledCalls,readsBefore,'Completed interactive calls return directly without operation polling');
- await page.unroute('**/api/canvas/*/tools/call');
+ await page.unroute(toolCallURL);
  await page.waitForFunction(()=>window.amplifier.getState().canvas.mcp.context.structuredContent?.count===1);
  assert.equal(await frame.locator('body').getAttribute('data-network'),'blocked');
  let state=await page.evaluate(()=>window.amplifier.getState());const savedId=state.canvas.id;
- assert.equal(state.smartTools.operations.filter(o=>o.target?.name==='counter_add').length,1,'Nested content cannot call host tools');
+ assert.equal((await operations()).filter(o=>o.target?.name==='counter_add').length,1,'Nested content cannot call host tools');
  // The panel paints optimistically, but the live MCP frame must not resume
  // reads until the matching shared visibility action has been acknowledged.
  const visibilityRequests=[],visibilityReports=[];let nextVisibility;
@@ -116,16 +128,16 @@ try{
  assert.equal(await frame.getByRole('textbox',{name:'Unsaved tool draft'}).inputValue(),'Keep this unsaved');
  await frame.locator('body').evaluate(()=>window.enableFixtureResumeReads(false));
  await page.unroute('**/api/actions',holdVisibility);
- await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(row=>row.id===id&&row.status==='completed'),visibilityRequests[0].id);
+ await expect.poll(async()=>(await operation(visibilityRequests[0].id))?.status).toBe('completed');
  state=await page.evaluate(()=>window.amplifier.getState());
  // System changes update the existing bridge. They must neither replace the
  // iframe nor replay the app's startup tool request.
- const themeOperationCount=state.smartTools.operations.length;
+ const themeOperationCount=(await operations()).length;
  await frame.locator('body').evaluate(el=>el.dataset.themeMarker='same-frame');
  await page.evaluate(()=>window.setSystemTheme(false));
  await frame.locator('body[data-theme="light"]').waitFor();
  assert.equal(await frame.locator('body').getAttribute('data-theme-marker'),'same-frame');
- assert.equal((await page.evaluate(()=>window.amplifier.getState())).smartTools.operations.length,themeOperationCount);
+ assert.equal((await operations()).length,themeOperationCount);
  await action('view.update',{patch:{scheme:'dark'}});
  await frame.locator('body[data-theme="dark"]').waitFor();
  await page.evaluate(()=>window.setSystemTheme(false));
@@ -134,38 +146,40 @@ try{
  await frame.locator('body[data-theme="light"]').waitFor();
  await page.evaluate(()=>window.setSystemTheme(true));
  assert.equal(await frame.locator('body').getAttribute('data-theme'),'light','An explicit light preference must override system media changes');
- assert.equal((await page.evaluate(()=>window.amplifier.getState())).smartTools.operations.length,themeOperationCount);
+ assert.equal((await operations()).length,themeOperationCount);
  await action('view.update',{patch:{scheme:'system'}});
  await frame.locator('body[data-theme="dark"]').waitFor();
  // Layout changes must not reconnect the MCP App or replay its startup tools.
- const operationCount=state.smartTools.operations.length;
+ const operationCount=(await operations()).length;
  await frame.locator('body').evaluate(el=>el.dataset.liveMarker='same-frame');
  await action('view.update',{patch:{canvasWidth:1000,canvasFocused:true,canvasControlsExpanded:false}});
  await page.mouse.move(500,400);
  await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').getBoundingClientRect().width===innerWidth);
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
- const frameBox=await page.locator('.a-canvas-html').boundingBox();assert.equal(frameBox.x,0);assert.equal(frameBox.width,1450);assert.equal(frameBox.y,36);
+ const frameBox=await page.locator('.a-canvas-html').boundingBox();assert.equal(frameBox.x,0);assert.equal(frameBox.width,1450);const chrome=await page.locator('.a-canvas-chrome').boundingBox();assert.equal(frameBox.y,chrome.y+chrome.height,'The live tool begins immediately below Canvas controls');
  await action('view.update',{patch:{canvasFocused:false}});
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
- assert.equal((await page.evaluate(()=>window.amplifier.getState())).smartTools.operations.length,operationCount);
+ assert.equal((await operations()).length,operationCount);
 
  // An agent takes the same action through app_control's shared dispatch contract.
  const receipt=await action('smartTools.call',{id:'counter',name:'counter_add',arguments:{amount:4,delay_ms:3000}});
- await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(o=>o.id===id&&o.status==='running'),receipt.operationId);
- await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
- await page.getByRole('button',{name:'Light',exact:true}).click();
+ await expect.poll(async()=>(await operation(receipt.operationId))?.status).toBe('running');
+ await appearance();
+ await page.getByLabel('Color mode',{exact:true}).selectOption('light');
  await frame.locator('body[data-theme="light"]').waitFor();
+ await page.getByText('Layout & background',{exact:true}).click();
  await page.locator('#layout').selectOption('work');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await action('view.update',{patch:{canvasFocused:true}});
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
- assert.ok((await state()).canvasArtifacts.some(row=>row.id===pinned.resourceId),'Opening a tool retains earlier saved artifacts');
- await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(o=>o.id===id&&o.status==='completed'),receipt.operationId);
- state=await page.evaluate(()=>window.amplifier.getState());assert.equal(state.smartTools.operations.find(o=>o.id===receipt.operationId).result.structuredContent.count,5);
- assert.equal(state.smartTools.operations.filter(o=>o.target?.name==='counter_add').length,2,'Presentation changes must not replay accepted tool work');
+ assert.ok((await observations()).canvasArtifacts.some(row=>row.id===pinned.resourceId),'Opening a tool retains earlier saved artifacts');
+ await expect.poll(async()=>(await operation(receipt.operationId))?.status).toBe('completed');
+ state=await page.evaluate(()=>window.amplifier.getState());assert.equal((await operation(receipt.operationId)).result.structuredContent.count,5);
+ assert.equal((await operations()).filter(o=>o.target?.name==='counter_add').length,2,'Presentation changes must not replay accepted tool work');
  await action('view.update',{patch:{canvasFocused:false}});
- await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
- await page.getByRole('button',{name:'Device',exact:true}).click();
+ await appearance();
+ await page.getByLabel('Color mode',{exact:true}).selectOption('system');
+ await page.getByText('Layout & background',{exact:true}).click();
  await page.locator('#layout').selectOption('balanced');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await action('canvas.close',{});
@@ -173,13 +187,13 @@ try{
  await page.evaluate(()=>window.setSystemTheme(false));
  await reopen;
  await frame.locator('body[data-theme="light"]').waitFor();
- // Keep controls beside the live view while exercising buttons at its top edge.
- await page.getByRole('button',{name:'Pin canvas controls',exact:true}).click();
+ // Current Canvas controls expand beside the mounted live view.
+ await page.getByRole('button',{name:'Canvas options',exact:true}).click();
  await frame.locator('#count').filter({hasText:/^5$/}).waitFor();
  await page.screenshot({path:'/tmp/amplifier-smart-tools-canvas.png'});
  // A saved view cannot silently acquire a replacement server configuration.
  await action('smartTools.configure',{id:'counter',name:'Changed counter',command:'invalid-command',args:[]});
- await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers.find(s=>s.id==='counter').command==='invalid-command');
+ await expect.poll(async()=>(await observations()).servers.find(s=>s.id==='counter')?.command).toBe('invalid-command');
  await frame.getByRole('button',{name:'Add one'}).click();
  await page.getByText('This server configuration changed. The saved document is retained; review the connection in Settings and open a new tool view.',{exact:true}).waitFor();
  await frame.getByRole('button',{name:'Read media'}).click();

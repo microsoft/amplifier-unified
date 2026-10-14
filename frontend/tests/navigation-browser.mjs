@@ -22,23 +22,25 @@ try{
  const info=()=>api('/api/fixture/info');
  const patch=async(instanceId,values)=>api('/api/fixture/agent',{args:{action:'shell.view.update',args:{clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId,patch:values}}});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
- const recent=page.locator('[data-sidebar-section=recent]'),pinned=page.locator('[data-sidebar-section=pinned]'),workspaces=page.locator('[data-sidebar-section=workspaces]');
+ const shortcuts=page.locator('[data-sidebar-section=recent]'),recent=page.getByRole('region',{name:'Chat search',exact:true}),pinned=page.locator('[data-sidebar-section=pinned]'),workspaces=page.locator('[data-sidebar-section=workspaces]');
  const chatrow=id=>recent.locator('.a-nav-chat[data-session-id="'+id+'"]'),details=page.locator('.a-navigation-flyout');
- const chatSearch=recent.getByRole('searchbox',{name:'Filter conversations',exact:true});
+ const chatSearch=recent.getByRole('searchbox',{name:'Search chats',exact:true});
  const snapshot=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
  const toggle=section=>section.locator('.a-sidebar-section-heading>button').first();
- await page.goto(vite?.resolvedUrls.local[0]||target);await recent.locator('.a-nav-chat').first().waitFor();
+ await page.goto(vite?.resolvedUrls.local[0]||target);await shortcuts.locator('.a-nav-chat').first().waitFor();
  const initial=await info(),selected=initial.initialSession;
- assert.deepEqual(await page.locator('[data-sidebar-section]').evaluateAll(rows=>rows.map(row=>row.dataset.sidebarSection)),['pinned','workspaces','recent']);
+ assert.deepEqual(await page.locator('[data-sidebar-section]').evaluateAll(rows=>rows.map(row=>row.dataset.sidebarSection)),[ 'workspaces','recent']);
  assert.equal(await page.getByRole('group',{name:'Chat view'}).count(),0);
  assert.equal(await page.locator('.a-workspace-explorer').count(),1);
- assert.equal(await recent.locator('.a-nav-chat').count(),40);
- assert.equal((await snapshot()).sidebarNavigation.recent.total,206);
+ assert.equal(await shortcuts.locator('.a-nav-chat').count(),20);
+ await page.getByRole('button',{name:'Search chats',exact:true}).click();
+ await expect(recent.locator('.a-nav-chat')).toHaveCount(40);
+ assert.equal((await snapshot()).sidebarNavigation.search.total,206);
  // Search/hover are passive and use the native identity, with stable row geometry.
  await chatSearch.fill('alpha-201');await expect(recent.locator('.a-nav-chat')).toHaveCount(1);
  const geometry=()=>chatrow(selected).evaluate(el=>({height:el.getBoundingClientRect().height,width:el.getBoundingClientRect().width}));
  const before=await geometry();await chatrow(selected).hover();await details.waitFor();
- assert.deepEqual(await geometry(),before);assert.equal(before.height,60);
+ assert.deepEqual(await geometry(),before);assert.equal(await chatrow(selected).locator('.a-nav-chat-title').evaluate(el=>getComputedStyle(el).whiteSpace),'nowrap');
  assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,'alpha-201']);
  await page.context().grantPermissions(['clipboard-read','clipboard-write']);
  await details.getByRole('button',{name:'Copy session id',exact:true}).click();
@@ -51,12 +53,12 @@ try{
  assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,initial.quietSession]);await page.keyboard.press('Escape');
  await chatSearch.fill('');await expect(recent.locator('.a-nav-chat')).toHaveCount(40);
  await recent.getByRole('button',{name:'Show more conversations'}).click();
- await expect.poll(async()=>(await snapshot()).sidebarNavigation.recent.index).toBe(1);
+ await expect.poll(async()=>(await snapshot()).sidebarNavigation.search.index).toBe(1);
  assert.equal(await recent.locator('.a-nav-chat').count(),40);assert.equal((await info()).state.selectedSessionId,selected);
- await recent.locator('summary').click();await recent.getByRole('button',{name:'2 need attention',exact:true}).click();
+ await recent.locator('summary').click();await recent.getByLabel('Filter chats by status').selectOption('attention');
  await expect(recent.locator('.a-nav-chat')).toHaveCount(2);
  const agentPage=await api('/api/fixture/agent',{args:{action:'shell.query',args:{clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId:'chats'}}});
- assert.equal(agentPage.result.sidebarNavigation.recent.total,2);
+ assert.equal(agentPage.result.sidebarNavigation.search.total,2);
  await patch('chats',{navRecentView:{navStatusFilter:'unread'}});
  await expect(recent.locator('.a-nav-chat')).toHaveCount(1);
  const unreadId=await recent.locator('.a-nav-chat').getAttribute('data-session-id');
@@ -64,41 +66,45 @@ try{
  await page.keyboard.press('Escape');await patch('chats',{navRecentView:{navFilter:'',navStatusFilter:'all'}});
  await recent.locator('summary').click();
 
- // One explorer retains duplicate path labels and drills into a workspace's chats.
- const search=workspaces.getByRole('searchbox',{name:'Filter workspaces',exact:true});
- await search.fill('*/playground');await expect(page.locator('.a-workspace-row')).toHaveCount(2);
- assert.equal(new Set(await page.locator('.a-workspace-result-path').allTextContents()).size,2);
- await page.locator('.a-workspace-row').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
+ // The full workspace browser retains duplicate path labels and drills into chats.
+ await workspaces.getByRole('button',{name:'All workspaces',exact:true}).click();
+ const workspaceBrowser=page.locator('.a-work-browser'),search=workspaceBrowser.getByRole('searchbox',{name:'Filter workspaces',exact:true});
+ await search.fill('*/playground');await expect(workspaceBrowser.locator('.a-workspace-row')).toHaveCount(2);
+ assert.equal(new Set(await workspaceBrowser.locator('.a-workspace-result-path').allTextContents()).size,2);
+ await workspaceBrowser.locator('.a-workspace-row').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
  await page.screenshot({path:out+'/workspace-flyout.png'});await page.keyboard.press('Escape');
- await page.getByRole('button',{name:'Open chats in '+initial.paths.two,exact:true}).click();
- const workspaceChats=workspaces.locator('.a-workspace-chat-view');
+ await workspaceBrowser.getByRole('button',{name:'Open chats in '+initial.paths.two,exact:true}).click();
+ const workspaceChats=workspaceBrowser;
  await expect(workspaceChats.locator('.a-nav-chat')).toHaveCount(3);
- assert.equal(await page.locator('.a-workspace-explorer').count(),0);
+ assert.equal(await workspaceBrowser.locator('.a-workspace-explorer').count(),0);
  const beta=(await snapshot()).sidebarNavigation.workspace.items[0];
  await workspaceChats.getByRole('searchbox',{name:'Filter conversations'}).fill('Beta 001');
  await expect(workspaceChats.locator('.a-nav-chat')).toHaveCount(1);
- assert.equal((await snapshot()).sidebarNavigation.recent.total,206);
+ await page.getByRole('button',{name:'Search chats',exact:true}).click();
+ await expect(recent.getByRole('status')).toHaveText('206 chats');
  await workspaces.getByRole('button',{name:'All workspaces',exact:true}).click();await search.waitFor();
- await search.fill('');await workspaces.getByRole('button',{name:'Browse folders',exact:true}).click();
- await page.locator('.a-workspace-location').waitFor();const browsed=(await info()).state.selectedSessionId;
+ await search.fill('');await workspaceBrowser.getByRole('button',{name:'Browse folders',exact:true}).click();
+ await workspaceBrowser.locator('.a-workspace-location').waitFor();const browsed=(await info()).state.selectedSessionId;
  await page.getByRole('button',{name:'Go to parent workspace folder',exact:true}).click();
  assert.equal((await info()).state.selectedSessionId,browsed);await page.screenshot({path:out+'/workspace-folders.png'});
- await page.reload();await page.locator('.a-workspace-explorer').waitFor();assert.equal(await workspaces.getByRole('button',{name:'Browse folders',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.reload();await workspaceBrowser.locator('.a-workspace-explorer').waitFor();assert.equal(await workspaceBrowser.getByRole('button',{name:'Browse folders',exact:true}).getAttribute('aria-pressed'),'true');
 
- // Pins stay the same across browsing, filters and saved legacy view preferences.
+ // Pins stay the same while the full browser changes its filters and workspace.
  await action('session.select',{id:selected});
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await composer.fill('Keep this unsent draft while moving pins');
  const pinIds=[selected,initial.quietSession,beta.id];
  for(const id of pinIds)await action('session.pin',{id,pinned:true});
- const order=()=>pinned.locator('[data-order-id]').evaluateAll(rows=>rows.map(row=>row.dataset.orderId));
+ await expect.poll(()=>page.locator('[data-sidebar-section]').evaluateAll(rows=>rows.map(row=>row.dataset.sidebarSection))).toEqual(['pinned','workspaces','recent']);
+ const order=()=>pinned.locator('[data-order-id]').evaluateAll(rows=>rows.map(row=>row.dataset.orderId.replace(/^session:/,'')));
  await expect.poll(order).toEqual(pinIds);
  const pinnedContents=()=>pinned.locator('.a-nav-chat').evaluateAll(rows=>rows.map(row=>row.textContent));
  const contents=await pinnedContents();
- await patch('chats',{navSimple:false,navChatScope:'all',navRecentView:{navFilter:'does not match'}});
- await expect(recent.locator('.a-nav-chat')).toHaveCount(0);assert.deepEqual(await pinnedContents(),contents);
- await patch('chats',{navSimple:true,navChatScope:'workspace',navRecentView:{navFilter:''}});
- assert.deepEqual(await pinnedContents(),contents);
- const third=pinned.locator('[data-order-id="'+beta.id+'"]'),first=pinned.locator('[data-order-id="'+selected+'"]');
+ await page.getByRole('button',{name:'Search chats',exact:true}).click();
+ await patch('chats',{navRecentView:{navFilter:'does not match'}});
+ await expect(recent.getByRole('status')).toHaveText('0 chats found');await expect(recent.locator('.a-nav-chat')).toHaveCount(0);assert.deepEqual(await pinnedContents(),contents);
+ await patch('chats',{navRecentView:{navFilter:''}});
+ await expect(recent.getByRole('status')).toHaveText('206 chats');assert.deepEqual(await pinnedContents(),contents);
+ const third=pinned.locator('[data-order-id="session:'+beta.id+'"]'),first=pinned.locator('[data-order-id="session:'+selected+'"]');
  const drag=async()=>{
   const handle=third.getByRole('button',{name:/Reorder/});await handle.scrollIntoViewIfNeeded();
   const a=await handle.boundingBox(),b=await first.boundingBox();
@@ -106,9 +112,9 @@ try{
  };
  await drag();const floating=page.locator('.a-reorder-floating');
  await expect(floating).toBeVisible();assert.ok((await floating.innerText()).includes(beta.title));
- await expect(floating.locator('.a-nav-chat-workspace')).toHaveText(beta.workspaceLabel);await expect(floating.locator('.a-navigation-age')).toBeVisible();
+ await expect(floating.locator('.a-nav-chat-workspace')).toHaveText(beta.workspaceLabel);assert.equal(await floating.locator('.a-navigation-age').isVisible(),await third.locator('.a-navigation-age').isVisible());
  await expect(pinned.locator('.a-order-insertion')).toBeVisible();await expect(pinned.locator('.a-order-placeholder')).toHaveCount(1);
- const floatBox=await floating.boundingBox();assert.ok(floatBox.width>150&&floatBox.x>=0);
+ const floatBox=await floating.boundingBox();assert.ok(floatBox.width>150&&floatBox.x>=0);assert.equal(await floating.locator('.a-nav-chat').evaluate(el=>el.offsetHeight),await third.locator('.a-nav-chat').evaluate(el=>el.offsetHeight));
  await page.screenshot({path:out+'/pin-drag.png'});await page.keyboard.press('Escape');await page.mouse.up();
  await expect.poll(order).toEqual(pinIds);assert.deepEqual((await info()).state.pinnedSessionIds,pinIds);
  await drag();await page.mouse.up();await expect.poll(order).toEqual([beta.id,selected,initial.quietSession]);
@@ -121,17 +127,17 @@ try{
  await drag();await action('session.pin',{id:initial.quietSession,pinned:false});await expect(floating).toHaveCount(0);await page.mouse.up();
  await expect.poll(order).toEqual([beta.id,selected]);await action('session.pin',{id:initial.quietSession,pinned:true});await expect.poll(order).toEqual([beta.id,selected,initial.quietSession]);
  // A pinned chat also present in workspace drill-in gets one editor at the clicked row.
- await patch('chats',{navWorkspaceList:false,navFilter:''});
+ await workspaces.getByRole('button',{name:'Open chats in '+initial.paths.one,exact:true}).click();
  const selectedPin=pinned.locator('[data-session-id="'+selected+'"]');
  await selectedPin.getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
  await details.getByRole('button',{name:/^Rename /}).click();await expect(details).toHaveCount(1);
  await expect(details.getByRole('textbox',{name:/New name for/})).toBeVisible();
  await details.getByRole('button',{name:'Cancel conversation rename'}).click();await page.keyboard.press('Escape');
- await patch('chats',{navWorkspaceList:true});
+ await action('session.select',{id:selected});
  assert.equal((await info()).state.selectedSessionId,selected);await expect(composer).toHaveDraft('Keep this unsent draft while moving pins');
- await toggle(workspaces).click();await toggle(recent).click();await page.screenshot({path:out+'/sidebar-pins.png'});
+ await toggle(workspaces).click();await toggle(shortcuts).click();await page.screenshot({path:out+'/sidebar-pins.png'});
  await toggle(pinned).click();await page.screenshot({path:out+'/sidebar-collapsed.png'});
- await page.reload();await expect(toggle(pinned)).toHaveAttribute('aria-expanded','false');await expect(toggle(workspaces)).toHaveAttribute('aria-expanded','false');await expect(toggle(recent)).toHaveAttribute('aria-expanded','false');
+ await page.reload();await expect(toggle(pinned)).toHaveAttribute('aria-expanded','false');await expect(toggle(workspaces)).toHaveAttribute('aria-expanded','false');await expect(toggle(shortcuts)).toHaveAttribute('aria-expanded','false');
  await toggle(pinned).click();await expect.poll(order).toEqual([beta.id,selected,initial.quietSession]);await expect(composer).toHaveDraft('Keep this unsent draft while moving pins');
 
  for(const scheme of ['light','dark']){
@@ -150,7 +156,7 @@ try{
  await patch('workspaces',{navWorkspaceMode:'recent',navWorkspaceFilter:''});await patch('chats',{navSectionsCollapsed:[],navWorkspaceList:true});
  await toggle(pinned).scrollIntoViewIfNeeded();await page.screenshot({path:out+'/sidebar-overview-dark.png'});
  assert.deepEqual((await info()).runtimeStarts,[]);assert.deepEqual((await info()).runtimeSends,[]);assert.deepEqual(errors,[]);
- console.log('Navigation browser passed: three saved sections, isolated native-history views, 40-item pages, rich drag preview/drop/cancel, keyboard order/focus, stable details, agent parity, persisted drafts/pins, desktop and 320/390 light/dark layouts, no model work.');
+ console.log('Navigation browser passed: empty Pinned hidden then three saved sections, quiet20-row Recent and isolated full-browser40-item pages, rich drag preview/drop/cancel, keyboard order/focus, stable details, agent parity, persisted drafts/pins, desktop and 320/390 light/dark layouts, no model work.');
 
 }catch(error){await page?.screenshot({path:out+'/failure.png'}).catch(()=>{});if(logs)console.error(logs);throw error}
 finally{await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}}
