@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.135",
+      "title": "Keep background history work out of everyday chat navigation",
+      "changes": [
+        "Unchanged catalog updates avoid repeating library merges and interface publications. Cold discovery runs in paced, bounded slices; requested chats retain fresh checks, and missed file notifications retain a bounded recovery path.",
+        "Storage cleanup reuses bounded, validated file-reference metadata instead of repeatedly parsing unchanged saved resource bodies. Changed or unavailable files still prevent uncertain deletion.",
+        "Refreshing recorded work snapshots only the historical identity, lifecycle and accounting information needed to join new events. Canonical request and response details remain available on demand, and older records without canonical logs remain intact."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.134",
       "title": "Faster warm chat opening and update activation",
       "changes": [

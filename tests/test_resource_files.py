@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 
@@ -306,4 +307,131 @@ async def test_background_sweep_releases_navigation_and_writer_during_body_reads
         release.set()
         await close_maintenance(service)
         competitor.close()
+        db.close()
+
+
+def test_reference_walk_deduplicates_shared_graph_without_loading_cold_fields(monkeypatch):
+    from types import MappingProxyType
+    from amplifier_web.cold_display import ColdRecord
+    def unexpected(*args):
+        pytest.fail('Walking retained roots must not hydrate cold fields')
+    monkeypatch.setattr('amplifier_web.cold_display.load', unexpected)
+    ref = {'$resource': 'a' * 64}
+    shared = {'nested': [MappingProxyType(ref)]}
+    shared['self'] = shared
+    row = ColdRecord({'id': 'cold', '_coldFields': {'messages': ref}}, None)
+    assert set(files.references([shared, shared, row])) == {'a' * 64}
+    assert 'messages' not in dict.keys(row)
+
+
+def test_edge_metadata_reuses_only_exact_unchanged_files(tmp_path, monkeypatch):
+    db = database(tmp_path / 'edges.sqlite3')
+    nested = files.put(db, {'child': True})
+    ref = files.put(db, {'nested': [nested], 'data': 'x' * 200_000})
+    db.commit()
+    source = files.detach(db, ref['$resource'])
+    cache = files.ReferenceEdges()
+    original = files.detached_references
+    reads = []
+    monkeypatch.setattr(files, 'detached_references', lambda row: (reads.append(row.identity), original(row))[1])
+    try:
+        assert cache.read(source) == (nested['$resource'],)
+        assert cache.read(source) == (nested['$resource'],)
+        assert reads == [source.identity] and cache.hits == 1
+        path = source.directory / (source.identity + '.json')
+        # An identical replacement is valid, but its new inode must be read.
+        replacement = path.with_suffix('.replacement')
+        replacement.write_bytes(path.read_bytes())
+        replacement.replace(path)
+        assert cache.read(source) == (nested['$resource'],)
+        assert len(reads) == 2 and len(cache.entries) == 1
+        assert cache.edge_count == 1
+        # The cache retains only the small file pointer, signature and edges.
+        assert all(len(key.indexed) < 128 for key in cache.entries)
+        assert cache.entries[source][1] == (nested['$resource'],)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('change', ['missing', 'symlink', 'same-size-corruption', 'changed-index'])
+async def test_cached_graph_uncertainty_preserves_all_garbage(tmp_path, monkeypatch, change):
+    from types import SimpleNamespace
+    from amplifier_web.storage_migration import _maintenance_async, close_maintenance
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    db = database(tmp_path / 'cached.sqlite3')
+    keep = files.put(db, {'retained': 'original'})
+    db.commit()
+    service = SimpleNamespace(db=db, _state={'keep': keep}, closed=False,
+                              lock=asyncio.Lock(), performance_diagnostics=PerformanceDiagnostics())
+    try:
+        await _maintenance_async(service)
+        misses = service._resource_edges.misses
+        await _maintenance_async(service)
+        assert service._resource_edges.misses == misses and service._resource_edges.hits == 1
+        # Add truly unreferenced bytes only after the warm graph was established.
+        garbage = files.put(db, {'garbage': True})
+        db.commit()
+        source = files.detach(db, keep['$resource'])
+        path = source.directory / (source.identity + '.json')
+        if change == 'missing':
+            path.unlink()
+        elif change == 'symlink':
+            original = path.read_bytes()
+            path.unlink()
+            outside = tmp_path / 'outside.json'
+            outside.write_bytes(original)
+            path.symlink_to(outside)
+        elif change == 'same-size-corruption':
+            before = path.stat()
+            path.write_bytes(path.read_bytes().replace(b'original', b'modified'))
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        else:
+            db.execute('UPDATE state_resources SET value=? WHERE id=?',
+                       (json.dumps({'$blob': 'f' * 64}), keep['$resource']))
+            db.commit()
+        await _maintenance_async(service)
+        assert service._resource_scan_status['blocked']
+        assert db.execute('SELECT 1 FROM state_resources WHERE id=?', (garbage['$resource'],)).fetchone()
+        assert (files.root(db) / (garbage['$resource'] + '.json')).exists()
+        snapshot = service.performance_diagnostics.snapshot()
+        assert snapshot['operations']['storage.gc.roots']['count'] >= 4
+        assert snapshot['counters']['storage.gc.edgeHits'] == 1
+    finally:
+        await close_maintenance(service)
+        if getattr(service, '_resource_scan', None):
+            service._resource_scan.close()
+        db.close()
+
+
+def test_edge_metadata_bounds_and_inline_payloads_are_not_cached(tmp_path):
+    db = database(tmp_path / 'bounded.sqlite3')
+    cache = files.ReferenceEdges(max_entries=2, max_edges=2)
+    try:
+        children = [files.put(db, {'child': index}) for index in range(3)]
+        parents = [files.put(db, {'nested': child}) for child in children]
+        wide = files.put(db, {'nested': children})
+        db.commit()
+        for parent in parents:
+            cache.read(files.detach(db, parent['$resource']))
+            assert len(cache.entries) <= 2 and cache.edge_count <= 2
+        assert set(cache.read(files.detach(db, wide['$resource']))) == {row['$resource'] for row in children}
+        assert len(cache.entries) == cache.edge_count == 2  # Oversized edge list is not retained.
+        prepared = files.prepare({'large inline': 'x' * 200_000})
+        inline = files.Detached(None, prepared.identity, prepared.text)
+        assert cache.read(inline) == cache.read(inline) == ()
+        assert inline not in cache.entries and len(cache.entries) == 2
+    finally:
+        db.close()
+
+
+def test_invalid_nested_edge_is_never_cached(tmp_path):
+    db = database(tmp_path / 'invalid-edge.sqlite3')
+    try:
+        reference = files.put(db, {'nested': {'$resource': 'unbounded-invalid-reference'}})
+        db.commit()
+        cache = files.ReferenceEdges()
+        with pytest.raises(ValueError, match='Invalid retained resource'):
+            cache.read(files.detach(db, reference['$resource']))
+        assert not cache.entries and cache.edge_count == 0
+    finally:
         db.close()

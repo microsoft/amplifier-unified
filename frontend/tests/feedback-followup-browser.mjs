@@ -35,9 +35,13 @@ async def main():
   await service.feedback.update('original-feedback',status='submitted',url=url)
   service.feedback.accept({'requestId':'unknown-feedback','title':'Unknown report','body':'Unknown details','category':'bug','includeDiagnostics':False})
   await service.feedback.update('unknown-feedback',status='unknown',url=None)
-  from amplifier_web.execution import ingest
+  from amplifier_web.capacity import usage_snapshot
   session=service._session();sid=session['id']
-  for n in range(3):ingest(session,{'id':str(n),'sessionId':sid,'rootSessionId':sid,'kind':'llm','phase':'completed','provider':'fixture','model':'model','revision':1,'startedAt':1,'endedAt':2,'usage':{'inputTokens':8,'outputTokens':2,'totalTokens':10,'costUsd':.01,'costType':'reported'}})
+  # Publish actual runtime observations so storage and display revisions see
+  # every receipt; mutating an execution tree directly bypasses that boundary.
+  for n in range(3):
+   await service.on_runtime_event('execution.event',{'id':str(n),'sessionId':sid,'rootSessionId':sid,'kind':'llm','phase':'completed','provider':'fixture','model':'model','producerId':'fixture-worker','liveObservation':True,'revision':1,'startedAt':1,'endedAt':2,'usage':{'inputTokens':8,'outputTokens':2,'totalTokens':10,'costUsd':.01,'costType':'reported'}})
+  assert usage_snapshot(service._session(sid))['calls']==3
   async def inspect(request):return web.json_response({'posts':posts})
   app.router.add_get('/api/fixture/followup',inspect)
   runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()

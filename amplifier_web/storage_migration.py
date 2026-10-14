@@ -178,14 +178,25 @@ async def _maintenance_async(service):
     deletion, recheck every root and source index under the writer boundary.
     A changed, unavailable or uncertain graph defers the sweep in its entirety.
     """
-    from .resource_files import retained_references, detach, detached_references, settle_worker
+    from .resource_files import retained_references, detach, ReferenceEdges, settle_worker
+    from .performance_diagnostics import measure, count
+
+    edges = getattr(service, '_resource_edges', None)
+    if edges is None:
+        edges = service._resource_edges = ReferenceEdges()
+    before = (edges.hits, edges.misses, edges.bytes_read)
 
     def roots():
         state = _roots(service)
         rows = state if isinstance(state, list) else [state]
         if any(isinstance(row, dict) and row.get('_viewRecoveryPending') for row in rows):
             return None
-        return set(retained_references(service.db, state))
+        with measure(service, 'storage.gc.roots', synchronous=True):
+            return set(retained_references(service.db, state))
+
+    def inspect(source):
+        with measure(service, 'storage.gc.body', synchronous=True):
+            return edges.read(source)
 
     def unavailable():
         return service.closed or getattr(service, 'backup_in_progress', False)
@@ -206,7 +217,7 @@ async def _maintenance_async(service):
                     if unavailable():
                         return
                     source = detach(service.db, identity)
-                pending.extend(await settle_worker(detached_references, source))
+                pending.extend(await settle_worker(inspect, source))
                 sources[identity] = source
             except (OSError, ValueError, TypeError, KeyError, RecursionError):
                 valid = False
@@ -230,6 +241,10 @@ async def _maintenance_async(service):
     except Exception as exc:
         service._storage_maintenance_error = type(exc).__name__
         logging.getLogger(__name__).warning('Storage maintenance deferred.', exc_info=True)
+    finally:
+        count(service, 'storage.gc.edgeHits', edges.hits - before[0])
+        count(service, 'storage.gc.edgeMisses', edges.misses - before[1])
+        count(service, 'storage.gc.bodyBytesRead', edges.bytes_read - before[2])
 
 
 async def close_maintenance(service):
