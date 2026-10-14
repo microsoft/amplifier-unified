@@ -98,7 +98,9 @@ async def main():
                 (native/'transcript.jsonl').write_text(''.join(json.dumps({'role':'user' if i%2==0 else 'assistant',
                     'content':f'Saved message {i}\n\n'+('A retained paragraph. '*25)})+'\n' for i in range(305)))
                 await service.history.refresh()
-                row=next(row for row in service.state['sessions'] if row.get('nativeIdentity')=='paging-fixture')
+                # Refresh discovers dormant entries in the directory. Only the
+                # explicitly requested chat joins the resident working set.
+                row=service._session('paging-fixture')
                 await service.history.load(row['id'])
                 row.update(status='ready',preparation={'status':'active'})
                 service.state.update(selectedSessionId=row['id'],selectedWorkspaceId=row['workspaceId'])

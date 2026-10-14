@@ -30,6 +30,12 @@ export function useConversationDetail(source,beforeApply,dispatch){
  const sourceKey=source?.id;
  if(current.current?.key!==sourceKey)current.current={key:sourceKey};
  const paging=useRef(null),[frozen,setFrozen]=useState(null);
+ const reads=useRef(new Set());
+ // A read belongs to the visible chat. Releasing it never cancels an accepted
+ // command, including the explicit native-history expansion below.
+ useEffect(()=>()=>{for(const token of reads.current)if(token.id===sourceKey)token.abort.abort()},[sourceKey]);
+ const beginRead=id=>{const token={id,abort:new AbortController()};reads.current.add(token);paging.current=token;return token};
+ const finishRead=token=>{reads.current.delete(token);token.abort.abort()};
  const originalSource=source,nativeWait=useRef(null);
  useEffect(()=>{
   const wait=nativeWait.current;if(!wait)return;
@@ -58,19 +64,19 @@ export function useConversationDetail(source,beforeApply,dispatch){
   sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular,[focusedHere,projected,regular]);
  async function around(messageId,{jump=true,isCurrent=()=>true}={}){
   if(paging.current||!originalSource)return false;
-  const id=originalSource.id,token={id};paging.current=token;setBusy('conversation');setError('');
+  const id=originalSource.id,token=beginRead(id);setBusy('conversation');setError('');
   try{
-   const result=await request('/api/conversation/navigation?'+new URLSearchParams({sessionId:id,messageId,window:'true'}));
+   const result=await request('/api/conversation/navigation?'+new URLSearchParams({sessionId:id,messageId,window:'true'}),{signal:token.abort.signal});
    if(!Array.isArray(result?.messages)||!result.messages.some(row=>row.id===messageId))throw Error('This message could not be loaded. Try again.');
    if(originalId.current===id&&paging.current===token&&isCurrent()){setFocused({...result,sessionId:id});if(jump)setJumpTarget({id:messageId});return true}
    return false;
-  }catch(error){if(originalId.current===id&&paging.current===token&&isCurrent())setError(error.message);return false}
-  finally{if(paging.current===token){paging.current=null;setBusy('')}}
+  }catch(error){if(!token.abort.signal.aborted&&originalId.current===id&&paging.current===token&&isCurrent())setError(error.message);return false}
+  finally{finishRead(token);if(paging.current===token){paging.current=null;setBusy('')}}
  }
- function latest(jump=true){paging.current=null;setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
+ function latest(jump=true){paging.current?.abort.abort();paging.current=null;nativeWait.current?.finish('The reading window changed.');setFrozen(null);setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
  async function earlier(part){
   if(paging.current||!session)return;
-  const id=session.id,token={id};paging.current=token;
+  const id=session.id,token=beginRead(id);
   const key=current.current;
   setBusy('conversation');setError('');setFrozen(session);
   const parts=part?[part]:['messages','nodes'];
@@ -78,7 +84,7 @@ export function useConversationDetail(source,beforeApply,dispatch){
   try{
    // Commit the paired pages once, after both requests succeed. Current text
    // stays mounted while loading so activity cannot precede its messages.
-   const results=await Promise.all(windows.map(async ({part,window})=>({part,window,result:await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:window.part||part,before:window.before}))})));
+   const results=await Promise.all(windows.map(async ({part,window})=>({part,window,result:await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:window.part||part,before:window.before}),{signal:token.abort.signal})})));
    if(current.current!==key)return;
    if(!part&&!session.messageWindow?.offset&&session.sharedHistoryOffset>0&&dispatch){
     let finish;
@@ -90,7 +96,7 @@ export function useConversationDetail(source,beforeApply,dispatch){
      const failure=await loaded;if(failure)throw Error(failure);
      // Loading from disk expands the canonical native window, not the bounded
      // browser tail. Fetch the preceding display page by its stable message ID.
-     if(session.messages[0])results.push({part:'messages',window:{},result:await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:'messages',before:session.messages[0].id}))});
+     if(session.messages[0])results.push({part:'messages',window:{},result:await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:'messages',before:session.messages[0].id}),{signal:token.abort.signal})});
     }finally{clearTimeout(timer);if(nativeWait.current?.finish===finish)nativeWait.current=null}
    }
    if(paging.current!==token||originalId.current!==id)return;
@@ -101,7 +107,7 @@ export function useConversationDetail(source,beforeApply,dispatch){
      ...(part==='messages'?{messageOffset:result.offset,sourceOffset:result.sourceOffset,userOffset:result.userOffset}:{nodeOffset:result.offset,turns:unique([...(result.turns||[]),...previous.turns]),segments:unique([...(window.part==='groups'?result.items:result.segments||[]),...(previous.segments||[])]),groupWindow:window.part==='groups'?{offset:result.offset,before:result.before}:previous.groupWindow})};
     return previous;
    });
-  }catch(e){if(originalId.current===id)setError(e.message)}finally{if(paging.current===token){paging.current=null;setFrozen(null);setBusy('')}}
+  }catch(e){if(!token.abort.signal.aborted&&originalId.current===id)setError(e.message)}finally{finishRead(token);if(paging.current===token){paging.current=null;setFrozen(null);setBusy('')}}
  }
  const originalId=useRef(originalSource?.id);
  if(originalId.current!==originalSource?.id){originalId.current=originalSource?.id;paging.current=null}
