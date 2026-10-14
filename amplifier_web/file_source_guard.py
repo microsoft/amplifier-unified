@@ -12,6 +12,7 @@ import hashlib
 from pathlib import Path
 import stat
 import time
+import unicodedata
 
 from filelock import FileLock, Timeout
 
@@ -53,7 +54,7 @@ def _lock_keys(paths):
     for path in paths:
         # Case folding conservatively serializes case aliases, including creates
         # on case-insensitive filesystems. Existing hard links share an inode key.
-        keys.add('path:' + str(path).casefold())
+        keys.add('path:' + unicodedata.normalize('NFC', str(path).casefold()))
         try:
             info = path.stat()
         except FileNotFoundError:

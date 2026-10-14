@@ -134,4 +134,4 @@ def test_image_uploads_inherit_shared_and_declared_read_restrictions(tmp_path):
     _apply_host_policy(bundle, SimpleNamespace(settings=settings, workspace=tmp_path))
     row = bundle.tools[0]['config']
     assert set(row['denied_read_paths']) == {str(tmp_path / path) for path in ('inputs/own', 'inputs/private', 'inputs/shared')}
-    assert row['allowed_read_paths'] == ['inputs']
+    assert row['allowed_read_paths'] == [str(tmp_path / 'inputs')]

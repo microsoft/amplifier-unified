@@ -10,7 +10,8 @@ from amplifier_module_tool_apply_patch import mount as patch_mount
 from amplifier_web.file_source_guard import install_file_source_guard
 
 async def main():
-    directory, writer, identity, target = sys.argv[1:]
+    directory, writer, identity, target = sys.argv[1:5]
+    creating = len(sys.argv) > 5
     directory = Path(directory)
     tools, capabilities = {}, {'session.working_dir': str(directory)}
     async def mount(kind, tool, name):
@@ -23,7 +24,15 @@ async def main():
     await filesystem_mount(coordinator, {})
     await patch_mount(coordinator, {'engine': 'function' if writer == 'function' else 'native'})
     await install_file_source_guard(coordinator, directory / 'locks')
-    assert (await tools['read_file'].execute({'file_path': target})).success
+    if creating:
+        # Widen the real compare-to-write seam to make creation races reliable.
+        original = tools['write_file'].tool.execute
+        async def delayed(arguments):
+            await asyncio.sleep(.15)
+            return await original(arguments)
+        tools['write_file'].tool.execute = delayed
+    else:
+        assert (await tools['read_file'].execute({'file_path': target})).success
     (directory / ('ready-' + identity)).touch()
     while not (directory / 'go').exists():
         await asyncio.sleep(.01)

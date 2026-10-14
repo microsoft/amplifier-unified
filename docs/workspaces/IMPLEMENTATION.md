@@ -29,10 +29,14 @@ read-only/narrow declarations. Image policy remains covered by adjacent native
 checks; image generation itself is outside the source-check adapter.
 
 The integrated candidate includes main's interim-reply and release fixes.
-Qualification against its installed wheel passes 376 native-runtime/file/policy/
+Qualification against its installed wheel passes 397 native-runtime/file/policy/
 provider-adapter checks and four subtests, with the real filesystem module and
 both patch engines loaded. Separate OS processes race full writes against full
-writes and both patch/string-edit paths, including hard-link aliases. Native
+writes and both patch/string-edit paths, including hard-link aliases. A separate
+creation race reproduced a lost update through Unicode-equivalent filenames on
+macOS. Normalizing only the lock identity fixes it without renaming either input;
+same-name, case-alias and Unicode-alias creation races now admit one winner.
+Native
 Core/Foundation tests cover finite, resumed, persistent and nested child mounts.
 All 681 frontend tests pass. Source/package byte verification includes application
 Python and shipped frontend assets.

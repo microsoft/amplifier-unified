@@ -226,3 +226,36 @@ def test_separate_process_race(tmp_path, writers, alias):
         for child in children:
             if child.poll() is None:
                 child.kill(); child.wait()
+
+
+@pytest.mark.parametrize('alias', ['same', 'case', 'unicode'])
+def test_concurrent_creation_does_not_clobber_aliases(tmp_path, alias):
+    names = {'same': ('file.txt', 'file.txt'), 'case': ('File.txt', 'file.txt'),
+             'unicode': ('caf\u00e9.txt', 'cafe\u0301.txt')}[alias]
+    paths = [tmp_path / name for name in names]
+    paths[0].touch()
+    aliases_same_file = paths[1].exists()
+    paths[0].unlink()
+    if not aliases_same_file:
+        pytest.skip('This filesystem treats these names as distinct files')
+    script = Path(__file__).parent / 'fixtures/file_source_process_probe.py'
+    children = [subprocess.Popen([sys.executable, str(script), str(tmp_path), 'write', str(index), str(path), 'create'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for index, path in enumerate(paths)]
+    import time
+    try:
+        deadline = time.monotonic() + 15
+        while not all((tmp_path / f'ready-{i}').exists() for i in range(2)):
+            assert time.monotonic() < deadline
+            time.sleep(.02)
+        (tmp_path / 'go').touch()
+        results = []
+        for child in children:
+            stdout, stderr = child.communicate(timeout=15)
+            assert child.returncode == 0, stdout + stderr
+            results.append(json.loads(stdout))
+        assert sorted(result['success'] for result in results) == [False, True], results
+        assert [r['error']['code'] for r in results if not r['success']] == ['file_source_stale']
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill(); child.wait()
