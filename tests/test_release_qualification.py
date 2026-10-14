@@ -215,9 +215,12 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert manual['permissions'] == {'contents': 'read'}
     commands = '\n'.join(step.get('run', '') for step in manual['jobs']['browser']['steps'])
     assert 'playwright install' in commands
-    assert 'test:session-health-browser' in commands
-    assert '--context-limit --active-worker' in commands
-    assert 'test:connectors-browser' in commands
+    assert 'scripts/browser_check_runner.py' in commands
+    plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
+    invocations = [row['command'] for row in plan['scenarios']]
+    assert ['node', 'tests/session-health-browser.mjs'] in invocations
+    assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in invocations
+    assert ['node', 'tests/connectors-browser.mjs'] in invocations
     critical = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(critical['on']) == {'workflow_dispatch', 'workflow_call'}
     assert critical['permissions'] == {'contents': 'read'}
@@ -265,7 +268,12 @@ def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
                     if step.get('name') == 'Run the complete Python suite')
     # Keep the entire suite and immediate node identities: a timeout must not
     # conceal which test failed or was still running behind quiet progress dots.
-    assert complete['run'] == 'uv run --no-sync pytest -v --tb=short'
+    assert 'uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml' in complete['run']
+    assert 'set -o pipefail' in complete['run']
+    assert 'tee output/python-checks/pytest.log' in complete['run']
+    assert '--maxfail' not in complete['run'] and ' tests/' not in complete['run']
+    upload = next(step for step in python['steps'] if step.get('uses') == 'actions/upload-artifact@v4')
+    assert upload['if'] == 'always()' and upload['with']['path'] == 'output/python-checks/'
     for filename in ('release.yml', 'work-workflows.yml'):
         jobs = yaml.load((workflows / filename).read_text(), Loader=yaml.BaseLoader)['jobs']
         for job in jobs.values():

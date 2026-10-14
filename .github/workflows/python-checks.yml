@@ -50,7 +50,17 @@ jobs:
           'amplifier-module-loop-streaming @ git+https://github.com/microsoft/amplifier-module-loop-streaming@main'
           'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
       - name: Run the complete Python suite
-        run: uv run --no-sync pytest -v --tb=short
+        run: |
+          mkdir -p output/python-checks
+          set -o pipefail
+          uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml 2>&1 | tee output/python-checks/pytest.log
+      - name: Retain complete and partial Python results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-results-${{ github.run_attempt }}
+          path: output/python-checks/
+          if-no-files-found: warn
   core-wheels:
     if: ${{ inputs.core_wheels }}
     uses: ./.github/workflows/core-wheels.yml
