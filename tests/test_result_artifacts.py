@@ -340,3 +340,46 @@ async def test_preview_format_survives_source_removal_without_file_editor(app, t
     assert result['result']['status'] == 'opened'
     assert app.state['canvas']['kind'] == kind and 'path' not in app.state['canvas']
     assert not (await read(app, source, args))['qualified']
+
+
+async def test_later_reply_keeps_each_exact_file_version_after_source_deletion(app, tmp_path):
+    """Exercise the real revision/retention seam, not synthetic historical rows."""
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_operations.coordination import fingerprint
+    source, peer, file, args = await setup(app, tmp_path, b'First retained version')
+    first = (await declare(app, peer, args))['result']
+    await finish(app, peer, args['requestId'])
+    await generation(app, peer, 'follow-up', ['new-human-input'])
+    file.write_bytes(b'Second retained version')
+    second_args = {**args, 'expectedResponseRevision': 1,
+                   'references': ['report.md@sha256:' + hashlib.sha256(file.read_bytes()).hexdigest()]}
+    second = (await agent_action(app, peer, 'coordination.reply', second_args, 'second-declaration'))['result']
+    anchor = {'messageId': display_identity(peer, 9, 'assistant', 'Updated result'),
+              'nativeIndex': 9, 'nativeText': 'Updated result', 'textDigest': fingerprint('Updated result'),
+              'rootSessionId': peer['id'], 'generationId': 'follow-up'}
+    await finish(app, peer, args['requestId'], generation_id='follow-up', input_ids=['new-human-input'],
+                 text='Updated result', nativeTerminal=anchor)
+    file.unlink()
+    assert (first['responseRevision'], second['responseRevision']) == (1, 2)
+    assert first['artifacts'][0]['outputId'] != second['artifacts'][0]['outputId']
+    old = await read(app, source, args, responseRevision=1)
+    new = await read(app, source, second_args, responseRevision=2)
+    assert old['qualified'] and old['text'] == 'First retained version'
+    assert new['qualified'] and new['text'] == 'Second retained version'
+    duplicate = await declare(app, peer, args)
+    assert duplicate['duplicate'] and duplicate['result']['responseRevision'] == 1
+    assert duplicate['result']['status'] == 'sealed'
+    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 2
+
+
+async def test_reply_publishes_both_participants_and_no_unrelated_session(app, tmp_path, monkeypatch):
+    source, peer, _, args = await setup(app, tmp_path)
+    calls = []
+    publish = app._publish_changes
+    def observe(**kwargs):
+        calls.append(set(kwargs.get('sessions', ())))
+        return publish(**kwargs)
+    monkeypatch.setattr(app, '_publish_changes', observe)
+    await declare(app, peer, args)
+    assert {source['id'], peer['id']} in calls
+    assert all(scope <= {source['id'], peer['id']} for scope in calls)

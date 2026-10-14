@@ -810,7 +810,7 @@ async def test_two_artifact_rounds_keep_original_bytes_and_exact_result_links(ap
 
 
 @pytest.mark.parametrize("negative", ["ack", "defer", "decline", "jobs", "unrelated", "accepted-only", "refs", "child"])
-async def test_nonresult_or_unproven_terminal_does_not_wake(app, negative):
+async def test_terminal_evidence_distinguishes_negative_notifications_from_dependency_success(app, negative):
     source, target = app.state["sessions"]
     kind = negative if negative in {"ack", "defer", "decline"} else "result"
     await declared_result(app, kind=kind, refs=[] if negative == "refs" else None)
@@ -821,9 +821,14 @@ async def test_nonresult_or_unproven_terminal_does_not_wake(app, negative):
         "child": {"sessionId": "child", "rootSessionId": target["id"]}}
     await finish(app, target, "result-request", **patches.get(negative, {}))
     result = (await app.dispatch("coordination.result", {"requestId": "result-request"}))["result"]
-    assert not result["qualified"]
-    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (wait["result"]["continuationId"],)).fetchone()
+    assert result['qualified'] is (negative == 'jobs')
+    notified = negative in {'jobs', 'unrelated', 'accepted-only', 'refs'}
+    row = app.db.execute('SELECT receipt FROM commands WHERE id=?', (wait['result']['continuationId'],)).fetchone()
+    assert bool(row) is notified
+    if row:
+        assert json.loads(row[0])['dependencySatisfied'] is (negative == 'jobs')
     assert len(app.runtime.inputs) == 1
+
 
 
 async def test_typed_result_seals_and_one_stable_continuation_waits_for_busy_sender(app):
@@ -1163,11 +1168,14 @@ async def test_staged_declaration_restart_is_unknown_not_sealed_or_replayed(app)
         result = (await reopened.dispatch("coordination.result", {"requestId": "result-request"}))["result"]
         assert result["receipt"]["response"]["status"] == "unknown" and not result["qualified"]
         assert "before terminal proof" in result["receipt"]["response"]["detail"]
-        assert result["receipt"]["subscription"]["status"] == "needs_attention"
+        assert result["receipt"]["subscription"]["status"] == "waiting"
         assert not reopened.db.execute("SELECT 1 FROM commands WHERE id=?", (wait["result"]["continuationId"],)).fetchone()
         reopened.collaboration.start()
         await finish(reopened, reopened._session(target["id"]), "result-request")
         assert reopened.collaboration.receipt("result-request")["response"]["status"] == "unknown"
+        continuation = reopened.collaboration.receipt(wait['result']['continuationId'])
+        assert continuation['dependencySatisfied'] is False
+        assert continuation['outcomeSnapshot']['status'] == 'unknown'
         assert not reopened.runtime.inputs
     finally:
         await reopened.close()
@@ -1495,7 +1503,8 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     assert rejected["response"]["requestId"] == request
     assert rejected["response"]["generationId"] == anchor["generationId"]
     assert rejected["response"]["messageIds"] == [canonical]
-    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (continuation,)).fetchone()
+    notification = app.collaboration.receipt(continuation)
+    assert notification['dependencySatisfied'] is False and notification['outcomeSnapshot']['status'] == 'rejected'
     with sqlite3.connect(app.db.execute("PRAGMA database_list").fetchone()[2]) as db:
         persisted = json.loads(db.execute("SELECT receipt FROM commands WHERE id=?", (request,)).fetchone()[0])
     assert persisted == rejected
@@ -1517,7 +1526,7 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     assert qualified["messageIds"] == [valid_anchor["messageId"]]
     assert app.collaboration.receipt(valid_continuation)["dependencyRequestId"] == "valid-next"
     assert app.collaboration.receipt(request) == rejected
-    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (continuation,)).fetchone()
+    assert app.collaboration.receipt(continuation) == notification
     assert not target.get("error")
 
 

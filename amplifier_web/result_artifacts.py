@@ -57,14 +57,7 @@ async def prepare(collaboration, source, args, origin, identity, digest):
             return {'duplicate': duplicate}
         if origin != 'agent':
             collaboration.error('Response declarations require the actual recipient agent generation.')
-        binding, active = collaboration.active_binding(source)
-        request = collaboration.receipt(args['requestId'])
-        if (request.get('commandAction') != 'coordination.send'
-                or request.get('target', {}).get('sessionId') != source['id']
-                or args['requestId'] not in active.get('inputIds', [])
-                or args['requestId'] not in {row.get('inputId') for row in binding.get('_inputBindings', [])}
-                or request.get('delivery') not in {'accepted', 'applied', 'submitting'}):
-            collaboration.error('Declare only the exact delivered request in your current root generation.')
+        _, request, _, _ = collaboration.validate_reply(source, args)
         captured = fence(source, request)
         root = source.get('workingDirectory') or source['workspace']
     items = await asyncio.to_thread(prepare_files, root, list(args.get('references', [])))

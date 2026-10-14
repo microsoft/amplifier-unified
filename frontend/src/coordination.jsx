@@ -104,7 +104,7 @@ export function RelatedWork({dispatch,sessionId}){
   <WorkspaceAwareness key={sessionId} dispatch={dispatch} sessionId={sessionId} context={context} refresh={refresh}/>
   {original&&<article aria-label="Original message"><strong>{original.role} · {original.sessionId}</strong><p style={{whiteSpace:'pre-wrap'}}>{original.text}</p>{original.truncated&&<small>Bounded excerpt; original retained.</small>}<button className="a-link" onClick={()=>setOriginal(null)}>Close original message</button></article>}
   {items.map(row=><div key={row.target.sessionId}>{row.title} · {labels[row.status]||row.status}{row.collaboration&&<> · created by {row.collaboration.creatorTitle||'Source conversation'}</>}<details><summary>Task identity</summary><code>{row.target.sessionId}{row.collaboration&&<> · creator {row.collaboration.creatorSessionId}</>}</code></details></div>)}
-  {context.requests.map(row=>{const result=inspected[row.requestId],response=result?.receipt?.terminalOutcome||row.terminalOutcome||result?.receipt?.response||row.response;return <article key={row.requestId} data-request-id={row.requestId}>
+  {context.requests.map(row=>{const result=inspected[row.requestId],receipt=result?.receipt||row,response=[receipt.response,receipt.terminalOutcome].filter(Boolean).sort((a,b)=>(b.outcomeRevision||0)-(a.outcomeRevision||0))[0];return <article key={row.requestId} data-request-id={row.requestId}>
    <small>{row.senderSessionId===sessionId?'Sent':'Received'} · {row.delivery} · {row.requestId}</small>
    <button className="a-link" onClick={()=>inspectResult(row.requestId)}>Inspect exact result</button>
    <button className="a-link" onClick={()=>reveal(row.target.sessionId,row.messageId)}>Open submitted message</button>

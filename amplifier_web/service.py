@@ -321,6 +321,7 @@ for _peer_action in ("conversation.send", "coordination.followup"):
         "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
         "senderSessionId": string(200),
         "replyToRequestId": string(200),
+        "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
         "references": {"type": "array", "maxItems": 16, "items": string(2000)},
     })
 from .schedules import definitions as schedule_definitions
@@ -4232,6 +4233,7 @@ class AppService:
         if self.closed:
             return
         self.closed = True
+        self.collaboration.close()
         if getattr(self, "profiling_host", None):
             await self.profiling_host.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
