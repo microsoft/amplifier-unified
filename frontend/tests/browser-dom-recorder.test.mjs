@@ -4,13 +4,13 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const source=readFileSync(new URL('../../scripts/browser_dom_recorder.js',import.meta.url),'utf8');
-function recorder({groups=0,singles=0,embedded=0}={}){
+function recorder({groups=0,singles=0,embedded=0,unmountNavigation=false,paneTarget='target',sameMessages=false,startWorkspace=false}={}){
  const window={},timers=[];let clicked=false,now=0;
  const group={closest:()=>null},groupRows=Array.from({length:groups},()=>({parentElement:{closest:()=>null}}));
  const singleRows=Array.from({length:singles},()=>({closest:()=>null}));
  const embeddedRows=Array.from({length:embedded},()=>({closest:()=>group}));
- const message={getAttribute:()=>clicked?'new-message':'old-message'};
- const pane={closest:()=>null,getClientRects:()=>[{}],getAttribute:()=> 'false',querySelectorAll(selector){
+ const message={getAttribute:()=>clicked&&!sameMessages?'new-message':'old-message'};
+ const pane={closest:()=>null,getClientRects:()=>[{}],getAttribute:key=>key==='data-session-id'?(clicked?paneTarget:'old'):'false',querySelectorAll(selector){
   if(selector==='article.a-message[data-message-id]')return [message];
   if(selector==='[data-part="execution"]')return [...singleRows,...embeddedRows];
   if(selector==='[data-part="execution-group"],.a-work-group')return groupRows;
@@ -18,13 +18,13 @@ function recorder({groups=0,singles=0,embedded=0}={}){
  }};
  const button={disabled:false,getClientRects:()=>[{}],closest(selector){return selector==='[data-session-id]'?{getAttribute:()=> 'target'}:null},
   getAttribute(key){return key==='aria-label'?'Target':key==='aria-current'&&clicked?'page':null},click(){clicked=true}};
- const app={getAttribute:()=> 'chat',querySelector(selector){
+ const app={getAttribute:()=>startWorkspace&&!clicked?'workspace':'chat',querySelector(selector){
   if(selector.includes('messages'))return pane;
   if(selector==='.a-work-heading strong')return {getAttribute:()=> 'Target'};
   if(selector.includes('Message Amplifier'))return {value:''};
   return null;
  },querySelectorAll:()=>[]};
- const document={title:'Synthetic',hidden:false,readyState:'complete',getElementById:()=>app,querySelectorAll:()=>[button]};
+ const document={title:'Synthetic',hidden:false,readyState:'complete',getElementById:()=>app,querySelectorAll:()=>clicked&&unmountNavigation?[]:[button]};
  const context={window,document,performance:{now:()=>now,timeOrigin:0},getComputedStyle:()=>({visibility:'visible'}),
   setTimeout:callback=>{timers.push(callback);return timers.length},clearTimeout:()=>{}};
  vm.runInNewContext(source,context);
@@ -47,7 +47,7 @@ test('opening a group does not manufacture new top-level Work headers',()=>{
 test('minimum-header milestone includes single turns and explicitly disclaims completeness',()=>{
  const r=recorder({singles:2});assert.equal(r.api.start({id:'target',minWorkHeaders:2}).started,true);
  r.tick();const result=r.api.report();
- assert.equal(result.schemaVersion,4);assert.equal(result.marks.firstWorkHeaderMs,100);
+ assert.equal(result.schemaVersion,5);assert.equal(result.marks.firstWorkHeaderMs,100);
  assert.equal(result.marks.minimumWorkHeadersMs,100);assert.equal(result.marks.expectedWorkCountMs,undefined);
  assert.ok(result.limitations.some(x=>x.includes('not canonical turns, events or complete history')));
  r.api.dispose();
@@ -62,4 +62,31 @@ test('no Work headers cannot satisfy a nonzero observation minimum',()=>{
 test('an old groups-only minimum is rejected rather than silently lowering the gate',()=>{
  const r=recorder({singles:1});assert.match(r.api.start({id:'target',minWork:23}).error,/minWorkHeaders/);
  assert.equal(r.api.report().running,false);r.api.dispose();
+});
+
+
+test('unpinned workspace selection qualifies exact pane content after navigation unmounts',()=>{
+ const r=recorder({singles:2,unmountNavigation:true,startWorkspace:true,sameMessages:true});
+ assert.equal(r.api.start({id:'target',minWorkHeaders:2,settleMs:300}).started,true);
+ for(let i=0;i<5;i++)r.tick();
+ const result=r.api.report();
+ assert.equal(result.current.selected.length,0);
+ assert.equal(result.marks.selectionMs,undefined);
+ assert.equal(result.current.paneSessionId,'target');
+ assert.equal(result.marks.paneIdentityMs,100);
+ assert.equal(result.marks.messagesMs,100);
+ assert.equal(result.marks.minimumWorkHeadersMs,100);
+ assert.equal(result.reason,'ready-observed');r.api.dispose();
+});
+
+for(const paneTarget of ['old',null])test(`optimistic navigation cannot qualify ${paneTarget===null?'unidentified':'old'} pane content`,()=>{
+ const r=recorder({singles:2,paneTarget});
+ r.api.start({id:'target',minWorkHeaders:2});r.tick();
+ const result=r.api.report();
+ assert.equal(result.marks.selectionMs,100);
+ assert.equal(result.marks.headerMs,100);
+ assert.equal(result.marks.paneIdentityMs,undefined);
+ assert.equal(result.marks.messagesMs,undefined);
+ assert.equal(result.marks.firstWorkHeaderMs,undefined);
+ assert.equal(result.marks.readyCandidateMs,undefined);r.api.dispose();
 });
