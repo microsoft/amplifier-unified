@@ -468,5 +468,10 @@ async def dispatch(service, action, args, origin, command_id, expected_revision,
         if command_id:
             service.db.execute('INSERT INTO commands VALUES (?,?,?)',
                                (command_id, fingerprint, json.dumps(receipt)))
-        service._publish_changes(globals={'canvasArtifacts', 'canvas', 'canvasTabs', 'view'})
+        changed = {'canvasArtifacts'}
+        if args['presentation']['canvas'] != 'unchanged':
+            changed.update({'canvas', 'canvasTabs', 'view'})
+        # A library/chat-only publication never changed the selected Canvas.
+        # Normalizing that unrelated view would needlessly put its body again.
+        service._publish_changes(globals=changed)
         return {**receipt, **({'state': service.browser_state()} if include_state else {})}

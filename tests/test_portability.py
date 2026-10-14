@@ -316,6 +316,8 @@ async def test_exact_artifact_transfer_roundtrip_preserves_existing_refs_without
             assert (native.directory(sid) / 'transcript.jsonl').read_bytes() == raw
             puts = []
             real_put = resource_files.put
+            selected_canvas = copy.deepcopy(right.state.get('canvas'))
+            selected_tabs = copy.deepcopy(right.state.get('canvasTabs'))
 
             def put(db, value):
                 puts.append(copy.deepcopy(value))
@@ -331,6 +333,8 @@ async def test_exact_artifact_transfer_roundtrip_preserves_existing_refs_without
             assert retained['reference'] == presented['reference']
             assert retained['publication']['status'] == 'unchanged'
             assert puts == []
+            assert right.state.get('canvas') == selected_canvas
+            assert right.state.get('canvasTabs') == selected_tabs
             assert portability_data.capture(right, right._session(sid))['resources'] == original_resources
             if kind == 'generated':
                 link = next(link for link in saved['publications'] if link.get('outputId') == imported['id'])
