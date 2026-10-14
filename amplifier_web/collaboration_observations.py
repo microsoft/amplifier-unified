@@ -1,4 +1,5 @@
 """Bounded presentation projections; receipts and native records stay authoritative."""
+import asyncio
 import base64
 import hashlib
 import json
@@ -15,7 +16,7 @@ STATES = {'idle', 'ready', 'working', 'running', 'starting', 'stopping', 'stoppe
     'blocked', 'success', 'deferred', 'declined', 'question', 'conflict', 'changed',
     'planned', 'creating_root', 'root_retained', 'input_committed', 'creation_pending',
     'created_initial_pending', 'retained', 'verified', 'incomplete', 'not_requested',
-    'released', 'uncertain', 'started', 'timeout'}
+    'released', 'uncertain', 'started', 'timeout', 'prepared', 'allocating', 'retired'}
 
 
 def digest(value):
@@ -107,6 +108,10 @@ def recap_items(app, source, rows, resources):
     for row in resources.get('items', [])[:16]:
         add(['resource', row['id']], 'resource', 'Resource reservation',
             'Reservation ' + state(row.get('status')), [row.get('revision'), row.get('status')])
+    for row in resources.get('storage', [])[:16]:
+        add(['storage', row['id']], 'resource', 'Task storage',
+            'Storage ' + state(row.get('status')),
+            [row.get('revision'), row.get('status'), row.get('observation')])
     return items
 
 
@@ -194,6 +199,9 @@ async def read(collaboration, action, args, origin, caller):
             reply = await dispatch_reservation(app, 'workspace.resources.reservations',
                 {'workspaceId': workspace['id'], 'limit': 16}, origin, None, caller)
             resources = reply['result']
+            from .task_resources import read as read_storage
+            storage = await asyncio.to_thread(read_storage, app.data_dir, source['id'], {'limit': 16})
+            resources.update(storage=storage['items'], storageNextOffset=storage['nextOffset'])
     source = collaboration.source(args, origin, caller, hydrate=False)
     if binding != [source['workspace'], source.get('runtimeSessionId'), source.get('nativeIdentity')]:
         collaboration.error('The conversation moved while reading its observation scope; inspect again.', 409)
@@ -202,4 +210,4 @@ async def read(collaboration, action, args, origin, caller):
     if action == 'coordination.diagnostics':
         return diagnostics(app, source, rows, truncated)
     return recap(source, recap_items(app, source, rows, resources), args.get('cursor'),
-        truncated or resources.get('nextOffset') is not None)
+        truncated or resources.get('nextOffset') is not None or resources.get('storageNextOffset') is not None)

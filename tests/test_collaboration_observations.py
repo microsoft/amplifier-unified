@@ -137,6 +137,28 @@ async def test_cursor_survives_service_reopen_without_replaying_work(app):
         await reopened.close()
 
 
+async def test_owned_storage_changes_appear_without_peer_allocations_or_paths(app):
+    source, peer = app.state['sessions']
+    workspace = next(row for row in app.state['workspaces'] if row['path'] == source['workspace'])
+    first = await read(app)
+    async def provision(sid, identity):
+        return (await app.dispatch('workspace.resources.provision', {
+            'sessionId': sid, 'workspaceId': workspace['id'], 'kind': 'scratch-directory'},
+            command_id=identity))['result']['items'][0]
+    await provision(peer['id'], 'peer-storage')
+    assert (await read(app, cursor=first['nextCursor']))['changes'] == []
+    owned = await provision(source['id'], 'own-storage')
+    changed = await read(app, cursor=first['nextCursor'])
+    assert [row['status'] for row in changed['changes']] == ['Storage ready']
+    assert owned['path'] not in json.dumps(changed)
+    await app.dispatch('workspace.resources.retire', {
+        'sessionId': source['id'], 'workspaceId': workspace['id'], 'id': owned['id'],
+        'expectedRevision': owned['revision']}, command_id='retire-own-storage')
+    retired = await read(app, cursor=changed['nextCursor'])
+    assert [row['status'] for row in retired['changes']] == ['Storage retired']
+    assert not app.runtime.inputs
+
+
 def test_item_cap_and_cursor_page_gap_are_explicit():
     from amplifier_web.collaboration_observations import recap, digest, MAX_ITEMS
     source = {'id': 'owner', 'workspace': 'workspace'}
