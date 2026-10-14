@@ -3,8 +3,7 @@ import {ResourceReservations} from './workspace-resource-reservations';
 import {ManagedResources} from './workspace-managed-resources';
 const unwrap=value=>value?.result?.accepted!==undefined?value.result:value;
 export function WorkspaceResources({state,act,workspaceId,readOnly=false}){
- const currentId=workspaceId,[visibleId,setVisibleId]=useState(currentId),visited=useRef(new Map());
- useEffect(()=>setVisibleId(currentId),[currentId]);
+ const currentId=workspaceId,visibleId=currentId,visited=useRef(new Map());
  const workspace=state.workspaces?.find(row=>row.id===currentId);
  if(workspace)visited.current.set(workspace.id,workspace);
  return <>{[...visited.current.values()].map(row=><div key={row.id} hidden={row.id!==visibleId}><ResourceEditor workspace={row} act={act} readOnly={readOnly}/><ManagedResources workspace={row} state={state} act={act} active={row.id===visibleId} readOnly={readOnly}/><ResourceReservations workspace={row} state={state} act={act} readOnly={readOnly} active={row.id===visibleId}/></div>)}</>;
