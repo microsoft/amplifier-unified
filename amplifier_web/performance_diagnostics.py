@@ -20,6 +20,7 @@ class PerformanceDiagnostics:
         self.slow = deque(maxlen=60)
         self.lag = deque(maxlen=60)
         self.resource_rebuilds = deque(maxlen=60)
+        self.projection_failures = deque(maxlen=16)
         self.resource_rebuild_counts = {'total': 0, 'byReason': {}, 'byResource': {}}
         self.lock = threading.Lock()
         self.task = None
@@ -69,6 +70,15 @@ class PerformanceDiagnostics:
             self.resource_rebuilds.append({'at': time.time(), 'resource': resource,
                 'package': package, 'reasons': tuple(reasons), 'changedGlobals': tuple(globals_changed)})
 
+    def record_projection_failure(self, reason, failure):
+        """Fixed labels and bounded numeric worker measurements, never sources."""
+        from .history_projection_failure import sanitize_failure
+        from .history_projection_process import REASONS
+        value = sanitize_failure(failure)
+        if value is not None and reason in REASONS:
+            with self.lock:
+                self.projection_failures.append({'at': time.time(), 'reason': reason, **value})
+
     async def _heartbeat(self):
         while True:
             started = time.monotonic()
@@ -94,6 +104,7 @@ class PerformanceDiagnostics:
                                    for name, values in self.operations.items()},
                     'slowOperations': [dict(row) for row in self.slow],
                     'eventLoopDelays': [dict(row) for row in self.lag],
+                    'historyProjectionFailures': [dict(row) for row in self.projection_failures],
                     'shellResourceRebuilds': {'total': self.resource_rebuild_counts['total'],
                         'byReason': dict(self.resource_rebuild_counts['byReason']),
                         'byResource': dict(self.resource_rebuild_counts['byResource']),

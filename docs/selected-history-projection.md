@@ -48,6 +48,14 @@ limits and resident high-water checks, or a Windows process-commit Job Object.
 These are distinct memory measurements, not a universal hard RSS guarantee.
 Platform acceptance must identify which policy was exercised.
 
+Before a failed worker is retired, it reports a fixed processing-stage label and
+available current/peak resident and virtual memory measurements, plus its actual
+address-space limit. Unavailable platform measurements remain null. The host
+retains only the most recent 16 sanitized failure records in performance
+diagnostics; no source paths, identities, content, or exception text cross this
+diagnostic boundary. A `memory_limit` outcome alone does not identify which
+memory measurement was exceeded or justify increasing the budget.
+
 ## Generations and incremental dependencies
 
 A generation includes projection schema, exact association/lifecycle input digest,

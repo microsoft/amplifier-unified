@@ -429,7 +429,11 @@ class SelectedHistoryReadModel:
     def project(self, inputs, *, check_budget=lambda: None):
         self.diagnostics = PerformanceDiagnostics()
         self.service.performance_diagnostics = self.diagnostics
-        check_budget()
+        def stage(name):
+            if label := getattr(check_budget, 'stage', None):
+                label(name)
+            check_budget()
+        stage('model_cache_load')
         key = inputs['id']
         digest = input_digest(inputs)
         value = self._load(key)
@@ -440,8 +444,10 @@ class SelectedHistoryReadModel:
             current = [(path, source_stamp(path)) for path in value['paths']]
             positions = self._append(inputs, value, current, check_budget)
             if positions is not None and stable_sources(current):
+                stage('model_store')
                 self._save_model(key, value, source_only=not positions, positions=positions or None)
                 if positions:
+                    stage('model_retain')
                     self._remember(key, value)
                 elif key in self.models:
                     self.models[key] = value
@@ -463,7 +469,9 @@ class SelectedHistoryReadModel:
             {**inputs, **({'execution': tree} if tree is not None else {})})), 'tree': tree,
             'paths': list(map(str, self.reader.read_paths.get(key, ()))),
             'revisions': revisions, 'proofs': self.reader.read_proofs.get(key, {})}
+        stage('model_store')
         self._save_model(key, value)
+        stage('model_retain')
         self._remember(key, value)
         return {**{name: value[name] for name in ('tree', 'paths', 'revisions', 'inputDigest')},
                 'status': 'complete', 'diagnostics': self.diagnostics.snapshot()}
