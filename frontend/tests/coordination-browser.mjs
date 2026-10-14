@@ -383,7 +383,7 @@ try{
   const row=related.locator('[data-request-id="'+changed.requestId+'"]');
   await expect(row).toContainText('Exact version saved');
   const url=await row.getByRole('link',{name:'Download saved version',exact:true}).getAttribute('href');
-  assert.equal(await page.request.get(url).then(response=>response.text()),changed.candidate.text);
+  assert.equal(await page.request.get(new URL(url,page.url()).href).then(response=>response.text()),changed.candidate.text);
   await unlink(changed.candidate.path);
   const saved=await agent('source','coordination.artifact',{sessionId:current.selected,requestId:changed.requestId,reference:changed.qualified.result.results[0].declaration.references[0]},'deleted-source-read');
   assert.equal(saved.result.text,changed.candidate.text);assert.equal(saved.result.status,'retained');

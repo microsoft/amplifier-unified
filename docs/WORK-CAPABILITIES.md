@@ -36,6 +36,7 @@ See [implementation and evidence](workspaces/IMPLEMENTATION.md) for qualificatio
 | Manage conversations/workspaces | `app_control` operation `list_actions` with `session.` or `workspace.` prefix, followed by `dispatch` |
 | Diagnose/recover a failed conversation | `session.inspect`, `session.recover`; recovery creates an idle copy and never replays tools |
 | Show and revisit artifacts | `canvas.show`, `canvas.select`, canvas application/view actions |
+| Inspect exact peer results after source changes | `coordination.reply` retains supported local `path@sha256:<digest>` references when reported; `coordination.artifact` reads bounded saved text/downloads within the exact request relationship. Related work opens the saved version. A snapshot is not independent correctness or integration evidence. |
 | Discover connected tools/resources | `smartTools.*` actions and the mounted tool catalog; availability does not imply a connected account |
 | Discover/use skills | Mounted `load_skill` from the configured skills behavior |
 | Delegate and steer workers | Mounted `delegate` and `live_worker`; async opt-in and pending receipts remain distinct from completion |
