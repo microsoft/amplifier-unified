@@ -41,7 +41,7 @@ const setMessages=messages=>{state={...state,sessions:state.sessions.map(row=>ro
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false}});
  await vite.listen();
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,chromiumSandbox:true});
  page=await browser.newPage({viewport:{width:1440,height:1000}});
  page.on('pageerror',error=>errors.push(error.message));
  await page.addInitScript(initial=>{

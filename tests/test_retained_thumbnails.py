@@ -7,10 +7,14 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
-if __name__ == '__main__':
+MODE = os.environ.get('AMPLIFIER_BROWSER_TEST_MODE', 'source')
+if MODE not in {'source', 'installed'}:
+    raise ValueError('AMPLIFIER_BROWSER_TEST_MODE must be source or installed')
+if __name__ == '__main__' and MODE == 'source':
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
@@ -18,6 +22,13 @@ import pytest
 from amplifier_web.server import create_app
 from amplifier_web.artifact_presentation import output_binding
 from test_output_images import png
+
+if __name__ == '__main__' and MODE == 'installed':
+    import amplifier_web.server as _server
+    _installed = Path(_server.__file__).resolve()
+    if (_installed.is_relative_to(Path(__file__).resolve().parents[1])
+            or not _installed.is_relative_to(Path(sys.prefix).resolve())):
+        raise RuntimeError('Retained-thumbnail fixture must use the installed package')
 
 
 class NoModel:
@@ -668,6 +679,7 @@ async def browser_fixture():
         app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
         print(json.dumps({'url': f'http://127.0.0.1:{port}', 'sessionId': sid, 'messageId': mid,
                           'records': records, 'document': document, 'legacy': legacy,
+                          'mode': MODE,
                           'package': str(Path(sys.modules['amplifier_web.server'].__file__).resolve())}), flush=True)
         stopped = asyncio.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):

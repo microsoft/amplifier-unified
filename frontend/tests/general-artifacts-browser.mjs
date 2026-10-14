@@ -17,7 +17,7 @@ try{
    const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}
   }catch{}});
  });
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,chromiumSandbox:true});
  const context=await browser.newContext({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-canvas-versions'}});
  const page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));

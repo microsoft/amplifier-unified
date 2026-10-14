@@ -8,7 +8,7 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 // with ten canonical saved receipts; not a stub that ignores the view limit.
 const legacyMode=process.argv.includes('--legacy-thumbnails');
 const retainedMode=process.argv.includes('--retained-thumbnails')||legacyMode;
-const fixture=spawn(root+'.venv/bin/python',['-u',root+(retainedMode?'tests/test_retained_thumbnails.py':'tests/fixtures/generated_images_server.py'),...(retainedMode?['--browser-fixture',...(legacyMode?['--legacy-thumbnails']:[])]:[])],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+(retainedMode?'tests/test_retained_thumbnails.py':'tests/fixtures/generated_images_server.py'),...(retainedMode?['--browser-fixture',...(legacyMode?['--legacy-thumbnails']:[])]:[])],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  const boot=await new Promise((resolve,reject)=>{
@@ -17,7 +17,8 @@ try{
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}});
  });
  if(process.env.AMPLIFIER_EXPECTED_PACKAGE)assert.equal(boot.package,process.env.AMPLIFIER_EXPECTED_PACKAGE+'/server.py');
- browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
+ if(retainedMode&&process.env.AMPLIFIER_BROWSER_TEST_MODE==='installed')assert.equal(boot.mode,'installed');
+ browser=await chromium.launch({headless:true,chromiumSandbox:true});
  const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer '+(retainedMode?'fixture-retained-thumbnails':'fixture-generated-images')}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const control=async(op,id)=>{const response=await page.request.post(boot.url+'/api/fixture/images',{data:{op,id}});assert.equal(response.status(),200);return response.json()};
