@@ -245,8 +245,12 @@ async def reclaim(manager):
     for entry in entries:
         if maintenance_blocked(manager):
             return result('Storage maintenance deferred while an update is pending.')
-        if checked >= MAX_CANDIDATES or time.monotonic() >= deadline:
+        if time.monotonic() >= deadline:
             return result('Storage maintenance reached its batch limit; remaining storage was kept.')
+        # Unknown/partial retirements may never become eligible. Reserve at
+        # least half the ordinary batch for generations still in releases/.
+        if checked >= max(1, MAX_CANDIDATES // 2):
+            break
         checked += 1
         manager._retired_cursor = entry.name
         try:

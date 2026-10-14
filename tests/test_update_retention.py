@@ -282,6 +282,21 @@ async def test_incomplete_retirements_do_not_starve_later_storage_after_restart(
     assert (retired / ('2' * 32)).exists()
 
 
+async def test_incomplete_retirements_leave_budget_for_unretired_generations(tmp_path, monkeypatch):
+    manager, names, project = manager_fixture(tmp_path, monkeypatch)
+    retired = manager.directory / 'retired'
+    for index in range(retention.MAX_CANDIDATES):
+        entry = retired / f'{index:032x}'
+        entry.mkdir(parents=True)
+        (entry / 'retirement.json').write_text(json.dumps({'schema': 1, 'phase': 'retiring'}))
+    result = await retention.reclaim(manager)
+    assert result['removed'] == 1
+    assert not (manager.directory / 'releases' / names[3]).exists()
+    assert len(list(retired.iterdir())) == retention.MAX_CANDIDATES
+    assert all((manager.directory / 'releases' / name).exists() for name in names[:3])
+    assert project.exists()
+
+
 @pytest.mark.parametrize('late', [False, True])
 async def test_modern_runtime_still_respects_external_project_references(tmp_path, monkeypatch, late):
     manager, names, project = manager_fixture(tmp_path, monkeypatch)
