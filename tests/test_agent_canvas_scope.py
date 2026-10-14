@@ -164,6 +164,8 @@ async def test_removed_callers_readback_does_not_report_some_other_chat(app):
     sid = caller(app)
     # An action can remove the caller before its post-action readback.
     app.state['sessions'] = [row for row in app.state['sessions'] if row['id'] != sid]
+    app.forget_session_records({sid})
+    app._save()
     with app.clients.bind('caller'):
         pass
     state = await read(app, sid)

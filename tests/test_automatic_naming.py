@@ -27,7 +27,11 @@ async def imported(app_factory, tmp_path, count=1, **metadata):
             {'role': 'assistant', 'content': 'A saved answer'}],
             metadata={'name': '', 'name_source': 'fallback', **metadata})
     app = app_factory()
-    await app.history.refresh()
+    for _ in range(100):
+        await app.history.refresh(force=False)
+        if app.state['sharedHistory'].get('reconciliation', {}).get('phase') == 'complete':
+            break
+    assert len(app.directory.select('history_managed AND native_project IS NOT NULL', limit=count+1)) == count
     calls = []
 
     async def complete(session, prompt):
@@ -51,7 +55,8 @@ async def tick(app, naming, clock):
 
 async def test_idle_imports_get_names_without_loading_history_or_running_tools(app_factory, tmp_path, monkeypatch):
     app, naming, clock, calls = await imported(app_factory, tmp_path)
-    session = next(row for row in app.state['sessions'] if row.get('nativeProject'))
+    session = app.directory.select('history_managed AND native_project IS NOT NULL', limit=1)[0]
+    assert session['id'] not in {row['id'] for row in app.state['sessions']}
     directory = directory_for(app.data_dir, session)
     transcript = (directory / 'transcript.jsonl').read_bytes()
     original_session = app._session
@@ -62,6 +67,7 @@ async def test_idle_imports_get_names_without_loading_history_or_running_tools(a
 
     monkeypatch.setattr(app, '_session', no_hydration)
     await tick(app, naming, clock)
+    session = app._session(session['id'], hydrate=False)
     assert session['title'] == 'Quarterly report summary'
     assert session['historyLoaded'] is False and session['messages'] == []
     assert len(calls) == 1 and 'Summarize the quarterly report' in calls[0][1]
@@ -75,7 +81,7 @@ async def test_idle_imports_get_names_without_loading_history_or_running_tools(a
 
 async def test_discovery_and_preview_are_read_only_but_background_loop_names(app_factory, tmp_path):
     app, naming, clock, calls = await imported(app_factory, tmp_path)
-    session = next(row for row in app.state['sessions'] if row.get('nativeProject'))
+    session = app.directory.select('history_managed AND native_project IS NOT NULL', limit=1)[0]
     from amplifier_web.chat_title_preview import read as preview
     assert preview(app.data_dir, session)['title'] == 'Summarize the quarterly report'
     await app.history.refresh()
@@ -94,7 +100,9 @@ async def test_discovery_and_preview_are_read_only_but_background_loop_names(app
 async def test_background_naming_waits_for_an_idle_open_view(app_factory, tmp_path, restriction):
     app, naming, clock, calls = await imported(app_factory, tmp_path)
     if restriction == 'busy':
-        app.state['sessions'][0]['status'] = 'working'
+        active = app._new_session({'title': 'Unrelated active work'})
+        active['status'] = 'working'
+        app.state['sessions'].append(active)
     elif restriction == 'update':
         app.state.setdefault('updates', {})['pendingRestart'] = True
     elif restriction == 'voice':
@@ -146,7 +154,7 @@ async def test_two_per_pass_with_cadence_and_persistent_failure_suppression(app_
     assert len(calls) == 3
     assert len(restored.attempts) == 3
     # Explicitly changing the Auto preference permits a new attempt.
-    session = next(row for row in restarted.state['sessions'] if row.get('nativeProject'))
+    session = restarted.directory.select('history_managed AND native_project IS NOT NULL', limit=1)[0]
     set_automatic(restarted.data_dir, session, False)
     set_automatic(restarted.data_dir, session, True)
     restored.next_scan = 0
@@ -216,12 +224,14 @@ async def test_scans_bound_metadata_reads_and_rotate_past_unconfigured_folders(a
         return False
 
     naming.provider_ready = not_ready
+    residents = {row['id'] for row in app.state['sessions']}
     monkeypatch.setattr(automatic_naming, 'read', tracked)
     await tick(app, naming, clock)
     assert len(seen) == 32
     await tick(app, naming, clock)
     assert len(seen) == 64 and len(set(seen)) == 40
     assert not calls
+    assert {row['id'] for row in app.state['sessions']} == residents
 
 
 async def test_deferred_name_waits_for_new_content_and_oversized_input_is_bounded(app_factory, tmp_path, monkeypatch):
@@ -248,3 +258,30 @@ async def test_deferred_name_waits_for_new_content_and_oversized_input_is_bounde
     await tick(app, naming, clock)
     assert len(calls) == 2
     assert 'no user message' in app.state['namingBackfill']['skipped'][0]['reason'].lower()
+
+
+async def test_attempt_receipts_stay_in_sql_and_only_requested_owner_changes(app_factory):
+    app = app_factory()
+    AutomaticNaming(app)
+    app.db.executemany('INSERT INTO automatic_naming_attempts VALUES (?,?)',
+        ((f'old-{index}', json.dumps([index, 0])) for index in range(27000)))
+    app.db.commit()
+    statements = []
+    app.db.set_trace_callback(statements.append)
+    naming = AutomaticNaming(app)
+    assert not any(statement.startswith('SELECT') for statement in statements)
+    assert naming.attempts.get('old-23') == '[23, 0]'
+    assert naming.attempts.get('unseen') is None
+    naming.attempts['old-23'] = 'changed source'
+    naming.attempts['new-owner'] = 'new source'
+    assert naming.attempts.pop('old-24') == '[24, 0]'
+    app.db.commit()
+    assert len(naming.attempts) == 27000
+    reads = [statement for statement in statements if statement.startswith('SELECT source')]
+    assert len(reads) == 3 and all(' WHERE id=' in statement for statement in reads)
+    app.db.set_trace_callback(None)
+    restored = AutomaticNaming(app)
+    assert restored.attempts.get('old-23') == 'changed source'
+    assert restored.attempts.get('new-owner') == 'new source'
+    assert restored.attempts.get('old-24') is None
+    assert restored.attempts.get('old-25') == '[25, 0]'

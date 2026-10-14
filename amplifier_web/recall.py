@@ -70,10 +70,64 @@ class Recall:
             await asyncio.gather(self.task, return_exceptions=True)
         self.store.close()
 
+    def registered_ids(self, session=None, args=None):
+        """Scalar authorization membership; never materialize dormant summaries."""
+        from .owned_history import includes, selected
+        directory = getattr(self.app, 'directory', None)
+        args = args or {}
+        scope = selected(args) if session is not None else 'all'
+        if directory is not None:
+            sql, params = directory.effective(self.app.state)
+            clauses = ['1']
+            if scope == 'task':
+                clauses.append('id=?'); params.append(session['id'])
+            elif scope == 'workspace':
+                clauses.append('workspace IS ?'); params.append(session.get('workspace'))
+            if session is not None:
+                if not args.get('includeInternal'):
+                    clauses.append("session_kind!='internal'")
+                if not args.get('includeChildren'):
+                    clauses.append("session_kind!='worker'")
+            return [row[0] for row in directory.db.execute(sql+' SELECT id FROM directory_rows WHERE '+
+                ' AND '.join(clauses)+' ORDER BY ordinal,id', params)]
+        return [row['id'] for row in self.app.state['sessions']
+                if (session is None or includes(session, row, scope))
+                and (session is None or args.get('includeInternal') or row.get('sessionKind') != 'internal')
+                and (session is None or args.get('includeChildren') or row.get('sessionKind') != 'worker')]
+
+    def source(self, identity):
+        """Detach one explicit indexing source without admitting it for live work."""
+        resident = next((row for row in self.app.state['sessions'] if row['id'] == identity), None)
+        if resident is not None:
+            return copy.deepcopy(resident)
+        directory = getattr(self.app, 'directory', None)
+        metadata = directory.resolve(identity) if directory is not None else None
+        if metadata is None:
+            raise FileNotFoundError('Source removed during indexing')
+        from .state_records import load_owner
+        saved, _ = load_owner(self.app.db, metadata['id'])
+        if saved is None and self.app.db.execute('SELECT 1 FROM history_local_rows WHERE id=?', (metadata['id'],)).fetchone():
+            raise FileNotFoundError('Saved source record is unavailable; retained index was preserved')
+        from .directory_state import _owner
+        return copy.deepcopy(_owner(directory, metadata, self.app.state))
+
+    def registered(self, identity):
+        directory = getattr(self.app, 'directory', None)
+        return directory.resolve(identity) if directory is not None else next(
+            (row for row in self.app.state['sessions'] if row['id'] == identity), None)
+
     def metadata_rows(self, session_id):
         """Compact deterministic task/output references, never inferred memories."""
         rows=[]
-        task=self.app.state.get('runtimeControl',{}).get(session_id,{}).get('task.get',{}).get('task')
+        controls = self.app.state.get('runtimeControl', {})
+        if session_id in controls:
+            control = controls[session_id]
+        else:
+            from .state_records import load_owner
+            _, control = load_owner(self.app.db, session_id)
+            from .cold_display import ColdRecord
+            control = ColdRecord(control or {}, self.app.db)
+        task=(control or {}).get('task.get',{}).get('task')
         if task:
             summary={key:task.get(key) for key in ('objective','status','constraints','corrections','blockedReason','completionEvidence','artifactRefs')}
             rows.append({'id':'task:'+task['id'],'role':'task','sourceKind':'task','recordId':task['id'],
@@ -92,17 +146,14 @@ class Recall:
         from .history_query import _rows, _identity
         errors, indexed, unchanged = [], 0, 0
         async with self.app.lock:
-            session_ids = [row['id'] for row in self.app.state['sessions']]
+            session_ids = self.registered_ids()
         self.notify(status='indexing',total=len(session_ids),processed=0,errors=[])
         signatures = await asyncio.to_thread(self.store.signatures)
         try:
             for number, session_id in enumerate(session_ids):
                 try:
                     async with self.app.lock:
-                        source = next((row for row in self.app.state['sessions'] if row['id']==session_id), None)
-                        if source is None:
-                            raise FileNotFoundError('Source removed during indexing')
-                        session = copy.deepcopy(source)
+                        session = self.source(session_id)
                         metadata=self.metadata_rows(session_id)
                     source_stamp=await asyncio.to_thread(source_signature,session)
                     signature=digest([source_stamp,metadata])
@@ -122,9 +173,14 @@ class Recall:
                     self.notify(processed=number+1,indexed=indexed+unchanged,errors=errors[:50])
                     await asyncio.sleep(0)
             async with self.app.lock:
-                retained = {row['id'] for row in self.app.state['sessions']}
-            await asyncio.to_thread(self.store.prune, retained)
-            self.notify(status='partial' if errors else 'ready', processed=len(session_ids), indexed=indexed+unchanged,
+                retained = set(self.registered_ids())
+                discovery = self.app.state.get('sharedHistory', {})
+                complete = (discovery.get('reconciliation', {}).get('phase') == 'complete'
+                    and not any(discovery.get(key) for key in ('loading', 'error', 'issues', 'issueCount')))
+            # Missing metadata during cache recovery is not source deletion.
+            if complete:
+                await asyncio.to_thread(self.store.prune, retained)
+            self.notify(discoveryComplete=complete, status='partial' if errors else 'ready', processed=len(session_ids), indexed=indexed+unchanged,
                 updated=indexed,unchanged=unchanged,errors=errors[:50],errorCount=len(errors),checkedAt=time.time())
         except asyncio.CancelledError:
             self.notify(status='interrupted')
@@ -144,11 +200,10 @@ class Recall:
 
     async def dispatch(self, action, args, origin, command_id=None):
         from .service import AppError
-        from .owned_history import includes, selected, require
+        from .owned_history import selected, require
         try:
             async with self.app.lock:
                 session = copy.deepcopy(self.app._session(args.get('sessionId')))
-                catalog = {row['id']: {'id':row['id'],'workspace':row.get('workspace'),'kind':row.get('sessionKind','root')} for row in self.app.state['sessions']}
             if action == 'recall.refresh':
                 self.start()
                 await asyncio.sleep(0)
@@ -165,9 +220,8 @@ class Recall:
                 result = copy.deepcopy(self.state)
             elif action == 'recall.search':
                 scope = selected(args)
-                allowed = {sid for sid,row in catalog.items() if includes(session,row,scope)
-                    and (args.get('includeInternal') or row['kind']!='internal')
-                    and (args.get('includeChildren') or row['kind']!='worker')}
+                async with self.app.lock:
+                    allowed = self.registered_ids(session, args)
                 result = await asyncio.to_thread(self.store.search,args['query'],allowed,args.get('offset',0),args.get('limit',20))
                 retained=[]
                 for item in result.get('items', []):
@@ -236,7 +290,8 @@ class Recall:
                     if command_id and self.store.receipt(command_id, fingerprint) is not None:
                         return {'accepted': True, 'result': {**self.personalization.status(session), 'duplicate': True}}
                     source_id = args.get('sourceSessionId')
-                    if source_id and (source_id not in catalog or catalog[source_id]['workspace'] != session.get('workspace')):
+                    source = self.registered(source_id) if source_id else None
+                    if source_id and (source is None or source.get('workspace') != session.get('workspace')):
                         raise ValueError('Choose a source conversation in this workspace.')
                     self.personalization.start(session, [source_id] if source_id else None)
                     if command_id:
@@ -266,7 +321,7 @@ class Recall:
                         raise ValueError('Create a new explicit memory to change its scope.')
                 if args.get('source'):
                     reference = args['source']
-                    if reference['sessionId'] not in catalog:
+                    if self.registered(reference['sessionId']) is None:
                         raise ValueError('Memory evidence must reference registered history.')
                     evidence = await asyncio.to_thread(self.store.message,reference['sessionId'],reference['messageId'],0,1)
                     if reference.get('sourceRevision') is not None and reference['sourceRevision'] != evidence['sourceRevision']:

@@ -96,6 +96,14 @@ visible UI. Other conversations are listed by title/status, without their conten
 Use `get_state` with `args:{"path":"/canvas","offset":0,"limit":50}` to inspect
 one section. Large values have `$statePath` references; follow `nextOffset` for
 more entries or text. Optional `revision` detects changes between pages.
+For `/sessions` pages and indexed paths, versioned reads must also carry the
+`directoryRevision` returned by the overview or a directory read. This token
+identifies the local and native directory views used to assign those indices;
+native discovery can change them before the next app revision is published.
+A stale token rejects the read before resolving its index. Unversioned reads use
+the current directory. Directory paging loads only the requested owners and
+does not select chats or start work. The HTTP detail route accepts the same
+`directoryRevision` query parameter.
 
 Resolved configurations are stored once per session. Bulky dependency provenance
 is stored once in the app database and referenced by `$resource`; requesting its

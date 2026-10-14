@@ -12,6 +12,51 @@ from test_native_history import session, write_json
 from test_automatic_history import app_factory, native_session
 
 
+async def test_workspace_only_delta_refreshes_admitted_native_availability(tmp_path, app_factory, monkeypatch):
+    workspace = tmp_path / 'native-workspace'
+    for number in range(20):
+        native_session(workspace, f'available-{number}')
+    app = app_factory()
+    index = app.history.index
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+
+    async def finish():
+        for _ in range(100):
+            await app.history.refresh(force=False)
+            assert app.state['sharedHistory']['error'] is None
+            if app.state['sharedHistory']['reconciliation']['phase'] == 'complete':
+                return
+        pytest.fail('bounded discovery did not finish')
+
+    await finish()
+    owner = app._session('available-0', hydrate=False)
+    app._publish_changes(sessions=[owner['id']])
+    await app.history.refresh(force=False)
+    assert owner['workspaceAvailable'] is True and owner['historyReadOnlyReason'] is None
+    residents = {row['id'] for row in app.state['sessions']}
+    decoded = []
+    original = index._catalog.get
+    monkeypatch.setattr(index._catalog, 'get', lambda project, identity:
+        (decoded.append(identity), original(project, identity))[1])
+    # Start a normal recovery one yield at a time. The workspace-only change
+    # necessarily arrives after the initial non-forced slice, with no session
+    # payload delta and no local settings epoch to trigger a full merge.
+    index._recovery_budget = 1
+    moved = tmp_path / 'moved-workspace'
+    workspace.rename(moved)
+    index._reconcile_at = 0
+    await finish()
+    assert owner['workspaceAvailable'] is False
+    assert owner['historyReadOnlyReason'] == 'The original workspace folder is no longer available.'
+    moved.rename(workspace)
+    index._reconcile_at = 0
+    await finish()
+    assert owner['workspaceAvailable'] is True and owner['historyReadOnlyReason'] is None
+    assert decoded and set(decoded) == {'available-0'}
+    assert {row['id'] for row in app.state['sessions']} == residents
+    assert app.runtime.started == [] and app.runtime.sent == []
+
+
 def test_persistent_cache_reuses_compact_metadata_without_reading_bodies(tmp_path):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()
@@ -554,7 +599,8 @@ async def test_refresh_error_publication_failure_does_not_terminate_discovery(tm
     await app.history.refresh(force=False)
     assert app.history._native_revision is not None
     assert app.state['sharedHistory']['error'] is None
-    assert any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
+    assert app.directory.resolve('saved-root')['nativeIdentity'] == 'saved-root'
+    assert not any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
 
 
 async def test_actual_save_failure_retains_discovery_dirty_union(tmp_path, app_factory, monkeypatch):
@@ -580,7 +626,8 @@ async def test_actual_save_failure_retains_discovery_dirty_union(tmp_path, app_f
     assert app.history._native_revision is not None
     assert not app._progress_dirty
     assert app.state['sharedHistory']['error'] is None
-    assert any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
+    assert app.directory.resolve('saved-root')['nativeIdentity'] == 'saved-root'
+    assert not any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
 
 
 async def test_recovery_slice_counters_do_not_publish_unchanged_library(tmp_path, app_factory, monkeypatch):
@@ -712,8 +759,9 @@ async def test_single_native_change_does_not_serialize_unrelated_app_views(tmp_p
     await app.dispatch('session.create', {})
     await app.history.refresh()
     await app.history.refresh(force=False)
+    child_row = app._session('saved-child', hydrate=False)
+    await app.history.refresh(force=False)  # Reconcile the explicitly admitted owner.
     app.projections.sessions(app.state)
-    child_row = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'saved-child')
     original_save = app._save
     scopes = []
 
@@ -745,7 +793,7 @@ async def test_single_native_change_does_not_serialize_unrelated_app_views(tmp_p
     assert builds == []
     assert (own_view.read_bytes(), own_view.stat().st_mtime_ns) == before
     assert child_row['nativeRevision'][1] == (child / 'transcript.jsonl').stat().st_size
-    assert len(app.history._catalog_rows) >= 2
+    assert app.history.index._catalog.count() >= 2
 
 
 async def test_scoped_history_commit_does_not_drop_pending_runtime_progress(tmp_path, app_factory, monkeypatch):
@@ -760,7 +808,7 @@ async def test_scoped_history_commit_does_not_drop_pending_runtime_progress(tmp_
     own['draft'] = 'Unrelated progress must reach the durable view'
     app._progress_dirty = True
     # A later labelled writer cannot narrow an earlier unknown mutation.
-    native_id = next(row['id'] for row in app.state['sessions'] if row.get('historyManaged'))
+    native_id = app._session('saved-root', hydrate=False)['id']
     await app.on_runtime_event('assistant.delta', {'sessionId': native_id, 'text': 'later delta'})
     app.history.index._reconcile_at = time.monotonic() + 60
     monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, {project_slug(workspace)}))
@@ -931,7 +979,7 @@ async def test_empty_catalog_delta_still_refreshes_selected_transcript(
     saved = native_session(tmp_path / 'cli', 'saved-root')
     app = app_factory()
     await app.history.refresh()
-    row = next(item for item in app.state['sessions'] if item.get('nativeIdentity') == 'saved-root')
+    row = app._session('saved-root', hydrate=False)
     app.state['selectedSessionId'] = row['id']
     app._publish()
     await app.history.load(row['id'])
@@ -1059,5 +1107,5 @@ async def test_empty_delta_preserves_catalog_availability_and_public_facts(
     if change == 'availability':
         workspace = next(item for item in app.state['workspaces'] if item.get('path') == str(native))
         assert workspace['available'] is False
-        assert any(item.get('nativeIdentity') == 'saved-root' for item in app.state['sessions'])
+        assert app.directory.resolve('saved-root')['nativeIdentity'] == 'saved-root'
     assert load_saved_state(app.db)['sharedHistory'] == shared

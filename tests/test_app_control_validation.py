@@ -108,6 +108,8 @@ async def test_wrong_type_action_args_never_reaches_bridge(value):
      {'action': 'session.rename', 'args': {'id': 'chat', 'title': 'New'}, 'id': 'stable-command', 'expectedRevision': 12}),
     ({'operation': 'dispatch', 'args': {'action': 'canvas.close'}}, {'action': 'canvas.close'}),
     ({'operation': 'get_state'}, {}),
+    ({'operation': 'get_state', 'args': {'path': '/sessions/17/title', 'revision': 12, 'directoryRevision': 'observed-directory'}},
+     {'path': '/sessions/17/title', 'revision': 12, 'directoryRevision': 'observed-directory'}),
     ({'operation': 'list_actions', 'args': {'prefix': 'session.'}}, {'prefix': 'session.'}),
 ])
 async def test_valid_requests_and_receipts_are_unchanged(payload, expected_args):

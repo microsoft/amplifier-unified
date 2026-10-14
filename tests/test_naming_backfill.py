@@ -203,6 +203,8 @@ async def test_deleted_chat_is_not_recreated_by_late_naming(app):
     async def complete(target, prompt):
         async with app.lock:
             app.state['sessions'] = [row for row in app.state['sessions'] if row['id'] != target['id']]
+            app.directory.sync([], app.state, deleted=[target['id']])
+            app.db.commit()
             shutil.rmtree(directory)
         return reply()
 
@@ -211,3 +213,53 @@ async def test_deleted_chat_is_not_recreated_by_late_naming(app):
     assert not directory.exists()
     assert not result['named']
     assert result['failed'][0]['id'] == session['id']
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+async def test_backfill_finds_dormant_candidates_and_only_admits_selected_limit(app, monkeypatch, explicit):
+    rows = [await chat(app, text=f'Name this saved conversation {index}') for index in range(12)]
+    for index, row in enumerate(rows):
+        app._session(row['id']).update(recentActivityAt=index+1, navigationActivityAt=index+1)
+    await app.dispatch('session.naming', {'id': rows[-1]['id'], 'automatic': False})
+    app._session(rows[-2]['id'])['sessionKind'] = 'internal'
+    app._session(rows[-3]['id']).update(sessionKind='worker', nativeParentId=rows[0]['id'])
+    app._save()
+    selected = app.state['selectedSessionId']
+    await app.close()
+    restored = AppService(app.data_dir, Runtime(), workspace=app.data_dir)
+    try:
+        initial = {row['id'] for row in restored.state['sessions']}
+        assert initial == {selected}
+        calls = []
+
+        async def complete(session, prompt):
+            calls.append(session['id'])
+            return reply('Named dormant chat')
+
+        restored.naming_backfill = NamingBackfill(restored, complete=complete)
+        target = rows[2]['id'] if explicit else rows[-4]['id']
+        original = restored._session
+        admitted = []
+
+        def scoped(identity=None, *args, **kwargs):
+            if identity is not None:
+                assert identity in {selected, target}
+                admitted.append(identity)
+            return original(identity, *args, **kwargs)
+
+        monkeypatch.setattr(restored, '_session', scoped)
+        args = {'limit': 1}
+        if explicit:
+            args['ids'] = ['missing-dormant-owner', rows[-3]['id'], target, rows[3]['id']]
+        _, result = await backfill(restored, args)
+        assert result['named'] == [target] and calls == [target]
+        assert target in admitted and set(admitted) <= {target, selected}
+        assert {row['id'] for row in restored.state['sessions']} == initial | {target}
+        assert restored.state['selectedSessionId'] == selected
+        if explicit:
+            skipped = {row['id']: row['reason'] for row in result['skipped']}
+            assert skipped['missing-dormant-owner'] == 'No chat has this ID.'
+            assert 'top-level' in skipped[rows[-3]['id']]
+        assert not restored.runtime.started and not restored.runtime.sent
+    finally:
+        await restored.close()

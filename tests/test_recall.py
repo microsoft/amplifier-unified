@@ -202,3 +202,93 @@ async def test_internal_recall_is_explicit_without_deleting_index_or_source(tmp_
         assert app._session(job)['messages'] == original
     finally:
         await app.close()
+
+
+async def test_dormant_recall_membership_survives_refresh_without_live_admission(tmp_path, monkeypatch):
+    app = AppService(tmp_path/'app', workspace=tmp_path, runtime=Runtime())
+    try:
+        dormant = await make(app, 'Dormant source', 'The dormant decision was cobalt.')
+        worker = await make(app, 'Saved worker', 'Worker cobalt evidence.')
+        app._session(worker).update(sessionKind='worker', parentId=dormant)
+        other = await make(app, 'Other workspace', 'Other cobalt evidence.')
+        app._session(other)['workspace'] = str(tmp_path/'other')
+        caller = await make(app, 'Current', 'Keep current work separate.')
+        app.state.setdefault('runtimeControl', {})[dormant] = {
+            'task.get': {'task': {'id':'durable-task', 'revision':2, 'objective':'Remember heliotrope', 'status':'complete'}}}
+        app._save()
+        await refresh(app)
+        before = set(app.recall.store.signatures())
+        app.state['sessions'] = [app._session(caller)]
+        app.state['runtimeControl'] = {key:value for key,value in app.state['runtimeControl'].items() if key == caller}
+        app.projections.invalidate()
+        admitted = app._session
+        def current_only(identity=None, *args, **kwargs):
+            assert identity in {None, caller}, 'recall refresh/search admitted a dormant conversation'
+            return admitted(identity, *args, **kwargs)
+        monkeypatch.setattr(app, '_session', current_only)
+        original_decode = app.directory.decode
+        def no_summary(*args, **kwargs):
+            pytest.fail('ordinary recall authorization decoded dormant directory metadata')
+        monkeypatch.setattr(app.directory, 'decode', no_summary)
+        result = await app.recall.dispatch('recall.search', {'sessionId':caller, 'query':'cobalt'}, 'ui')
+        assert [row['sessionId'] for row in result['result']['items']] == [dormant]
+        all_rows = await app.recall.dispatch('recall.search',
+            {'sessionId':caller, 'query':'cobalt', 'scope':'all', 'includeChildren':True}, 'ui')
+        assert {row['sessionId'] for row in all_rows['result']['items']} == {dormant, worker, other}
+        monkeypatch.setattr(app.directory, 'decode', original_decode)
+        await app.recall.refresh()
+        assert app.recall.state['status'] == 'ready'
+        assert set(app.recall.store.signatures()) == before
+        assert [row['id'] for row in app.state['sessions']] == [caller]
+        task = await app.recall.dispatch('recall.search', {'sessionId':caller, 'query':'heliotrope'}, 'ui')
+        assert task['result']['items'][0]['recordRevision'] == 2
+        assert not app.runtime.sent
+        # Explicit membership removal withdraws search access immediately and
+        # prunes only that source on the next explicit index refresh.
+        app.state['sharedHistory'] = {'reconciliation': {'phase': 'complete'}}
+        app.directory.sync([], app.state, deleted=[dormant])
+        app.db.commit()
+        assert not (await app.recall.dispatch('recall.search',
+            {'sessionId':caller, 'query':'dormant cobalt'}, 'ui'))['result']['items']
+        await app.recall.refresh()
+        assert set(app.recall.store.signatures()) == before - {dormant}
+    finally:
+        monkeypatch.undo()
+        await app.close()
+
+
+@pytest.mark.parametrize('phase', ['running', 'unavailable', 'not-started'])
+async def test_partial_directory_recovery_never_prunes_undiscovered_recall_sources(tmp_path, phase):
+    app = AppService(tmp_path/'app', workspace=tmp_path, runtime=Runtime())
+    try:
+        caller = await make(app, 'Current', 'Current evidence')
+        app.recall.store.replace({'id':'not-yet-discovered','title':'Saved history','workspace':str(tmp_path)},
+            'saved-signature', 1, [{'id':'prior','role':'user','text':'Keep canonical source evidence'}])
+        app.state['sharedHistory'] = {'reconciliation': {'phase': phase}}
+        await app.recall.refresh()
+        assert 'not-yet-discovered' in app.recall.store.signatures()
+        assert app.recall.state['discoveryComplete'] is False
+        assert [row['id'] for row in app.state['sessions']] == [caller]
+    finally:
+        await app.close()
+
+
+async def test_missing_durable_owner_preserves_previous_recall_evidence(tmp_path):
+    app = AppService(tmp_path/'app', workspace=tmp_path, runtime=Runtime())
+    try:
+        dormant = await make(app, 'Lost saved pointer', 'Preserve indexed cobalt evidence')
+        caller = await make(app, 'Current', 'Current evidence')
+        app._save()
+        await app.recall.refresh()
+        signature = app.recall.store.signatures()[dormant]
+        app.state['sessions'] = [app._session(caller)]
+        app.db.execute("DELETE FROM state_records WHERE kind='session' AND id=?", (dormant,))
+        app.db.commit()
+        app.state['sharedHistory'] = {'reconciliation': {'phase':'complete'}}
+        await app.recall.refresh()
+        assert app.recall.state['status'] == 'partial'
+        assert app.recall.state['errors'] == [{'sessionId':dormant,'reason':'FileNotFoundError'}]
+        assert app.recall.store.signatures()[dormant] == signature
+        assert [row['id'] for row in app.state['sessions']] == [caller]
+    finally:
+        await app.close()

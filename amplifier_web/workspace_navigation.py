@@ -195,7 +195,7 @@ def _registry_labels(paths):
     return path_labels(paths)
 
 
-def _index(state):
+def _index(state, *, aggregates=None):
     archive = state.get('view', {}).get('navWorkspaceArchive', 'active')
     registrations = [row for row in state.get('workspaces', [])
                      if (row.get('available') is True or row.get('archived')) and _path(row.get('path')) is not None
@@ -215,7 +215,7 @@ def _index(state):
     attention = state.get('attention', {})
     unread_sessions = attention.get('sessions', {})
     reviewed_errors = reviewed_session_errors(attention)
-    for session in state.get('sessions', []):
+    for session in (() if aggregates is not None else state.get('sessions', [])):
         if not is_top_level(session) or session.get('id') in seen:
             continue
         seen.add(session.get('id'))
@@ -234,6 +234,11 @@ def _index(state):
         if summary['kind'] == 'attention':
             category = {'Work blocked': 'blocked', 'Approval requested': 'decision', 'Answer requested': 'decision'}.get(summary['label'], 'error')
             entry['activityCounts'][category] = entry['activityCounts'].get(category, 0) + 1
+
+    if aggregates is not None:
+        for path, entry in chats.items():
+            if str(path) in aggregates:
+                entry.update(aggregates[str(path)])
 
     root = _root(list(chats))
     nodes = {root: {'children': set(), 'descendantWorkspaceCount': 0, 'unread': 0}}

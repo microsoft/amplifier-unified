@@ -124,6 +124,7 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
         db.execute('DROP TABLE storage_layout')
         # This fixture replaces the database with a pre-records legacy snapshot.
         db.execute('DELETE FROM state_records')
+        db.execute('DROP TABLE history_directory_layout')
         db.execute('CREATE TABLE smart_tool_operations(id TEXT PRIMARY KEY,value TEXT NOT NULL)')
         for n in range(20):
             value = json.dumps({'content': body, 'mcp': {'lastOperationId': str(n)}})
@@ -134,6 +135,14 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
         state['canvasArtifacts'] = [{'id': 'surface', 'sessionId': sid, 'body': {'$resource': identity}, 'kind': 'mcp-app'}]
         db.execute('UPDATE state SET value=? WHERE id=1', (json.dumps(state),))
     old_size = (home / 'app.sqlite3').stat().st_size
+    upgrade = migration.upgrade
+
+    def checked_upgrade(service):
+        # Fail promptly instead of hanging inside SQLite's backup retry loop.
+        assert not service.db.in_transaction
+        return upgrade(service)
+
+    monkeypatch.setattr(migration, 'upgrade', checked_upgrade)
     restored = AppService(home, workspace=tmp_path)
     try:
         await restored._storage_maintenance_task

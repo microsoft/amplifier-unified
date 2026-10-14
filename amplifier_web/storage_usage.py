@@ -86,6 +86,89 @@ def inspect(home, workspaces, args):
             'workspaceId':workspace['id'] if workspace else None}
 
 
+def _history_scope(app, path):
+    """Explicit cleanup proof over durable placement, without live admission."""
+    directory = getattr(app, 'directory', None)
+    if directory is None:
+        owners = list(app.state['sessions'])
+    else:
+        residents = {row['id']: row for row in app.state['sessions']}
+        owners = list(residents.values())
+        from .state_records import load_owner
+        from .session_projection import hydrate
+        # Read only scalar placement for unrelated dormant owners. Retained
+        # summary placement is written in the same transaction as its pointer.
+        query = """SELECT r.id,json_extract(r.value,'$.workspace'),l.workspace,
+                   json_extract(l.summary,'$.workingDirectory')
+            FROM state_records r LEFT JOIN history_local_rows l ON l.id=r.id
+            WHERE r.kind='session' AND r.value!='null'"""
+        for identity, saved_workspace, indexed_workspace, execution in app.db.execute(query):
+            if identity in residents:
+                continue
+            workspace = indexed_workspace or saved_workspace
+            if workspace is None:
+                raise ValueError('Saved chat placement is unavailable. Its files were preserved.')
+            if execution is None:
+                metadata = app.worktrees.saved_owner(identity)
+                if metadata is None:
+                    raise ValueError('Saved chat placement is unavailable. Its files were preserved.')
+                execution = metadata.get('workingDirectory') or metadata.get('workspace')
+            candidate = {'id': identity, 'workspace': workspace, 'workingDirectory': execution}
+            _check_overlap(candidate, path)
+            if Path(workspace).absolute() == path:
+                saved, _ = load_owner(app.db, identity)
+                if saved is None:
+                    raise ValueError('A saved chat record is unavailable. Its files were preserved.')
+                context = {'sessions': [saved], 'runtimeControl': {}}
+                hydrate(app.data_dir, context, app.db)
+                candidate = context['sessions'][0]
+                metadata = app.db.execute('SELECT summary FROM history_local_rows WHERE id=?', (identity,)).fetchone()
+                if metadata:
+                    candidate.update(json.loads(metadata[0]))
+                owners.append(candidate)
+        # An orphaned local directory row must not disappear from the proof.
+        for identity, in app.db.execute("""SELECT l.id FROM history_local_rows l
+                LEFT JOIN state_records r ON r.kind='session' AND r.id=l.id
+                WHERE r.value IS NULL OR r.value='null'"""):
+            if identity not in residents:
+                # A missing pointer cannot prove all former execution locations.
+                raise ValueError('A saved chat record is unavailable. Its files were preserved.')
+        if directory._native_path:
+            # Hidden navigation rows still own their history and working files.
+            for workspace, in app.db.execute('SELECT DISTINCT workspace_path FROM history_native.native_rows WHERE namespace=?',
+                                             (directory._native_namespace,)):
+                if workspace is None:
+                    raise ValueError('Native chat placement is unavailable. Its files were preserved.')
+                _check_overlap({'workspace': workspace}, path)
+            known = {(row.get('nativeProject'), row.get('nativeIdentity') or row.get('runtimeSessionId') or row['id'])
+                     for row in owners}
+            for project, identity, raw in app.db.execute('SELECT project,identity,value FROM history_native.native_rows '
+                    'WHERE namespace=? AND workspace_path=?', (directory._native_namespace, str(path))):
+                if (project, identity) in known:
+                    continue
+                metadata = json.loads(raw)
+                owners.append({**metadata, 'id': metadata['id'], 'workspace': str(path),
+                               'nativeProject': project, 'nativeIdentity': identity,
+                               'runtimeSessionId': identity, 'historyManaged': True, 'status': 'idle'})
+    for owner in owners:
+        _check_overlap(owner, path)
+    return [owner for owner in owners if owner.get('workspace') and Path(owner['workspace']).absolute() == path]
+
+
+def _overlaps(candidate, path):
+    return candidate == path or candidate.is_relative_to(path) or path.is_relative_to(candidate)
+
+
+def _check_overlap(owner, path):
+    workspace = Path(owner['workspace']).absolute() if owner.get('workspace') else None
+    for value in (owner.get('workspace'), owner.get('workingDirectory')):
+        if not value:
+            continue
+        candidate = Path(value).expanduser().resolve()
+        if workspace != path and _overlaps(candidate, path):
+            raise ValueError('Another chat uses an overlapping folder. Its files were preserved.')
+
+
 def _scope(app,identity):
     if (not shutil.rmtree.avoids_symlink_attacks or os.rename not in os.supports_dir_fd
             or not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY')):
@@ -106,12 +189,7 @@ def _scope(app,identity):
         candidate=Path(other['path']).absolute()
         if candidate==path or candidate.is_relative_to(path) or path.is_relative_to(candidate):
             raise ValueError('Another registered workspace overlaps this folder. Its files were preserved.')
-    sessions=[s for s in app.state['sessions'] if s.get('workspace')==str(path)]
-    for other in app.state['sessions']:
-        if other in sessions or not other.get('workspace'):continue
-        candidate=Path(other['workspace']).absolute()
-        if candidate.is_relative_to(path) or path.is_relative_to(candidate):
-            raise ValueError('Another chat uses an overlapping folder. Its files were preserved.')
+    sessions=_history_scope(app,path)
     ids={value for s in sessions for value in (s['id'],s.get('runtimeSessionId'),s.get('nativeIdentity')) if value}
     _idle(app,sessions,ids)
     from .workspace_resources import command
@@ -172,7 +250,10 @@ async def dispatch(app,action,args,include_state):
             else:
                 import sys
                 from .storage_catalog import inspect as categorized
-                sessions=[{k:copy.deepcopy(r[k]) for k in ('id','title','workspace','runtimeSessionId','location') if k in r} for r in app.state['sessions']]
+                # This explicit disk review needs named managed-chat locations,
+                # including dormant owners. It never admits their saved bodies.
+                sessions=[{k:copy.deepcopy(r[k]) for k in ('id','title','workspace','runtimeSessionId','location') if k in r}
+                          for r in app.directory.select('managed=1', limit=-1)]
                 installation=Path(sys.prefix) if sys.prefix != sys.base_prefix else None
                 if args.get('progressive') or args.get('scanId'):
                     from .storage_scan import StorageScans

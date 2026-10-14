@@ -313,7 +313,11 @@ async def test_removed_conversation_retains_watch_for_review_without_runtime_act
     app,runtime,_,sid,args,data,*_=await fixture(tmp_path,monkeypatch)
     try:
         watch=await create(app,args)
-        def remove(): app._state['sessions'][:]=[row for row in app._state['sessions'] if row['id']!=sid]
+        def remove():
+            app._state['sessions'][:]=[row for row in app._state['sessions'] if row['id']!=sid]
+            app._state.get('runtimeControl', {}).pop(sid, None)
+            app.forget_session_records({sid})  # Removal, not working-set eviction.
+            app._save(session_ids={sid}, record_only=True)
         if phase=='read-return':
             original=app.smart_tools.call_tool
             async def read(*a,**kw):

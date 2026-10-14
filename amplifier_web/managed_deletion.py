@@ -111,13 +111,17 @@ def _scope(app, sid):
     from .session_navigation import is_top_level
     if native_id != marker['id'] or not is_top_level(row):
         raise ValueError('Delete the managed conversation that owns this worker instead.')
-    sessions = [item for item in app.state['sessions'] if item.get('workspace') == str(folder)]
+    directory = getattr(app, 'directory', None)
+    sessions = ([app._admit_session(item) for item in directory.select('workspace=?', (str(folder),), limit=-1)]
+                if directory is not None else [item for item in app.state['sessions'] if item.get('workspace') == str(folder)])
     ids = {row['id'], marker['id']}
     for item in sessions:
         if item['id'] != row['id'] and is_top_level(item):
             raise ValueError('Another conversation uses this chat folder. Archive it instead; no files were removed.')
         ids.update(filter(None, (item['id'], item.get('nativeIdentity'), item.get('runtimeSessionId'))))
-    for item in app.state['sessions']:
+    children = (directory.select('parent_id IN (SELECT value FROM json_each(?))', (json.dumps(sorted(ids)),), limit=-1)
+                if directory is not None else app.state['sessions'])
+    for item in children:
         if item.get('parentId') in ids and not is_top_level(item) and item.get('workspace') != str(folder):
             raise ValueError('A worker uses a separate folder. Archive this chat until that worker is detached.')
     return row, marker, sessions, ids

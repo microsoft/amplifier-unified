@@ -137,10 +137,26 @@ class ClientViews:
             index = None
         selected = (index.by_id.get(sid) if index is not None else
                     next((row for row in rows if row['id'] == sid), None))
-        catalog_loading = self.service._state.get('sharedHistory', {}).get('loading', False)
+        directory = getattr(self.service, 'directory', None)
+        if selected is None and sid is not None and directory is not None:
+            selected = directory.resolve(sid)
+        shared_history = self.service._state.get('sharedHistory', {})
+        phase = shared_history.get('reconciliation', {}).get('phase')
+        catalog_incomplete = bool(shared_history.get('loading') or shared_history.get('error')
+                                  or shared_history.get('issues') or shared_history.get('issueCount')
+                                  or phase is not None and phase != 'complete')
         startup = self.startup_selections.get(identity)
-        awaiting_catalog = bool(catalog_loading and startup and startup[0] == sid)
-        if not catalog_loading or selected is not None:
+        # A completed bounded discovery step is not a complete directory.
+        # Absence during recovery cannot discard a saved browser selection.
+        unchanged = startup == (sid, record.get('selectedWorkspaceId'))
+        awaiting_catalog = bool(catalog_incomplete and startup and unchanged and selected is None)
+        if awaiting_catalog:
+            from .managed_deletion import removed
+            awaiting_catalog = not (sid in getattr(self.service, '_forgotten_session_ids', ())
+                or sid in getattr(self.service, '_deleted_session_ids', ())
+                or removed(self.service.db, identity=sid)
+                or record.get('selectedWorkspaceId') in self.service._state.get('hiddenNativeWorkspaces', ()))
+        if not awaiting_catalog or selected is not None:
             self.startup_selections.pop(identity, None)
         if sid is not None and selected is None and not awaiting_catalog:
             record["selectedSessionId"] = None

@@ -164,7 +164,8 @@ async def test_headless_continue_uses_catalog_when_browser_page_is_empty(aiohttp
 
 
 @pytest.mark.parametrize('selected_kind', ['worker', 'root', 'none'])
-async def test_headless_continue_selects_only_roots_implicitly(aiohttp_server, tmp_path, capsys, selected_kind):
+@pytest.mark.parametrize('dormant', [False, True])
+async def test_headless_continue_selects_only_roots_implicitly(aiohttp_server, tmp_path, capsys, selected_kind, dormant):
     runtime = Runtime()
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=runtime, voice=False,
                            background_updates=False)
@@ -178,6 +179,9 @@ async def test_headless_continue_selects_only_roots_implicitly(aiohttp_server, t
     worker.update(sessionKind='worker', parentId=recent_root, nativeParentId=recent_root)
     assert service.state['sessions'][0]['id'] == worker['id']
     service.state['selectedSessionId'] = {'worker': worker['id'], 'root': older_root, 'none': None}[selected_kind]
+    if dormant:
+        service._save()
+        service._state['sessions'] = [worker]
     service._publish()
     server = await aiohttp_server(app)
     args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path), resume=None,

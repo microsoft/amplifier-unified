@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.138",
+      "title": "Load the chats you use without restoring the whole library",
+      "changes": [
+        "Saved chat metadata stays in an indexed directory on disk. Startup, navigation, search pages and workspace counts no longer restore the complete saved library into application memory.",
+        "Opening a chat loads its saved owner on demand. Idle owners can leave the working set while their conversations, pending operations, client selections and cleanup protections remain durable.",
+        "Warm background history reconciliation reuses unchanged indexed records and updates changed chats without rebuilding every summary in the project. Initial discovery and recovery of a missing index remain separate background operations.",
+        "Quiet recorded-work polling skips repeated traversal of an unchanged selected chat. Changed files and newly published work still invalidate that result.",
+        "Agent state pages use directory revision tokens to detect changed chat indices, and interrupted collaboration authority is retired before it is shown after a restart."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.137",
       "title": "Avoid duplicate history work when opening chats",
       "changes": [

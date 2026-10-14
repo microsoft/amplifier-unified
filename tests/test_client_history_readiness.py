@@ -14,7 +14,7 @@ async def test_terminal_history_follows_stream_target_until_disconnect(tmp_path)
     queue = None
     try:
         await service.history.refresh()
-        ids = {row['nativeIdentity']: row['id'] for row in service.state['sessions']}
+        ids = {row['nativeIdentity']: row['id'] for row in service.directory.select() if row.get('nativeIdentity')}
         service._state['selectedSessionId'] = ids['saved-selection']
         service.clients.attach('terminal', kind='tui')
         with service.clients.bind('terminal'):
@@ -48,7 +48,7 @@ async def test_refresh_follows_connected_clients_not_inactive_saved_views(tmp_pa
     try:
         await service.history.refresh()
         assert service.state['selectedSessionId'] is None
-        ids = {row['nativeIdentity']: row['id'] for row in service.state['sessions']}
+        ids = {row['nativeIdentity']: row['id'] for row in service.directory.select() if row.get('nativeIdentity')}
         for identity in ('first', 'second', 'inactive'):
             service.clients.attach(identity)
             with service.clients.bind(identity):
@@ -87,7 +87,7 @@ async def test_event_reconnect_loads_restored_selection_without_reselecting(tmp_
     home = tmp_path / 'app'
     previous = AppService(home, ObservedRuntime(), workspace=tmp_path)
     await previous.history.refresh()
-    sid = next(row['id'] for row in previous.state['sessions'] if row.get('nativeIdentity') == 'restored-chat')
+    sid = previous.directory.resolve('restored-chat')['id']
     previous.clients.attach('browser')
     with previous.clients.bind('browser'):
         previous.state['selectedSessionId'] = sid

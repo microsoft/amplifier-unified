@@ -189,3 +189,50 @@ async def test_explicit_user_session_client_keeps_registered_history_access(tmp_
     response=await client.post(target,headers=headers,json={'id':'bad-target','action':'session.history','args':{'id':owner['id'],'scope':'all'}})
     assert response.status==400
     assert not app.runtime.sent
+
+
+async def test_dormant_scope_facts_do_not_decode_or_admit_owners(app, monkeypatch):
+    from amplifier_web.owned_history import require, metadata
+    owner, related, other = app.state['sessions']
+    app._save()
+    app.state['sessions'] = [owner]
+    before = [row['id'] for row in app.state['sessions']]
+    def forbidden(*args, **kwargs):
+        pytest.fail('scope authorization decoded or admitted a dormant owner')
+    monkeypatch.setattr(app.directory, 'decode', forbidden)
+    monkeypatch.setattr(app, '_admit_session', forbidden)
+    assert require(app, owner['id'], related['id']) == {'id':related['id'], 'workspace':related['workspace']}
+    with pytest.raises(AppError, match='scope'):
+        require(app, owner['id'], other['id'])
+    assert require(app, owner['id'], other['id'], 'all')['id'] == other['id']
+    assert require(app, related['id'], related['id'], 'task')['id'] == related['id']
+    with pytest.raises(AppError, match='scope'):
+        require(app, related['id'], owner['id'], 'task')
+    with pytest.raises(AppError) as missing:
+        metadata(app, 'missing-history')
+    assert missing.value.status == 404
+    assert [row['id'] for row in app.state['sessions']] == before
+
+
+async def test_dormant_scope_filter_is_applied_before_history_paging(app, monkeypatch):
+    from amplifier_web.history_query import query_history
+    owner, related, other = app.state['sessions']
+    app._save()
+    app.state['sessions'] = [owner]
+    monkeypatch.setattr(app, '_admit_session', lambda *a, **kw: pytest.fail('list admitted a dormant owner'))
+    result = await query_history(app, {'action':'list','scope':'all','workspace':other['workspace'],'limit':1}, owner['id'])
+    assert [row['id'] for row in result['items']] == [other['id']]
+    assert result['next_offset'] is None
+    with pytest.raises(ValueError, match='scope'):
+        await query_history(app, {'action':'list','workspace':other['workspace']}, owner['id'])
+    assert [row['id'] for row in app.state['sessions']] == [owner['id']]
+
+
+async def test_denied_dispatch_does_not_admit_dormant_target(app, monkeypatch):
+    owner, _, other = app.state['sessions']
+    app._save()
+    app.state['sessions'] = [owner]
+    monkeypatch.setattr(app, '_admit_session', lambda *a, **kw: pytest.fail('denied request admitted target'))
+    with pytest.raises(AppError, match='scope'):
+        await app.app_bridge('dispatch', {'action':'session.inspect','args':{'id':other['id']}}, owner['id'])
+    assert [row['id'] for row in app.state['sessions']] == [owner['id']]

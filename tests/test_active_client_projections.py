@@ -10,6 +10,10 @@ from test_browser_state import catalog
 def fixture(app_factory, count=1000):
     app = app_factory()
     rows = catalog(app, count=count, workers=2, workspaces=4)
+    # These projection tests deliberately exercise a large admitted working set
+    # and retain mutable owner aliases. Ordinary bounded admission is covered
+    # separately by the 27k directory/residency acceptance tests.
+    app.state['sessions'] = list(rows)  # Separate list keeps each borrowed owner alias explicit.
     for queue in list(app.queues):
         app.unsubscribe(queue)
     for index in range(4):
@@ -23,16 +27,17 @@ async def test_publication_shares_indexes_without_copying_full_catalog(app_facto
     app, rows = fixture(app_factory)
     app._projections = None  # Measure a cold publication independently of fixture setup.
     builds, projected, queues = [], [], []
-    original_index, original_registry, original_project = workspace_navigation._index, chat_navigation.registry, app.clients.project
-    monkeypatch.setattr(workspace_navigation, '_index', lambda state: (builds.append('workspace'), original_index(state))[1])
-    monkeypatch.setattr(chat_navigation, 'registry', lambda state: (builds.append('chat'), original_registry(state))[1])
+    original_index, original_chats, original_project = workspace_navigation._index, app.directory.chats, app.clients.project
+    monkeypatch.setattr(workspace_navigation, '_index', lambda state, **kwargs: (builds.append('workspace'), original_index(state, **kwargs))[1])
+    monkeypatch.setattr(chat_navigation, 'registry', lambda state: pytest.fail('Directory publication built the full in-memory catalog'))
+    monkeypatch.setattr(app.directory, 'chats', lambda state, **kwargs: (builds.append('chat'), original_chats(state, **kwargs))[1])
     monkeypatch.setattr(app.clients, 'project', lambda state: (projected.append(len(state['sessions'])), original_project(state))[1])
     monkeypatch.setattr(app, 'state_context', lambda: pytest.fail('Browser publication projected the full catalog'))
     for index in range(4):
         with app.clients.bind(f'client-{index}'):
             queues.append(app.subscribe())
     app._publish()
-    assert builds.count('workspace') == builds.count('chat') == 1
+    assert builds.count('workspace') == 1 and builds.count('chat') == 8
     assert len(projected) == 4 and max(projected) < 250
     for index, queue in enumerate(queues):
         state = queue.get_nowait()
@@ -40,12 +45,15 @@ async def test_publication_shares_indexes_without_copying_full_catalog(app_facto
         assert next(row for row in state['sessions'] if row['id'] == rows[index]['id'])['draft'] == f'Private {index}'
         with app.clients.bind(f'client-{index}'):
             app.shell.inspect(f'client-{index}', snapshots=True)
-    assert builds.count('workspace') == builds.count('chat') == 1
+    # Shell modules may request their own bounded pages; they must not rebuild
+    # a full in-memory registry (forbidden above) or the shared workspace index.
+    assert builds.count('workspace') == 1
+    after_shells = builds.count('chat')
     rows[-3]['error'] = 'New off-page error'
     app._save()  # Saving without a revision change must still invalidate indexes.
     with app.clients.bind('client-0'):
         assert rows[-3]['id'] in app.browser_state()['attention']['sessions']
-    assert builds.count('workspace') == builds.count('chat') == 2
+    assert builds.count('workspace') == 2 and builds.count('chat') == after_shells + 2
 
 
 async def test_streaming_only_commits_changed_record_and_skips_unrelated_client(app_factory, monkeypatch):
@@ -62,9 +70,9 @@ async def test_streaming_only_commits_changed_record_and_skips_unrelated_client(
     app._save()
     before = unrelated.read_bytes(), unrelated.stat().st_mtime_ns
     builds = []
-    original = chat_navigation.registry
-    monkeypatch.setattr(chat_navigation, 'registry',
-                        lambda state: (builds.append('chat'), original(state))[1])
+    original = app.directory.chats
+    monkeypatch.setattr(app.directory, 'chats',
+                        lambda state, **kwargs: (builds.append('chat'), original(state, **kwargs))[1])
     # Prime once after the unscoped fixture save.
     with app.clients.bind('client-0'):
         app.browser_state()
@@ -179,7 +187,7 @@ async def test_clients_share_navigation_despite_layout_and_private_draft_differe
     app._projections = None  # Measure a cold publication independently of fixture setup.
     builds, queues = [], []
     for module, name, label in ((workspace_navigation, 'snapshot', 'workspace'),
-                                (chat_navigation, 'snapshot', 'chat'),
+                                (app.directory, 'chats', 'chat'),
                                 (browser_state, 'navigation', 'browser')):
         original = getattr(module, name)
         def observed(*args, _original=original, _label=label, **kwargs):
@@ -302,6 +310,7 @@ async def test_session_streams_share_duplicate_projection_and_keep_private_draft
     assert first['sessions'][0]['draft'] == 'Private 0'
     assert other['sessions'][0]['draft'] == 'Other private draft'
     app.state['sessions'] = [row for row in app.state['sessions'] if row['id'] != sid]
+    app.forget_session_records({sid})
     app._publish()
     assert all(queue.get_nowait()['sessions'] == [] for queue in queues)
 
@@ -442,11 +451,11 @@ async def test_shared_session_index_refreshes_messages_and_busy_offpage_rows(app
 async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_rows(app_factory, monkeypatch):
     app, rows = fixture(app_factory)
     builds = []
-    original = chat_navigation.catalog
+    original = app.directory.chats
     def counted(*args, **kwargs):
         builds.append(1)
         return original(*args, **kwargs)
-    monkeypatch.setattr(chat_navigation, 'catalog', counted)
+    monkeypatch.setattr(app.directory, 'chats', counted)
     with app.clients.bind('client-0'):
         first = app.browser_state()
         builds.clear()

@@ -11,6 +11,29 @@ import uuid
 
 PARTS={'runtime':['runtime'],'cache':['foundation/cache','updates/releases','updates/active.json'],'settings':['config','routing','bundles'],'conversations':['sessions']}
 
+
+def bulk_sessions(service, *, include_native=False):
+    """Explicit backup/reset/cleanup scope, independent of the resident set.
+
+    Normal navigation must use the directory's bounded queries instead. These
+    user-requested bulk operations need all local owners, including their cold
+    presentation references, without admitting them or starting any runtime.
+    Untouched native history is excluded from private backup scope.
+    """
+    from .state_records import load
+    from .session_projection import hydrate
+    durable = load(service.db) or {'sessions': []}
+    context = {'sessions': durable.get('sessions', [])}
+    hydrate(service.data_dir, context, service.db)
+    rows = {row['id']: row for row in context['sessions']}
+    if include_native:
+        for row in service.directory.select(limit=-1):
+            rows.setdefault(row['id'], row)
+    # Active owners may have changes that have not been published yet.
+    rows.update((row['id'], row) for row in service.state['sessions'])
+    return list(rows.values())
+
+
 def _backup_files(data_dir, session_paths, publishing=None, publishing_captures=()):
     folder=data_dir/'backups'/uuid.uuid4().hex
     folder.mkdir(parents=True,mode=0o700)
@@ -85,7 +108,9 @@ async def backup(service, *, publishing_locked=False):
             from .shared_settings import settings_paths
             from .session_files import amplifier_home
             paths={(amplifier_home()/name,'shared-config/'+name) for name in ('settings.yaml','keys.env','routing','bundles')}
-            workspaces={service.default_workspace,*[s['workspace'] for s in service.state['sessions'] if not s.get('historyManaged') and s.get('workspace')]}
+            sessions=[s for s in bulk_sessions(service)
+                      if not s.get('historyManaged') and s.get('workspace')]
+            workspaces={service.default_workspace,*[s['workspace'] for s in sessions]}
             from .session_files import project_slug
             for workspace in workspaces:
                 for scope,path in settings_paths(workspace).items():
@@ -104,8 +129,6 @@ async def backup(service, *, publishing_locked=False):
                     paths.add((capture,'relocated-captures/'+path.parent.parent.name+'/sessions/'+identity+'/context-intelligence'))
             # The rebuildable navigation index can describe thousands of CLI
             # sessions. Only sessions used by this app expand the backup scope.
-            sessions=[s for s in service.state['sessions']
-                      if not s.get('historyManaged') and s.get('workspace')]
             for session in sessions:
                 include(session['workspace'],session.get('runtimeSessionId') or session['id'])
                 for worker in session.get('workers',[]):
@@ -139,7 +162,7 @@ async def _reset(manager,args):
         await manager.publish(maintenance={'resetPreview':{'parts':parts,'paths':targets},'detail':'Reset only affects this app’s data. A private backup and retained originals are created before applying.'})
         return
     if args.get('confirmation')!='RESET':raise ValueError('Type RESET to apply the selected reset')
-    if 'conversations' in parts and any(service.publishing.owns_records(row['id']) for row in service.state['sessions']):
+    if 'conversations' in parts and any(service.publishing.owns_records(row['id']) for row in bulk_sessions(service)):
         raise ValueError('Conversations own retained publishing releases and receipts. Archive them to preserve publishing controls and ownership.')
     from .runtime_retention import DEFAULT_RETENTION
     async with service.runtime_lifecycle():
@@ -159,6 +182,7 @@ async def _reset(manager,args):
                 if setup:await setup.close();setattr(manager,key,None)
             result=await backup(service, publishing_locked=True)
             async with service.lock:
+                sessions=bulk_sessions(service, include_native=True) if 'conversations' in parts else []
                 retained=service.data_dir/'backups'/('reset-'+uuid.uuid4().hex)
                 retained.mkdir(mode=0o700)
                 for name in targets:
@@ -168,8 +192,9 @@ async def _reset(manager,args):
                         target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
                         shutil.move(str(path),str(target))
                 if 'conversations' in parts:
-                    for session in service.state['sessions']:
+                    for session in sessions:
                         service.history.hide_session(session)
+                    service.forget_session_records(row['id'] for row in sessions)
                     service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
                     service.db.execute('DELETE FROM commands')
                 if 'settings' in parts:
@@ -179,6 +204,8 @@ async def _reset(manager,args):
                     service._refresh_shared_preferences()
                     service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
                     service.state['notificationSettings']=manager.notifications.public()
+                    # Dormant owners have no mounted runtime to retire; their
+                    # next start reads the reset settings normally.
                     for session in service.state['sessions']:
                         if not session.get('historyManaged'):session['configurationPending']=True
                 if 'cache' in parts:

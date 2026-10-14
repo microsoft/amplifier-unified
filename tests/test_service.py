@@ -503,11 +503,14 @@ async def test_settings_navigation_and_filters_are_agent_visible(service):
 
 
 async def test_attention_acknowledgement_is_shared_and_changed_items_reappear(service):
+    cached = service.projections.attention(service.state)
+    assert cached['items'] == []
     row={'id':'repo','label':'Community bundle','status':'update','current':'old','latest':'new'}
     service.state['settings'].setdefault('updates',{})['autoInstall']=False
     service.state['updates']={'items':[row]}
     initial=service.get_state()['attention']
     assert initial['unread']==1
+    assert cached['items'] == []  # Acknowledgement must use current global facts.
     assert initial['sections']['maintenance']==initial['pages']['updates']==1
     await service.app_bridge('dispatch',{'action':'attention.read','args':{'ids':['source:repo']}},service.get_state()['selectedSessionId'])
     assert service.get_state()['attention']['unread']==0

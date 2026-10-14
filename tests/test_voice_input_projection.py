@@ -196,7 +196,7 @@ async def test_real_history_load_and_passive_read_share_voice_projection(tmp_pat
     native_session(tmp_path / 'cli', 'voice-history', native)
     app = app_factory()
     await app.history.refresh()
-    source = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'voice-history')
+    source = app._session('voice-history', hydrate=False)
     source.update(historyManaged=False, messages=[
         {'id': 'spoken', 'role': 'user', 'text': 'yes', 'via': 'call', 'voiceId': 'call-one',
          'voiceInputId': 'voice:call-one:delegation-one'}])

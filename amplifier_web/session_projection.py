@@ -134,7 +134,7 @@ def stored_execution(tree):
 
 
 def persist(home, state, cache, *, session_ids=None, by_id=None, references=None, scoped_result=False,
-            undo=None, db=None):
+            undo=None, db=None, retain_native=None):
     """SQLite keeps only the session list; presentation files change on demand."""
     from .automatic_history import INDEX_FIELDS
     result = dict(state)
@@ -163,6 +163,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             revision = session.get('nativeRevision') or [0]
             baseline = session.get('_catalogRecentAt', revision[0] / 1e9)
             customized = (session['id'] in retained or session['id'] != native_id
+                or retain_native is not None and retain_native(session)
                 or session.get('titleSource') not in {None, 'native'}
                 or bool(session.get('draftAttachments')) or bool(session.get('draft'))
                 or bool(session.get('messageAnnotations')) or bool(session.get('messageQuotes'))

@@ -125,15 +125,16 @@ async def test_attach_discovers_native_roots_and_children_without_import(app, tm
     before = transcript.read_bytes()
     await app.dispatch('workspace.add', {'path': str(folder)})
     await asyncio.gather(*list(app.tasks))
-    rows = [row for row in app.state['sessions'] if row.get('nativeIdentity') == native]
-    assert len(rows) == 1
+    discovered = app.directory.resolve(native, project_slug(folder))
+    assert discovered is not None and discovered['nativeIdentity'] == native
+    assert not app.state['sessions']  # Discovery does not admit dormant bodies.
     caller = app._new_session({'workspace': str(folder)}); app.state['sessions'].append(caller)
     result = await app.app_bridge('history', {'action': 'read', 'session_id': native}, caller['id'])
     assert result['session']['id'] == native
     assert result['session']['sessionRef']['nativeProject'] == project_slug(folder)
     assert result['messages'][0]['text'] == 'Original native text'
     selected = await app.dispatch('session.select', {'id': native, 'nativeProject': project_slug(folder)})
-    assert selected['state']['selectedSessionId'] == rows[0]['id']
+    assert selected['state']['selectedSessionId'] == discovered['id']
     assert transcript.read_bytes() == before
 
 
@@ -219,6 +220,13 @@ async def test_unavailable_native_store_keeps_index_and_reports_incomplete(app, 
     assert result['items'][0]['id'] == 'native-history'
     with pytest.raises(ValueError, match='unavailable'):
         await app.app_bridge('history', {'action': 'read', 'session_id': 'native-history'}, 'native-history')
+    (home / 'temporarily-unavailable').rename(home / 'projects')
+    for _ in range(10):
+        recovered = await app.app_bridge('history', {'action': 'list'}, 'native-history')
+        if recovered['complete']:
+            break
+    assert recovered['complete'] and not recovered['discovery']['issues']
+    assert recovered['items'][0]['id'] == 'native-history'
 
 
 async def test_replaying_plan_does_not_undo_a_later_workspace_rename(app):

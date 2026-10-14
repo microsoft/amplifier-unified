@@ -81,6 +81,10 @@ class Portability:
         if self.node.fenced(sid):
             return True
         session = next((row for row in self.app.state['sessions'] if row['id'] == sid), None)
+        if session is None and getattr(self.app, 'directory', None) is not None:
+            # Dormancy and hiding a workspace cannot remove a native transfer
+            # fence. This point lookup needs identity/placement metadata only.
+            session = self.app.directory.resolve(sid, include_hidden_workspaces=True)
         if session:
             workspace = session.get('workspace')
             if session.get('nativeProject') or not workspace or not Path(workspace).expanduser().is_dir():
@@ -357,7 +361,7 @@ class Portability:
         # A retry is a receipt read, even though native staging already exists.
         if self.node.path(body['id']).exists():
             return self.node.receive(envelope, args)
-        existing = next((s for s in self.app.state['sessions'] if s['id'] == body['sessionId']), None)
+        existing = self.app.directory.resolve(body['sessionId'])
         if existing and not self.node.fenced(body['sessionId']):
             raise ValueError('This destination already has a writable task with that identity')
         from .session_files import amplifier_home
@@ -523,7 +527,7 @@ class Portability:
             async with self.app.lock:
                 data.preflight_install(self.app, payload)
             from .session_files import project_slug
-            previous = next((s for s in self.app.state['sessions'] if s['id'] == row['sessionId']), {})
+            previous = self.app.worktrees.saved_owner(row['sessionId']) or {}
             session = {**copy.deepcopy(payload['session']), 'workspace': destination['workspace'],
                        'workingDirectory': destination['workspace'], 'runtimeSessionId': payload['nativeIdentity'],
                        'nativeIdentity': payload['nativeIdentity'], 'nativeProject': project_slug(destination['workspace']),

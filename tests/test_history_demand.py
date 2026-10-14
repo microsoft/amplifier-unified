@@ -78,7 +78,8 @@ async def test_event_reader_ignores_closed_clients_and_keeps_active_work(status)
     visited, complete = [], asyncio.Event()
     view = EventLogView(host)
 
-    async def observe(identity):
+    async def observe(identity, *, passive=False):
+        assert passive is True
         visited.append(identity)
         if identity == 'background-work':
             complete.set()
@@ -146,6 +147,7 @@ async def test_event_selection_observes_same_revision_saves_and_row_replacement(
     assert event_sessions(app) == [second['id']]
     assert app.projections.sessions(app.state) is not previous_index
     app.state['sessions'] = [first]
+    app.forget_session_records({second['id']})  # Membership removal, not residency eviction.
     app._state['selectedSessionId'] = second['id']  # Removed retained selection.
     app._save()
     assert event_sessions(app) == []
@@ -232,7 +234,7 @@ async def test_cancelled_initial_history_cannot_keep_projection_deferred(tmp_pat
     native_session(tmp_path / 'native-project', 'cancelled-root')
     app = app_factory()
     await app.history.refresh()
-    row = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'cancelled-root')
+    row = app._session('cancelled-root', hydrate=False)
     row.update(historyLoaded=False, historyLoading=False, workers=[], status='idle')
     app.state['selectedSessionId'] = row['id']
     entered, release, finished = asyncio.Event(), threading.Event(), asyncio.Event()
@@ -274,7 +276,7 @@ async def test_pending_initial_read_projects_once_after_messages_and_keeps_exact
     directory = native_session(tmp_path / 'native-project', 'deferred-root')
     app = app_factory()
     await app.history.refresh()
-    row = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'deferred-root')
+    row = app._session('deferred-root', hydrate=False)
     row.update(historyLoaded=False, historyLoading=False, workers=[], status='idle')
     receipt = {'id': 'model', 'kind': 'llm', 'sessionId': row['id'], 'rootSessionId': row['id'],
                'producerId': 'owned-worker', 'revision': 1, 'turnId': 'owned-turn',

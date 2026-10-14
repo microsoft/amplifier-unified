@@ -116,8 +116,12 @@ async def test_unchanged_history_check_reads_only_identity(app, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail('An unchanged history check must not hydrate/copy display payloads')
     monkeypatch.setattr('amplifier_web.automatic_history.revision', revision)
+    resolve = app._session
+    def metadata_only(identity, *, hydrate=True):
+        assert hydrate is False, 'An unchanged check may resolve metadata, never hydrate display'
+        return resolve(identity, hydrate=False)
     with monkeypatch.context() as patch:
-        patch.setattr(app, '_session', forbidden)
+        patch.setattr(app, '_session', metadata_only)
         patch.setattr(app.cold_display, 'hydrate', forbidden)
         patch.setattr(app, '_publish', forbidden)
         await app.history.refresh_session(row['id'])

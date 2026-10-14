@@ -73,6 +73,8 @@ def set_automatic(home, session, enabled):
             # Foundation's lock and existing atomic metadata writer are shared
             # with its name writer; no separate name store or transcript write.
             store.history._save_metadata_unlocked(current)
+            session['nativeNameRevision'] = current.get('name_revision', 0)
+            session['nativeNamePolicyRevision'] = current.get('name_policy_revision', 0)
     session['autoName'] = enabled
 
 
@@ -162,6 +164,8 @@ def refresh(home, session, *, migrate=False):
     directory = directory_for(home, session)
     metadata = adopt(directory, session) if migrate else SessionMetadataStore(directory).read()
     if metadata.get('name'):
+        session['nativeNameRevision'] = metadata.get('name_revision', 0)
+        session['nativeNamePolicyRevision'] = metadata.get('name_policy_revision', 0)
         source = metadata.get('name_source', 'manual')
         display_source = ('manual' if session.get('titleSource') == 'manual' else 'native') if session.get('historyManaged') else source
         session.update(title=metadata['name'], titleSource=display_source, nativeNameSource=source)

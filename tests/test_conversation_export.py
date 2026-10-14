@@ -28,7 +28,7 @@ async def test_native_unloaded_export_is_complete_read_only_and_excludes_private
     before = files_snapshot(root)
     app = app_factory()
     await app.history.refresh()
-    source = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'native-export')
+    source = app._session('native-export', hydrate=False)
     assert source['messages'] == []
     result = await app.dispatch('session.export', {'id': source['id'], 'format': 'markdown', 'destination': 'none'})
     value = exported(app, result)
@@ -45,7 +45,7 @@ async def test_native_paged_export_keeps_exact_code_voice_and_artifact_reference
     root = native_session(tmp_path / 'cli', 'paged-export', rows)
     app = app_factory()
     await app.history.refresh()
-    source = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'paged-export')
+    source = app._session('paged-export', hydrate=False)
     await app.history.load(source['id'])
     assert source['sharedHistoryOffset'] == 40 and len(source['messages']) == 100
     source['messages'] += [{'id': 'voice-1', 'role': 'user', 'text': 'A spoken follow-up', 'via': 'call', 'voiceId': 'call-1'},
@@ -91,7 +91,7 @@ async def test_agent_and_ui_share_immutable_snapshot_and_json_compatibility(tmp_
 async def test_export_rejects_missing_corrupt_or_rewritten_native_history(tmp_path, app_factory):
     root = native_session(tmp_path / 'cli', 'broken-export')
     app = app_factory(); await app.history.refresh()
-    source = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'broken-export')
+    source = app._session('broken-export', hydrate=False)
     await app.history.load(source['id'])
     (root / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'Rewritten question'}) + '\n')
     with pytest.raises(AppError, match='rewritten'):
@@ -197,7 +197,7 @@ async def test_changed_during_read_is_rejected_without_publishing_snapshot(tmp_p
     from amplifier_web.conversation_export import SessionHistoryStore
     root = native_session(tmp_path / 'cli', 'changing-export')
     app = app_factory(); await app.history.refresh()
-    source = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'changing-export')
+    source = app._session('changing-export', hydrate=False)
     original = SessionHistoryStore.load
     def changed(self, **kwargs):
         result = original(self, **kwargs)
@@ -286,7 +286,7 @@ async def test_range_across_paged_native_history_and_voice_is_complete(app_facto
     rows = [{'role': 'user', 'content': f'Native {i}'} for i in range(140)]
     native_session(tmp_path / 'cli', 'range-native', rows)
     app = app_factory(); await app.history.refresh()
-    source = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'range-native')
+    source = app._session('range-native', hydrate=False)
     await app.history.load(source['id'])
     source['messages'].append({'id': 'voice-range', 'role': 'assistant', 'text': 'Spoken ending', 'via': 'call', 'voiceId': 'call'})
     first = display_message(rows[1], 1, source)['id']

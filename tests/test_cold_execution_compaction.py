@@ -91,7 +91,8 @@ async def test_restart_migrates_old_blob_and_rebuilds_display_without_changing_l
     original_logs = {path: path.read_bytes() for path in paths}
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
-        current = next(v for v in restored._state['sessions'] if v['id'] == identity)
+        assert all(v['id'] != identity for v in restored._state['sessions'])
+        current = restored._session(identity, hydrate=False)
         ref = dict.get(current, '_coldFields')['execution']
         assert ref['executionProjection'] == 1 and ref['$resource'] != old['$resource']
         assert not dict.__contains__(current, 'execution')
@@ -101,6 +102,11 @@ async def test_restart_migrates_old_blob_and_rebuilds_display_without_changing_l
         assert any(n.get('requestDetail') for n in current['execution']['nodes'])
         assert all(path.read_bytes() == text for path, text in original_logs.items())
         assert current['messages'][0]['text'] == 'retain conversation'
+        from amplifier_web.storage_migration import _maintenance_async
+        maintenance = getattr(restored, '_storage_maintenance_task', None)
+        if maintenance is not None:
+            await maintenance
+        await _maintenance_async(restored)
         assert not (root(restored.db) / (old['$resource'] + '.json')).exists()
     finally:
         await restored.close()

@@ -96,20 +96,26 @@ def owned_nodes(session):
             owner['ancestors'] = [*prior.get('ancestors', []), {k: v for k, v in prior.items() if k != 'ancestors'}]
         headers[worker['id']] = owner
         return owner
-    result = []
-    for row in nodes:
-        worker = workers_by_id.get(row.get('exchangeOwnerId') or row.get('parentId')) or workers.get(row.get('sessionId'))
-        if worker and row.get('kind') != 'worker':
-            result.append({**row, 'delegate': header(worker),
-                           **({'exchange': exchange_for(row)} if row.get('exchangeOwnerId') else {})})
-        elif row.get('kind') == 'worker':
-            result.append({**row, **header(row)})
-        elif row.get('kind') == 'tool' and tool_name(row) == 'delegate':
-            # Requests that fail before spawning a worker still have an exchange.
-            result.append({**row, 'exchange': exchange_for(row)})
-        else:
-            result.append(row)
-    return result
+    try:
+        result = []
+        for row in nodes:
+            worker = workers_by_id.get(row.get('exchangeOwnerId') or row.get('parentId')) or workers.get(row.get('sessionId'))
+            if worker and row.get('kind') != 'worker':
+                result.append({**row, 'delegate': header(worker),
+                               **({'exchange': exchange_for(row)} if row.get('exchangeOwnerId') else {})})
+            elif row.get('kind') == 'worker':
+                result.append({**row, **header(row)})
+            elif row.get('kind') == 'tool' and tool_name(row) == 'delegate':
+                # Requests that fail before spawning a worker still have an exchange.
+                result.append({**row, 'exchange': exchange_for(row)})
+            else:
+                result.append(row)
+        return result
+    finally:
+        # The recursive closure otherwise retains session until cyclic GC,
+        # preventing prompt retirement of an unborrowed history owner.
+        header = None
+
 
 
 def work_segments(session, nodes=None, *, select_groups=None):
