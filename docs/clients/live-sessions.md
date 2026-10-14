@@ -31,6 +31,13 @@ start with the same view but diverge independently. Saved client drafts are
 retained in the app database, including when no stream is connected. Client IDs
 are presentation identities, not credentials or security boundaries.
 
+The bundled browser loads older conversation pages only for an explicit page
+action or current scrolling input toward older history. Restored reading
+positions, focus, layout changes and browser anchoring do not request additional
+pages. Leaving the selected chat or returning to its latest window aborts pending
+history reads and discards their late results. That releases reader interest;
+it never cancels an accepted history-expansion or execution command.
+
 ## Authentication and attachment
 
 Use the host's existing authenticated browser cookie or control bearer token.

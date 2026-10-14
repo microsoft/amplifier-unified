@@ -99,6 +99,9 @@ plan/runner hashes and build-metadata digest are retained with the run/attempt.
 These are observations for that exact source, not reusable release receipts.
 Fixtures must continue owning their synthetic state and cleaning resources;
 runner process cleanup does not authorize access to real/shared installations.
+Each scenario records existing PID/start-time pairs before launch. Unchanged
+pre-existing processes are outside its inherited-token ownership; unreadable
+new or reused identities still stop cleanup rather than being assumed unrelated.
 
 Do not infer complete history from DOM Work-group counts. The reusable
 `scripts/browser_dom_recorder.js` probe reports grouped headers and standalone

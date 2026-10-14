@@ -240,6 +240,10 @@ class HistoryDirectory:
     def navigation_revision(self):
         return self.observation_revision['navigation']
 
+    @property
+    def workspace_revision(self):
+        return self.observation_revision['workspace']
+
     def changed(self, revision=None):
         self._native_revision = revision
 

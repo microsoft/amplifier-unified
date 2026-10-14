@@ -2,8 +2,10 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
+import signal
 import sys
 import subprocess
 import shutil
@@ -53,7 +55,7 @@ def test_owned_orphan_is_reaped_and_reported_before_next_check(tmp_path, detache
 
 
 def test_uncertain_cleanup_stops_and_records_unrun_without_false_cascade(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, 'retire_group', lambda group, token: {'remaining': [123], 'terminated': 1})
+    monkeypatch.setattr(runner, 'retire_group', lambda group, token, preexisting: {'remaining': [123], 'terminated': 1})
     code, report, _ = execute(tmp_path, [scenario('first', 'pass'), scenario('must-not-run', 'raise Exception("not reached")')])
     assert code == 1 and not report['complete']
     assert report['scenarios'][1]['status'] == 'unrun'
@@ -88,6 +90,79 @@ def test_cleanup_does_not_signal_an_unrelated_live_process(tmp_path):
     finally:
         unrelated.terminate()
         unrelated.wait(timeout=2)
+
+
+def test_preexisting_unreadable_process_does_not_block_independent_checks(tmp_path, monkeypatch):
+    unrelated = subprocess.Popen([sys.executable, '-c',
+        'import ctypes,time;ctypes.CDLL(None).prctl(4,0,0,0,0);print("ready",flush=True);time.sleep(60)'],
+        stdout=subprocess.PIPE, start_new_session=True)
+    try:
+        assert unrelated.stdout.readline() == b'ready\n'
+        path = Path('/proc') / str(unrelated.pid) / 'environ'
+        original_open = Path.open
+        attempted = []
+        def protected(self, *args, **kwargs):
+            if self == path:
+                attempted.append(True)
+                raise PermissionError('Unrelated protected process')
+            return original_open(self, *args, **kwargs)
+        # Kernel restrictions vary with container capabilities. This preserves
+        # the real process/start identity while making the denial deterministic.
+        monkeypatch.setattr(Path, 'open', protected)
+        code, report, _ = execute(tmp_path, [scenario('first', 'pass'), scenario('last', 'pass')])
+        assert code == 0 and report['passed'] and report['complete']
+        assert not attempted and unrelated.poll() is None
+        assert all(row['cleanup'] == {'remaining': [], 'terminated': 0} for row in report['scenarios'])
+    finally:
+        unrelated.terminate()
+        unrelated.wait(timeout=2)
+
+
+def test_new_unreadable_identity_is_not_exempt_and_stops_coverage(tmp_path, monkeypatch):
+    ready = tmp_path / 'owned.pid'
+    source = ('import subprocess,sys,json;from pathlib import Path;'
+              'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],start_new_session=True);'
+              'birth=Path(f"/proc/{p.pid}/stat").read_text().rsplit(")",1)[1].split()[19];'
+              f'Path({str(ready)!r}).write_text(json.dumps({{"pid":p.pid,"birth":birth}}))')
+    original_open = Path.open
+    def protected(self, *args, **kwargs):
+        if self.name == 'environ' and ready.exists() and self.parent.name == str(json.loads(ready.read_text())['pid']):
+            raise PermissionError('New potentially owned process')
+        return original_open(self, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', protected)
+    try:
+        code, report, _ = execute(tmp_path, [scenario('new-protected', source), scenario('not-run', 'pass')])
+        assert code == 1 and not report['complete']
+        assert report['scenarios'][0]['cleanup']['remaining'] == ['unknown']
+        assert report['scenarios'][1]['reason'] == 'unsafe_cleanup'
+    finally:
+        if ready.exists():
+            # Test owns this exact child; the runner correctly refused to infer
+            # its ownership from an unreadable environment.
+            child = json.loads(ready.read_text())
+            handle = os.pidfd_open(child['pid'])
+            try:
+                birth = Path(f'/proc/{child["pid"]}/stat').read_text().rsplit(')', 1)[1].split()[19]
+                assert birth == child['birth']
+                signal.pidfd_send_signal(handle, signal.SIGKILL)
+            finally:
+                os.close(handle)
+
+
+def test_reused_pid_requires_fresh_proof_but_known_owner_precedes_baseline(monkeypatch):
+    own = Path('/proc') / str(os.getpid())
+    birth = (own / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+    original_open = Path.open
+    def protected(self, *args, **kwargs):
+        if self == own / 'environ':
+            raise PermissionError('Reused PID must be inspected')
+        return original_open(self, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', protected)
+    baseline = runner.process_identities()
+    baseline[os.getpid()] = str(int(birth) - 1)
+    with pytest.raises(PermissionError):
+        runner.owned_members(-1, 'unused', {}, baseline)
+    assert runner.owned_members(-1, 'unused', {os.getpid(): birth}, baseline)[os.getpid()] == birth
 
 
 def test_budget_never_claims_unexecuted_checks_passed(tmp_path):

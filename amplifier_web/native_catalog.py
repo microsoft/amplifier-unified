@@ -90,6 +90,8 @@ class NativeCatalog:
             ''')
             if 'navigation' not in {column[1] for column in db.execute('PRAGMA table_info(native_revisions)')}:
                 db.execute('ALTER TABLE native_revisions ADD COLUMN navigation INTEGER NOT NULL DEFAULT 0')
+            if 'workspace' not in {column[1] for column in db.execute('PRAGMA table_info(native_revisions)')}:
+                db.execute('ALTER TABLE native_revisions ADD COLUMN workspace INTEGER NOT NULL DEFAULT 0')
             db.execute('INSERT OR IGNORE INTO native_revisions(namespace) VALUES(?)', (self.namespace,))
             row = db.execute('SELECT version FROM native_cache_version').fetchone()
             if row is None:
@@ -395,7 +397,7 @@ class NativeCatalog:
         """Commit only changed metadata; no transcript, event or app view bodies."""
         changed, removed = [], []
         reasons = Counter()
-        revision = observation = membership = navigation = False
+        revision = observation = membership = navigation = workspace_changed = False
         with self.connect() as db:
             for name in previous.keys() - projects.keys():
                 self._check_running()
@@ -405,6 +407,7 @@ class NativeCatalog:
                 deleted = db.execute('DELETE FROM native_rows WHERE namespace=? AND project=?', (self.namespace, name))
                 if deleted.rowcount:
                     observation = membership = navigation = True
+                    workspace_changed = True
                 reasons['project.remove.occupied' if deleted.rowcount else 'project.remove.empty'] += 1
                 db.execute('DELETE FROM native_projects WHERE namespace=? AND project=?', (self.namespace, name))
                 db.execute('DELETE FROM native_recovery_seen WHERE namespace=? AND token IN '
@@ -436,6 +439,7 @@ class NativeCatalog:
                     reasons['project.' + ('add' if old is None else 'change') +
                             ('.occupied' if occupied else '.empty')] += 1
                     navigation |= occupied
+                    workspace_changed |= occupied
                     if occupied and (old is None or any(old['workspace'].get(key) != project['workspace'].get(key)
                                           for key in ('id', 'path'))):
                         observation = membership = True
@@ -449,6 +453,7 @@ class NativeCatalog:
                                          (self.namespace, name, identity))
                     if deleted.rowcount:
                         observation = membership = navigation = True
+                        workspace_changed = True
                     reasons['row.remove' if deleted.rowcount else 'row.absent'] += 1
                     # A repeated absence can still repair a caller's stale
                     # projection, but cannot change committed session facts.
@@ -462,6 +467,13 @@ class NativeCatalog:
                         membership |= prior is None or any(row.get(key) != prior.get(key) for key in MEMBERSHIP_FIELDS)
                         observation |= prior is None or any(row.get(key) != prior.get(key) for key in OBSERVATION_FIELDS)
                         navigation |= prior is None or any(row.get(key) != prior.get(key) for key in NAVIGATION_FIELDS)
+                        # Titles and child progress never change workspace totals.
+                        # Membership changes remain conservative: duplicate native
+                        # IDs can alter the public owner used by suppression/read.
+                        workspace_changed |= (prior is None or
+                            any(row.get(key) != prior.get(key) for key in MEMBERSHIP_FIELDS) or
+                            row.get('sessionKind', 'root') == 'root' and
+                            row.get('recentActivityAt') != prior.get('recentActivityAt'))
                         columns = ','.join(('namespace', 'project', 'identity', 'value', *SCALAR_COLUMNS))
                         values = (self.namespace, name, identity, json.dumps(row), *row_scalars(row, project['workspace']))
                         db.execute('INSERT OR REPLACE INTO native_rows (' + columns + ') VALUES(' + ','.join('?' for _ in values) + ')', values)
@@ -487,8 +499,8 @@ class NativeCatalog:
                     db.execute('INSERT OR REPLACE INTO native_file_sources VALUES(?,?,?,?)',
                                (self.namespace, str(path), json.dumps(signature), int(valid)))
             if revision:
-                db.execute('UPDATE native_revisions SET revision=revision+1,observation_sessions=observation_sessions+?,observation_membership=observation_membership+?,navigation=navigation+? WHERE namespace=?',
-                           (int(observation), int(membership), int(navigation), self.namespace))
+                db.execute('UPDATE native_revisions SET revision=revision+1,observation_sessions=observation_sessions+?,observation_membership=observation_membership+?,navigation=navigation+?,workspace=workspace+? WHERE namespace=?',
+                           (int(observation), int(membership), int(navigation), int(workspace_changed), self.namespace))
         # The connection context committed successfully. Fixed categories only:
         # never record an identity/path/value, and never count rolled-back work.
         if self.diagnostics is not None:

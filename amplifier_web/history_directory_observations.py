@@ -6,7 +6,11 @@ journal; global pins/read receipts join indexed identities and fingerprints.
 import hashlib
 import json
 
-COLLECTIONS = ('sessions', 'attention', 'activity', 'navigation')
+COLLECTIONS = ('sessions', 'attention', 'activity', 'navigation', 'workspace')
+NAVIGATION_FIELDS = ('id','title','description','status','workspace','workspaceId','location',
+    'titleSource','nativeNameSource','autoName','naming','configurationBusy',
+    'runtimeSessionId','nativeIdentity','createdAt','sessionKind','parentId',
+    'nativeParentId','historyManaged','workspaceAvailable','nativeAvailable')
 
 
 def initialize(db):
@@ -14,6 +18,10 @@ def initialize(db):
                '(id TEXT PRIMARY KEY,sessions TEXT,attention TEXT,activity TEXT,navigation TEXT)')
     if 'navigation' not in {row[1] for row in db.execute('PRAGMA table_info(history_observation_rows)')}:
         db.execute('ALTER TABLE history_observation_rows ADD COLUMN navigation TEXT')
+    if 'workspace' not in {row[1] for row in db.execute('PRAGMA table_info(history_observation_rows)')}:
+        # Old rows derive this small fact from their existing public facts on a
+        # keyed read. No upgrade-wide summary/body decode or rewrite is needed.
+        db.execute('ALTER TABLE history_observation_rows ADD COLUMN workspace TEXT')
     db.execute('CREATE TABLE IF NOT EXISTS history_observation_revisions '
                '(collection TEXT PRIMARY KEY,revision INTEGER NOT NULL)')
     db.executemany('INSERT OR IGNORE INTO history_observation_revisions VALUES(?,0)',
@@ -24,25 +32,46 @@ def encoded(value):
     return json.dumps(value,sort_keys=True,separators=(',',':'))
 
 
+def workspace_part(session, workspace, notices, navigation, native_project=None):
+    fields, _, recent, activity = navigation
+    row = dict(zip(NAVIGATION_FIELDS, fields))
+    from .session_identity import native_id, project
+    membership = [session['id'], session['role'], native_id(row),
+                  project({**row, 'nativeProject': native_project}),
+                  bool(row.get('historyManaged'))]
+    return encoded([membership, [workspace, row.get('workspaceId'), recent, activity,
+        [(item['id'], item['fingerprint']) for item in notices]] if session['role'] == 'root' else None])
+
+
+def complete(directory, saved, identity):
+    if saved is None:
+        return None
+    if saved[4] is not None:
+        return tuple(saved)
+    if saved[3] is None:
+        return (*saved[:4], encoded(saved[:4]))
+    session, workspace = json.loads(saved[0])
+    _, notices = json.loads(saved[1])
+    owner = directory.db.execute('SELECT native_project FROM history_local_rows WHERE id=?', (identity,)).fetchone()
+    return (*saved[:4], workspace_part(session, workspace, notices, json.loads(saved[3]), owner[0] if owner else None))
+
+
 def parts(row, *, blocked=False):
     from .client_observations import Observations
     facts = Observations.row_facts(None,row,{},frozenset())
     session,workspace,notices = facts
     from .chat_navigation import navigation_activity, timestamp
     from .navigation_summary import activity
-    fields = ('id','title','description','status','workspace','workspaceId','location',
-              'titleSource','nativeNameSource','autoName','naming','configurationBusy',
-              'runtimeSessionId','nativeIdentity','createdAt','sessionKind','parentId',
-              'nativeParentId','historyManaged','workspaceAvailable','nativeAvailable')
     defaults = {'description':'','status':'idle','sessionKind':
                 'internal' if session['role']=='internal' else 'root' if session['role']=='root' else 'worker'}
     navigation = ([bool(row.get(key,True)) if key=='workspaceAvailable' else
                    timestamp(row.get(key)) if key=='createdAt' and row.get(key) is not None else
                    row.get(key) if row.get(key) is not None else defaults.get(key)
-                   for key in fields],session['agentCreated'],
+                   for key in NAVIGATION_FIELDS],session['agentCreated'],
                   navigation_activity(row),activity(row,False,blocked=blocked))
-    return tuple(encoded(value) for value in ((session,workspace),
-        (session['role'],notices),Observations.count_facts(facts),navigation))
+    return (*tuple(encoded(value) for value in ((session,workspace),
+        (session['role'],notices),Observations.count_facts(facts),navigation)),
+        workspace_part(session, workspace, notices, navigation, row.get('nativeProject')))
 
 
 def native_parts(directory, row):
@@ -50,30 +79,34 @@ def native_parts(directory, row):
     if not directory._native_path:
         return None
     from .session_identity import native_id, project
-    saved = directory.db.execute('SELECT identity,project,public_id,kind,title,workspace_path '
+    saved = directory.db.execute('SELECT identity,project,public_id,kind,title,workspace_path,workspace_id,recent,parent_id '
         'FROM history_native.native_rows WHERE namespace=? AND project=? AND identity=?',
         (directory._native_namespace,project(row),native_id(row))).fetchone()
     if saved is None:
         return None
-    identity,project_id,public,kind,title,workspace = saved
+    identity,project_id,public,kind,title,workspace,workspace_id,recent,parent = saved
     duplicated = directory.db.execute('SELECT COUNT(*) FROM history_native.native_rows '
         'WHERE namespace=? AND identity=?',(directory._native_namespace,identity)).fetchone()[0]>1
     effective_id = public if duplicated else identity
     if row['id'] != effective_id:
         return None
-    return parts({'id':effective_id,'title':title,'sessionKind':kind,'status':'idle','workspace':workspace})
+    baseline = {'id':effective_id,'title':title,'sessionKind':kind,'status':'idle','workspace':workspace}
+    return (*parts(baseline)[:4], parts({**baseline, 'workspaceId': workspace_id,
+        'nativeIdentity': identity, 'nativeProject': project_id, 'historyManaged': True,
+        'parentId': parent, 'nativeParentId': parent,
+        'recentActivityAt': recent})[4])
 
 
 def saved_parts(directory,row):
-    saved = directory.db.execute('SELECT sessions,attention,activity,navigation FROM history_observation_rows WHERE id=?',
+    saved = directory.db.execute('SELECT sessions,attention,activity,navigation,workspace FROM history_observation_rows WHERE id=?',
                                   (row['id'],)).fetchone()
-    return tuple(saved) if saved else native_parts(directory,row)
+    return complete(directory, saved, row['id']) if saved else native_parts(directory,row)
 
 
 def sync(directory,row,prior_summary_or_none=None,state=None,*,deleted=False):
     identity = row if isinstance(row,str) else row['id']
-    previous = directory.db.execute('SELECT sessions,attention,activity,navigation FROM history_observation_rows WHERE id=?',
-                                     (identity,)).fetchone()
+    previous = complete(directory, directory.db.execute('SELECT sessions,attention,activity,navigation,workspace FROM history_observation_rows WHERE id=?',
+                                     (identity,)).fetchone(), identity)
     if previous is None and not isinstance(row,str):
         previous = native_parts(directory,row)
     from .navigation_summary import task_blocked
@@ -87,7 +120,7 @@ def sync(directory,row,prior_summary_or_none=None,state=None,*,deleted=False):
     if deleted:
         directory.db.execute('DELETE FROM history_observation_rows WHERE id=?',(identity,))
     else:
-        directory.db.execute('INSERT OR REPLACE INTO history_observation_rows VALUES(?,?,?,?,?)',
+        directory.db.execute('INSERT OR REPLACE INTO history_observation_rows VALUES(?,?,?,?,?,?)',
                              (identity,*current))
     for index,key in enumerate(COLLECTIONS):
         if (previous[index] if previous else None)!=(current[index] if current else None):
@@ -98,7 +131,7 @@ def digest(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
 
 
-def visible_ids(directory, state, identities, *, notices=False):
+def visible_ids(directory, state, identities, *, notices=False, roots=False):
     """Resolve only requested public owners, retaining canonical suppression."""
     from .history_directory import PUBLIC_ID_BATCH
     identities = sorted(set(identities))
@@ -106,7 +139,8 @@ def visible_ids(directory, state, identities, *, notices=False):
     for start in range(0, len(identities), PUBLIC_ID_BATCH):
         sql, params = directory.effective(state, public_ids=identities[start:start + PUBLIC_ID_BATCH])
         result.update(row[0] for row in directory.db.execute(sql +
-            " SELECT id FROM directory_rows" + (" WHERE session_kind!='internal'" if notices else ''), params))
+            " SELECT id FROM directory_rows" + (" WHERE session_kind='root'" if roots else
+                " WHERE session_kind!='internal'" if notices else ''), params))
     return result
 
 
@@ -114,9 +148,9 @@ def revision(directory,state):
     # effective freezes each admitted row once; a snapshot uses its already
     # frozen overlay and pinned DB views, never mutable service state.
     sql,params = directory.effective(state)
-    native = (0,0,0)
+    native = (0,0,0,0)
     if directory._native_path:
-        saved = directory.db.execute('SELECT observation_sessions,observation_membership,navigation '
+        saved = directory.db.execute('SELECT observation_sessions,observation_membership,navigation,workspace '
             'FROM history_native.native_revisions WHERE namespace=?',(directory._native_namespace,)).fetchone()
         native = tuple(saved) if saved else native
     local = dict(directory.db.execute('SELECT collection,revision FROM history_observation_revisions'))
@@ -167,13 +201,15 @@ def revision(directory,state):
     if read:
         owners = visible_ids(directory, state, (row[0] for row in read), notices=True)
         read = [row for row in read if row[0] in owners]
+    root_read_owners = visible_ids(directory, state, (row[0] for row in read), roots=True) if read else set()
+    workspace_read = [row for row in read if row[0] in root_read_owners]
     from .managed_deletion import tombstones
     suppression = digest([sorted(set(state.get('hiddenNativeSessions',[]))),
                           sorted(set(state.get('hiddenNativeWorkspaces',[]))),
                           sorted(encoded((row.get('id'),row.get('project'),sorted(row.get('ids') or [])))
                                  for row in tombstones(directory.db))])
-    result = {key:(directory._native_namespace,native[2 if key=='navigation' else 0 if key=='sessions' else 1],local.get(key,0),
-                 digest(sorted(overlays[key])),digest(pins if key=='sessions' else read),suppression)
+    result = {key:(directory._native_namespace,native[3 if key=='workspace' else 2 if key=='navigation' else 0 if key=='sessions' else 1],local.get(key,0),
+                 digest(sorted(overlays[key])),digest(pins if key=='sessions' else workspace_read if key=='workspace' else read),suppression)
             for key in COLLECTIONS}
     # Never remember uncommitted mutable facts: rollback followed by another
     # transaction may reuse the same numeric generation for different content.
