@@ -115,7 +115,12 @@ graph once and inspects at most 128 artifact-directory entries per sweep, retain
 a scan cursor. It removes only unindexed hash files and abandoned atomic-writer
 temporary files. Missing retained resources or uncertain presentation recovery
 block cleanup. A complete graph walk remains part of periodic GC; this is not a
-claim that all GC work fits a fixed time budget.
+claim that all GC work fits a fixed time budget. The expensive immutable-resource
+walk runs without the application lock or a SQLite writer transaction. The
+collector reacquires those boundaries and rechecks the complete root set and
+all source-index bindings before pruning. Any change, missing body, uncertainty
+or cancellation defers deletion; navigation need not wait for body traversal.
+Confirmed deletion keeps its separate writer-excluded reconciliation protocol.
 
 Deletion preview remains read-only. The confirmed path reconciles unindexed
 files under writer exclusion before reporting file cleanup complete, yielding

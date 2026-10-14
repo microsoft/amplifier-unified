@@ -2,6 +2,22 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.130",
+      "title": "Faster chat navigation and background maintenance",
+      "changes": [
+        "Opening a chat from its workspace immediately shows the chat loading view. Reasoning-effort changes stay selected when background updates arrive during a slider gesture.",
+        "Workspace plan summaries read root plan receipts without rebuilding child histories or the full execution view. Changing transcripts get one fresh read attempt, and one failed chat read no longer discards every other chat\u2019s event index.",
+        "Background storage cleanup releases the app lock while reading resource bodies and revalidates reachability before deleting anything. Raw model recordings are formatted when opened, preserving access to the exact recorded request and response.",
+        "Disabled-budget model admission avoids building an unused historical usage report. Tool-result updates reuse unchanged usage totals; admission receipts and enabled-budget checks remain enforced.",
+        "An optional, per-window Appearance setting folds interim replies after a proven final response. Final text, media, exports and message identities stay available.",
+        "A newer human message invalidates a schedule-repair authorization at both due time and final admission.",
+        "Resource reservations retain authenticated ownership and durable outcomes. Independent repository copies preserve original changes and each chat\u2019s selected execution location.",
+        "Workspace awareness exposes bounded active-work summaries and advisory file declarations through shared client/server operations; declarations do not reserve files or grant access.",
+        "Post-release checks use their declared runtime dependencies and updated fixtures. Broad verification continues after publication."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.129",
       "title": "Faster chat controls and clearer navigation",
       "changes": [

@@ -353,7 +353,10 @@ def read_text(session, args):
             from .delegate_exchange import field_value, observation_response
             text = observation_response(row) if part == 'messages' and field == 'delegateResponse' else field_value(row, field)
     if not isinstance(text,str):raise ValueError('This detail is no longer available.')
-    if digest(text)!=args.get('digest'):raise ValueError('This detail changed. Refresh this conversation to load the current version.')
+    from .event_log_view import event_field_digest
+    detail = row.get(field + 'Detail', {}) if row else {}
+    expected = event_field_digest(reference) if reference and detail.get('digestKind') == 'event-field-v1' else digest(text)
+    if expected != args.get('digest') and digest(text) != args.get('digest'):raise ValueError('This detail changed. Refresh this conversation to load the current version.')
     offset=int(args.get('offset',0))
     if offset<0 or offset>len(text):raise ValueError('Invalid detail offset.')
     # An expanded tool reads its source record once, rather than reparsing a

@@ -33,7 +33,8 @@ try{
  await expect(page.getByText('Candidate validated; nothing saved',{exact:true})).toBeVisible();
  const localReceipt=await page.evaluate(()=>window.amplifier.getState().registry.sourceValidation);
  assert.equal(localReceipt.kind,'module');assert.equal(localReceipt.submittedSource,'./valid-candidate');
- assert.ok(localReceipt.source.startsWith('/'));assert.ok(localReceipt.source.endsWith('/workspace/valid-candidate'));
+ assert.ok(localReceipt.source.startsWith('/'));assert.ok(localReceipt.source.endsWith('/valid-candidate'));
+ assert.ok(!localReceipt.source.endsWith('/workspace/valid-candidate'),'Global Settings uses the host configuration owner');
  assert.notEqual(localReceipt.source,localReceipt.submittedSource);assert.equal(localReceipt.saved,false);
  assert.equal((await page.evaluate(()=>window.amplifier.getState().registry.sources)).at(-1).source,'git+https://github.com/example/valid-candidate');
  await page.getByLabel('Source type',{exact:true}).selectOption('bundle');

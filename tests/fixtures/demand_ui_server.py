@@ -7,6 +7,10 @@ import timeline_ui_server as fixture
 async def main(home):
     app=await fixture.main(home)
     service=app['service'];session=service._session()
+    # Isolate one lazy work disclosure. Multi-turn grouping has its own
+    # canonical-work browser journey; adjacent turns now share one header.
+    session['execution']['turns'] = [row for row in session['execution']['turns'] if row['id'] == 'voice:third']
+    session['execution']['nodes'] = [row for row in session['execution']['nodes'] if row['turnId'] == 'voice:third']
     session['execution']['nodes'].extend([
         {'id':f'bulk-{i}','kind':'tool','turnId':'voice:third','label':f'Step {i}',
          'phase':'completed','startedAt':13,'endedAt':14,'output':f'Output {i} '+('large result '*5000)}

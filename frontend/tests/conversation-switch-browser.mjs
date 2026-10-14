@@ -22,6 +22,7 @@ try{
  await act('session.pin',{id:second,pinned:true});
  await act('view.update',{patch:{navPinned:true}});
  await act('session.select',{id:first});
+ await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:await page.evaluate(()=>window.amplifier.getState().selectedWorkspaceId)}});
  const blocked=new Promise(resolve=>{release=resolve});
  await page.route('**/api/actions',async route=>{
   const request=route.request();
@@ -30,7 +31,8 @@ try{
  });
  await page.getByRole('button',{name:'Second chat',exact:true}).first().waitFor();
  await page.evaluate(()=>{window.switchStarted=performance.now()});
- await page.getByRole('button',{name:'Second chat',exact:true}).first().click();
+ // Exercise the reported workspace-list entry path, not only the sidebar.
+ await page.locator('.a-work-browser').getByRole('button',{name:'Second chat',exact:true}).click();
  await expect(page.getByRole('button',{name:'Second chat',exact:true}).first()).toHaveAttribute('aria-current','page',{timeout:1000});
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Second private draft',{timeout:1000});
  await expect(page.getByText('Second history',{exact:true})).toHaveCount(0);

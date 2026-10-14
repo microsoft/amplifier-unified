@@ -25,7 +25,7 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
     (foundation / "__init__.py").write_text("")
     (foundation / "history.py").write_text("class SessionHistoryStore: pass\n")
     (foundation / "jsonl.py").write_text("class TranscriptIndex: pass\n")
-    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "ownership.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py"):
+    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py"):
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     shutil.copytree(PACKAGE.parent / "amplifier_operations", outer / "amplifier_operations")

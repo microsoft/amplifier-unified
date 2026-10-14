@@ -314,6 +314,8 @@ from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
 from .collaboration import definitions as collaboration_definitions
 ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
+from .workspace_awareness import definitions as workspace_awareness_definitions
+ACTION_DEFINITIONS.update(workspace_awareness_definitions(schema, string))
 for _peer_action in ("conversation.send", "coordination.followup"):
     ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
         "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
@@ -373,6 +375,7 @@ for _access, _actions in {
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
         "worktree.create", "worktree.attach", "worktree.remove", "worktree.handoff", "worktree.reconcile",
+        "coordination.intent",
     },
     "presentation": {
         "session.select", "session.pin", "session.markUnread", "session.archive", "session.restore", "session.rename",
@@ -386,6 +389,7 @@ for _access, _actions in {
         "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
+        "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
@@ -1784,14 +1788,17 @@ class AppService:
             prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
             prepared_health['capture']['limitations'].append('Request timings cover handler execution, not time before the server accepts a connection.')
         if action == 'session.plans':
-            from .chat_plan import overview
             if args.get('includeItems') and len(args['ids']) != 1:
                 raise AppError('Inspect one chat at a time for plan details.')
-            rows = []
+            sources = []
             for identity in args['ids']:
-                session = self._session(identity)
-                await self.event_log_view.refresh(session['id'])
-                rows.append(overview(session, include_items=args.get('includeItems', False)))
+                session = self._session(identity, hydrate=False)
+                sources.append({key: session[key] for key in
+                    ('id', 'nativeIdentity', 'runtimeSessionId', 'workspace', 'nativeProject') if key in session})
+            rows = []
+            for source in sources:
+                rows.append(await asyncio.to_thread(self.event_log_view.read_plan, source,
+                    include_items=args.get('includeItems', False)))
             return {'accepted': True, 'result': {'items': rows}, 'effects': []}
         prepared_export = None
         prepared_share = None
@@ -3631,6 +3638,8 @@ class AppService:
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
+                from .response_completion import apply as apply_response_completion
+                apply_response_completion(session, payload)
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
                 if root_generation and payload.get('event') == 'generation.started':
@@ -3670,6 +3679,13 @@ class AppService:
                 if not repeated or session.get("streaming") == payload.get("text"):
                     session.pop("streaming", None)
                     session.pop("streamingId", None)
+                # Transport may deliver completion before its saved message.
+                terminal = next((event for event in reversed(session.get("generations", []))
+                                 if event.get("generation_id") == generation_id
+                                 and event.get("event") in {"generation.finished", "generation.failed", "generation.detached"}), None)
+                if terminal:
+                    from .response_completion import apply as apply_response_completion
+                    apply_response_completion(session, terminal)
             elif kind == "assistant.delta":
                 session.setdefault("streamingId", str(uuid.uuid4()))
                 session["streaming"] = session.get("streaming", "") + payload.get("text", payload.get("delta", ""))
@@ -3845,9 +3861,12 @@ class AppService:
         if operation == "coordination.admit":
             return self.collaboration.admission(session_id, args)
         if operation == "coordination.current":
-            return self._session(session_id).get("coordinationReference", {
+            from .workspace_awareness import packet
+            from .collaboration import PRINCIPAL
+            reference = self._session(session_id, hydrate=False).get("coordinationReference", {
                 "sessionId": session_id, "grants": [], "requests": [], "bounded": True,
                 "detail": "No retained collaboration reference; discover current coordination.context."})
+            return {**reference, 'awareness': packet(self, session_id, principal=PRINCIPAL.get())}
         def visual_origin(explicit=None):
             if input_origin is None:
                 return

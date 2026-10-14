@@ -821,6 +821,19 @@ class Collaboration:
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
         source = self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None
+        if action in {'coordination.awareness', 'coordination.intent.read', 'coordination.intent'}:
+            from .workspace_awareness import packet, intent_for, declare
+            if action == 'coordination.intent':
+                return await declare(self, source, args, origin, command_id)
+            target = self.service._session(args['sessionId'], hydrate=False)
+            if origin not in {'ui', 'user'} and target['workspace'] != source['workspace']:
+                self.error('Awareness and shared declarations belong to the calling workspace.')
+            if action == 'coordination.intent.read':
+                return {'accepted': True, 'result': intent_for(self.service, target)}
+            if origin not in {'ui', 'user'} and target['id'] != source['id']:
+                self.error('Read workspace awareness from the calling conversation.')
+            return {'accepted': True, 'result': packet(self.service, target['id'],
+                principal=PRINCIPAL.get(), offset=args.get('offset', 0), limit=args.get('limit', 8))}
         if action == "coordination.read":
             if args.get("messageId"):
                 target = self.service._session(args["sessionId"])
@@ -847,6 +860,9 @@ class Collaboration:
                 self.error("Current coordination context belongs to the caller.")
             result = self.current(args["sessionId"])
             source = self.service._session(args['sessionId'])
+            from .workspace_awareness import packet, observed_intent
+            result['awareness'] = packet(self.service, source['id'], principal=PRINCIPAL.get())
+            result['writeIntent'] = observed_intent(self.service, source)
             workspace = next((w for w in self.service.state['workspaces'] if w['path'] == source['workspace']), None)
             if workspace:
                 from .workspace_resources import dispatch_reservation

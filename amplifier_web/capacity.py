@@ -53,7 +53,7 @@ def aggregate(calls):
     return result
 
 
-def usage_snapshot(session):
+def usage_snapshot(session, *, admission_only=False):
     """The root's persisted execution projection already includes mounted children.
 
     Ignore aggregateUsage on tools/workers. IDs denote whole-call replacement
@@ -78,9 +78,16 @@ def usage_snapshot(session):
         old = calls.get(key)
         if old and (row.get('revision', 0), bool(row.get('endedAt'))) < (old.get('revision', 0), bool(old.get('endedAt'))):
             continue
+        if admission_only:
+            # Private disabled-budget admission needs only current call status.
+            # The caller holds app.lock and does not expose/mutate these aliases.
+            calls[key] = row
+            continue
         calls[key] = {k: copy.deepcopy(row[k]) for k in ('id', 'revision', 'producerId', 'budgetRevision', 'admittedAt', 'sessionId', 'provider', 'model', 'phase', 'startedAt', 'endedAt', 'usage', 'lifecycle') if k in row}
         if 'usage' in calls[key]:
             calls[key]['usage'] = with_gross_tokens(calls[key]['usage'] or {})
+    if admission_only:
+        return {'metrics': {}, 'receipts': list(calls.values())}
     receipts = sorted(calls.values(), key=lambda row: (row.get('startedAt') or 0, row['id']))
     groups = {}
     for row in receipts:
@@ -309,7 +316,7 @@ async def admission(service, session_id, args):
         if any(prior.get('id') == row.get('id') for prior in nodes + session.get('execution', {}).get('retiredUsageNodes', [])):
             return {'allowed': False, 'state': 'paused', 'budgetRevision': policy['revision'],
                     'reasons': ['This model-call ID was already admitted; its outcome must not be replayed']}
-        usage = usage_snapshot(session)
+        usage = usage_snapshot(session, admission_only=not policy.get('enabled'))
         result = {**evaluate(policy, usage), 'budgetRevision': policy['revision']}
         if result['allowed']:
             # Persist intent using the existing execution ID before any provider

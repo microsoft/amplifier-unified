@@ -6,6 +6,14 @@ on:
       - 'amplifier_web/coordination.py'
       - 'amplifier_web/collaboration*.py'
       - 'amplifier_web/app_guidance.py'
+      - 'amplifier_web/workspace_awareness.py'
+      - 'amplifier_web/coordination_delivery.py'
+      - 'frontend/src/workspace-awareness.jsx'
+      - 'frontend/tests/workspace-awareness-browser.mjs'
+      - 'tests/test_workspace_awareness.py'
+      - 'tests/test_coordination_delivery.py'
+      - 'tests/test_app_guidance.py'
+      - 'tests/fixtures/workspace_awareness_runtime_probe.py'
       - 'amplifier_web/automatic_history.py'
       - 'amplifier_web/session_identity.py'
       - 'amplifier_web/service.py'
@@ -77,16 +85,22 @@ jobs:
           tests/test_workspace_repair_outcomes.py tests/test_worktrees.py
           tests/test_peer_creation_operation.py
           tests/test_resource_reservations.py
+          tests/test_workspace_awareness.py
+          tests/test_coordination_delivery.py
+          tests/test_output_images.py tests/test_output_image_pairs.py
+          tests/test_voice_visual.py tests/test_computer_visual.py
           tests/test_multi_repository_worktrees.py
           tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
       - name: Verify mounted child identity and file boundaries
         run: >-
           uv run --locked
-          --with 'amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@08de4d442fde0210c4c89f7628c17846c5dfd67b'
-          --with 'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@db641363013ff906b656f49498a87ab01f5c506f'
-          pytest -q tests/test_child_app_authority.py tests/test_child_file_policy.py
-          tests/test_child_image_policy.py tests/test_child_resume_admission.py tests/test_runtime_worker.py
+          --with 'amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main'
+          --with 'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main'
+          python -c "import os, sys, pytest; os.environ['UNIFIED_RUNTIME_PYTHON'] = sys.executable;
+          sys.exit(pytest.main(['-q', 'tests/test_child_app_authority.py', 'tests/test_child_file_policy.py',
+          'tests/test_child_image_policy.py', 'tests/test_child_resume_admission.py', 'tests/test_runtime_worker.py',
+          'tests/test_app_guidance.py']))"
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
       - run: npx --prefix frontend playwright install --with-deps chromium
@@ -99,3 +113,6 @@ jobs:
       - name: Exercise explicit repository selection through the browser
         working-directory: frontend
         run: node tests/multi-repository-worktrees-browser.mjs
+      - name: Exercise active work and private file declarations through the browser
+        working-directory: frontend
+        run: node tests/workspace-awareness-browser.mjs

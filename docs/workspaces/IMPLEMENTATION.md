@@ -1,5 +1,68 @@
 # Implementation and evidence
 
+## Active-work awareness and advisory file intent — 2026-10-13
+
+Independent and commissioned roots now receive the same bounded view of active
+work in their canonical workspace. Observed native children are labeled
+separately. The host reports recorded execution folders, declaration freshness
+and overlap without hydrating peer histories, scanning working files, starting
+idle workers or copying private drafts. Packets fit within 8 KiB of encoded JSON
+and provide explicit pagination. Declaration bodies stay in existing command
+receipts; session metadata keeps only a compact reference.
+
+UI and agent routes share revision-aware declaration/read actions. Replacing a
+root's declaration requires that root's authority and both current revisions.
+Overlaps remain advisory. Paths resolve only during explicit declarations and
+must remain within known task folders; declarations never grant filesystem
+access. Missing retained bodies are unknown rather than empty. Exact retries,
+including an acknowledgment lost after commit, retain the original outcome.
+The browser preserves unsent text and retry identity through navigation, stale
+saves and reload, with the optional form under progressive disclosure.
+
+A real native-loop probe exposed accumulation of hook observations within one
+turn despite their ephemeral designation. Dynamic coordination references now
+use the existing fitted provider-delivery boundary. Both native reminder modes
+receive one fresh observation per request; the old observation is absent and
+neither enters saved history. Provider budget checks and normal/streamed
+transport share the same fitted observation. Host read failure reports unknown
+coverage, and auxiliary calls do not request workspace context.
+
+Local qualification: 290 installed-package Python checks pass outside the source
+checkout, including both native reminder modes, with two optional loop-module
+skips. Another 77 child authority/file/image policy checks and 38 image/guidance
+checks pass using the selected native runtime, covering those optional paths.
+The combined source/provider-delivery set has 242 passes and three optional
+runtime skips, covered by the native runs. All 668
+frontend tests pass, the production frontend builds, and the new browser journey
+passes private drafts, overlap, explicit reads, navigation, stale revision,
+reload, lost-response retry, pagination, mobile layout, clearing and idle
+transition. The existing two-peer/two-round coordination browser journey also
+passes; its no-paperwork assertion now excludes the optional collapsed file
+declaration form. Browser activity is scripted and sends no model input. The candidate
+wheel's 290 application/worktree Python files and 311 static files match source
+bytes. Selected image evidence remains after general workspace observations;
+adjacent image comparison/selection regressions cover this ordering.
+
+Two bounded two-round checks through a fresh real-provider worker and the
+installed candidate pass. The worker identifies an independent peer from ambient
+context, reads its declaration, declares the same file and verifies overlap.
+After the host marks that synthetic peer idle, it observes the new active set
+and clears only its own declaration. Both idle-to-idle and immediate ordinary
+follow-up delivery pass; file bytes and the peer's declaration remain unchanged.
+Only the source worker calls the real provider. Peer activity is a scripted host
+observation, not a second concurrently working model.
+
+The first immediate-follow-up probe omitted the API's explicit ordinary-message
+handoff flag and requested generation-bound steering. That input was retained
+rather than moved to a new turn; the probe timed out without a runtime error.
+The browser uses `allowNextTurn` with the observed generation, and that exact
+semantics passes the corrected check. The failed probe is retained as evidence,
+not treated as a product regression or a successful two-round run.
+
+Shared-folder editing remains cooperative. This slice does not enforce stale
+file writes, grant peer control, provision resources, create assignment-wide
+budgets or establish general parallel-agent efficacy. Those gates remain below.
+
 ## Explicit repository selection — 2026-10-13
 
 Tasks can inspect, create or attach working copies for individual repositories
@@ -89,7 +152,7 @@ general multi-agent efficacy.
 This completes cooperative reservation admission, not managed provisioning or
 an OS resource lock. Different aliases and separate app installations remain
 outside its domain. Per-repository bindings, actual command/import/preview
-provenance, write-intent awareness, supported stale-file writes and the remaining
+provenance, supported stale-file writes and the remaining
 assignment/integration gates below still require implementation and evidence.
 
 ## Coherent commissioned-task operation — 2026-10-13
@@ -203,7 +266,7 @@ competing stores.
 | Equivalent authority across supported routes | Host, runtime adapters, configuration controls | Explicit capability grants and revocation across schedules, recipes and background admission; preserve authorized configuration changes |
 | Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Later correlated replies, question/deferral revisions, expiring one-shot watches and fair bounded delivery; no duplicate continuation or false dependency success |
 | Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
-| Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context for user-created and commissioned peers; overlap warnings and supported stale-write conflicts without leaking drafts or loading dormant agents |
+| Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context and advisory overlap delivered above. Remaining: supported stale-write conflicts, plus broader independent/commissioned/native-worker lifecycle acceptance |
 | Assignment control | Existing task, capacity and interruption owners | Aggregate reservations and scoped Stop across commissioned roots and nested work, while unrelated project chats keep running |
 | Durable results and integration | Artifact/resource owner and worktree integration | Retain exact versions before mutable sources disappear; validate the combined candidate and preserve uncertain cleanup effects |
 | Complete supported user journeys | Shared action/API layer, browser and terminal clients | Repeated two-round real-provider work, failure and Stop variants, independent and commissioned peers, disconnect/restart, private client state and measured responsiveness |

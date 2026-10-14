@@ -115,6 +115,8 @@ def trim_execution(session, previous, message_id):
     # Preserve earlier work, including turns outside the loaded message window.
     cut = next((i for i, row in enumerate(previous) if row['id'] == message_id), len(previous))
     removed = {row['id'] for row in previous[cut:]}
+    from .response_completion import invalidate_removed
+    invalidate_removed(session, removed)
     discarded_inputs = {row.get('inputId') for row in previous[cut:] if row.get('inputId')}
     tree = session.get('execution')
     if tree:

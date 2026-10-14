@@ -8,6 +8,15 @@ function state(id,revision=1){return {revision,client:{hostInstanceId:'host'},se
  sessions:['a','b','c'].map(key=>({id:key,workspaceId:'space',title:key,draft:key+' draft',messages:key===id?[{id:key+'-message',text:key+' history'}]:[]})),
  view:{draft:id+' draft'},canvas:{id:id+'-canvas',open:true},canvasWorkspace:{views:[]},canvasArtifacts:[]}}
 
+for(const target of ['a','b'])test('opening '+target+' from a workspace paints the chat before the server responds',()=>{
+ const nav=createConversationNavigation(),workspace=state('a');
+ workspace.view.workSurface='workspace';workspace.view.workWorkspaceId='space';
+ const token=nav.begin(workspace,target),shown=nav.apply(workspace);
+ assert.equal(shown.view.workSurface,'chat');assert.equal(shown.selectedSessionId,target);
+ assert.equal(shown.navigationPending,true);assert.equal(workspace.view.workSurface,'workspace');
+ nav.settle(token);assert.equal(nav.apply(workspace).view.workSurface,'workspace');
+});
+
 test('cached chat shows loading until fresh state arrives, while preserving its draft',()=>{
  const nav=createConversationNavigation(),a=state('a'),b=state('b',2);
  nav.remember(a);nav.remember(b);const token=nav.begin(b,'a'),shown=nav.apply(b);

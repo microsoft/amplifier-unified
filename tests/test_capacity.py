@@ -377,3 +377,26 @@ def test_restart_marks_retired_inflight_accounting_unknown():
     record = usage_snapshot(session)['receipts'][0]
     assert record['phase'] == 'outcome_unknown'
     assert usage_snapshot(session)['metrics']['totalTokens']['unknownCalls'] == 1
+
+
+async def test_disabled_budget_admission_retains_receipts_without_building_usage_report(tmp_path, monkeypatch):
+    from amplifier_web import capacity
+    app, worker, sid = await setup(tmp_path, monkeypatch)
+    try:
+        def unwanted_report(*args):
+            raise AssertionError('Disabled-budget admission must not aggregate historical usage')
+        with monkeypatch.context() as patch:
+            patch.setattr(capacity, 'aggregate', unwanted_report)
+            first = call('pending-one', sid, rootSessionId=sid, phase='running', endedAt=None, usage={})
+            second = call('pending-two', sid, rootSessionId=sid, phase='running', endedAt=None, usage={})
+            result = await admission(app, sid, {'call': first})
+            assert result['allowed'] and result['state'] == 'disabled'
+            assert result['inFlightCalls'] == 0
+            result = await admission(app, sid, {'call': second})
+            assert result['allowed'] and result['inFlightCalls'] == 1
+            assert not (await admission(app, sid, {'call': first}))['allowed']
+        assert usage_snapshot(app._session(sid))['calls'] == 2
+        assert usage_snapshot(app._session(sid))['metrics']['totalTokens']['pendingCalls'] == 2
+    finally:
+        await worker.close()
+        await app.close()

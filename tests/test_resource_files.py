@@ -257,3 +257,53 @@ async def test_mark_refuses_changed_snapshot_and_service_close_settles(tmp_path,
         release.set()
         await close_maintenance(service)
         db.close()
+
+@pytest.mark.parametrize('change', ['none', 'new-root', 'changed-index', 'cancel'])
+async def test_background_sweep_releases_navigation_and_writer_during_body_reads(tmp_path, monkeypatch, change):
+    from types import SimpleNamespace
+    from amplifier_web.storage_migration import maintenance, close_maintenance
+    db = database(tmp_path / 'responsive.sqlite3')
+    competitor = database(tmp_path / 'responsive.sqlite3')
+    keep = files.put(db, {'retained': True})
+    garbage = files.put(db, {'old': True})
+    db.commit()
+    state = {'keep': keep}
+    service = SimpleNamespace(db=db, _state=state, closed=False, lock=asyncio.Lock())
+    entered, release = threading.Event(), threading.Event()
+    original = files.detached_references
+    def blocked(source):
+        entered.set()
+        assert release.wait(5)
+        return original(source)
+    monkeypatch.setattr(files, 'detached_references', blocked)
+    maintenance(service)
+    task = service._storage_maintenance_task
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        # An unrelated command can acquire the app lock while the file read is
+        # still blocked, and another connection is not denied writer access.
+        await asyncio.wait_for(service.lock.acquire(), 1)
+        try:
+            assert not db.in_transaction
+            competitor.execute('BEGIN IMMEDIATE')
+            competitor.rollback()
+            if change == 'new-root':
+                state['new'] = files.put(db, {'nested': garbage})
+                db.commit()
+            elif change == 'changed-index':
+                db.execute('DELETE FROM state_resources WHERE id=?', (keep['$resource'],))
+                db.commit()
+            elif change == 'cancel':
+                task.cancel()
+        finally:
+            service.lock.release()
+        release.set()
+        await asyncio.gather(task, return_exceptions=change == 'cancel')
+        exists = db.execute('SELECT 1 FROM state_resources WHERE id=?', (garbage['$resource'],)).fetchone()
+        assert bool(exists) is (change != 'none')
+        assert not db.in_transaction
+    finally:
+        release.set()
+        await close_maintenance(service)
+        competitor.close()
+        db.close()

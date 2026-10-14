@@ -32,18 +32,23 @@ export function MessageInteractions({message,sessionId,dispatch}){
  </div>{chosen.map(emoji=><button key={emoji} type="button" className="a-reaction-chip" aria-label={`Remove ${reactions.find(r=>r[0]===emoji)?.[1]||emoji} reaction`} aria-pressed="true" disabled={busy} data-action="message.reaction" onClick={()=>action('message.reaction',{emoji,present:false})}>{emoji}</button>)}{error&&<span className="a-message-interaction-error" role="alert">{error}</span>}</>;
 }
 
-export function MessageFocus({session,focus,detail}){
+export function MessageFocus({session,focus,detail,ensureVisible}){
  const attempted=useRef(''),completed=useRef('');
  useEffect(()=>{
   if(!focus||focus.sessionId!==session?.id||detail.busy)return;
   const request=`${focus.sessionId}:${focus.revision}`;
   if(completed.current===request)return;
   const key=`${request}:${session.messageWindow?.offset??0}`;
-  if(attempted.current===key)return;attempted.current=key;
   const node=[...document.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===focus.messageId);
   if(node){completed.current=request;node.tabIndex=-1;node.scrollIntoView({block:'center'});node.focus({preventScroll:true});return;}
-  if(detail.around)detail.around(focus.messageId);
-  else if(session.messageWindow?.offset>0)detail.earlier('messages');
- },[session?.id,session?.messages?.length,session?.messageWindow?.offset,focus?.revision,focus?.sessionId,detail.busy]);
+  let active=true;
+  Promise.resolve(ensureVisible?.(focus.messageId)).then(opened=>{
+   if(!active||opened||attempted.current===key)return;
+   attempted.current=key;
+   if(detail.around)detail.around(focus.messageId);
+   else if(session.messageWindow?.offset>0)detail.earlier('messages');
+  }).catch(()=>{});
+  return()=>{active=false};
+ },[session?.id,session?.messages?.length,session?.messageWindow?.offset,focus?.revision,focus?.sessionId,detail.busy,ensureVisible]);
  return null;
 }

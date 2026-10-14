@@ -8,6 +8,7 @@ import pytest
 
 from amplifier_web import browser_state
 from amplifier_web.service import AppService
+from amplifier_web.storage_migration import close_maintenance
 from test_automatic_history import app_factory
 
 
@@ -134,7 +135,10 @@ async def test_mixed_scope_checkpoint_and_restart_keep_all_records_and_private_d
     assert load(app.db)['revision'] == app.state['revision']
     durable = load_saved_state(app.db)
     assert durable['theme']['name'] == 'Changed global'
-    await app.publishing.close()  # Release the single-owner fixture lease only.
+    # A stopped/crashed owner cannot retain its background SQLite writer lock.
+    # Settle maintenance without checkpointing the records under test.
+    await close_maintenance(app)
+    await app.publishing.close()
     restored = app_factory(home=app.data_dir)
     assert restored._session(rows[1]['id'])['messages'][0]['text'] == 'same length edit'
     assert restored.clients.records['0']['drafts'][rows[0]['id']] == 'private-0'
@@ -146,7 +150,8 @@ async def test_scope_records_survive_unclean_reader_restore_without_checkpoint(a
     app._state['runtimeControl'][rows[0]['id']]['task.get'] = {'task': {'revision': 4, 'status': 'active'}}
     rows[0]['messages'][0]['text'] = 'An exact changed body'
     app._publish(session_ids={rows[0]['id']}, detail_only=True, record_only=True)
-    # Do not close/checkpoint the first instance before the new startup reader.
+    # Release background ownership without closing/checkpointing app state.
+    await close_maintenance(app)
     await app.publishing.close()
     restored = app_factory(home=app.data_dir)
     assert restored._session(rows[0]['id'])['messages'][0]['text'] == 'An exact changed body'
@@ -173,6 +178,7 @@ async def test_sparse_sql_failure_rolls_back_and_retry_keeps_dirty_union_and_cli
     monkeypatch.setattr(state_records, 'save', original)
     rows[1]['streaming'] = 'retry B'
     app._publish(session_ids={rows[1]['id']}, detail_only=True, record_only=True)
+    await close_maintenance(app)
     await app.publishing.close()
     restored = app_factory(home=app.data_dir)
     assert restored.clients.records['1']['drafts'][rows[1]['id']] == 'new private B'

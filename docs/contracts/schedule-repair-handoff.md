@@ -28,7 +28,8 @@ text digest, latest owner human input, exact schedule revision and configuration
 New human input in either chat before repair, edits, stops, workspace changes or
 schedule changes invalidate the handoff. Stored authorization references the
 original human and receipt. At due admission the original authorizing chat is
-loaded; missing/edited authority, workspace changes and stops prevent execution,
+loaded; missing/edited authority, a newer human input in that source chat,
+workspace changes and stops prevent execution,
 including changes that race the final runtime admission guard. Normal task,
 preview, configuration, permissions and uncertain-run protections still apply.
 
