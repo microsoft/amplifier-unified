@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.151",
+      "title": "Keep history reads and workspace updates focused",
+      "changes": [
+        "Restoring a chat or adjusting its layout no longer loads older conversation pages without scrolling intent. Switching chats cancels obsolete history reads while preserving accepted work.",
+        "Workspace totals reuse their results across unrelated worker updates and chat-title changes. Real membership, activity, unread and availability changes still update the view.",
+        "Conversation history checks now explicitly open the requested saved chat instead of assuming the entire library is loaded.",
+        "Background browser checks ignore unrelated processes that existed before each scenario, while uncertain cleanup of new processes still stops verification."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.150",
       "title": "Make release verification failures easier to diagnose",
       "changes": [
