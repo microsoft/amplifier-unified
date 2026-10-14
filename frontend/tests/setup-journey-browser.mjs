@@ -11,7 +11,7 @@ try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.port){clearTimeout(timer);resolve(value)}}catch{}})});
  const target=`http://127.0.0.1:${ready.port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
  const control=async body=>{const response=await fetch(target+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(response.status,200);return response.json()};
- vite=await createServer({configFile:false,root:root+'frontend',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
+ vite=await createServer({configFile:false,cacheDir:root+'frontend/.vite-legacy-mocks',root:root+'frontend',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
  const page=await browser.newPage({viewport:{width:1600,height:1000},extraHTTPHeaders:headers});page.on('pageerror',e=>errors.push(e.message));
  await control({op:'setup',connected:false});
@@ -21,15 +21,19 @@ try{
  await control({op:'setup',connected:true,journey:'connect'});
  await expect(page.getByText('Your first connection is ready',{exact:true})).toBeVisible();
  await expect(page.locator('.a-canvas-head').getByRole('button',{name:'Settings',exact:true})).toHaveCount(0);
- const before=await page.evaluate(()=>window.amplifier.getState().sessions.length);
+ // Ordinary frames carry the selected chat; membership belongs to the catalog.
+ const catalog=async()=>{const client=await page.evaluate(()=>window.amplifier.getState().client.id);const response=await page.request.get(target+'/api/sessions?kind=root&limit=10',{headers:{...headers,'X-Amplifier-Client':client}});assert.equal(response.status(),200);const value=await response.json();assert.equal(value.nextOffset,null);return value.items.map(row=>row.id)};
+ const before=await catalog(),originalId=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ assert.ok(before.includes(originalId));
  await page.getByRole('button',{name:'Set up with the assistant',exact:true}).click();
  await expect(page.locator('.a-settings-canvas .a-settings-experience')).toBeVisible();
  await expect(page.locator('.a-overlay')).toHaveCount(0);
  await expect(page.getByRole('tab',{name:'Settings',exact:true})).toBeVisible();
  const settingsId=await page.evaluate(()=>window.amplifier.getState().canvas.id);
  await page.waitForFunction(()=>window.amplifier.getState().view.setupJourney==='assisted');
- assert.equal(await page.evaluate(()=>window.amplifier.getState().sessions.length),before+1);
  const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ assert.ok(!before.includes(sid),'The assistant receives one new conversation');
+ assert.deepEqual((await catalog()).sort(),[...before,sid].sort(),'Exactly one chat added; all previous chats retained');
  await page.waitForFunction(id=>window.amplifier.getState().sessions.find(s=>s.id===id)?.messages?.some(m=>m.role==='user'&&m.text.startsWith('Help me finish setting up')),sid);
  const bounds=await page.locator('.a-conversation').boundingBox();if(bounds)assert.ok(bounds.width>=350&&bounds.width<500,JSON.stringify(bounds));
  // Narrow desktop panes show a single options button and one action row.
@@ -111,7 +115,7 @@ try{
  await expect(page.getByRole('alertdialog')).toBeVisible();
  await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
  await expect(privateKey).toHaveValue('synthetic-private-draft');
- const other=await page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id!==id).id,sid);
+ const other=originalId;assert.ok((await catalog()).includes(other),'Original conversation remains selectable');
  const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
  const switched=await fetch(target+'/api/actions',{method:'POST',headers:{...headers,'X-Amplifier-Client':clientId},body:JSON.stringify({action:'session.select',args:{id:other}})});
  assert.equal(switched.status,200);
