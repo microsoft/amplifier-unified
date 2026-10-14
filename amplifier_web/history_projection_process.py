@@ -265,6 +265,16 @@ class ProcessProjector:
     async def _retire(self):
         process, self._process = self._process, None
         home, self._worker_home = self._worker_home, None
+        task = asyncio.create_task(self._dispose(process, home))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # close() may interrupt an already running timeout retirement. The
+            # detached child handle must remain owned until wait/kill completes.
+            await task
+            raise
+
+    async def _dispose(self, process, home):
         if process is not None:
             if process.stdin and not process.stdin.is_closing():
                 try:

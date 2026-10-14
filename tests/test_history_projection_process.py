@@ -173,6 +173,26 @@ async def test_close_stops_blocked_worker_and_drains_queued_reads(tmp_path):
     await owner.close()
 
 
+async def test_close_during_timeout_retirement_still_waits_for_owned_child(tmp_path):
+    owner = projector(tmp_path, _timeout=.3, _close_timeout=.4)
+    task = asyncio.create_task(owner.project({'sleep': 20}, key='blocked'))
+    await called(tmp_path)
+    process = owner._process
+    for _ in range(100):
+        if owner._process is None:
+            break  # Timeout has detached the child and is waiting to retire it.
+        await asyncio.sleep(.01)
+    assert owner._process is None and process.returncode is None
+    await owner.close()
+    try:
+        assert process.returncode is not None
+        assert (await task)['reason'] == 'closed'
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+
+
 async def test_worker_stdin_eof_stops_even_uncooperative_model(tmp_path):
     owner = projector(tmp_path, _close_timeout=.15)
     task = asyncio.create_task(owner.project({'sleep': 20}, key='blocked'))
