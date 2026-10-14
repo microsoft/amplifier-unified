@@ -294,6 +294,8 @@ class ConfigurationAuthority:
             self.error('Only the user can grant configuration authority.')
         identity = command_id or str(uuid.uuid4())
         digest = fingerprint([action, args, origin, source['id']])
+        bound_keys = ('id', 'workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision')
+        captured = tuple(source.get(key) for key in bound_keys)
         async with self.service.lock:
             previous = self.service.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
             if previous:
@@ -303,6 +305,12 @@ class ConfigurationAuthority:
                 grant = self.record(receipt['result']['id'])
                 self.service._task(self.notify_waiter(grant))
                 return {**receipt, 'result': grant, 'duplicate': True}
+            # Awaiting the shared commit lock can outlive this generation or
+            # Stop/placement boundary. A stale proposal must not bind itself to
+            # the newer task state merely because the dict changed in place.
+            source = self.source(args, origin, caller, active=True)
+            if origin not in {'ui', 'user'} and captured != tuple(source.get(key) for key in bound_keys):
+                self.error('The task authority changed while waiting; no configuration request was saved.', 409)
             # A failed transaction must not roll back earlier unrelated receipts.
             self.service.db.commit()
             before = copy.deepcopy(source.get('approvals', []))

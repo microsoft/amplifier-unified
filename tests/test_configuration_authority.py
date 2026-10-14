@@ -271,6 +271,67 @@ async def test_grant_receipts_handle_failed_commit_and_lost_acknowledgment(app,m
     assert (await agent(app,source,'capability.request',args,'lost-ack'))['duplicate']
 
 
+@pytest.mark.parametrize('change', ['stop', 'generation', 'workspace', 'placement'])
+async def test_request_revalidates_original_authority_after_waiting_for_commit_lock(app, monkeypatch, change):
+    source = app.state['sessions'][0]
+    args = {'sessionId': source['id'], 'effects': ['file_access'], 'scopes': ['local'], 'reason': 'Requested setup'}
+    entered = asyncio.Event()
+    original = app.configuration_authority.source
+    def inspect(*args, **kwargs):
+        result = original(*args, **kwargs)
+        entered.set()
+        return result
+    monkeypatch.setattr(app.configuration_authority, 'source', inspect)
+    async with app.lock:
+        pending = asyncio.create_task(agent(app, source, 'capability.request', args, 'racing-request'))
+        await entered.wait()
+        if change == 'stop':
+            source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+        elif change == 'generation':
+            source['collaborationGeneration'] = {'id': 'new-generation', 'inputIds': ['new-user'], 'terminal': False}
+        elif change == 'workspace':
+            source['workspace'] += '-moved'
+        else:
+            source['executionRevision'] = source.get('executionRevision', 0) + 1
+    with pytest.raises(AppError, match='changed|current transport'):
+        await pending
+    assert not app.configuration_authority.rows(source['id'])
+    assert not source['approvals']
+
+
+async def test_user_grant_binds_current_state_after_lock_and_duplicate_stays_passive(app):
+    source = app.state['sessions'][0]
+    args = {'sessionId': source['id'], 'effects': ['file_access'], 'scopes': ['local'], 'reason': 'Requested setup'}
+    async with app.lock:
+        pending = asyncio.create_task(app.dispatch('capability.grant', args, command_id='user-waiting'))
+        await asyncio.sleep(0)
+        source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    first = await pending
+    assert first['result']['interruptionRevision'] == source['interruptionRevision']
+    duplicate = await app.dispatch('capability.grant', args, command_id='user-waiting')
+    assert duplicate['duplicate'] and duplicate['result'] == first['result']
+
+
+async def test_committed_agent_retry_survives_generation_change_while_waiting(app, monkeypatch):
+    source = app.state['sessions'][0]
+    args = {'sessionId': source['id'], 'effects': ['file_access'], 'scopes': ['local'], 'reason': 'Requested setup'}
+    first = await agent(app, source, 'capability.request', args, 'retained-request')
+    entered = asyncio.Event()
+    original = app.configuration_authority.source
+    def inspect(*args, **kwargs):
+        value = original(*args, **kwargs)
+        entered.set()
+        return value
+    monkeypatch.setattr(app.configuration_authority, 'source', inspect)
+    async with app.lock:
+        pending = asyncio.create_task(agent(app, source, 'capability.request', args, 'retained-request'))
+        await entered.wait()
+        source['collaborationGeneration'] = {'id': 'new-generation', 'inputIds': ['new-user'], 'terminal': False}
+    duplicate = await pending
+    assert duplicate['duplicate'] and duplicate['result'] == first['result']
+    assert len(app.configuration_authority.rows(source['id'])) == 1
+
+
 async def test_peer_cannot_launder_privilege_but_reviewed_current_request_can(app):
     source, peer=app.state['sessions']
     await grant(app,['file_access'],['local'])
