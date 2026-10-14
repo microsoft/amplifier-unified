@@ -44,3 +44,12 @@ into the next release when one is in progress, or address them directly when idl
 newly discovered urgent regressions still warrant prompt attention. Reuse verified
 qualification only when the exact tested inputs match the candidate being shipped;
 changed inputs require the affected checks again.
+
+## Bundled client and server evolve together
+
+User direction, October 14, 2026: the web client ships with the server. Change
+bundled interfaces together and remove superseded bundled paths; do not add
+old-bundle compatibility fallbacks or capability negotiation. Independently
+released clients, custom components, and explicit public APIs have their own
+contracts and version policies. Preserve or deliberately revise those contracts
+with their owners instead of silently changing their promised behavior.
