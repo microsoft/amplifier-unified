@@ -59,12 +59,13 @@ text, composer drafts, artifact bodies, mount plans or credentials.
 Use `useShellComponent` for a stable, immutable snapshot. No second event stream
 or model turn is started by a component edit. Agent reads remain explicit.
 
-Built-in navigation can opt into [scoped resource reads](../browser-state-transport.md#opt-in-shell-navigation-resources).
-The response states which resources it supplies. Hidden reading surfaces need not
-construct their pages merely to retain controller state. Custom component and
-navigation snapshots keep their existing contracts. A view losing read interest
-does not cancel accepted commands, change instance generation or discard dirty
-drafts and Canvas inputs.
+The bundled browser uses [scoped shell resources](../browser-state-transport.md#shell-bootstrap-and-active-resources).
+It bootstraps descriptors once, then receives changed requested sections through
+the existing state stream. Hidden reading surfaces do not construct their pages
+merely to retain controller state. Custom components still receive their complete
+contracted snapshot through the SDK; explicit `shell.query` and `shell.inspect`
+reads retain their contracts. A view losing read interest does not cancel accepted
+commands, change instance generation or discard dirty drafts and Canvas inputs.
 
 `host.dispatch('view.update', {patch})` patches only the instance's UI state;
 accumulated state is limited to 16 KB. It cannot change a conversation draft.

@@ -189,7 +189,12 @@ async def test_detail_snapshot_fallback_observes_changed_summary_and_full_save(a
     app, rows = chats(app_factory)
     rows[0]['historyLoaded'] = True
     app._publish(session_ids={rows[0]['id']}, detail_only=True, record_only=True)
+    # Ordinary frames contain the owning client's selected context. The other
+    # client's unrelated row must stay absent while the exact owner's cached
+    # detail snapshot observes the saved summary change.
     with app.clients.bind('1'):
+        assert rows[0]['id'] not in {row['id'] for row in app.browser_state()['sessions']}
+    with app.clients.bind('0'):
         current = app.browser_state()
     summary = next(row for row in current['sessions'] if row['id'] == rows[0]['id'])
     assert summary['historyLoaded'] is True

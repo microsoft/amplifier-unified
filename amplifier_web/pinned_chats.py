@@ -41,8 +41,8 @@ def update(service, args, command_id, fingerprint, origin, *, include_state):
             from .session_projection import persist
             persist(service.data_dir, service._state, {}, session_ids=native_ids,
                     by_id={target['id']: target}, references=references, scoped_result=True, db=service.db)
-        save(service.db, service._state, references, native_ids, {'pinnedSessionIds', 'pinnedItemIds', 'events',
-             *({'view'} if service.clients.record() is None else set())})
+        changed_globals = save(service.db, service._state, references, native_ids, {'pinnedSessionIds', 'pinnedItemIds', 'events',
+                               *({'view'} if service.clients.record() is None else set())})
         written = service.clients.save(defer_ack=True)
         service.db.commit()
         service.clients.acknowledge(written)
@@ -59,6 +59,7 @@ def update(service, args, command_id, fingerprint, origin, *, include_state):
         if sid in references: service._session_projection_refs[sid] = references[sid]
         else: service._session_projection_refs.pop(sid, None)
     # No display hydration, canonical history write, or pending progress flush.
+    service.shell.resources.invalidate(changed_globals)
     service.projections.pins_changed(service.state)
     service._browser_snapshot = None
     service._client_snapshots.clear()

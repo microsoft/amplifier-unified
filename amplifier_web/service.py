@@ -839,8 +839,19 @@ class AppService:
                 cached = self.clients.project(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state),
                     copies=self._snapshot_copies if session_id is None else None, client_id=client_id,
                     detail_project=self.projections.detail, demand=self.clients.records[client_id]['kind'] == 'web', directory=self.directory))
-                cached['shellDataKey'] = self.projections.shell_key(self.state)
-                cached['shellChangeToken'] = self.shell.change_token(client_id)
+                if self.clients.records[client_id]['kind'] == 'web':
+                    # Descriptor identity exists before resource registration,
+                    # including the first frame after a host restart. Clients
+                    # can then discard the previous host's resources and load
+                    # its new descriptors without an ambiguous missing key.
+                    cached['shellBootstrapKey'] = self.shell.resources.bootstrap_key(client_id)
+                    if self.shell.resources.registered(client_id):
+                        resources = self.shell.resources.snapshot(client_id)
+                        if resources is not None:
+                            cached['shellResources'] = resources
+                else:
+                    cached['shellDataKey'] = self.projections.shell_key(self.state)
+                    cached['shellChangeToken'] = self.shell.change_token(client_id)
                 if session_id is None:
                     self._client_snapshots[client_id] = cached
                     self._client_snapshot_preferences[client_id] = self._shared_preferences_stamp
@@ -962,12 +973,12 @@ class AppService:
                 # Persist sanitized global presentation just as full checkpoints
                 # do (not the live canvas body that persist() externalized).
                 record_state = {**self._state, **{key: saved[key] for key in global_keys if key in saved}}
-                save_working(self.db, record_state, pending_references, admitted_ids, global_keys=global_keys,
-                             deleted=deleted_ids)
+                changed_global_keys = save_working(self.db, record_state, pending_references, admitted_ids, global_keys=global_keys,
+                                                   deleted=deleted_ids)
             else:
                 saved['runtimeControl'] = {identity: saved_cold(record)
                                            for identity, record in saved.get('runtimeControl', {}).items()}
-                save_working(self.db, saved, pending_references, admitted_ids, deleted=deleted_ids)
+                changed_global_keys = save_working(self.db, saved, pending_references, admitted_ids, deleted=deleted_ids)
             self.directory.sync((row for row in self._state['sessions']
                                  if row['id'] in admitted_ids and row['id'] in pending_references), self._state,
                                 deleted=(admitted_ids - pending_references.keys()) | deleted_ids)
@@ -997,6 +1008,7 @@ class AppService:
         changed_clients = {identity for identity, value in pending_clients.items()
                            if self.clients.saved.get(identity) != value}
         self.clients.acknowledge(pending_clients)
+        self.shell.resources.invalidate(changed_global_keys)
         self._view_cache = pending_views
         self._session_projection_refs = pending_references
         self._directory_migrated = True

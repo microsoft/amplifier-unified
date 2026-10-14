@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {navigationResources,navigationDemandKey,hasNavigationResource} from '../src/shell/navigation-demand.js';
+import {navigationResources,hasNavigationResource} from '../src/shell/navigation-demand.js';
+
+import {shellScope} from '../src/shell/resources.js';
 
 const sidebar=['pinnedNavigation','recentNavigation','workspaceShortcuts'];
 test('built-in demand includes only the sidebar and visible browsing page',()=>{
@@ -12,9 +14,9 @@ test('built-in demand includes only the sidebar and visible browsing page',()=>{
 test('demand scope changes for workspace/tab but not unrelated drafts or progress',()=>{
  const state={view:{workSurface:'workspace',workWorkspaceId:'one'}};
  for(const patch of [{workWorkspaceId:'two'},{workWorkspaceTab:'files'},{workWorkspaceTab:'details'}])
-  assert.notEqual(navigationDemandKey(state),navigationDemandKey({...state,view:{...state.view,...patch}}));
- assert.equal(navigationDemandKey(state),navigationDemandKey({...state,revision:99,view:{...state.view,draft:'private'}}));
- assert.equal(navigationDemandKey({view:{}}),navigationDemandKey({view:{workWorkspaceTab:'files'}}));
+  assert.notDeepEqual(shellScope(state),shellScope({...state,view:{...state.view,...patch}}));
+ assert.deepEqual(shellScope(state),shellScope({...state,revision:99,view:{...state.view,draft:'private'}}));
+ assert.deepEqual(shellScope({view:{}}),shellScope({view:{workWorkspaceTab:'files'}}));
 });
 test('built-in resources require explicit coverage from the bundled server',()=>{
  assert.equal(hasNavigationResource({navigationResources:sidebar},'sidebarSearch'),false);

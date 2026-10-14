@@ -89,7 +89,7 @@ def update_pins(service, action, args, command_id, fingerprint, origin, *, inclu
         if command_id:
             service.db.execute('INSERT INTO commands VALUES (?,?,?)',
                                (command_id, fingerprint, json.dumps(receipt)))
-        save(service.db, service._state, {}, set(), preference_keys | {'events'})
+        changed_globals = save(service.db, service._state, {}, set(), preference_keys | {'events'})
         service.db.commit()
     except BaseException:
         service.db.rollback()
@@ -100,6 +100,7 @@ def update_pins(service, action, args, command_id, fingerprint, origin, *, inclu
                 service._state.pop(key, None)
         raise
     # Pending runtime publication keeps its ordinary durability boundary.
+    service.shell.resources.invalidate(changed_globals)
     service.projections.workspace_pins_changed()
     if action == 'navigation.pinOrder':
         service.projections.pins_changed(service.state)

@@ -431,30 +431,35 @@ test('quiet Recent grows past 100 to natural exhaustion with only an explicit ke
  await act(async()=>root.unmount());
 });
 
-test('failed Recent read retains rows; explicit Retry is shell.query, never a write replay',async()=>{
+
+let recentRead=async()=>{throw Error('Unexpected resource read')};
+const recentHost=options=>({subscribe:()=>()=>{},refreshResources:()=>recentRead(),...options});
+async function timedOutChange(t,api,value){
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{let pending;await act(async()=>{pending=api.change(value)});await act(async()=>{t.mock.timers.tick(10000);await pending})}
+ finally{t.mock.timers.reset()}
+}
+
+test('failed Recent read retains rows; explicit Retry reads only current resources, never a write replay',async t=>{
  let current={...snapshot,recentNavigation:recentFixture()},api,root;
  const calls=[];
- function Probe(){api=useRecentShortcuts({clientId:'test-client',instanceId:'chats',getSnapshot:()=>current},current,async(...args)=>{calls.push(args);return {accepted:true}});return null}
+ function Probe(){api=useRecentShortcuts(recentHost({clientId:'test-client',instanceId:'chats',getSnapshot:()=>current}),current,async(...args)=>{calls.push(args);return {accepted:true}});return null}
  await act(async()=>{root=create(React.createElement(Probe))});
- await act(async()=>api.change({limit:40}));
+ await timedOutChange(t,api,{limit:40});
  assert.equal(api.page.items.length,20);assert.match(api.error,/previous chats are kept/);
- const previousFetch=globalThis.fetch,reads=[];
- globalThis.fetch=async(_url,options)=>{
-  reads.push(JSON.parse(options.body));
-  return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({accepted:true,result:{recentNavigation:recentFixture(40,false,1)}})};
- };
+ const previousRead=recentRead,reads=[];
+ recentRead=async()=>{reads.push('resources');return {recentNavigation:recentFixture(40,false,1)}};
  try{
   await act(async()=>api.retry());
   assert.equal(api.page.items.length,40);assert.equal(api.error,'');
-  assert.equal(calls.length,1);assert.equal(reads.length,1);assert.equal(reads[0].action,'shell.query');
-  assert.deepEqual(reads[0].args,{clientId:'test-client',instanceId:'chats'});
- }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
+  assert.equal(calls.length,1);assert.equal(reads.length,1);assert.equal(reads[0],'resources');
+ }finally{recentRead=previousRead;await act(async()=>root.unmount())}
 });
 
 test('change and retry share synchronous singleflight; a late response cannot replace a changed scope',async()=>{
  let current={...snapshot,recentNavigation:recentFixture()},api,root;
  const held=[];
- function Probe(){api=useRecentShortcuts({getSnapshot:()=>current},current,()=>new Promise(resolve=>held.push(resolve)));return null}
+ function Probe(){api=useRecentShortcuts(recentHost({getSnapshot:()=>current}),current,()=>new Promise(resolve=>held.push(resolve)));return null}
  await act(async()=>{root=create(React.createElement(Probe))});
  let first;
  await act(async()=>{
@@ -470,35 +475,35 @@ test('change and retry share synchronous singleflight; a late response cannot re
  await act(async()=>root.unmount());
 });
 
-test('Retry prefers a newer host snapshot received while its read was delayed',async()=>{
+test('Retry prefers a newer host snapshot received while its read was delayed',async t=>{
  let current={...snapshot,recentNavigation:recentFixture(40,false,1)},api,root;
  const writes=[];
- function Probe(){api=useRecentShortcuts({clientId:'retry-client',instanceId:'chats',getSnapshot:()=>current},current,async(...args)=>{writes.push(args);return {accepted:true}});return null}
+ function Probe(){api=useRecentShortcuts(recentHost({clientId:'retry-client',instanceId:'chats',getSnapshot:()=>current}),current,async(...args)=>{writes.push(args);return {accepted:true}});return null}
  await act(async()=>{root=create(React.createElement(Probe))});
- await act(async()=>api.change({limit:60}));
+ await timedOutChange(t,api,{limit:60});
  assert.equal(api.page.limit,40);assert.equal(api.blocked,true);
- const previousFetch=globalThis.fetch;
+ const previousRead=recentRead;
  let resolveRead;
- globalThis.fetch=()=>new Promise(resolve=>{resolveRead=resolve});
+ recentRead=()=>new Promise(resolve=>{resolveRead=resolve});
  try{
   let retry;
   await act(async()=>{retry=api.retry()});
   current={...current,recentNavigation:recentFixture(80,true,3)};
   await act(async()=>root.update(React.createElement(Probe)));
   await act(async()=>{
-   resolveRead({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({accepted:true,result:{recentNavigation:recentFixture(60,false,2)}})});
+   resolveRead({recentNavigation:recentFixture(60,false,2)});
    await retry;
   });
   assert.equal(api.page.limit,80);assert.equal(api.settings.showAgentCreated,true);
   assert.equal(api.page.scope.viewRevision,3);assert.equal(api.blocked,false);
   assert.equal(writes.length,1);
- }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
+ }finally{recentRead=previousRead;await act(async()=>root.unmount())}
 });
 
 test('failed Load older requires reconciliation and never skips to a larger limit',async()=>{
  let root;const writes=[];
  const state={...snapshot,recentNavigation:recentFixture()};
- await act(async()=>{root=create(render(React.createElement(ConversationList,{host:{...host,getSnapshot:()=>state,dispatch:async(...args)=>{writes.push(args);throw Error('Unconfirmed Recent write')}}})))});
+ await act(async()=>{root=create(render(React.createElement(ConversationList,{host:{...host,refreshResources:()=>recentRead(),getSnapshot:()=>state,dispatch:async(...args)=>{writes.push(args);throw Error('Unconfirmed Recent write')}}})))});
  const button=text=>root.root.findAllByType('button').find(node=>node.children.includes(text));
  await act(async()=>button('Load older chats').props.onClick());
  assert.equal(button('Load older chats').props['aria-disabled'],true);
@@ -506,9 +511,9 @@ test('failed Load older requires reconciliation and never skips to a larger limi
  assert.equal(button('Show agent-created'),undefined);
  assert.equal(writes.length,1);assert.equal(writes[0][1].patch.navRecentLimit,40);
  assert.ok(button('Retry'));
- const previousFetch=globalThis.fetch;
+ const previousRead=recentRead;
  let resolveRead;
- globalThis.fetch=()=>new Promise(resolve=>{resolveRead=resolve});
+ recentRead=()=>new Promise(resolve=>{resolveRead=resolve});
  try{
   let retry;
   await act(async()=>{retry=button('Retry').props.onClick();button('Retry').props.onClick()});
@@ -516,18 +521,18 @@ test('failed Load older requires reconciliation and never skips to a larger limi
   assert.equal(button('Show agent-created'),undefined);
   assert.equal(writes.length,1);
   await act(async()=>{
-   resolveRead({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({accepted:true,result:{recentNavigation:recentFixture()}})});
+   resolveRead({recentNavigation:recentFixture()});
    await retry;
   });
   assert.equal(button('Load older chats').props['aria-disabled'],false);
- }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
+ }finally{recentRead=previousRead;await act(async()=>root.unmount())}
 });
 
-test('old matching limit with no new revision is not a successful write acknowledgement',async()=>{
+test('old matching limit with no new revision is not a successful write acknowledgement',async t=>{
  let api,root;const current={...snapshot,recentNavigation:recentFixture()};
- function Probe(){api=useRecentShortcuts({getSnapshot:()=>current},current,async()=>({accepted:true}));return null}
+ function Probe(){api=useRecentShortcuts(recentHost({getSnapshot:()=>current}),current,async()=>({accepted:true}));return null}
  await act(async()=>{root=create(React.createElement(Probe))});
- await act(async()=>api.change({showAgentCreated:false}));
+ await timedOutChange(t,api,{showAgentCreated:false});
  assert.equal(api.blocked,true);assert.equal(api.page.scope.viewRevision,0);
  assert.match(api.error,/previous chats are kept/);
  await act(async()=>root.unmount());
@@ -537,7 +542,7 @@ test('expanded Recent scope uses independent host scope, not a late response sel
  const expected={mode:'workspace',workspaceId:'b',filter:'',clientId:'scope-client',instanceId:'chats',generation:2};
  let current={...snapshot,generation:2,recentScope:expected,recentNavigation:{...recentFixture(),
   scope:{...recentFixture().scope,...expected}}},api,root;
- const scopedHost={clientId:'scope-client',instanceId:'chats',getSnapshot:()=>current};
+ const scopedHost=recentHost({clientId:'scope-client',instanceId:'chats',getSnapshot:()=>current});
  function Probe(){api=useRecentShortcuts(scopedHost,current,async()=>({accepted:true}));return null}
  await act(async()=>{root=create(React.createElement(Probe))});
  for(const [key,value] of Object.entries({mode:'all',workspaceId:'elsewhere',clientId:'other',instanceId:'other',generation:3})){
@@ -551,7 +556,7 @@ test('expanded Recent scope uses independent host scope, not a late response sel
 
 test('a stale origin scope cannot self-match after the saved origin setting changes',async()=>{
  let current={...snapshot,recentNavigation:recentFixture(),view:{navShowAgentCreated:false}},api,root;
- function Probe(){api=useRecentShortcuts({getSnapshot:()=>current},current,async()=>({accepted:true}));return null}
+ function Probe(){api=useRecentShortcuts(recentHost({getSnapshot:()=>current}),current,async()=>({accepted:true}));return null}
  await act(async()=>{root=create(React.createElement(Probe))});
  current={...current,view:{navShowAgentCreated:true},recentNavigation:recentFixture(40,false,2)};
  await act(async()=>root.update(React.createElement(Probe)));
@@ -568,7 +573,7 @@ for(const registration of ['missing','unavailable'])test(`Recent retains canonic
  let current={...snapshot,selectedWorkspaceId:'pinned-missing',generation:2,recentScope:effective,
   workspaces:registration==='missing'?[]:[{id:'pinned-missing',path:'/gone',available:false}],
   recentNavigation:empty(20,0)},api,root;
- const scopedHost={clientId:'pinned-client',instanceId:'chats',getSnapshot:()=>current};
+ const scopedHost=recentHost({clientId:'pinned-client',instanceId:'chats',getSnapshot:()=>current});
  function Probe(){api=useRecentShortcuts(scopedHost,current,async(_name,{patch})=>{
   current={...current,view:{...current.view,...patch},recentNavigation:empty(patch.navRecentLimit,1)};
   return {accepted:true};
@@ -584,18 +589,42 @@ for(const registration of ['missing','unavailable'])test(`Recent retains canonic
  current={...current,recentScope:restoredScope,workspaces:[{id:'pinned-missing',path:'/restored',available:true}],recentNavigation:restored};
  await act(async()=>root.update(React.createElement(Probe)));
  assert.deepEqual(api.page.items,restored.items);assert.equal(api.page.scope.workspaceId,'pinned-missing');
- const previousFetch=globalThis.fetch;let release;
- globalThis.fetch=()=>new Promise(resolve=>{release=resolve});
+ const previousRead=recentRead;let release;
+ recentRead=()=>new Promise(resolve=>{release=resolve});
  try{
   let pending;await act(async()=>{pending=api.retry()});
   // Delayed old response must not self-match even with a larger revision.
   current={...current,recentNavigation:empty(40,99)};
   await act(async()=>root.update(React.createElement(Probe)));
   await act(async()=>{
-   release({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({accepted:true,result:{recentNavigation:empty(40,99)}})});
+   release({recentNavigation:empty(40,99)});
    await pending;
   });
   assert.deepEqual(api.page.items,restored.items);assert.equal(api.page.scope.workspaceId,'pinned-missing');
   assert.match(api.error,/changed during the read/);
- }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
+ }finally{recentRead=previousRead;await act(async()=>root.unmount())}
+});
+
+
+test('Recent receipt stays pending until its exact scoped page arrives through the stream',async()=>{
+ let current={...snapshot,recentNavigation:recentFixture()},api,root;const listeners=new Set(),writes=[];
+ const scopedHost=recentHost({getSnapshot:()=>current,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}});
+ function Probe(){api=useRecentShortcuts(scopedHost,current,async(...args)=>{writes.push(args);return {accepted:true}});return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ let pending;await act(async()=>{pending=api.change({limit:40})});
+ assert.equal(api.busy,true);assert.equal(api.error,'');assert.equal(api.page.limit,20);assert.equal(listeners.size,1);
+ current={...current,view:{navRecentLimit:40},recentNavigation:recentFixture(40,false,1)};
+ await act(async()=>{listeners.forEach(fn=>fn());await pending;root.update(React.createElement(Probe))});
+ assert.equal(api.busy,false);assert.equal(api.error,'');assert.equal(api.page.limit,40);assert.equal(listeners.size,0);assert.equal(writes.length,1);
+ await act(async()=>root.unmount());
+});
+
+test('Recent unmount cancels its projection wait and releases its listener without retrying a write',async()=>{
+ let api,root;const current={...snapshot,recentNavigation:recentFixture()},listeners=new Set(),writes=[];
+ const scopedHost=recentHost({getSnapshot:()=>current,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}});
+ function Probe(){api=useRecentShortcuts(scopedHost,current,async(...args)=>{writes.push(args);return {accepted:true}});return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ let pending;await act(async()=>{pending=api.change({limit:40})});assert.equal(listeners.size,1);
+ await act(async()=>root.unmount());await pending;
+ assert.equal(listeners.size,0);assert.equal(writes.length,1);
 });
