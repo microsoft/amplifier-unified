@@ -262,6 +262,39 @@ the total inspection duration are bounded; deadline/cancellation cannot create
 a late candidate receipt. A replacement worker makes prior loaded-state
 continuity unknown even when current source still matches.
 
+### Explicit integration validation — 2026-10-14
+
+Combining an assignment's outputs requires an explicitly named integration
+responsible member. The commissioning owner may assign or clear that duty with
+the current assignment revision; it never enrolls an independent conversation.
+Independent conversations can validate their own candidates without creating an
+assignment. Responsibility records coordination, not wider file/tool authority.
+
+An explicit validation names a retained candidate, one of its repositories and
+the exact command and timeout. It checks the complete candidate before
+submitting through the existing Operations shell policy/approval owner, then
+rechecks admission after approval. The current worker must positively confirm
+support; replacement or older adapters refuse before submission. Stop, responsibility and execution changes
+invalidate delayed admission. This is an observation boundary, not a filesystem
+lock against external writers. Stable command identities retain uncertain
+admission without repeating commands after lost acknowledgment or restart.
+
+Explicit collection reads that operation's native terminal evidence and checks
+the candidate again. Command exit, output completeness, source/dependency match
+and retained artifacts remain separate facts. A zero exit and matching candidate
+permit a successful validation receipt only for that named command/repository;
+they do not prove the command was a meaningful test, that every repository was
+integrated, or that anything was published. Missing terminal evidence remains
+unknown. Resulting repository commits/snapshots and supported exact file
+references use existing command and output owners. Collection preserves earlier
+receipts, including partial failures and changed candidates.
+
+Per-repository publication status defaults to unknown. Explicit reports carry
+their author and references, distinguished from any existing authoritative
+publication evidence. Recording a status never merges, publishes or deploys.
+Passive read/list and progressively disclosed user controls share the agent
+actions and do not execute validation or collect mutable source automatically.
+
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.
 
 ### Configuration authority addition — 2026-10-14

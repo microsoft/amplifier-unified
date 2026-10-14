@@ -3993,6 +3993,9 @@ class AppService:
                 for question_id in values:
                     self.questions.answer_for_dependency(session_id, question_id)
                 return {"admitted": True, "questionIds": values}
+        if operation == 'integration.admit':
+            from .integration_validation import admit
+            return await admit(self, session_id, args.get('id'), args.get('command'))
         if operation == "operations.observe":
             return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
         if operation == "computer.visual.read":

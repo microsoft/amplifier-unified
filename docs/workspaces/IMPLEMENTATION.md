@@ -28,6 +28,56 @@ limits. Their test counts overlap and must not be added into a combined-suite
 result. Final combined source/package qualification is pending; no publication,
 deployment or fresh-worker adoption is established by this ledger.
 
+## Explicit integration commands and collected results — candidate
+
+`assignment.integration` lets the commissioning owner explicitly name a current
+member responsible for combining work, using the assignment revision. It never
+enrolls independent peers or starts work. Independent conversations can validate
+their own candidates without an assignment; an assignment member requires the
+explicit responsibility before admission.
+
+`integration.validate` names a saved candidate, one exact repository, command
+and timeout. It checks the complete candidate, saves intent in existing command
+receipts and submits through the existing Operations request and shell approval
+path. Commands are bound through approval; unsupported admission adapters
+refuse. The worker asks the host to recheck candidate, Stop, responsibility and
+execution after approval, before invoking the mounted shell. This check is an
+observation boundary, not a filesystem fence against external writers or a new
+sandbox. Operation admission and terminal outcomes remain in their existing
+owner. Lost acknowledgment, shutdown and restart never automatically repeat a
+validation command.
+
+Explicit `integration.collect` combines at most eight exact invocation receipts
+for one candidate. It records native process/owner identity, terminal state,
+exit code, output/capture completeness and exact pre/post source observations.
+Every listed repository has its own outcome; an unvalidated repository stays
+unvalidated. A zero exit without complete native evidence or matching source
+does not qualify a passed validation. Current Git HEAD/source snapshots and up
+to sixteen exact local result references are retained, using the existing
+Outputs store with its 8 MiB/file and 16 MiB combined limits. Publication is
+unknown unless explicitly reported, with author/reference and an explicit lack
+of owner confirmation. Recording a publication report has no external effect.
+
+Read/list and the advanced execution disclosure share these actions with the
+agent bridge and attached-session commands. Pending browser request identities
+survive reload. Collection does not execute commands or auto-import modules.
+Command success covers the named invocation, not the quality of its tests,
+semantic correctness of the combination, complete subprocess import closure,
+hermetic isolation, publication, deployment or host adoption. Shell subprocess
+dependencies remain distinct from previously observed worker-loaded modules.
+
+Qualification: 101 focused checks pass with the selected native Core/Foundation
+and managed Bash module, including exact imports from two explicit repository
+copies, a real merge conflict preserving both contributors, delayed post-approval
+Stop, unknown adapters, partial results, durable files and HTTP/agent parity.
+The final current-worker capability/replacement fence has two passing focused
+rechecks. The 693 frontend checks and production desktop/mobile integration and
+assignment journeys pass. Browser validation uses actual managed shell commands
+with synthetic approval hooks; response-loss/reload retries do not duplicate
+execution, and saved downloads survive original-file deletion. Served production
+asset bytes were checked against the built files. These observations do not
+claim provider-driven decision quality, installed-package adoption or deployment.
+
 ## Preserving checkout archive — 2026-10-14
 
 Unused app-created checkouts now have separate archive and restore actions.

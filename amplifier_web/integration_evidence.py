@@ -14,6 +14,7 @@ MAX_INSPECTION_SECONDS = 120
 
 
 def definitions(schema, string):
+    from .integration_validation import definitions as validation_definitions
     sid = {'sessionId': string(200)}
     identity = {**sid, 'id': string(200)}
     module_name = {**string(200), 'pattern': r'^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$'}
@@ -22,6 +23,7 @@ def definitions(schema, string):
     dependency = schema({'module': module_name, 'repositoryPath': string(4000), 'path': string(4000),
         'sha256': {'type': 'string', 'pattern': '^[a-f0-9]{64}$'}}, ['module', 'repositoryPath', 'path', 'sha256'])
     return {
+        **validation_definitions(schema, string),
         'runtime.provenance': ('Inspect already-loaded Core/Foundation, mounted object types and explicit project modules in the running worker. Never imports requested code, starts a worker, or proves tests/isolation. Current file hashes are distinct from exact imported bytes.', schema({**sid, 'modules': modules}, ['sessionId'])),
         'integration.capture': ('Retain a bounded combined candidate from inspected repository sourceRevision values and expected loaded-module origins/hashes. Saves evidence only; never tests, imports, installs or changes dependencies. Mismatch and unknown remain explicit.', schema({**sid, 'purpose': string(500),
             'repositories': {'type': 'array', 'minItems': 1, 'maxItems': 8, 'items': repository},
@@ -39,7 +41,7 @@ def binding(session):
 def receipt(app, sid, identity):
     row = app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
     value = json.loads(row[0]) if row else {}
-    if (value.get('commandAction') not in {'integration.capture', 'integration.check'}
+    if (value.get('commandAction') not in {'integration.capture', 'integration.check', 'integration.validate', 'integration.collect'}
             or value.get('result', {}).get('sessionId') != sid):
         raise ValueError('Choose this conversation\'s exact candidate receipt.')
     return value['result']
@@ -110,7 +112,7 @@ async def _dispatch(app, action, args, origin, command_id, caller):
             if action == 'integration.list':
                 fields = ('id', 'kind', 'status', 'purpose', 'capturedAt', 'captureId')
                 columns = ','.join("json_extract(receipt,'$.result." + key + "')" for key in fields)
-                rows = app.db.execute("SELECT rowid," + columns + " FROM commands WHERE json_extract(receipt,'$.commandAction') IN ('integration.capture','integration.check') AND json_extract(receipt,'$.result.sessionId')=? AND rowid<? ORDER BY rowid DESC LIMIT 17", (sid, args.get('before', 9007199254740991))).fetchall()
+                rows = app.db.execute("SELECT rowid," + columns + " FROM commands WHERE json_extract(receipt,'$.commandAction') IN ('integration.capture','integration.check','integration.validate','integration.collect') AND json_extract(receipt,'$.result.sessionId')=? AND rowid<? ORDER BY rowid DESC LIMIT 17", (sid, args.get('before', 9007199254740991))).fetchall()
                 return {'accepted': True, 'result': {'items': [{key: value for key, value in zip(fields, row[1:]) if value is not None} for row in rows[:16]],
                     'nextBefore': rows[15][0] if len(rows) > 16 else None}}
             captured_binding = binding(source)
@@ -224,6 +226,9 @@ async def _dispatch(app, action, args, origin, command_id, caller):
 
 
 async def dispatch(app, action, args, origin, command_id, caller):
+    from .integration_validation import ACTIONS, dispatch as validation_dispatch
+    if action in ACTIONS:
+        return await validation_dispatch(app, action, args, origin, command_id, caller)
     from .service import AppError
     try:
         async with asyncio.timeout(MAX_INSPECTION_SECONDS):

@@ -118,8 +118,10 @@ def setup_routes(app, streams):
             "integration.list": "sessionId",
             **{name: 'sessionId' for name in ('workspace.resources.managed', 'workspace.resources.provision',
                 'workspace.resources.read', 'workspace.resources.retire')},
+            "integration.validate": "sessionId", "integration.collect": "sessionId",
             "assignment.read": "sessionId", "assignment.start": "sessionId",
             "assignment.set": "sessionId", "assignment.stop": "sessionId", "assignment.detach": "sessionId",
+            "assignment.integration": "sessionId",
             "coordination.watch": "sessionId", "coordination.watch.read": "sessionId", "coordination.watch.cancel": "sessionId",
         }.get(action)
         if key is None:
