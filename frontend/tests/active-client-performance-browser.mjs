@@ -1,17 +1,33 @@
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {writeFile} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {dirname} from 'node:path';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/active_client_performance_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
-let browser,terminal,stopCompanion=true,companionTask;
+let browser,terminal,stopCompanion=true,companionTask,api,result,primaryError,diagnosticsBefore,diagnosticsAfter;
+const clientRequests=[],samples=[],companionSamples=[],diagnosticErrors=[],cleanupErrors=[];
+const retain=(rows,row)=>{rows.push(row);if(rows.length>128)rows.shift()};
+const evidence=async()=>{
+ const value={...(result||{}),samples,clientRequests,companionSamples,diagnosticsBefore,diagnosticsAfter,
+  failure:primaryError?.stack?.slice(0,16000),diagnosticErrors,cleanupErrors,
+  timingLimits:'Client/server wall timestamps share the fixture host clock. Capacity includes lock wait; save spans are nested. Do not add overlapping durations. Client elapsed minus server duration includes scheduling/transport, not a proven queue cause.'};
+ if(process.env.AMPLIFIER_PERF_EVIDENCE){await mkdir(dirname(process.env.AMPLIFIER_PERF_EVIDENCE),{recursive:true});await writeFile(process.env.AMPLIFIER_PERF_EVIDENCE,JSON.stringify(value,null,2)+'\n')}
+};
 const stats=values=>{const s=[...values].sort((a,b)=>a-b);return {samples:s.length,medianMs:Math.round(s[Math.floor(s.length/2)]),p95Ms:Math.round(s[Math.min(s.length-1,Math.floor(s.length*.95))]),maxMs:Math.round(s.at(-1))}};
 try{
  const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),45000);let output='';fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const r=JSON.parse(line);if(r.url){clearTimeout(timer);resolve(r.url)}}catch{}})});
  const headers={Authorization:'Bearer fixture-active-client-token','Content-Type':'application/json'};
- const api=async(path,body)=>{const response=await fetch(url+path,{headers,signal:AbortSignal.timeout(15000),...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})});assert.equal(response.status,200,path);return response.json()};
+ api=async(path,body)=>{
+  const started=performance.now(),row={path,startedAtMs:Date.now(),...(path==='/fixture/admit'?{callId:body.id}:{})};
+  try{const response=await fetch(url+path,{headers,signal:AbortSignal.timeout(15000),...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})});
+   Object.assign(row,{status:response.status,serverTiming:response.headers.get('server-timing'),requestId:response.headers.get('x-fixture-request-id')||response.headers.get('x-amplifier-request-id')});
+   assert.equal(response.status,200,path);return await response.json();
+  }catch(error){row.errorType=error.name;throw error}
+  finally{Object.assign(row,{elapsedMs:performance.now()-started,endedAtMs:Date.now()});retain(clientRequests,row)}
+ };
  const {sessions}=await api('/fixture/metrics');
  browser=await chromium.launch({headless:true});
  const pages=[],errors=[],viewCounts=[];
@@ -37,9 +53,10 @@ try{
  const companionDurations=[],companionStatuses=[],companionErrors=[];
  let companionPending=0,companionMax=0,companionEtag,lastCompanion;
  const pollCompanion=async working=>{
-  const start=performance.now();companionPending++;companionMax=Math.max(companionMax,companionPending);
+  const start=performance.now(),sample={startedAtMs:Date.now(),working};companionPending++;companionMax=Math.max(companionMax,companionPending);
   try{
    const response=await fetch(url+'/api/companion',{headers:{...headers,'X-Amplifier-Client':'performance-companion',...(companionEtag?{'If-None-Match':companionEtag}:{})},signal:AbortSignal.timeout(15000)});
+   Object.assign(sample,{status:response.status,serverTiming:response.headers.get('server-timing'),requestId:response.headers.get('x-amplifier-request-id')});
    assert.ok([200,304].includes(response.status),'Companion HTTP '+response.status);
    if(response.status===200)lastCompanion=await response.json();
    else assert.ok(companionEtag&&lastCompanion,'Conditional response needs a prior representation');
@@ -51,8 +68,9 @@ try{
    assert.deepEqual(lastCompanion.items.map(row=>row.id).sort(),[...companionBefore.noticeIds].sort());
    companionStatuses.push(response.status);
    return performance.now()-start;
-  }finally{companionPending--}
+  }finally{companionPending--;Object.assign(sample,{elapsedMs:performance.now()-start,endedAtMs:Date.now()});retain(companionSamples,sample)}
  };
+ diagnosticsBefore=await api('/fixture/diagnostics');
  await api('/fixture/progress',{running:true});
  // Representative one-second stress cadence, not a measured Tempo interval.
  // A slow response delays the next poll; never queue or overlap observations.
@@ -60,9 +78,11 @@ try{
  companionTask=(async()=>{try{while(!stopCompanion){const start=performance.now();companionDurations.push(await pollCompanion(1));if(!stopCompanion)await new Promise(resolve=>setTimeout(resolve,Math.max(0,1000-(performance.now()-start))))}}catch(error){companionErrors.push(error.stack||String(error))}})();
  const health=[],admissions=[],actions=[];
  for(let i=0;i<12;i++){
+  const sample={index:i,callId:'synthetic-admission-'+i,startedAtMs:Date.now()};
   let start=performance.now();await api('/api/health');health.push(performance.now()-start);
   start=performance.now();assert.equal((await api('/fixture/admit',{id:'synthetic-admission-'+i})).allowed,true);admissions.push(performance.now()-start);
   start=performance.now();await pages[i%4].evaluate(n=>window.amplifier.dispatch('view.update',{patch:{navExpanded:n%2===0}}),i);actions.push(performance.now()-start);
+  Object.assign(sample,{healthMs:health.at(-1),admissionMs:admissions.at(-1),actionMs:actions.at(-1),endedAtMs:Date.now()});retain(samples,sample);
   await new Promise(resolve=>setTimeout(resolve,100));
  }
  stopCompanion=true;await companionTask;
@@ -79,11 +99,21 @@ try{
  assert.equal(metrics.companion.snapshots,0);assert.equal(metrics.companion.leases,0);assert.equal(metrics.companion.readers,0);
  assert.equal(companionMax,1);assert.equal(companionPending,0);
  // Generous end-to-end ceilings catch seconds-long queues without fragile CPU microbenchmarks.
- const result={catalogSessions:22915,workspaces:3932,browsers:4,terminalStreams:1,health:stats(health),admission:stats(admissions),actions:stats(actions),viewMaxInFlight:viewCounts.map(r=>r.max),ticks:metrics.ticks,terminalFrames,draftsRetained:true,modelCalls:0,
+ result={catalogSessions:22915,workspaces:3932,browsers:4,terminalStreams:1,health:stats(health),admission:stats(admissions),actions:stats(actions),viewMaxInFlight:viewCounts.map(r=>r.max),ticks:metrics.ticks,terminalFrames,draftsRetained:true,modelCalls:0,
   companion:{clients:1,cadenceMs:1000,cadence:'representative stress workload',...stats(companionDurations),quietMs:Math.round(companionQuietMs),statuses:companionStatuses,maxInFlight:companionMax,pins:14,noticeOwners:100,readReceipts:153,selectionRetained:true,snapshots:metrics.companion.snapshots,leases:metrics.companion.leases,readers:metrics.companion.readers}};
- if(process.env.AMPLIFIER_PERF_EVIDENCE)await writeFile(process.env.AMPLIFIER_PERF_EVIDENCE,JSON.stringify(result,null,2)+'\n');
+ diagnosticsAfter=await api('/fixture/diagnostics');
+ await evidence().catch(error=>diagnosticErrors.push(error.message.slice(0,1000)));
  console.log(JSON.stringify(result,null,2));
  assert.ok(result.health.p95Ms<1500,JSON.stringify(result));assert.ok(result.admission.p95Ms<1500,JSON.stringify(result));assert.ok(result.actions.p95Ms<2000,JSON.stringify(result));
  assert.ok(result.viewMaxInFlight.every(n=>n<=1),JSON.stringify(result));
  terminal.abort();await drain;
-}finally{stopCompanion=true;await companionTask;terminal?.abort();await browser?.close();fixture.kill();}
+}catch(error){primaryError=error;throw error}
+finally{
+ stopCompanion=true;
+ for(const cleanup of [()=>companionTask,async()=>{if(api)diagnosticsAfter=await api('/fixture/diagnostics')},()=>terminal?.abort(),()=>browser?.close(),()=>fixture.kill()]){
+  try{await cleanup()}catch(error){cleanupErrors.push({name:error.name,message:error.message.slice(0,1000)})}
+ }
+ await evidence().catch(error=>diagnosticErrors.push(error.message.slice(0,1000)));
+ if(diagnosticErrors.length||cleanupErrors.length)console.error(JSON.stringify({diagnosticErrors,cleanupErrors}));
+ if(!primaryError&&(diagnosticErrors.length||cleanupErrors.length))throw Error('Performance evidence or cleanup failed; see diagnostic errors');
+}
