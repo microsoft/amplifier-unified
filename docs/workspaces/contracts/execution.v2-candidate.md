@@ -416,6 +416,14 @@ conversation after interruption settles; retained usage and late corrections
 remain attributable. Detaching never interrupts another conversation or erases
 accounting. No cleanup or external resource teardown is implied by Stop.
 
+Orderly host shutdown closes admission before asynchronous cleanup and marks its
+owned live workers as expected to exit. This maintenance boundary does not act
+as a conversation or assignment Stop: settled conversations retain their state,
+unfinished execution is interrupted, and no work is replayed. Unexpected worker
+exits and worker-reported failures remain errors. Generated systemd units signal
+the host first, retaining bounded final process-group cleanup; existing custom
+units require an explicit reviewed replacement to adopt that policy.
+
 The current adapter cannot interrupt or account for only one request inside an
 independent peer's mixed conversation. Stop reports that limitation and suppresses
 pending assignment input without substituting a whole-conversation interruption.

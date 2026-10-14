@@ -74,7 +74,8 @@ async def test_stop_event_precedes_exit_new_admission_waits_without_replay(tmp_p
 
 
 @pytest.mark.parametrize('explicit_stop', [False, True])
-async def test_configuration_shutdown_is_cold_but_concurrent_user_stop_wins(tmp_path, explicit_stop):
+@pytest.mark.parametrize('reason', ['configuration', 'shutdown'])
+async def test_configuration_shutdown_is_cold_but_concurrent_user_stop_wins(tmp_path, explicit_stop, reason):
     fixture, release, log = (tmp_path / name for name in ('worker.py', 'release', 'commands.jsonl'))
     fixture.write_text(FIXTURE)
     manager = RuntimeManager(command=[sys.executable, str(fixture), str(release), str(log)])
@@ -84,14 +85,14 @@ async def test_configuration_shutdown_is_cold_but_concurrent_user_stop_wins(tmp_
         if kind == 'runtime.warmth' and data['status'] == 'cold': cold.set()
     try:
         await manager.start({'id': 'owned', 'workspace': str(tmp_path), 'bundle': 'fixture'}, emit)
-        refresh = asyncio.create_task(manager.stop('owned', reason='configuration'))
+        refresh = asyncio.create_task(manager.stop('owned', reason=reason))
         await asyncio.wait_for(cold.wait(), 10)
         assert not any(kind == 'runtime.status' and data['status'] == 'stopped' for kind, data in events)
         stop = asyncio.create_task(manager.stop('owned')) if explicit_stop else None
         if stop:
             await asyncio.sleep(0)
             # A queued maintenance request must not overwrite this user intent.
-            later = asyncio.create_task(manager.stop('owned', reason='configuration'))
+            later = asyncio.create_task(manager.stop('owned', reason=reason))
             await asyncio.sleep(0)
         release.touch()
         await asyncio.wait_for(refresh, 10)

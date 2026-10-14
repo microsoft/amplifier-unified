@@ -138,6 +138,7 @@ Type=simple
 ExecStart={" ".join(shlex.quote(item) for item in command)}
 Restart=on-failure
 RestartSec=5
+KillMode=mixed
 Environment="PATH={service_path}"
 Environment="AMPLIFIER_SESSION_STATE_HOME={state_home}"{access_line}
 

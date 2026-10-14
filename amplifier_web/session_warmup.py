@@ -117,10 +117,11 @@ class SessionWarmup:
             # Merely visiting a saved chat must leave its history readable.
             from .session_health import exception_details
             from .worker_diagnostics import diagnostic_reference
+            from .runtime import RuntimeHostClosingError
             detail = exception_details(exc)
             async with self.service.lock:
                 current = self.service._session(identity)
-                current['preparation'] = {'status': 'unavailable',
+                current['preparation'] = {'status': 'cold'} if isinstance(exc, RuntimeHostClosingError) else {'status': 'unavailable',
                     'detail': detail['summary'] + ' ' + detail['guidance'],
                     **diagnostic_reference(exc)}
                 self.service._publish_progress(session_ids={identity}, record_only=True)

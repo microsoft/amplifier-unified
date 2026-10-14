@@ -35,6 +35,13 @@ class RuntimeStartupError(RuntimeError):
     """This attempt failed preparation before the worker submitted its input."""
 
 
+class RuntimeHostClosingError(RuntimeError):
+    """The host deliberately closed admission; outstanding effects stay unknown."""
+
+    def __init__(self):
+        super().__init__('The runtime host is closing. Unconfirmed work was not replayed.')
+
+
 class RuntimePreparationCancelled(asyncio.CancelledError):
     """The outer task was cancelled before native input admission."""
 
@@ -314,6 +321,8 @@ class RuntimeManager:
     async def _admission(self, sid):
         while True:
             async with self._locks.setdefault(sid, asyncio.Lock()):
+                if self._closed:
+                    raise RuntimeHostClosingError()
                 row = self.workers.get(sid)
                 retirement = row.get('retirement_task') if row else None
                 stopping = row.get('stop_task') if row else None
@@ -337,12 +346,16 @@ class RuntimeManager:
             # Stop. Waiting outside the lock neither cancels nor replays it.
             try:
                 await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+            except asyncio.CancelledError:
+                if self._closed and not asyncio.current_task().cancelling():
+                    raise RuntimeHostClosingError() from None
+                raise
             except TimeoutError as exc:
                 raise RuntimeError('Worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
     async def _start_locked(self, session, emit, *, preserve_emit=False):
         if self._closed:
-            raise RuntimeError("The runtime host is closing.")
+            raise RuntimeHostClosingError()
         sid = session["id"]
         self._check_execution(sid, session)
         self._retired.pop(sid, None)
@@ -369,7 +382,7 @@ class RuntimeManager:
         reservation = None
         source_reservation = None
         proc = lease = None
-        preparation = {"stopped": False, "task": None, "started_at": time.monotonic()}
+        preparation = {"stopped": self._closed, "shutdown": self._closed, "task": None, "started_at": time.monotonic()}
         self._preparations[sid] = preparation
         heartbeat = asyncio.create_task(self._preparation_progress(sid, preparation, emit))
         try:
@@ -419,6 +432,10 @@ class RuntimeManager:
                 # must enter the same cleanup path as qualification/spawn errors.
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
+            if preparation.get('shutdown'):
+                raise RuntimeHostClosingError()
+            if preparation['stopped']:
+                raise RuntimeStartupError('Runtime preparation was stopped before input admission.')
         except BaseException as exc:
             try:
                 if proc is not None and proc.returncode is None:
@@ -431,6 +448,11 @@ class RuntimeManager:
                         lease.unlink(missing_ok=True)
                     except OSError:
                         pass  # An orphan lease is retained evidence, not an owner.
+            if preparation.get('shutdown'):
+                await emit('runtime.ended', {'sessionId': sid, 'status': 'interrupted', 'reason': 'shutdown'})
+                if isinstance(exc, asyncio.CancelledError) and asyncio.current_task().cancelling():
+                    raise
+                raise RuntimeHostClosingError() from None
             if isinstance(exc, asyncio.CancelledError):
                 await emit("runtime.status", {"sessionId": sid, "status": "stopped",
                     "phase": "runtime-setup", "detail": "Preparation cancelled before input admission."})
@@ -511,8 +533,13 @@ class RuntimeManager:
         except TimeoutError as exc:
             await self.stop(sid)
             raise RuntimeError(f"Amplifier preparation exceeded {self.startup_timeout:g} seconds and was stopped before accepting your message. Check the configured bundle, then retry.") from exc
-        except BaseException:
-            await self.stop(sid)
+        except BaseException as exc:
+            await self.stop(sid, reason='shutdown' if self._closed else 'stopped')
+            if (isinstance(exc, asyncio.CancelledError) and self._closed
+                    and row.get('stop_reason') == 'shutdown' and not asyncio.current_task().cancelling()):
+                # close() cancelled this owner's readiness future, not the
+                # caller task. Preserve external cancellation as cancellation.
+                raise RuntimeHostClosingError() from None
             raise
 
     async def _progress(self, sid, row):
@@ -708,9 +735,8 @@ class RuntimeManager:
                     normalized = normalize_event(data, sid, row["inputId"])
                     if (normalized and normalized[0] == 'runtime.status'
                             and normalized[1].get('status') == 'stopped'
-                            and row.get('stop_reason') == 'configuration'):
-                        # The process closed to replace its mounted settings.
-                        # This is not a durable user interruption of the chat.
+                            and row.get('stop_reason') in {'configuration', 'shutdown'}):
+                        # Closing a process for maintenance is not a user Stop.
                         normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
                     if normalized:
                         await row["emit"](*normalized)
@@ -750,12 +776,15 @@ class RuntimeManager:
             row.get('sendInputs', {}).clear()
             for future in row["pending"].values():
                 if not future.done():
-                    future.set_exception(RuntimeError("Amplifier worker disconnected"))
+                    future.set_exception(RuntimeHostClosingError() if row.get('stop_reason') == 'shutdown'
+                                         else RuntimeError("Amplifier worker disconnected"))
 
     async def _execution_ended(self, sid, row, status):
         """Only a confirmed process exit settles independent background calls."""
         if row.get("executionEnded"): return
-        await row["emit"]("runtime.ended", {"sessionId": sid, "status": status, "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
+        shutdown = row.get('stop_reason') == 'shutdown'
+        await row["emit"]("runtime.ended", {"sessionId": sid, "status": 'interrupted' if shutdown else status,
+            **({'reason': 'shutdown'} if shutdown else {}), "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
         # The reader can be cancelled while delivery waits for the service
         # lock. Only successful delivery suppresses the stop-path retry.
         row["executionEnded"] = True
@@ -780,6 +809,8 @@ class RuntimeManager:
         return await self._reply(*await self._admit(sid, op, args), op=op, args=args)
 
     async def _admit(self, sid, op, args):
+        if self._closed:
+            raise RuntimeHostClosingError()
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
@@ -940,7 +971,7 @@ class RuntimeManager:
             if requested:
                 await self.control(session['id'],'provider.select',requested)
                 await emit('runtime.modelSelectionApplied',{'sessionId':session['id'],'selection':requested})
-        except (SessionInUseError, RuntimeStartupError):
+        except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
             raise
         except Exception as exc:
             failure = RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')
@@ -1181,6 +1212,10 @@ class RuntimeManager:
         self._retired.pop(session_id, None)
         preparation = self._preparations.get(session_id)
         if preparation:
+            if reason == 'stopped' or 'stop_reason' not in preparation:
+                preparation['stop_reason'] = reason
+            if reason == 'stopped':
+                preparation['shutdown'] = False
             preparation["stopped"] = True
             if preparation["task"] is not None:
                 preparation["task"].cancel()
@@ -1190,7 +1225,7 @@ class RuntimeManager:
             return
         # A real Stop wins even if maintenance already started shutdown. A later
         # refresh cannot downgrade an explicit Stop that owns this process.
-        if reason != 'configuration' or 'stop_reason' not in row:
+        if reason == 'stopped' or 'stop_reason' not in row:
             row['stop_reason'] = reason
         retirement = row.get('retirement_task')
         if retirement and retirement is not asyncio.current_task() and not retirement.done():
@@ -1201,6 +1236,10 @@ class RuntimeManager:
         await asyncio.shield(row["stop_task"])
 
     async def _stop_row(self, session_id, row):
+        # An exit already observed before the shutdown boundary is still a
+        # crash. Let its reader record that evidence before cancelling readers.
+        if row['process'].returncode is not None and not row['closing']:
+            await asyncio.shield(row['reader'])
         row["closing"] = True
         if not row["ready"].done():
             row["ready"].cancel()
@@ -1228,7 +1267,7 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
-        cold = row.get("retiring") or row.get('stop_reason') == 'configuration'
+        cold = row.get("retiring") or row.get('stop_reason') in {'configuration', 'shutdown'}
         await row["emit"]("runtime.warmth" if cold else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if cold else "stopped"})
         if self.workers.get(session_id) is row:
@@ -1236,10 +1275,25 @@ class RuntimeManager:
             if row.get('generation_lease'):
                 row['generation_lease'].unlink(missing_ok=True)
 
-    async def close(self):
+    def begin_shutdown(self):
+        """Synchronously fence admission and classify only our live owners."""
         self._closed = True
+        for preparation in self._preparations.values():
+            preparation['stopped'] = True
+            if preparation.get('stop_reason') != 'stopped':
+                preparation.update(shutdown=True, stop_reason='shutdown')
+            if preparation['task'] is not None:
+                preparation['task'].cancel()
+        for row in self.workers.values():
+            if row['process'].returncode is None:
+                row['closing'] = True
+                if row.get('stop_reason') != 'stopped':
+                    row['stop_reason'] = 'shutdown'
+
+    async def close(self):
+        self.begin_shutdown()
         await self.retention.close()
-        await asyncio.gather(*(self.stop(sid) for sid in set(self.workers) | set(self._preparations)), return_exceptions=True)
+        await asyncio.gather(*(self.stop(sid, reason='shutdown') for sid in set(self.workers) | set(self._preparations)), return_exceptions=True)
         self._retired.clear()
 
     async def spawn_worker(self, session, instruction, input_id, emit):
