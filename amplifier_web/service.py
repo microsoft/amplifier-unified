@@ -455,6 +455,8 @@ class AppService:
         self._state = value
 
     def __init__(self, data_dir: Path, runtime=None, workspace=None):
+        from .installed_build import capture
+        self.installed_build = capture()
         self.data_dir = Path(data_dir).expanduser()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(self.data_dir / "app.sqlite3")

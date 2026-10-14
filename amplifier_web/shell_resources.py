@@ -310,6 +310,12 @@ class ShellResources:
                         own[resource] = previous[resource]
                     else:
                         dirty.add(resource)
+                        diagnostics = getattr(self.shell.service, 'performance_diagnostics', None)
+                        if diagnostics is not None:
+                            from .shell_resource_diagnostics import rebuild_reasons
+                            reasons, globals_changed = rebuild_reasons(previous_keys.get(resource), key,
+                                workspace_page=resource in {'workspaceExplorer', 'workspaceShortcuts', 'workspaceOverview'})
+                            diagnostics.record_resource_rebuild(resource, instance['package'], reasons, globals_changed)
                 if dirty:
                     count(self.shell.service, 'shell.resources.pages.build', len(dirty))
                     with measure(self.shell.service, 'shell.resources.pages', synchronous=True):

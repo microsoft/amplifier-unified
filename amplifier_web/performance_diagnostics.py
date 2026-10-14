@@ -19,6 +19,8 @@ class PerformanceDiagnostics:
         self.counters = {}
         self.slow = deque(maxlen=60)
         self.lag = deque(maxlen=60)
+        self.resource_rebuilds = deque(maxlen=60)
+        self.resource_rebuild_counts = {'total': 0, 'byReason': {}, 'byResource': {}}
         self.lock = threading.Lock()
         self.task = None
         self.started = time.time()
@@ -55,6 +57,18 @@ class PerformanceDiagnostics:
             with self.lock:
                 self.lag.append({'at': time.time(), 'delayMs': round(delay * 1000, 2)})
 
+    def record_resource_rebuild(self, resource, package, reasons, globals_changed):
+        """Call-site enums only; page keys and their values never enter diagnostics."""
+        with self.lock:
+            self.resource_rebuild_counts['total'] += 1
+            for field, names in (('byReason', reasons), ('byResource', (resource,))):
+                counts = self.resource_rebuild_counts[field]
+                for name in names:
+                    if name in counts or len(counts) < 64:
+                        counts[name] = counts.get(name, 0) + 1
+            self.resource_rebuilds.append({'at': time.time(), 'resource': resource,
+                'package': package, 'reasons': tuple(reasons), 'changedGlobals': tuple(globals_changed)})
+
     async def _heartbeat(self):
         while True:
             started = time.monotonic()
@@ -80,6 +94,12 @@ class PerformanceDiagnostics:
                                    for name, values in self.operations.items()},
                     'slowOperations': [dict(row) for row in self.slow],
                     'eventLoopDelays': [dict(row) for row in self.lag],
+                    'shellResourceRebuilds': {'total': self.resource_rebuild_counts['total'],
+                        'byReason': dict(self.resource_rebuild_counts['byReason']),
+                        'byResource': dict(self.resource_rebuild_counts['byResource']),
+                        'recent': [{**row, 'reasons': list(row['reasons']),
+                                    'changedGlobals': list(row['changedGlobals'])}
+                                   for row in self.resource_rebuilds]},
                     'limitations': ['Inclusive operations overlap; do not add their durations.',
                                     'Loop delays include host suspension and scheduling; they do not identify the cause.',
                                     'No request bodies, prompts, credentials, paths or stack locals are collected.']}

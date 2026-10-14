@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.147",
+      "title": "Discover interface updates through the live connection",
+      "changes": [
+        "Connected windows receive installed interface identity from the server instead of checking build.json every minute or on focus. Your configured release-check interval is unchanged.",
+        "If startup or reconnection fails, bounded version checks can still offer a reload. Reload continues to wait for drafts and Canvas changes to be saved.",
+        "Recovery alerts remain readable with saved appearances, and isolated runtime qualification fixtures include the current package boundaries."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.146",
       "title": "Keep chat updates focused on the current view",
       "changes": [

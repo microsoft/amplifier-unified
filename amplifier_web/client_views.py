@@ -250,6 +250,8 @@ class ClientViews:
                                        for row in snapshot.get("canvasArtifacts", [])]
         snapshot["client"] = {"id": self.current.get(), "kind": record["kind"], "protocolVersion": 1,
                               "hostInstanceId": self.service.instance_id, "reconnect": "snapshot"}
+        if record['kind'] == 'web':
+            snapshot['client']['build'] = self.service.installed_build.project()
         snapshot["computerVisual"] = self.service.computer_visual.project(self.current.get())
         snapshot["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get("", []))
         from .cold_display import detached
