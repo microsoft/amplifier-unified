@@ -16,7 +16,8 @@ versions and release notes, run `npm ci --prefix frontend`,
 resulting `amplifier_web/static` changes in the release commit. Rebuild once more
 and require `git diff --exit-code -- amplifier_web/static` to pass before merging
 the release candidate; a version-only edit still changes generated bundle hashes.
-Keep the release workflow's committed-assets comparison enabled.
+Keep the release workflow's committed-assets comparison enabled when a matching
+trusted PR proof is unavailable; a reused proof includes that same comparison.
 
 The installed-wheel probe also loads worker-owned app packages in a fresh
 `-I -S` child outside the checkout. A successful host import is not worker
@@ -116,7 +117,27 @@ calling the existing immutable-tag publication implementation.
 
 Qualification tools come from the workflow revision, copied before selecting a
 historical application commit. They are transferred as an artifact within this
-run. No previous run or PR result is accepted as qualification evidence.
+run. Package/native qualification and candidate receipts remain fresh.
+
+The frontend lane may reuse an immutable artifact from successful **Fast release
+checks** for the same-repository PR whose merge commit is this publishing main
+commit. Reuse binds the entire tracked Git tree (a conservative superset of
+frontend code, tests, scripts, lockfiles, version and build configuration), the
+actual committed-assets digest, Node/npm and runner image identities. GitHub's
+run, attempt, PR association, tested merge commit/tree, job/step success and
+artifact archive digest are independently checked; the qualifying workflow and
+proof helper must match the release checkout. A green check name or a JSON claim
+of success alone is insufficient. The proof is emitted only after tests, build
+and committed-assets verification, then retained seven days.
+
+Lookup has a 20-second network budget and small archive/JSON limits. Missing,
+expired, changed, fork, tampered or unrecognized proofs run the ordinary frontend
+installation, tests, build and assets comparison. Historical release selections
+always use that fallback. Backend-only changes can also cause a conservative
+whole-tree mismatch; avoiding duplicated work never takes priority over exact
+evidence. The frontend lane still issues a fresh receipt for the current release
+candidate and retains a separate artifact stating whether and which proof was
+reused. Broad post-release coverage is unchanged.
 
 The runtime job checks out the declared loop-live source and current recipe
 source as before. It resolves a new runtime lock with refresh and upgrade before
@@ -180,8 +201,9 @@ at planning; this guard prevents accidental publication but does not exercise
 the downstream jobs. A new release still requires its own version and all required
 qualification lanes.
 
-An exact-candidate promotion system that reuses matching PR/merge qualification
-and shared prebuilt wheels remains a separate proposal.
+The narrow frontend proof reuse described above does not promote an entire
+previous release candidate. Reusing package/native qualification or shared
+prebuilt wheels remains a separate proposal.
 
 ## Published Core binaries
 

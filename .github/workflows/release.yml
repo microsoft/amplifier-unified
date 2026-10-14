@@ -45,7 +45,7 @@ jobs:
           SELECTED_RELEASE_REVISION: ${{ inputs.release_revision }}
         run: |
           mkdir -p "$RUNNER_TEMP/release-tools"
-          cp scripts/release.py scripts/release_qualification.py "$RUNNER_TEMP/release-tools/"
+          cp scripts/release.py scripts/release_qualification.py scripts/frontend_release_proof.py "$RUNNER_TEMP/release-tools/"
           python "$RUNNER_TEMP/release-tools/release.py" plan --revision "$SELECTED_RELEASE_REVISION" --output "$GITHUB_OUTPUT"
       - name: Pin the verified selected commit
         env:
@@ -127,6 +127,9 @@ jobs:
   frontend:
     needs: prepare
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     env:
       RELEASE_CANDIDATE: ${{ needs.prepare.outputs.candidate }}
     steps:
@@ -158,7 +161,13 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - name: Find exact trusted PR frontend proof
+        id: frontend-proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python "$RUNNER_TEMP/release-tools/frontend_release_proof.py" reuse --destination "$RUNNER_TEMP/frontend-proof-reuse.json" --output "$GITHUB_OUTPUT"
       - name: Validate frontend and committed assets
+        if: steps.frontend-proof.outputs.reused != 'true'
         run: |
           npm ci --prefix frontend
           npm test --prefix frontend
@@ -168,6 +177,11 @@ jobs:
         run: |
           uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
           python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane frontend --destination "$RUNNER_TEMP/frontend.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-proof-reuse
+          path: ${{ runner.temp }}/frontend-proof-reuse.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: frontend-qualification

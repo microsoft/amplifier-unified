@@ -1,0 +1,238 @@
+"""Frontend proof reuse is fail-closed and never substitutes a PR green badge."""
+import base64
+import copy
+import hashlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import subprocess
+import zipfile
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).parents[1]
+spec = importlib.util.spec_from_file_location('frontend_proof', ROOT / 'scripts/frontend_release_proof.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+@pytest.fixture
+def facts():
+    repository = 'owner/app'
+    head, base, tested, selected = 'a' * 40, 'b' * 40, 'c' * 40, 'd' * 40
+    qualifiers = {name: hashlib.sha256(name.encode()).hexdigest() for name in module.QUALIFIERS}
+    inputs = {'tree': 'e' * 40, 'assets': 'assets-digest', 'qualifiers': qualifiers,
+              'tools': {'node': 'v22.0.0', 'npm': '10.0.0', 'image': 'ubuntu24', 'imageVersion': '20261014'}}
+    proof = {'schema': 1, 'eligible': True, 'inputs': copy.deepcopy(inputs), 'repository': repository,
+             'runId': 101, 'attempt': 2, 'pr': 15, 'head': head, 'base': base, 'tested': tested}
+    run = {'id': 101, 'run_attempt': 2, 'status': 'completed', 'conclusion': 'success',
+           'event': 'pull_request', 'path': module.WORKFLOW, 'head_sha': head,
+           'head_repository': {'full_name': repository}, 'pull_requests': [{'number': 15}]}
+    pr = {'number': 15, 'merged_at': '2026-10-14T00:00:00Z', 'merge_commit_sha': selected,
+          'head': {'sha': head, 'repo': {'full_name': repository}},
+          'base': {'sha': base, 'repo': {'full_name': repository}}}
+    jobs = [{'name': 'Fast release checks', 'run_id': 101, 'run_attempt': 2, 'conclusion': 'success',
+             'steps': [{'name': name, 'status': 'completed', 'conclusion': 'success'} for name in module.STEPS]}]
+    commit = {'sha': tested, 'tree': {'sha': inputs['tree']}, 'parents': [{'sha': base}, {'sha': head}]}
+    return dict(proof=proof, inputs=inputs, run=run, pr=pr, jobs=jobs, commit=commit,
+                qualifiers=qualifiers.copy(), repository=repository)
+
+
+def test_success_requires_exact_external_facts(facts):
+    module.verify(**facts)
+
+
+@pytest.mark.parametrize('change', [
+    'inputs', 'assets', 'tool', 'image', 'missing-image', 'workflow-bytes', 'helper-bytes',
+    'run', 'attempt', 'pr', 'head', 'fork', 'event', 'workflow', 'failure', 'running',
+    'association', 'tested', 'tree', 'parents', 'job-attempt', 'job-failed', 'step-skipped',
+    'ineligible',
+])
+def test_every_identity_or_success_mismatch_refuses_reuse(facts, change):
+    if change == 'inputs': facts['proof']['inputs']['tree'] = 'changed'
+    elif change == 'assets': facts['proof']['inputs']['assets'] = 'changed'
+    elif change == 'tool': facts['proof']['inputs']['tools']['node'] = 'v23'
+    elif change == 'image': facts['proof']['inputs']['tools']['imageVersion'] = 'yesterday'
+    elif change == 'missing-image':
+        facts['inputs']['tools']['image'] = facts['proof']['inputs']['tools']['image'] = None
+    elif change in {'workflow-bytes', 'helper-bytes'}:
+        facts['qualifiers'][module.QUALIFIERS[change == 'helper-bytes']] = 'different-code'
+    elif change == 'run': facts['proof']['runId'] += 1
+    elif change == 'attempt': facts['proof']['attempt'] -= 1
+    elif change == 'pr': facts['proof']['pr'] += 1
+    elif change == 'head': facts['run']['head_sha'] = 'old-head'
+    elif change == 'fork': facts['run']['head_repository']['full_name'] = 'someone/fork'
+    elif change == 'event': facts['run']['event'] = 'workflow_dispatch'
+    elif change == 'workflow': facts['run']['path'] = '.github/workflows/untrusted.yml'
+    elif change == 'failure': facts['run']['conclusion'] = 'failure'
+    elif change == 'running': facts['run']['status'] = 'in_progress'
+    elif change == 'association': facts['run']['pull_requests'] = []
+    elif change == 'tested': facts['commit']['sha'] = 'other'
+    elif change == 'tree': facts['commit']['tree']['sha'] = 'different'
+    elif change == 'parents': facts['commit']['parents'].reverse()
+    elif change == 'job-attempt': facts['jobs'][0]['run_attempt'] = 1
+    elif change == 'job-failed': facts['jobs'][0]['conclusion'] = 'failure'
+    elif change == 'step-skipped': facts['jobs'][0]['steps'][1]['conclusion'] = 'skipped'
+    elif change == 'ineligible': facts['proof']['eligible'] = False
+    with pytest.raises(ValueError):
+        module.verify(**facts)
+
+
+class FakeAPI:
+    def __init__(self, facts):
+        self.facts, self.calls = facts, []
+        self.artifact = {'id': 201, 'name': 'frontend-proof-2', 'workflow_run': {'id': 101},
+                         'digest': 'sha256:archive', 'expired': False, 'size_in_bytes': 500}
+
+    def get(self, path):
+        self.calls.append(path)
+        f = self.facts
+        if path.startswith('commits/'): return [f['pr']]
+        if path.startswith('actions/workflows/'): return {'workflow_runs': [f['run']]}
+        if '/artifacts?' in path: return {'artifacts': [self.artifact]}
+        if path.startswith('git/commits/'): return f['commit']
+        if path.startswith('contents/'):
+            name = path[len('contents/'):].split('?')[0]
+            return {'encoding': 'base64', 'size': len(name), 'content': base64.b64encode(name.encode()).decode()}
+        if '/jobs?' in path: return {'jobs': f['jobs']}
+        raise AssertionError(path)
+
+    def archive(self, artifact):
+        return self.facts['proof']
+
+
+@pytest.fixture
+def lookup(facts, monkeypatch, tmp_path):
+    monkeypatch.setattr(module, 'identity', lambda root: facts['inputs'])
+    monkeypatch.setattr(module, 'command', lambda *args, **kwargs: 'd' * 40)
+    env = {'GITHUB_SHA': 'd' * 40, 'GITHUB_REF': 'refs/heads/main', 'GITHUB_REPOSITORY': 'owner/app'}
+    return tmp_path, env, FakeAPI(facts)
+
+
+def test_success_receipt_records_release_and_artifact_identity(lookup):
+    result = module.find(*lookup)
+    assert result['reused'] and result['selected'] == 'd' * 40
+    assert result['artifactId'] == 201 and result['runId'] == 101 and result['attempt'] == 2
+
+
+@pytest.mark.parametrize('change', ['historical', 'unmerged', 'different-merge', 'fork',
+                                    'old-attempt-artifact', 'other-run-artifact', 'bad-tested', 'tampered'])
+def test_unavailable_or_untrusted_proof_falls_back(lookup, change):
+    root, env, api = lookup
+    if change == 'historical': env['GITHUB_SHA'] = 'f' * 40
+    elif change == 'unmerged': api.facts['pr']['merged_at'] = None
+    elif change == 'different-merge': api.facts['pr']['merge_commit_sha'] = 'f' * 40
+    elif change == 'fork': api.facts['pr']['head']['repo']['full_name'] = 'other/app'
+    elif change == 'old-attempt-artifact': api.artifact['name'] = 'frontend-proof-1'
+    elif change == 'other-run-artifact': api.artifact['workflow_run']['id'] = 99
+    elif change == 'bad-tested': api.facts['proof']['tested'] = '../../other'
+    elif change == 'tampered': api.facts['proof']['inputs']['assets'] = 'tampered'
+    assert module.find(root, env, api)['reused'] is False
+    if change == 'historical': assert api.calls == []
+
+
+def archive_bytes(name='frontend-proof.json', content=b'{"schema":1}'):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(name, content)
+    return stream.getvalue()
+
+
+@pytest.mark.parametrize('change', ['digest', 'expired', 'large-archive', 'large-record', 'path', 'bad-json'])
+def test_artifact_transport_and_content_tampering_refused(monkeypatch, change):
+    data = archive_bytes('../frontend-proof.json' if change == 'path' else 'frontend-proof.json',
+                         b'x' * 64_001 if change == 'large-record' else b'broken' if change == 'bad-json' else b'{}')
+    artifact = {'id': 1, 'expired': change == 'expired', 'size_in_bytes': len(data),
+                'digest': 'sha256:' + hashlib.sha256(data).hexdigest()}
+    if change == 'digest': artifact['digest'] = 'sha256:wrong'
+    if change == 'large-archive': artifact['size_in_bytes'] = 1_000_001
+    monkeypatch.setattr(subprocess, 'check_output', lambda *a, **kw: data)
+    with pytest.raises(ValueError): module.GitHub('owner/app').archive(artifact)
+
+
+def test_create_refuses_fork_or_manual_even_if_checkout_would_match(monkeypatch, tmp_path):
+    path = tmp_path / 'event.json'
+    path.write_text(json.dumps({'pull_request': {'head': {'repo': {'full_name': 'fork/app'}}}}))
+    monkeypatch.setattr(module, 'identity', lambda root: pytest.fail('must not qualify untrusted source'))
+    env = {'GITHUB_EVENT_PATH': str(path), 'GITHUB_EVENT_NAME': 'pull_request', 'GITHUB_REPOSITORY': 'owner/app'}
+    assert module.create(tmp_path, env)['eligible'] is False
+    env['GITHUB_EVENT_NAME'] = 'workflow_dispatch'
+    assert module.create(tmp_path, env)['eligible'] is False
+
+
+def test_fingerprint_covers_all_tracked_inputs_and_detects_dirty_or_extra_assets(tmp_path, monkeypatch):
+    paths = [*module.QUALIFIERS, 'frontend/src/app.js', 'frontend/tests/app.test.mjs',
+             'frontend/package-lock.json', 'frontend/vite.config.js', 'frontend/scripts/branding.mjs',
+             'pyproject.toml', 'amplifier_web/__init__.py', 'amplifier_web/static/app.js',
+             'scripts/build.py', 'assets/logo.svg']
+    for name in paths:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(name)
+    def git(*args):
+        return subprocess.check_output(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                                        *args], cwd=tmp_path, stderr=subprocess.DEVNULL, text=True)
+    git('init', '-q'); git('add', '.'); git('commit', '-qm', 'fixture')
+    original = module.command
+    monkeypatch.setattr(module, 'command', lambda *args, **kw:
+                        'v22' if args[0] == 'node' else '10' if args[0] == 'npm' else original(*args, **kw))
+    baseline = module.identity(tmp_path)
+    monkeypatch.setenv('NODE_OPTIONS', '--max-old-space-size=4096')
+    assert module.identity(tmp_path)['environment'] != baseline['environment']
+    baseline = module.identity(tmp_path)
+    for name in paths:
+        (tmp_path / name).write_text(name + ' changed')
+        with pytest.raises(subprocess.CalledProcessError): module.identity(tmp_path)
+        git('add', name); git('commit', '-qm', name)
+        changed = module.identity(tmp_path)
+        assert changed['tree'] != baseline['tree'], name
+        if name.startswith('amplifier_web/static/'):
+            assert changed['assets'] != baseline['assets']
+        baseline = changed
+    (tmp_path / 'amplifier_web/static/new-chunk.js').write_text('untracked output')
+    with pytest.raises(ValueError, match='Untracked'): module.identity(tmp_path)
+
+
+def test_unexpected_lookup_error_writes_explicit_fallback(monkeypatch, tmp_path):
+    destination, output = tmp_path / 'receipt.json', tmp_path / 'output'
+    monkeypatch.setenv('GITHUB_REPOSITORY', 'owner/app')
+    monkeypatch.setattr(module, 'find', lambda *args: (_ for _ in ()).throw(RuntimeError('unexpected ZIP/API error')))
+    monkeypatch.setattr('sys.argv', ['proof', 'reuse', '--destination', str(destination), '--output', str(output)])
+    module.main()
+    assert json.loads(destination.read_text())['reused'] is False
+    assert output.read_text() == 'reused=false\n'
+
+
+def test_lookup_network_budget_is_shared_between_requests(monkeypatch):
+    now = [100]
+    monkeypatch.setattr(module.time, 'monotonic', lambda: now[0])
+    api = module.GitHub('owner/app')
+    timeouts = []
+    def request(*args, **kwargs):
+        timeouts.append(kwargs['timeout'])
+        now[0] += 12
+        return '{}'
+    monkeypatch.setattr(subprocess, 'check_output', request)
+    api.get('first'); api.get('second')
+    with pytest.raises(TimeoutError): api.get('third')
+    assert timeouts == [20, 8]
+
+
+def test_workflows_keep_full_fallback_and_fresh_package_runtime():
+    load = lambda name: yaml.load((ROOT / '.github/workflows' / name).read_text(), Loader=yaml.BaseLoader)
+    fast, release = load('work-workflows.yml'), load('release.yml')
+    steps = fast['jobs']['integration']['steps']
+    names = [s.get('name') for s in steps]
+    assert [name for name in names if name in module.STEPS] == list(module.STEPS)
+    frontend = release['jobs']['frontend']['steps']
+    fallback = next(s for s in frontend if s.get('name') == 'Validate frontend and committed assets')
+    assert fallback['if'] == "steps.frontend-proof.outputs.reused != 'true'"
+    for command in ('npm ci', 'npm test', 'npm run build', 'git diff --exit-code'):
+        assert command in fallback['run']
+    assert release['jobs']['release']['needs'] == ['prepare', 'package', 'frontend', 'runtime']
+    for lane in ('package', 'runtime'):
+        assert 'frontend-proof' not in json.dumps(release['jobs'][lane])
+    receipt = next(s for s in frontend if s.get('name') == 'Record frontend qualification for this candidate')
+    assert 'if' not in receipt and 'verify' in receipt['run'] and '--candidate' in receipt['run']
