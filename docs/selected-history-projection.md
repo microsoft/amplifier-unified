@@ -103,6 +103,16 @@ canonical display rows during durable persistence; that changed input rebuilds
 the selected tree rather than treating a cache as authority. Logical decoded charges are not process RSS; the process budget is a separate
 limit.
 
+Event-index checkpoint writes stream JSON through a 64 KiB buffer into a private
+gzip temporary file. The 64 MiB decoded and 16 MiB compressed quotas are checked
+during serialization, before the complete checkpoint is atomically installed.
+Individual strings above 256 Ki characters or nesting deeper than 64 levels skip
+this optional cache before encoding; canonical reads remain unchanged. This also
+bounds the encoder's individual scalar chunks, which may exceed the write buffer.
+An allocation or storage failure while writing a disposable checkpoint preserves
+the canonical read and the previous complete checkpoint. These bounds remove
+whole-document serialization copies; they do not bound the full cold Work tree.
+
 This slice still materializes a complete selected cold Work tree for existing
 host summary/detail consumers. It avoids repeated descendant reconstruction for
 recognized small appends and isolates uncertain/cold reconstruction. Fully paged

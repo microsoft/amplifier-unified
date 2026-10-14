@@ -729,7 +729,7 @@ class EventLogView:
             try:
                 with measure(self.service, 'events.checkpoint.save', synchronous=True):
                     self.checkpoints.save(index)
-            except (OSError, ValueError, TypeError):
+            except (OSError, ValueError, TypeError, MemoryError):
                 # A disposable cache failure cannot fail a canonical read.
                 count(self.service, 'events.checkpoint.write_failed')
 
