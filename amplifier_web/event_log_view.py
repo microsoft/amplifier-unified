@@ -729,7 +729,7 @@ class EventLogView:
             try:
                 with measure(self.service, 'events.checkpoint.save', synchronous=True):
                     self.checkpoints.save(index)
-            except (OSError, ValueError, TypeError):
+            except (OSError, ValueError, TypeError, MemoryError):
                 # A disposable cache failure cannot fail a canonical read.
                 count(self.service, 'events.checkpoint.write_failed')
 
@@ -1418,7 +1418,7 @@ class EventLogView:
                 count(self.service, 'events.process.retry.' + reason)
                 diagnostics = getattr(self.service, 'performance_diagnostics', None)
                 if diagnostics is not None and result.get('failure') is not None:
-                    diagnostics.record_projection_failure(reason, result['failure'])
+                    diagnostics.record_projection_failure(reason, result['failure'], session_id=identity)
                 refused_revisions = None
                 deterministic = reason in {'input_limit', 'output_limit'}
                 if reason == 'input_limit':

@@ -659,6 +659,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         async with service.lock:
             service.shell.resources.register(identity, payload['demandId'], payload['resources'], payload['scope'],
                 recovery=service.shell.resources.clients.get(identity, {}).get('recovery', False))
+            if reason in {'retry', 'manual'}:
+                # Attach this validated demand to failed current query keys
+                # before clearing cooldowns (including a newer demand ID).
+                service.shell.resources.snapshot(identity)
+                service.shell.resources.queries.retry(identity)
             service._client_snapshots.pop(identity, None)
             result = service.shell.resources.snapshot(identity)
         from .performance_diagnostics import count

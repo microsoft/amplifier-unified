@@ -30,7 +30,7 @@ export function createShellHttpFixture(readState){
      recentScope:{clientId,instanceId:instance.id,generation:0,workspaceId:input.selectedWorkspaceId}};
     resources[name]={revision:input.revision,value};
    }
-   instances[instance.id]={generation:0,resources};
+   instances[instance.id]={generation:0,stateRevision:input.revision,pending:{},resources};
   }
   return {hostInstanceId,clientId,bootstrapKey,demandId:registration.demandId,
    scope:registration.scope,instances};

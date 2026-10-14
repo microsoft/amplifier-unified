@@ -40,7 +40,7 @@ considering a Rust implementation behind the same interface.
 
 ## Implementation progress, October 14
 
-Releases .143 through .152 are published. Release .143 introduced bounded
+Releases .143 through .153 are published. Release .143 introduced bounded
 requested navigation pages and removed duplicate ordinary-state projections;
 .142 was not published. Release .144 replaced repeated whole-shell reads with
 [resources on the existing state stream](../docs/browser-state-transport.md#shell-bootstrap-and-active-resources).
@@ -117,12 +117,37 @@ requires the full selected dependency shape and retained-worker state to be
 investigated separately. No claim of a solved memory or latency budget follows
 from the root-only pass.
 
-The next release also removes automatic runtime preparation from ordinary chat
-selection. The existing behavior started and retained a runtime merely to read
+Release .153 removed automatic runtime preparation from ordinary chat
+selection. The preceding behavior started and retained a runtime merely to read
 saved messages, contrary to the read/admission boundary below. Explicit preparation
 and accepted execution remain distinct, budgeted actions. Bounded failure-stage
 and memory diagnostics support investigation without collecting conversation
-content or adding healthy-path polling.
+content or adding healthy-path polling. PR #706's workspace overview and
+coordination changes are included. PR #716 reconciles the workspace implementation
+documentation and is included in the next candidate after .153.
+
+Live .153 repeated six-chat acceptance stopped after 94 observations when Work
+reads failed. The first failure occurred during event-index retention near the
+worker's memory budget; subsequent low-memory setup failures require distinct
+exception classification. Initial AHP/ACP Work completed with no model runtime
+starts, but that single pass does not qualify the repeated workload. The stopped
+run is failure evidence, not sustained latency acceptance.
+
+The .154 candidate addresses a reproduced optional-checkpoint allocation spike:
+incremental serialization replaces whole-document JSON/byte/compression copies,
+and failure to save a disposable checkpoint cannot fail a completed canonical
+read. A limited-headroom regression fails against the old writer and preserves
+the exact selected result with the new writer. This proves one failure mechanism,
+not that every live selected-history failure is resolved. Setup exception type,
+substage and the host's requested chat ID make remaining failures attributable.
+
+Cold bundled catalog queries are also moving to one bounded read-only process on
+Linux, with exact canonical SQL, explicit pending state, stale-result rejection,
+and cancellation of obsolete reader demand. Other hosts retain their existing
+reader until native process qualification. This isolates cold query cost without
+introducing another catalog or changing exact-total semantics. Reconciliation
+process isolation and fully paged cold Work trees remain separate follow-ups;
+neither is claimed complete by this change.
 
 The .151 extended browser runner completed all 65 scenarios: 43 passed and 22
 failed, including one scenario that passed its assertions but left processes for

@@ -24,7 +24,7 @@ function envelope(demand,input,changes={}){
   const page={items:[{id:'first',title:'First'}],scope:{workspaceId:input.selectedWorkspaceId},total:1};
   resources[name]={revision:1,value:name.startsWith('sidebar')?{sidebarNavigation:{[name.slice(7).toLowerCase()]:page}}:{[name]:page}};
  }
- return {hostInstanceId:'host-1',clientId:'test-client',bootstrapKey:input.shellBootstrapKey,demandId:demand.demandId,scope:demand.scope,instances:{chats:{generation:1,resources}},...changes};
+ return {hostInstanceId:'host-1',clientId:'test-client',bootstrapKey:input.shellBootstrapKey,demandId:demand.demandId,scope:demand.scope,instances:{chats:{generation:1,stateRevision:1,pending:{},resources}},...changes};
 }
 async function fixture(run,{dispatch=async()=>({accepted:true})}={}){
  const prior={fetch:globalThis.fetch,document:globalThis.document,window:globalThis.window};
@@ -69,7 +69,7 @@ test('unchanged scope ignores app/catalog/Canvas/runtime churn and shell notific
  for(let revision=2;revision<12;revision++)await f.render(state(undefined,{revision,shellDataKey:'new-'+revision,shellChangeToken:'token-'+revision,canvas:{id:'different',open:true},runtime:{available:false},sessions:[{id:'chat-a',streaming:'progress'}],shellResources:resources}));
  await act(async()=>{const event=new Event('amplifier-shell');event.detail={shellClientId:'test-client'};window.dispatchEvent(event)});
  assert.equal(f.calls.length,1,'no whole-shell invalidation from unrelated publication');
- const next=structuredClone(resources);next.instances.chats.resources.recentNavigation={revision:2,value:{recentNavigation:{items:[{id:'changed'}],total:1}}};
+ const next=structuredClone(resources);next.instances.chats.stateRevision++;next.instances.chats.resources.recentNavigation={revision:2,value:{recentNavigation:{items:[{id:'changed'}],total:1}}};
  await f.render({...f.input(),shellResources:next});
  assert.equal(f.calls.length,1);assert.equal(f.current().data.snapshots.chats.recentNavigation.items[0].id,'changed');
 }));
@@ -91,7 +91,7 @@ test('older HTTP baseline cannot overwrite a newer same-demand stream resource',
  await f.render(state());await f.accept(0);
  await act(async()=>{void f.current().refresh()});
  const newer=envelope(demandFor(f.calls[1]),f.input());
- newer.instances.chats.resources.recentNavigation={revision:5,value:{recentNavigation:{items:[{id:'new'}]}}};
+ newer.instances.chats.stateRevision++;newer.instances.chats.resources.recentNavigation={revision:5,value:{recentNavigation:{items:[{id:'new'}]}}};
  await f.render({...f.input(),shellResources:newer});await f.accept(1);
  assert.equal(f.current().data.snapshots.chats.recentNavigation.items[0].id,'new');assert.equal(f.calls.length,2);
  const diagnostics=JSON.parse(f.attributes['data-amplifier-shell-diagnostics']);
@@ -107,7 +107,7 @@ test('runtime diagnostics distinguish repeated baselines and context-only update
  for(let index=0;index<3;index++)await f.render({...f.input(),revision:index+2,shellResources:structuredClone(baseline)});
  assert.equal(read().resourceRevisions.acceptedEnvelopes,4);assert.equal(read().resourceRevisions.unchangedEnvelopes,3);
  assert.equal(read().resourceRevisions.changedRecords,initial);
- const context=structuredClone(baseline);context.instances.chats.resources.context.revision++;
+ const context=structuredClone(baseline);context.instances.chats.stateRevision++;context.instances.chats.resources.context.revision++;
  await f.render({...f.input(),shellResources:context});
  assert.equal(read().events.at(-1).contextRecords,1);assert.equal(read().events.at(-1).pageRecords,0);
  const stale={...context,demandId:999};await f.render({...f.input(),shellResources:stale});
@@ -170,9 +170,9 @@ test('view receipts preserve committed edits until the resource stream catches u
   assert.equal(host.getSnapshot().view.navFilter,'new');
   await act(async()=>{resolve({accepted:true,result:{shellView:{instanceId:'chats',generation:1,viewRevision:2,view:{workSurface:'chat',navFilter:'new'}}}});await operation});
   await f.render({...f.input(),shellResources:baseline});assert.equal(host.getSnapshot().view.navFilter,'new');
-  const caught=structuredClone(baseline);caught.instances.chats.resources.context={revision:3,value:{...baseline.instances.chats.resources.context.value,viewRevision:2,view:{workSurface:'chat',navFilter:'new'}}};
+  const caught=structuredClone(baseline);caught.instances.chats.stateRevision++;caught.instances.chats.resources.context={revision:3,value:{...baseline.instances.chats.resources.context.value,viewRevision:2,view:{workSurface:'chat',navFilter:'new'}}};
   await f.render({...f.input(),shellResources:caught});
-  const changed=structuredClone(caught);changed.instances.chats.resources.context={revision:4,value:{...caught.instances.chats.resources.context.value,viewRevision:3,view:{workSurface:'chat',navFilter:'later'}}};
+  const changed=structuredClone(caught);changed.instances.chats.stateRevision++;changed.instances.chats.resources.context={revision:4,value:{...caught.instances.chats.resources.context.value,viewRevision:3,view:{workSurface:'chat',navFilter:'later'}}};
   await f.render({...f.input(),shellResources:changed});assert.equal(host.getSnapshot().view.navFilter,'later');assert.equal(f.calls.length,1);
  },{dispatch:()=>new Promise(done=>resolve=done)});
 });
@@ -227,7 +227,7 @@ test('a newer streamed view cannot be rewound by an older command receipt',async
  await fixture(async f=>{
   await f.render(state());const baseline=await f.accept(0),host=f.current().hostFor(instance);
   let operation;await act(async()=>{operation=host.dispatch('view.update',{patch:{navFilter:'requested'}})});
-  const newer=structuredClone(baseline);newer.instances.chats.resources.context={revision:3,value:{...baseline.instances.chats.resources.context.value,viewRevision:3,view:{workSurface:'chat',navFilter:'newer'}}};
+  const newer=structuredClone(baseline);newer.instances.chats.stateRevision++;newer.instances.chats.resources.context={revision:3,value:{...baseline.instances.chats.resources.context.value,viewRevision:3,view:{workSurface:'chat',navFilter:'newer'}}};
   await f.render({...f.input(),shellResources:newer});
   await act(async()=>{resolve({accepted:true,result:{shellView:{instanceId:'chats',generation:1,viewRevision:2,view:{navFilter:'requested'}}}});await operation});
   assert.equal(host.getSnapshot().view.navFilter,'newer');assert.equal(f.current().data.snapshots.chats.viewRevision,3);assert.equal(f.calls.length,1);
@@ -279,3 +279,16 @@ test('a previous host cannot restore its acknowledged view after restart',async(
   assert.equal(f.calls.length,2,'restart does not replay the old command');
  },{dispatch:()=>new Promise(done=>resolve=done)});
 });
+
+test('late pending HTTP cannot resurrect retry after an equal-value ready stream entry',()=>fixture(async f=>{
+ await f.render(state());const baseline=await f.accept(0);
+ await act(async()=>{void f.current().refresh()});
+ const pending=structuredClone(baseline);pending.instances.chats.stateRevision=2;
+ pending.instances.chats.pending={recentNavigation:{status:'retry',retryAfterMs:1000}};
+ const ready=structuredClone(baseline);ready.instances.chats.stateRevision=3;
+ await f.render({...f.input(),shellResources:ready});
+ await f.reply(1,pending);
+ assert.deepEqual(f.current().data.snapshots.chats.navigationResourcePending,{});
+ assert.equal(f.current().data.snapshots.chats.recentNavigation.items[0].id,'first');
+ assert.equal(f.calls.length,2,'pending state adds no polling or replay');
+}));

@@ -121,7 +121,10 @@ def source_receipt(value):
     return receipt
 
 
-def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
+def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT,
+        input_limit=None, output_limit=None):
+    input_limit = INPUT_LIMIT if input_limit is None else input_limit
+    output_limit = OUTPUT_LIMIT if output_limit is None else output_limit
     spool, cache_home = Path(spool).resolve(), Path(cache_home).resolve()
     work = queue.Queue(maxsize=1)
     stopped = threading.Event()
@@ -134,9 +137,9 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
             sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
 
     def compute():
-        stage = 'setup'
-        def failed(reason, identity=None):
-            value = {'type': 'retry', 'reason': reason, 'failure': capture_failure(stage)}
+        stage = 'setup_policy'
+        def failed(reason, identity=None, exception=None):
+            value = {'type': 'retry', 'reason': reason, 'failure': capture_failure(stage, exception)}
             if identity is not None:
                 value['id'] = identity
             reply(value)
@@ -146,16 +149,18 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 stage = value
         try:
             guard = memory_policy(memory_limit)
+            stage = 'setup_import'
             factory = model_factory
             if factory is None:
                 from .history_read_model import SelectedHistoryReadModel
                 factory = SelectedHistoryReadModel
+            stage = 'setup_store'
             model = factory(cache_home)
             reply({'type': 'ready'})
-        except (MemoryError, MemoryLimit, OSError, ValueError):
-            failed('memory_limit'); return
-        except Exception:
-            failed('worker_failed'); return
+        except (MemoryError, MemoryLimit) as exc:
+            failed('memory_limit', exception=exc); return
+        except Exception as exc:
+            failed('worker_failed', exception=exc); return
         while not stopped.is_set():
             descriptor = work.get()
             if descriptor is None:
@@ -171,8 +176,8 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 stage = 'input_decode'
                 check_budget()
                 with source.open('rb') as stream:
-                    data = stream.read(INPUT_LIMIT + 1)
-                if len(data) > INPUT_LIMIT:
+                    data = stream.read(input_limit + 1)
+                if len(data) > input_limit:
                     raise OverflowError('input')
                 if hashlib.sha256(data).hexdigest() != descriptor['digest']:
                     raise ValueError('Changed input artifact')
@@ -185,27 +190,27 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 check_budget()
                 stage = 'output_encode'
                 try:
-                    size, digest = write_json(target, result, OUTPUT_LIMIT)
+                    size, digest = write_json(target, result, output_limit)
                 except OverflowError:
                     receipt = source_receipt(result) if result.get('status') == 'complete' else None
                     if receipt is None:
                         raise
-                    size, digest = write_json(target, receipt, min(OUTPUT_LIMIT, RECEIPT_LIMIT))
+                    size, digest = write_json(target, receipt, min(output_limit, RECEIPT_LIMIT))
                 del result
                 check_budget()
                 reply({'type': 'result', 'id': identity, 'bytes': size, 'digest': digest})
-            except (MemoryError, MemoryLimit):
+            except (MemoryError, MemoryLimit) as exc:
                 target.unlink(missing_ok=True)
-                failed('memory_limit', identity)
+                failed('memory_limit', identity, exc)
                 return
             except OverflowError as exc:
                 reply({'type': 'retry', 'id': identity,
                        'reason': 'input_limit' if str(exc) == 'input' else 'output_limit'})
             except InterruptedError:
                 return
-            except Exception:
+            except Exception as exc:
                 target.unlink(missing_ok=True)
-                failed('worker_failed', identity)
+                failed('worker_failed', identity, exc)
 
     thread = threading.Thread(target=compute, daemon=True)
     thread.start()

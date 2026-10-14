@@ -2,10 +2,13 @@
 from pathlib import Path
 import sys
 
-STAGES = frozenset({'setup', 'input_decode', 'model', 'model_cache_load',
+STAGES = frozenset({'setup', 'setup_policy', 'setup_import', 'setup_store', 'input_decode', 'model', 'model_cache_load',
     'source_scan', 'source_bindings', 'source_rows', 'source_associate',
     'source_join', 'source_plan', 'source_usage', 'source_retain',
     'model_store', 'model_retain', 'output_encode'})
+EXCEPTIONS = frozenset({'MemoryError', 'MemoryLimit', 'OSError', 'PermissionError',
+    'FileNotFoundError', 'FileExistsError', 'IsADirectoryError', 'NotADirectoryError',
+    'ValueError', 'ImportError', 'ModuleNotFoundError', 'RuntimeError', 'other'})
 FIELDS = ('residentBytes', 'peakResidentBytes', 'virtualBytes',
           'peakVirtualBytes', 'addressSpaceLimitBytes')
 
@@ -14,19 +17,25 @@ def sanitize_failure(value):
     if (not isinstance(value, dict) or not isinstance(value.get('stage'), str)
             or value['stage'] not in STAGES):
         return None
-    return {'stage': value['stage'], **{key: value.get(key)
+    exception = value.get('exceptionType')
+    return {'stage': value['stage'],
+        'exceptionType': exception if isinstance(exception, str) and exception in EXCEPTIONS else None,
+        'errno': value.get('errno') if type(value.get('errno')) is int and 0 <= value['errno'] <= 2**31 - 1 else None,
+        **{key: value.get(key)
         if type(value.get(key)) is int and 0 <= value[key] <= 2**63 - 1 else None
         for key in FIELDS}}
 
 
-def capture_failure(stage):
+def capture_failure(stage, exception=None):
     """Sample only on failure; missing platform facts stay explicitly unknown.
 
     Linux reports current/peak resident and virtual bytes. Other Unix systems
     provide peak RSS and the actual address-space soft limit, not current RSS.
     A failed allocation can also prevent measurement; the stage still survives.
     """
-    result = {'stage': stage, **dict.fromkeys(FIELDS)}
+    kind = type(exception).__name__ if exception is not None else None
+    result = {'stage': stage, 'exceptionType': kind if kind in EXCEPTIONS else 'other' if kind else None,
+              'errno': exception.errno if isinstance(exception, OSError) else None, **dict.fromkeys(FIELDS)}
     try:
         import resource
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss

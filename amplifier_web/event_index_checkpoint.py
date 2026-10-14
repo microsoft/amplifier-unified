@@ -19,6 +19,46 @@ MAX_DECODED = 64 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_TOTAL = 256 * 1024 * 1024
 MAX_FILES = 1024
+WRITE_BUFFER = 64 * 1024
+MAX_SCALAR_CHARS = 256 * 1024
+MAX_DEPTH = 64
+
+
+class CheckpointTooLarge(ValueError):
+    """The optional checkpoint exceeds a streaming serialization bound."""
+
+
+def check_scalars(value, depth=0):
+    # iterencode streams containers, but encodes each string as one chunk.
+    # Bound that chunk before encoding, with only a bounded recursion stack.
+    if depth > MAX_DEPTH:
+        raise CheckpointTooLarge
+    if isinstance(value, str):
+        if len(value) > MAX_SCALAR_CHARS:
+            raise CheckpointTooLarge
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            check_scalars(key, depth + 1)
+            check_scalars(item, depth + 1)
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            check_scalars(item, depth + 1)
+
+
+class BoundedOutput:
+    """Count gzip headers, compressed chunks and trailer before writing."""
+    def __init__(self, stream):
+        self.stream, self.written = stream, 0
+
+    def write(self, value):
+        if self.written + len(value) > MAX_FILE:
+            raise CheckpointTooLarge
+        written = self.stream.write(value)
+        self.written += written
+        return written
+
+    def flush(self):
+        self.stream.flush()
 
 
 def tuples(value):
@@ -104,19 +144,34 @@ class Checkpoints:
         signature = (index.revision, index.association_revision)
         if getattr(index, '_checkpoint_signature', None) == signature:
             return
-        raw = json.dumps(encode(index), separators=(',', ':'), ensure_ascii=False).encode()
-        if len(raw) > MAX_DECODED:
-            return
-        payload = gzip.compress(raw, compresslevel=1, mtime=0)
-        if len(payload) > MAX_FILE:
+        payload = encode(index)
+        try:
+            check_scalars(payload)
+        except CheckpointTooLarge:
             return
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = self.path(index.path, index.identity)
         descriptor, temporary = tempfile.mkstemp(prefix='.index-', dir=self.directory)
         try:
             with os.fdopen(descriptor, 'wb') as stream:
-                stream.write(payload)
+                with gzip.GzipFile(filename='', mode='wb', fileobj=BoundedOutput(stream),
+                                   compresslevel=1, mtime=0) as compressed:
+                    decoded, buffer = 0, bytearray()
+                    encoder = json.JSONEncoder(separators=(',', ':'), ensure_ascii=False)
+                    for chunk in encoder.iterencode(payload):
+                        piece = chunk.encode()
+                        decoded += len(piece)
+                        if decoded > MAX_DECODED:
+                            raise CheckpointTooLarge
+                        buffer.extend(piece)
+                        if len(buffer) >= WRITE_BUFFER:
+                            compressed.write(buffer)
+                            buffer.clear()
+                    if buffer:
+                        compressed.write(buffer)
             os.replace(temporary, path)
+        except CheckpointTooLarge:
+            return
         finally:
             Path(temporary).unlink(missing_ok=True)
         index._checkpoint_signature = signature

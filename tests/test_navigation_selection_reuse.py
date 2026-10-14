@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from amplifier_web.shell_resources import scope_for
-from test_shell_modules import service
+from test_shell_modules import service, settled_resources
 
 
 def state_for(service, selected, workspace='one', **view):
@@ -83,7 +83,7 @@ async def test_shell_selection_reuses_canonical_pages_and_current_identity(servi
         owner = service.shell.resources
         wanted = ['recentNavigation', 'pinnedNavigation', 'workspaceShortcuts']
         owner.register('selection-client', 1, wanted, scope_for(service.state))
-        first = owner.snapshot('selection-client')
+        first = await settled_resources(service, 'selection-client')
         frozen = deepcopy(first)
         def forbidden(*args, **kwargs):
             raise AssertionError('Selection must not rerun global navigation queries')

@@ -470,8 +470,12 @@ test('change and retry share synchronous singleflight; a late response cannot re
  current={...current,selectedSessionId:'other',recentNavigation:{...recentFixture(20,true,1),
   scope:{...recentFixture(20,true,1).scope,selectedSessionId:'a'}}};
  await act(async()=>{held[0]({accepted:true});await first;root.update(React.createElement(Probe))});
- assert.equal(api.page.scope.viewRevision,0);assert.equal(api.page.scope.showAgentCreated,false);
+ assert.deepEqual(api.page.items,[],'old-scope rows cannot appear under the new selection');
  assert.match(api.error,/previous chats are kept/);
+ current={...current,selectedSessionId:'a',recentNavigation:undefined};
+ await act(async()=>root.update(React.createElement(Probe)));
+ assert.equal(api.page.scope.viewRevision,0);assert.equal(api.page.scope.showAgentCreated,false);
+ assert.equal(api.page.items.length,20,'accepted prior scope is retained without accepting the late response');
  await act(async()=>root.unmount());
 });
 
@@ -627,4 +631,17 @@ test('Recent unmount cancels its projection wait and releases its listener witho
  let pending;await act(async()=>{pending=api.change({limit:40})});assert.equal(listeners.size,1);
  await act(async()=>root.unmount());await pending;
  assert.equal(listeners.size,0);assert.equal(writes.length,1);
+});
+
+test('cold resource placeholders never claim empty catalogs and matching updates keep rows',()=>{
+ const pending={...snapshot,navigationResources:[],navigationResourcePending:{
+  pinnedNavigation:{status:'pending'},recentNavigation:{status:'pending'},workspaceShortcuts:{status:'pending'}},
+  recentNavigation:undefined,recentShortcuts:undefined,workspaceShortcuts:undefined,unpinnedWorkspaceShortcuts:undefined};
+ const coldHost={...host,getSnapshot:()=>pending,refreshResources:async()=>{throw Error('No automatic read')}};
+ const cold=renderToStaticMarkup(render(React.createElement(ConversationList,{host:coldHost})));
+ assert.match(cold,/Loading recent chats/);assert.match(cold,/Loading workspaces/);
+ assert.doesNotMatch(cold,/Your recent chats appear here|Create a workspace to start/);
+ const updating={...snapshot,navigationResourcePending:{recentNavigation:{status:'pending'}}};
+ const warm=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...coldHost,getSnapshot:()=>updating}})));
+ assert.match(warm,/Updating recent chats/);assert.match(warm,/Research ideas/);
 });

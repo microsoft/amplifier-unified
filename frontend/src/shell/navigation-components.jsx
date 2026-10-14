@@ -19,6 +19,8 @@ import {PathField} from '../settings-ui';
 import {readItems} from '../attention';
 import {useNavigation} from '../../../packages/shell-sdk/index.js';
 import {waitForSnapshot} from './wait-for-snapshot';
+import {hasNavigationResource} from './navigation-demand';
+import {NavigationResourceStatus} from './navigation-resource-status';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
@@ -85,7 +87,7 @@ export function useNavigationController(host,kind){
   finally{submitting.current=false;setSaving(false)}
  };
  useEffect(()=>{if(!draft.mode)return;form.current?.scrollIntoView?.({block:'nearest'});form.current?.querySelector?.('input')?.focus()},[draft.mode,draft.id]);
- return {state,act,prefix,view,draft,form,saving,formError,history,refreshing,workspace,workspaceCount,allChats,setDraft,updateDraft,choose,submit};
+ return {state,act,refreshResources:host.refreshResources,prefix,view,draft,form,saving,formError,history,refreshing,workspace,workspaceCount,allChats,setDraft,updateDraft,choose,submit};
 }
 export function NavigationEditor({model}){
  const {state,act,prefix,draft,form,saving,formError,setDraft,updateDraft,submit}=model;
@@ -256,7 +258,11 @@ export function useRecentShortcuts(host,state,act){
   }catch(error){if(mounted.current&&ticket===sequence.current)setError(error.message||'Recent is unavailable. The previous chats are kept.')}
   finally{if(mounted.current&&ticket===sequence.current){waiting.current=false;setBusy(false)}}
  };
- return {page,settings,busy,error,blocked:uncertain.current,change,retry};
+ const queryPending=state.navigationResourcePending?.recentNavigation;
+ const matching=Object.entries(scopeFor(state)).every(([key,value])=>page.scope?.[key]===value);
+ const visiblePage=matching?page:{items:[],total:0,remaining:0,limit:settings.limit};
+ return {page:visiblePage,settings,busy:busy||queryPending?.status==='pending'||!matching&&!queryPending,
+  error,blocked:uncertain.current||!!queryPending,change,retry};
 }
 
 function RecentShortcuts({host,model,now}){
@@ -297,7 +303,7 @@ function RecentShortcuts({host,model,now}){
  },[host]);
  return <div ref={root} tabIndex={-1} className="a-recent-shortcuts" aria-busy={busy} onFocusCapture={e=>{focused.current=e.target}} onBlurCapture={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget))focused.current=null}}>
   {page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
-  {!page.items.length&&!busy&&!error&&<p className="a-nav-empty">Your recent chats appear here.</p>}
+  {!page.items.length&&!busy&&!error&&!model.state.navigationResourcePending?.recentNavigation&&<p className="a-nav-empty">Your recent chats appear here.</p>}
   {(page.remaining>0||busy||error)&&<div className="a-recent-controls">
    {busy&&<small role="status">Loading recent chats…</small>}
    {page.remaining>0&&<button ref={more} type="button" className="a-sidebar-all a-link a-recent-control" style={{minHeight:44}} aria-disabled={busy||blocked} data-action="view.update" onClick={load}>Load older chats</button>}
@@ -447,9 +453,10 @@ function QuietSidebar({host,workspaceHost,navigation}){
   <NavigationEditor model={model}/>
   {!workspaceHost&&<NavigationEditor model={workspaceModel}/>}
   <button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>
-  {!!pins.total&&<SidebarSection id="pinned" title="Pinned" model={model}>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
+  {(!!pins.total||model.state.navigationResourcePending?.pinnedNavigation)&&<SidebarSection id="pinned" title="Pinned" model={model}><NavigationResourceStatus state={model.state} resource="pinnedNavigation" label="pinned chats and workspaces" refresh={model.refreshResources}/>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
   <SidebarSection id="workspaces" title="Workspaces" model={model} actions={<button type="button" className="a-icon" aria-label="New workspace" onClick={()=>navigation.create()}><Plus/></button>}>
-   <WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>
+   <NavigationResourceStatus state={workspaceState} resource="workspaceShortcuts" label="workspaces" refresh={workspaceModel.refreshResources}/>
+   {hasNavigationResource(workspaceState,'workspaceShortcuts')?<WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>:!workspaceState.navigationResourcePending?.workspaceShortcuts&&<p role="status">Loading workspaces…</p>}
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
   </SidebarSection>
   <SidebarSection id="recent" title="Recent" model={model} actions={<>
@@ -457,6 +464,7 @@ function QuietSidebar({host,workspaceHost,navigation}){
    {model.history.error&&<span role="alert">{model.history.error}</span>}
    <button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>
   </>}>
+   <NavigationResourceStatus state={model.state} resource="recentNavigation" label="recent chats" refresh={model.refreshResources}/>
    <RecentShortcuts host={host} model={model} now={now}/>
   </SidebarSection>
  </div>;

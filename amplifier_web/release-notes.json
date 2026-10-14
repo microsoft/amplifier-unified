@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.154",
+      "title": "Keep cold navigation responsive and reduce history cache memory",
+      "changes": [
+        "On Linux, cold chat and workspace queries run in a bounded reader process so navigation cannot hold the main request loop. Lists show loading, updating or retry status and discard obsolete results.",
+        "History index checkpoints are written incrementally instead of making several complete copies. An optional checkpoint failure preserves the readable conversation and completed Work result.",
+        "History diagnostics distinguish setup errors from memory refusals and identify the requested chat when reads finish after a selection change.",
+        "Workspace collaboration documentation now reflects the delivered coordination features. Browser checks follow the current navigation, Smart Tools and reasoning-selection flows while continuing to detect unintended runtime starts."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.153",
       "title": "Keep navigation lightweight and make workspace coordination clearer",
       "changes": [

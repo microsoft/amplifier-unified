@@ -55,6 +55,10 @@ retains only the most recent 16 sanitized failure records in performance
 diagnostics; no source paths, identities, content, or exception text cross this
 diagnostic boundary. A `memory_limit` outcome alone does not identify which
 memory measurement was exceeded or justify increasing the budget.
+Startup distinguishes memory-policy setup, model import, and model-store creation.
+Only `MemoryError` or the explicit memory-policy refusal reports `memory_limit`;
+other startup exceptions report `worker_failed`. An allowlisted exception type
+and bounded numeric errno distinguish those failures without retaining their text.
 
 ## Generations and incremental dependencies
 
@@ -98,6 +102,21 @@ post-projection inputs. A full application restart may have intentionally remove
 canonical display rows during durable persistence; that changed input rebuilds
 the selected tree rather than treating a cache as authority. Logical decoded charges are not process RSS; the process budget is a separate
 limit.
+
+Failure diagnostics include the host's requested chat ID, rather than the viewer's
+current selection, so queued reads can be traced after rapid chat switches. Worker
+payloads cannot supply or override this identity; source paths and content remain
+excluded.
+
+Event-index checkpoint writes stream JSON through a 64 KiB buffer into a private
+gzip temporary file. The 64 MiB decoded and 16 MiB compressed quotas are checked
+during serialization, before the complete checkpoint is atomically installed.
+Individual strings above 256 Ki characters or nesting deeper than 64 levels skip
+this optional cache before encoding; canonical reads remain unchanged. This also
+bounds the encoder's individual scalar chunks, which may exceed the write buffer.
+An allocation or storage failure while writing a disposable checkpoint preserves
+the canonical read and the previous complete checkpoint. These bounds remove
+whole-document serialization copies; they do not bound the full cold Work tree.
 
 This slice still materializes a complete selected cold Work tree for existing
 host summary/detail consumers. It avoids repeated descendant reconstruction for
