@@ -36,6 +36,7 @@ See [implementation and evidence](workspaces/IMPLEMENTATION.md) for qualificatio
 | Manage conversations/workspaces | `app_control` operation `list_actions` with `session.` or `workspace.` prefix, followed by `dispatch` |
 | Commission a durable peer | `coordination.create` establishes the ordinary peer, explicit placement, initial request and return subscription before releasing work; stable command retries inspect the retained operation rather than create another peer. |
 | See active work and declare file intent | `coordination.context/awareness`, `coordination.intent` and `coordination.intent.read` expose bounded active-work context and revision-aware declarations. Overlap is advisory; a declaration grants no file or peer-control authority. |
+| Catch up after returning and inspect work timing | `coordination.recap` reads bounded changes from a caller-owned cursor; Related work retains its cursor per browser tab. `coordination.diagnostics` exports scoped numeric phase observations without private content or waking workers. Missing timing samples remain unavailable. |
 | Select a repository working copy | Discover `worktree.*` actions for explicit repository selection, create/attach, handoff and reconciliation. Canonical history stays separate from the selected execution folder; no automatic dependency rebinding or sandbox is implied. |
 | Diagnose/recover a failed conversation | `session.inspect`, `session.recover`; recovery creates an idle copy and never replays tools |
 | Show and revisit artifacts | `canvas.show`, `canvas.select`, canvas application/view actions |
@@ -62,10 +63,12 @@ paths; separate aliases need not duplicate the implementations.
 
 Availability depends on the mounted runtime and negotiated capabilities.
 Shared folders remain cooperative. Independent mixed conversations do not support
-request-only assignment interruption; generic scratch/database/browser-profile
-provisioning and automatic dependency mapping are also unavailable here. Source
-provenance checks observe loaded origins and current files, not the exact bytes
-previously imported or successful integration tests. The
+request-only assignment interruption. Owned folders and SQLite files are supported;
+general infrastructure provisioning, isolated running browsers, database servers
+and automatic dependency mapping remain unavailable. Source provenance checks
+observe loaded origins and current files, not the exact bytes previously imported.
+Explicit integration validation separately records the named native command's
+outcome; it does not establish test quality or complete dependency isolation. The
 [implementation ledger](workspaces/IMPLEMENTATION.md) separates these limits
 from delivered behavior and remaining acceptance work.
 
