@@ -18,7 +18,7 @@ export function WorkerRetentionSettings({state,act}){
   <p>Keep recently used conversations ready for their next message. These limits apply to idle conversations on this host; work in progress and pending interactions stay protected.</p>
   <label htmlFor="warm-worker-count">Conversations to keep ready</label><input id="warm-worker-count" type="number" min="0" step="1" value={count} onChange={event=>setCount(event.target.value)} onBlur={event=>commit(event,'max_warm_workers')} onKeyDown={event=>{if(event.key==='Enter')event.currentTarget.blur()}}/>
   <label htmlFor="warm-worker-hours">Hours to keep an idle conversation ready</label><input id="warm-worker-hours" type="number" min="0" step="any" value={hours} onChange={event=>setHours(event.target.value)} onBlur={event=>commit(event,'idle_timeout_hours')} onKeyDown={event=>{if(event.key==='Enter')event.currentTarget.blur()}}/>
-  <p className="a-caption">Changes save automatically. Number fields save when you leave the field or press Enter. Setting either limit to zero releases idle conversations as soon as they settle without starting new work. Opening saved history never starts a runtime.</p>
+  <p className="a-caption">Changes save automatically. Number fields save when you leave the field or press Enter. Setting either limit to zero releases idle conversations as soon as they settle without starting new work. Saved history remains available.</p>
   {saving&&<p role="status">Saving readiness settings…</p>}{error&&<p role="alert">{error}</p>}
  </section>;
 }
