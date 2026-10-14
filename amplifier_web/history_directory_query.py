@@ -213,6 +213,12 @@ def root_count(directory, state):
     return directory.db.execute(sql + " SELECT COUNT(*) FROM directory_rows WHERE session_kind='root'", params).fetchone()[0]
 
 
+def child_count(directory, state, parent):
+    """Count canonical direct children without constructing a hidden page."""
+    sql, params = directory.effective(state, children_of=parent)
+    return directory.db.execute(sql+' SELECT COUNT(*) FROM directory_rows',params).fetchone()[0]
+
+
 def children(directory, state, parent, query='', index=0):
     sql, params = directory.effective(state, children_of=parent)
     sql += ', child_rows AS (SELECT * FROM directory_rows)'

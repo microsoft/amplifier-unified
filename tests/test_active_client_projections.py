@@ -37,7 +37,7 @@ async def test_publication_shares_indexes_without_copying_full_catalog(app_facto
         with app.clients.bind(f'client-{index}'):
             queues.append(app.subscribe())
     app._publish()
-    assert builds.count('workspace') == 1 and builds.count('chat') == 8
+    assert builds.count('workspace') == 0 and builds.count('chat') == 0
     assert len(projected) == 4 and max(projected) < 250
     for index, queue in enumerate(queues):
         state = queue.get_nowait()
@@ -53,7 +53,7 @@ async def test_publication_shares_indexes_without_copying_full_catalog(app_facto
     app._save()  # Saving without a revision change must still invalidate indexes.
     with app.clients.bind('client-0'):
         assert rows[-3]['id'] in app.browser_state()['attention']['sessions']
-    assert builds.count('workspace') == 2 and builds.count('chat') == after_shells + 2
+    assert builds.count('workspace') == 1 and builds.count('chat') == after_shells
 
 
 async def test_streaming_only_commits_changed_record_and_skips_unrelated_client(app_factory, monkeypatch):
@@ -142,6 +142,8 @@ async def test_slow_scoped_subscriber_gets_latest_affected_revision_not_unrelate
 async def test_worker_summary_detail_targets_parent_view_not_other_client(app_factory):
     app, rows = fixture(app_factory, count=20)
     child = next(row for row in rows if row.get('parentId') == rows[0]['id'])
+    app.clients.records['client-0']['view'].update(panel='subagent-history',
+        subagentHistory={'sessionId': rows[0]['id'], 'filter': '', 'index': 0})
     queues = []
     for number in range(2):
         with app.clients.bind(f'client-{number}'):
@@ -170,7 +172,10 @@ async def test_scoped_rename_updates_shared_navigation_without_rebuilding_other_
     app._publish(session_ids={rows[0]['id']})
     assert rows[1]['id'] not in built
     b = queues[1].get_nowait()
-    assert any(row['title'] == 'Updated title' for row in b['chatNavigation']['items'])
+    assert 'chatNavigation' not in b
+    with app.clients.bind('client-1'):
+        navigation = app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)})
+    assert any(row['title'] == 'Updated title' for row in navigation['items'])
     assert b['view']['draft'] == 'Private 1'
     # Unscoped same-revision saves remain conservative, including in-place edits.
     rows[1]['messages'] = [{'id': 'new', 'role': 'assistant', 'text': 'Fresh body'}]
@@ -204,8 +209,7 @@ async def test_clients_share_navigation_despite_layout_and_private_draft_differe
         with app.clients.bind(f'client-{index}'):
             queues.append(app.subscribe())
     app._publish()
-    assert builds.count('workspace') == builds.count('browser') == 2
-    assert builds.count('chat') == 4  # Two sidebar pages and two header pages.
+    assert builds == []  # Ordinary browser frames construct no navigation pages.
     for index, queue in enumerate(queues):
         state = queue.get_nowait()
         selected = rows[index // 2]
@@ -216,7 +220,10 @@ async def test_clients_share_navigation_despite_layout_and_private_draft_differe
         with app.clients.bind(f'client-{index}'):
             live = app.state_context()
             for key in ('chatNavigation', 'headerChatNavigation', 'subagentNavigation', 'workspaceExplorer'):
-                assert state[key] == live[key]
+                assert key not in state and key in live
+    # Explicit custom-component contexts still share identical navigation views.
+    assert builds.count('workspace') == builds.count('browser') == 2
+    assert builds.count('chat') == 4
 
 
 async def test_projection_queries_share_only_unaffected_navigation(app_factory):
@@ -367,7 +374,8 @@ async def test_cached_browser_and_uncached_agent_navigation_share_attention_filt
     with app.clients.bind('client-0'):
         app.state['view']['navStatusFilter'] = 'unread'
         app._save()
-        browser = app.browser_state()['chatNavigation']
+        assert 'chatNavigation' not in app.browser_state()
+        browser = app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)})
         agent = app.get_state()['chatNavigation']
         assert [row['id'] for row in browser['items']] == [rows[900]['id']]
         assert browser == agent
@@ -437,7 +445,9 @@ async def test_shared_session_index_refreshes_messages_and_busy_offpage_rows(app
         assert len(first['notificationMessages']) == 100
         assert first['notificationMessages'][0]['id'] == '5'
         assert all('text' not in item for item in first['notificationMessages'])
-        assert target['id'] in {item['id'] for item in first['sessions']}
+        assert target['id'] not in {item['id'] for item in first['sessions']}
+        assert target['id'] in app.projections.sessions(app.state).active
+        assert app.session_state(target['id'])['sessions'][0]['status'] == 'working'
     target['messages'].append({'id': 'latest', 'role': 'assistant', 'via': 'text', 'createdAt': 1000, 'text': 'Latest'})
     target['status'] = 'idle'
     app.state['notificationSettings']['preview'] = True
@@ -458,13 +468,16 @@ async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_row
     monkeypatch.setattr(app.directory, 'chats', counted)
     with app.clients.bind('client-0'):
         first = app.browser_state()
+        navigation = app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)})
         builds.clear()
         for index in range(3):
             rows[0]['streaming'] = f'Progress {index}'
             app.state['diagnostics']['local']['sampleCount'] = index
             app._publish()
             current = app.browser_state()
-            assert current['chatNavigation'] == first['chatNavigation']
+            assert 'chatNavigation' not in current
+            assert current['shellDataKey'] == first['shellDataKey']
+            assert app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)}) == navigation
             assert current['revision'] > first['revision']
         assert builds == []
         # A same-valued replacement must not make later invalidation depend on
@@ -478,8 +491,10 @@ async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_row
         app._save()  # No revision change: still must invalidate all queries.
         app.state['view']['navFilter'] = 'Changed off page'
         changed = app.browser_state()
-        assert [row['title'] for row in changed['chatNavigation']['items']] == ['Changed off page']
-        assert changed['chatNavigation']['activityCounts']['working'] == 1
+        assert 'chatNavigation' not in changed
+        navigation = app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)})
+        assert [row['title'] for row in navigation['items']] == ['Changed off page']
+        assert navigation['activityCounts']['working'] == 1
         assert builds
 
 

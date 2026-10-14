@@ -154,6 +154,13 @@ def navigation(state, *, chats=chat_snapshot, index=None, directory=None):
     selected = index.by_id.get(state.get('selectedSessionId'))
     if selected and is_top_level(selected) and selected.get('workspaceId') == scope['workspaceId'] and all(row['id'] != selected['id'] for row in header['items']):
         header = {**header, 'items': header['items'][:99] + [{**summary(selected), 'pinned': selected['id'] in state.get('pinnedSessionIds', [])}]}
+    workers = subagent_navigation(state, index=index, directory=directory)
+    return {'chatNavigation': chat, 'headerChatNavigation': {'items': header['items'], 'total': header['total']},
+            'subagentNavigation': workers}
+
+
+def subagent_navigation(state, *, index=None, directory=None):
+    index = index or SessionIndex(state)
     requested = state.get('view', {}).get('subagentHistory', {})
     requested = requested if isinstance(requested, dict) else {}
     parent = requested.get('sessionId') or state.get('selectedSessionId')
@@ -175,8 +182,7 @@ def navigation(state, *, chats=chat_snapshot, index=None, directory=None):
         workers = {'items': [summary(row) for row in children[start:end]], 'total': len(children), 'unfilteredTotal': len(all_children),
                    'index': index, 'pages': pages, 'start': start, 'end': end,
                    'scope': {'sessionId': parent, 'filter': query}}
-    return {'chatNavigation': chat, 'headerChatNavigation': {'items': header['items'], 'total': header['total']},
-            'subagentNavigation': workers}
+    return workers
 
 
 class SnapshotCopies:
@@ -208,8 +214,14 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     directory = directory or index.directory
     result = dict(state)
     result.update(derived)
+    if 'browserResources' in derived:
+        # The bundled shell owns navigation pages. Do not accidentally retain a
+        # prior full-state projection when constructing a selected-chat frame.
+        for name in ('chatNavigation', 'headerChatNavigation', 'workspaceExplorer', 'subagentNavigation'):
+            if name not in derived:
+                result.pop(name, None)
     visible = {row['id'] for name in ('chatNavigation', 'headerChatNavigation', 'subagentNavigation')
-               for row in derived[name]['items']}
+               for row in derived.get(name, {}).get('items', [])}
     selected = state.get('selectedSessionId')
     selected_row = index.by_id.get(selected) or (directory.resolve(selected) if directory else None) or {}
     visible.add(selected_row.get('parentId'))
@@ -217,10 +229,11 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     if client_id is None:
         full.update(index.active)  # Legacy unbound readers retain compatibility.
     visible.update(full)
-    visible.add(derived['subagentNavigation']['scope']['sessionId'])
-    workers = derived['subagentNavigation']
-    selected_children = (workers['unfilteredTotal'] if workers['scope']['sessionId'] == selected
-                         else directory.children(state, selected_row)['unfilteredTotal'] if directory else len(index.children(selected_row))) if selected_row else 0
+    workers = derived.get('subagentNavigation')
+    if workers is not None:
+        visible.add(workers['scope']['sessionId'])
+    selected_children = (workers['unfilteredTotal'] if workers is not None and workers['scope']['sessionId'] == selected
+                         else directory.child_count(state, selected_row) if directory else len(index.children(selected_row))) if selected_row else 0
     detail_project = detail_project or project
     visible_rows = dict(index.by_id)
     if directory is not None:

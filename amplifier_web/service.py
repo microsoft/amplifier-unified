@@ -832,7 +832,8 @@ class AppService:
             if (cached is None or cached['revision'] != self.state['revision'] or session_id is not None
                     or self._client_snapshot_preferences.get(client_id) != self._shared_preferences_stamp):
                 from .browser_state import snapshot
-                derived = self.projections.browser(self.state)
+                derived = self.projections.browser(self.state, selected_context=(
+                    session_id is None and self.clients.records[client_id]['kind'] == 'web'))
                 if session_id is not None:
                     self._session(session_id)
                 cached = self.clients.project(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state),
