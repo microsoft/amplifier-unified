@@ -92,6 +92,29 @@ and installed-package checks passed, while its browser run stopped on a cleanup
 failure and its full Python run exposed stale runner/evidence tests. Subsequent
 releases repair those findings; the earlier run remains failed/incomplete.
 
+Release .152 is being qualified from reviewed PRs #704, #705 and #707. The
+selected-history lane adds bounded Linux process isolation and six requested
+read models, with unchanged-input reuse, supported incremental updates and exact
+reference reconstruction for broader changes. Other operating systems retain the
+existing reader pending native qualification. Cold selected trees still materialize
+in host memory within explicit limits; this is not a fully paged transcript store.
+
+The catalog lane now reuses ordinary selection-independent sidebar pages, separates
+root navigation dependencies from unrelated worker changes, and narrows workspace
+candidates through existing indexes. Fixed 100-switch tests at 270, 2,700 and 27,000
+records issued zero navigation-page queries and decoded zero page rows. This is
+synthetic SQL evidence, not end-to-end latency acceptance. Cold arbitrary global
+filtered counts/order remain potentially expensive, and reconciliation still uses
+threads. The next live qualification records sustained six-chat observations and
+large selected histories separately before declaring performance exits complete.
+
+The .151 extended browser runner completed all 65 scenarios: 43 passed and 22
+failed, including one scenario that passed its assertions but left processes for
+cleanup. Its full coverage exposes stale controls and possible product defects
+that are being repaired; publication is not a claim of clean broad verification.
+Five duplicate source-browser runs were removed from the readiness workflow while
+preserving each distinct journey and package-install coverage.
+
 ## Ownership and data flow
 
 ```mermaid

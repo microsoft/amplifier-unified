@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.152",
+      "title": "Keep chat navigation and selected Work processing bounded",
+      "changes": [
+        "Ordinary chat switches reuse unchanged sidebar pages and workspace totals. Workspace listings narrow indexed candidates before applying their existing visibility rules.",
+        "On Linux hosts, requested Work histories are rebuilt in a bounded background process. Selected read models reuse unchanged work and apply supported updates incrementally, with exact reconstruction when source changes require it.",
+        "Unavailable Work projections show their status without making the saved conversation unreadable. Oversized unchanged histories are not retried repeatedly.",
+        "Background verification removes five duplicate source-browser runs while preserving their coverage, and chat timing checks identify the actual displayed conversation."
+      ],
+      "notices": [
+        "Other host operating systems retain the existing history reader while native process qualification continues."
+      ]
+    },
+    {
       "version": "0.20.151",
       "title": "Keep history reads and workspace updates focused",
       "changes": [
