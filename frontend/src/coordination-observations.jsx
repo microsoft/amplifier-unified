@@ -1,18 +1,21 @@
-import React,{useEffect,useRef,useState} from 'react';
-import {cursorStore,portableClientTiming} from './coordination-observations.js';
+import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {cursorStore,portableClientTiming,recapCommitTiming} from './coordination-observations.js';
 import {recentActionTimings,recentRequestTimings,download} from './api.js';
 
 export function CoordinationObservations({dispatch,sessionId}){
  const root=useRef(null),epoch=useRef(0),visible=useRef(false),store=useRef(null);
+ const commitTiming=useRef(null);
+ if(!commitTiming.current||commitTiming.current.sessionId!==sessionId)commitTiming.current={sessionId,timing:recapCommitTiming()};
  if(!store.current){let storage;try{storage=sessionStorage}catch{}store.current=cursorStore(storage)}
  const [shown,setShown]=useState(false),[report,setReport]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[diagnostic,setDiagnostic]=useState(null);
  const painted=()=>visible.current&&document.visibilityState!=='hidden'&&!!root.current?.getClientRects().length;
  const load=async()=>{
-  const turn=++epoch.current,previous=store.current.read(sessionId);setBusy(true);setError('');
+  const turn=++epoch.current,previous=store.current.read(sessionId),timing=commitTiming.current.timing;setBusy(true);setError('');
   try{
    const value=await dispatch('coordination.recap',{sessionId,...(previous?{cursor:previous}:{})},{feedback:false});
+   const commitSample=timing.received();
    if(!Array.isArray(value?.result?.changes)||typeof value.result.nextCursor!=='string')throw Error('The change recap is unavailable. Refresh to try again.');
-   if(turn===epoch.current&&painted())setReport({value:value.result,previous,turn});
+   if(turn===epoch.current&&painted())setReport({value:value.result,previous,turn,commitSample,timing});
   }catch(error){if(turn===epoch.current&&painted())setError(error.message)}
   finally{if(turn===epoch.current)setBusy(false)}
  };
@@ -26,13 +29,17 @@ export function CoordinationObservations({dispatch,sessionId}){
   return()=>{visible.current=false;epoch.current++;observer.disconnect();document.removeEventListener('visibilitychange',visibility)};
  },[sessionId]);
  useEffect(()=>{if(shown)void load();return()=>{epoch.current++}},[shown,sessionId]);
+ useLayoutEffect(()=>{
+  const committedAt=performance.now();
+  if(report?.turn===epoch.current&&report.timing===commitTiming.current.timing&&painted())report.timing.committed(report.commitSample,committedAt);
+ },[report,sessionId]);
  useEffect(()=>{
   if(report?.turn===epoch.current&&painted())store.current.mark(sessionId,report.previous,report.value.nextCursor);
  },[report,sessionId]);
  const inspect=async()=>{
   const turn=epoch.current;setError('');
   try{const reply=await dispatch('coordination.diagnostics',{sessionId},{feedback:false});
-   if(turn===epoch.current&&painted())setDiagnostic({...reply.result,client:portableClientTiming(recentActionTimings(),recentRequestTimings())});
+   if(turn===epoch.current&&painted())setDiagnostic({...reply.result,client:portableClientTiming(recentActionTimings(),recentRequestTimings(),commitTiming.current.timing.snapshot())});
   }catch(error){if(turn===epoch.current&&painted())setError(error.message)}
  };
  const value=report?.value;

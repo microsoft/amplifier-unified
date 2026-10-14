@@ -544,5 +544,9 @@ delay. Correlation uses hashed actor and operation identities; arbitrary content
 paths, titles, tool arguments, credentials and private drafts are excluded.
 Browser action/request timing is attached locally, never synchronized as shared
 conversation state. Inclusive measurements may overlap and must not be summed.
-Unavailable samples and unmeasured rendering time remain explicit; a recorded
+The browser may also attach a bounded, numeric recap timing sample from dispatch
+response delivery to the component through its React layout effect after DOM
+mutations commit. This monotonic-clock observation is local to that recap mount;
+it excludes network delivery, physical paint and global application rendering.
+Unavailable samples and unmeasured paint remain explicit; a recorded
 phase or timing is not proof of correctness, live liveness or external effects.

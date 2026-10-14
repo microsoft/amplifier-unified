@@ -32,6 +32,12 @@ try{
  const report=recap.getByRole('textbox',{name:'Portable work phase report'});await expect(report).toBeVisible();
  const parsed=JSON.parse(await report.inputValue());assert.equal(parsed.phases.length,1);assert.equal(parsed.provider.status,'unavailable');
  assert.ok(parsed.client.request.length);assert.doesNotMatch(JSON.stringify(parsed),/PRIVATE-|Primary owner|Review helper|\/private|\/Users/);
+ assert.equal(parsed.clientRendering.status,'not_collected'); // Server has no browser measurement.
+ const rendering=parsed.client.rendering;assert.equal(rendering.status,'observed');
+ assert.equal(rendering.scope,'current recap component mount');assert.equal(rendering.clock,'performance.now');
+ assert.equal(rendering.boundary,'recap dispatch response delivered to component → React layout effect after DOM mutations');
+ assert.ok(rendering.samples.length>0&&rendering.samples.length<=30);
+ assert.ok(rendering.samples.every(row=>Number.isFinite(row.elapsedMs)&&row.elapsedMs>=0&&row.committedMs>=row.receivedMs&&Math.abs(row.committedMs-row.receivedMs-row.elapsedMs)<1e-9));
  const [download]=await Promise.all([a.waitForEvent('download'),recap.getByRole('button',{name:'Save phase report',exact:true}).click()]);
  await download.saveAs(output+'/portable-report.json');assert.deepEqual(JSON.parse(await readFile(output+'/portable-report.json','utf8')),parsed);
  await a.screenshot({path:output+'/desktop.png'});
@@ -50,6 +56,6 @@ try{
  await close(a);await expect(a.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('PRIVATE-A-DRAFT');
  await expect(b.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('PRIVATE-B-DRAFT');
  const runtime=await a.request.get(url+'/fixture').then(response=>response.json());assert.deepEqual(runtime.sent,[]);assert.deepEqual(errors,[]);
- const result={status:'passed',runtime:'scripted; no model inputs',checks:['independent tab cursors','changed saved receipt','visible-only cursor advance','hidden late response','reload','private drafts','portable redaction and download','provider unavailable','mobile layout']};
+ const result={status:'passed',runtime:'scripted; no model inputs',checks:['independent tab cursors','changed saved receipt','visible-only cursor advance','hidden late response','reload','private drafts','portable redaction and download','local recap response-to-DOM-commit timing','provider unavailable','mobile layout']};
  await writeFile(output+'/report.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser?.close();fixture.kill()}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import React,{act} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
-import {cursorStore,portableClientTiming} from '../src/coordination-observations.js';
+import {cursorStore,portableClientTiming,recapCommitTiming} from '../src/coordination-observations.js';
 const server=await createServer({configFile:false,server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {CoordinationObservations}=await server.ssrLoadModule('/src/coordination-observations.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
@@ -27,7 +27,29 @@ test('portable client timing drops routes, bodies, IDs and invalid numbers',()=>
  assert.doesNotMatch(JSON.stringify(result),/SECRET|PRIVATE|\/private/);
  assert.deepEqual(result.actionQueue,[{at:2,queueMs:20}]);
  assert.deepEqual(result.request,[{at:3,elapsedMs:100,status:200}]);
- assert.equal(result.rendering.status,'not_collected');
+ assert.equal(result.rendering.status,'unavailable');assert.deepEqual(result.rendering.samples,[]);
+});
+
+test('recap commit timing measures one exact monotonic interval and retains a bounded detached ring',()=>{
+ let now=10;const timing=recapCommitTiming(()=>now);
+ assert.equal(timing.snapshot().status,'unavailable');
+ const pending=timing.received();now=12.5;
+ assert.equal(timing.committed(pending),true);assert.equal(timing.committed(pending),false);
+ assert.deepEqual(timing.snapshot().samples,[{receivedMs:10,committedMs:12.5,elapsedMs:2.5}]);
+ assert.equal(recapCommitTiming(()=>now).committed(pending),false);
+ const copy=timing.snapshot();copy.samples[0].elapsedMs=999;assert.equal(timing.snapshot().samples[0].elapsedMs,2.5);
+ for(let i=0;i<35;i++){now=20+i;const token=timing.received();now+=.5;timing.committed(token)}
+ const snapshot=timing.snapshot();assert.equal(snapshot.samples.length,30);assert.equal(snapshot.samples[0].receivedMs,25);
+ assert.equal(snapshot.boundary,'recap dispatch response delivered to component → React layout effect after DOM mutations');
+ assert.equal(snapshot.scope,'current recap component mount');assert.equal(snapshot.clock,'performance.now');
+ assert.deepEqual(portableClientTiming([],[],snapshot).rendering,snapshot);
+});
+
+test('invalid or reversed recap clocks remain unavailable rather than becoming zero observations',()=>{
+ for(const [start,end] of [[NaN,10],[10,Infinity],[10,9],[-1,0]]){
+  let now=start;const timing=recapCommitTiming(()=>now),token=timing.received();now=end;
+  assert.equal(timing.committed(token),false);assert.equal(timing.snapshot().status,'unavailable');
+ }
 });
 
 for(const cancelled of ['hidden','session-change'])for(const fails of [false,true]){

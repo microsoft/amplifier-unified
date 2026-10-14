@@ -925,7 +925,10 @@ same scoped receipts, already loaded native provider/bridge records and existing
 process loop-delay samples. Correlation IDs are hashed; message content, paths,
 tool payloads and private drafts are excluded. The browser adds bounded numeric
 action/network samples from its existing telemetry, without routes or command
-names. Missing samples and uncollected rendering measurements remain explicit;
+names. A local ring also records recap dispatch response delivery to the component
+through the React layout effect after DOM mutation. Its exact boundary, monotonic
+clock and current-mount scope are exported; it does not measure physical paint
+or overall app rendering. Missing samples remain explicitly unavailable;
 inclusive, overlapping timings do not establish cause or end-to-end latency.
 
 Both passive actions share UI, session HTTP and agent dispatch, recheck scope
