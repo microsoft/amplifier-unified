@@ -1,0 +1,60 @@
+{
+  "formatVersion": 1,
+  "status": "integration-candidate",
+  "installedGraph": {
+    "passed": 17,
+    "failed": 0,
+    "skipped": 0,
+    "durationMs": 30931.863042,
+    "host": "9d2e5de9cc0f4cbdd054016d96938391838cb28e",
+    "native": "198efe6bf14242b09eae0e6d3669003c6e620268",
+    "nativeCapabilities": "00ef02d03d2275db367a250182fada0259f93165",
+    "operations": "ec9979ce65619a86a22b31b15fcd8e8ed370f8d8",
+    "schedulingFoundation": "ecea0132c2e46045957a62fa0259ef239424af83",
+    "workspaceSource": "d33226359aac8c9d0547c8ecfc7188fa7a223bc4",
+    "logSha256": "bae0c749cb2fe224e7eef02bd7c2023a1006924d686f2f055ea6d9cf954bf8b5"
+  },
+  "freshConsumer": {
+    "installedConsumer": true,
+    "staticClient": true,
+    "ahpInitialize": true,
+    "acpTurn": true,
+    "scopedResource": true,
+    "node": "v25.2.1",
+    "limits": [
+      "Independent ACP fixture only; native runtime and browser/device qualification are separate."
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "amplifier-unified-0.1.0.tgz",
+      "sha256": "6946de3b8b52bdcaa28a35a12e9e0bd1503796ee8dfd35563c5164cbd4bdbdae"
+    },
+    {
+      "name": "web-release-548aded.tgz",
+      "sha256": "45bfd9365a58cc89d2585cb71d86a392edc348ed88b2e7d91408cf8bea697f15"
+    }
+  ],
+  "client": {
+    "revision": "548aded92618a9f9e80cde0a221575ab30a7df1c",
+    "unitTests": 518,
+    "configurationCases": [
+      "two dirty editors",
+      "busy cancellation",
+      "lost model reply and reload",
+      "mixed agent host",
+      "absent native administration"
+    ],
+    "cancelSourceMs": 135,
+    "cancelStaticMs": 136,
+    "settingsCommandReplay": 0,
+    "credentialsStoredInJournal": false
+  },
+  "limits": [
+    "No architecture candidate activated on Spark-1 or Spark-2.",
+    "Offline native model fixtures and independently installed MCP SDK; vendor accounts and physical devices are separately qualified.",
+    "Selected native recovery tests are separate from the composed graph; recovery facade is not yet included.",
+    "Supervisor lifetime and receipts qualified; production transport, exhaustive quiescence coverage and service-manager replacement are separate.",
+    "Workspace directory handles currently require POSIX."
+  ]
+}

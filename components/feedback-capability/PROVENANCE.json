@@ -1,0 +1,12 @@
+{
+  "repository": "microsoft/amplifier-unified",
+  "revision": "278a3abf69d77c14843884e66e67d4531a2a41b4",
+  "adapted": [
+    "amplifier_web/feedback.py",
+    "amplifier_web/feedback_attachments.py",
+    "amplifier_web/feedback_excerpts.py",
+    "amplifier_web/feedback_lifecycle.py"
+  ],
+  "license": "MIT",
+  "boundary": "Private client drafts removed; explicit shared submissions and indexed receipts only."
+}

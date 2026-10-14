@@ -1,0 +1,44 @@
+[
+  {
+    "featureId": "F16.01",
+    "status": "partial-qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/full-native-handoff.json",
+    "scope": "Actual installed full configured native capture and new inactive restore, exact reviewed scope, owner completeness, verified download, original history preservation; selected reset/undo retained",
+    "gap": "Complete product-wide backup/restore and active destination runtime qualification remain outside this native-only browser flow"
+  },
+  {
+    "featureId": "F16.03",
+    "status": "partial-qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/full-native-handoff.json",
+    "scope": "Actual installed full configured native capture and new inactive restore, exact reviewed scope, owner completeness, verified download, original history preservation; selected reset/undo retained",
+    "gap": "Complete product-wide backup/restore and active destination runtime qualification remain outside this native-only browser flow"
+  },
+  {
+    "featureId": "F16.04",
+    "status": "partial-qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/full-native-handoff.json",
+    "scope": "Actual installed full configured native capture and new inactive restore, exact reviewed scope, owner completeness, verified download, original history preservation; selected reset/undo retained",
+    "gap": "Complete product-wide backup/restore and active destination runtime qualification remain outside this native-only browser flow"
+  },
+  {
+    "featureId": "F16.05",
+    "status": "partial-qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/full-native-handoff.json",
+    "scope": "Actual installed full configured native capture and new inactive restore, exact reviewed scope, owner completeness, verified download, original history preservation; selected reset/undo retained",
+    "gap": "Complete product-wide backup/restore and active destination runtime qualification remain outside this native-only browser flow"
+  },
+  {
+    "featureId": "F16.02",
+    "status": "qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/runtime-repair-handoff.json",
+    "scope": "Private rebuild selection and exact native retained-lock repair review, separate qualified environment, exact lost-response recovery and separately reviewed future-worker activation; actual source and installed-static browser",
+    "gap": "Source cache repair/deletion and full-product reconstruction are not part of native runtime repair"
+  },
+  {
+    "featureId": "F17.01",
+    "status": "qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/runtime-repair-handoff.json",
+    "scope": "Private rebuild selection and exact native retained-lock repair review, separate qualified environment, exact lost-response recovery and separately reviewed future-worker activation; actual source and installed-static browser",
+    "gap": "Source cache repair/deletion and full-product reconstruction are not part of native runtime repair"
+  }
+]

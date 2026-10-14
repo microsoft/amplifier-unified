@@ -1,0 +1,145 @@
+{
+  "candidateCommit": "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9",
+  "rows": [
+    {
+      "featureId": "F02.01",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "Actual native/media shared defaults, both advertised model choices, private editing/reload, two-client CAS rebase and exact lost-response receipt; no credential grant or selected chat.",
+      "gap": "No audio/device/provider-account qualification."
+    },
+    {
+      "featureId": "F02.03",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "Actual native/media shared defaults, both advertised model choices, private editing/reload, two-client CAS rebase and exact lost-response receipt; no credential grant or selected chat.",
+      "gap": "No audio/device/provider-account qualification."
+    },
+    {
+      "featureId": "F02.02",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "Actual native stored fallback preference, rendered public choices and explicit stored-only explanation.",
+      "gap": "Transport does not automatically switch models; this remains a stored preference only."
+    },
+    {
+      "featureId": "F02.04",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "Native/media persist future-call defaults; controls state future-call boundary and native model/voice choices are saved.",
+      "gap": "No actual future audio connection or active-call guard exercised in browser; backend owner separately qualified."
+    },
+    {
+      "featureId": "F14.01",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "History page explains existing-directory/root-session discovery and inert imported authority.",
+      "gap": "Automatic legacy discovery behavior remains covered by separate catalog/workspace receipts, not this control."
+    },
+    {
+      "featureId": "F14.02",
+      "status": "implemented-unqualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "History page now mounts canonical NativeConversationExport for selected AHP session, removing unadvertised history.export.",
+      "gap": "Exact history-page export gesture not exercised in this qualifier; canonical export has prior lifecycle acceptance."
+    },
+    {
+      "featureId": "F14.03",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "Actual JSON picker upload at 16 KiB, interrupted chunk exact recovery, explicit bounded review, one native import/adoption despite lost commit reply, passive history.",
+      "gap": "JSONL and drag/drop gestures are supported source but not separately exercised in this browser receipt."
+    },
+    {
+      "featureId": "F14.04",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "Actual title and bundle override survive staged native preview and explicit import.",
+      "gap": "Bundle is import metadata; no imported runtime preparation or provider calls claimed."
+    },
+    {
+      "featureId": "F14.05",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "Unit size/type/receipt bounds plus actual native parse/preview of JSON; exact source hash required for resumed upload.",
+      "gap": "Invalid JSON parse rejection and JSONL browser validation are not separately exercised."
+    },
+    {
+      "featureId": "F14.06",
+      "status": "gap",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "History cleanup unavailable is explicitly visible.",
+      "gap": "No age-based cleanup/legacy app-file purge owner; no retirement or deletion approval inferred."
+    },
+    {
+      "featureId": "F14.07",
+      "status": "gap",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "History cleanup unavailable is explicitly visible.",
+      "gap": "No age-based cleanup/legacy app-file purge owner; no retirement or deletion approval inferred."
+    },
+    {
+      "featureId": "F14.08",
+      "status": "gap",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "History cleanup unavailable is explicitly visible.",
+      "gap": "No age-based cleanup/legacy app-file purge owner; no retirement or deletion approval inferred."
+    },
+    {
+      "featureId": "F14.09",
+      "status": "gap",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "History cleanup unavailable is explicitly visible.",
+      "gap": "No age-based cleanup/legacy app-file purge owner; no retirement or deletion approval inferred."
+    },
+    {
+      "featureId": "F14.10",
+      "status": "gap",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/voice-import-static/voice-import-receipt.json",
+        "cc9fe092310e010eee3a4ef7ac8634db93a9a7b9"
+      ],
+      "scope": "History cleanup unavailable is explicitly visible.",
+      "gap": "No age-based cleanup/legacy app-file purge owner; no retirement or deletion approval inferred."
+    }
+  ]
+}

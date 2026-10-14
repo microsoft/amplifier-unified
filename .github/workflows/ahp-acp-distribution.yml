@@ -1,0 +1,275 @@
+name: AHP ACP distribution fixtures
+on:
+  pull_request:
+    paths:
+      - 'distribution/**'
+      - 'components/**'
+      - '.github/workflows/ahp-acp-distribution.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'distribution/**'
+      - 'components/**'
+      - '.github/workflows/ahp-acp-distribution.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  protocol-fixtures:
+    name: Public artifact composition (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    defaults:
+      run:
+        working-directory: distribution
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Verify exact component archive identities
+        run: python3 scripts/verify-artifacts.py
+      - run: npm ci --ignore-scripts
+      - name: Exercise local protocol fixtures
+        run: npm test
+      - name: Verify passive preview recovery inspection
+        run: python3 -B test/preview_bootstrap_inspection_test.py
+      - name: Verify authenticated preview socket retirement
+        run: node --experimental-test-module-mocks --test test/preview-access-race.acceptance.mjs
+      - name: Verify native maintenance authority and reconstruction boundaries
+        run: |
+          npm ci --ignore-scripts --prefix ../components/maintenance-capability
+          npm test --prefix ../components/maintenance-capability
+      - name: Verify independent distribution supervisor and owned process replacement
+        run: |
+          npm ci --ignore-scripts --prefix ../components/distribution-update-owner
+          npm test --prefix ../components/distribution-update-owner
+      - name: Verify durable selected recovery with the installed host
+        run: |
+          npm ci --ignore-scripts --prefix ../components/recovery-capability
+          RECOVERY_HOST_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-host/dist/index.js" npm test --prefix ../components/recovery-capability
+      - name: Pack public composition
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: State acceptance boundary
+        run: |
+          echo 'This lane runs protocol fixtures. Optional installed Python, actual providers, browser/device and deployment gates require their separate receipts.' >> "$GITHUB_STEP_SUMMARY"
+  feedback-owner:
+    name: Installed feedback owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent feedback owner
+        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' ./components/feedback-capability/python pytest pytest-asyncio
+      - name: Verify durable delivery and disclosure fixtures
+        run: python -I -m pytest -q -o asyncio_mode=auto components/feedback-capability/python/tests
+      - run: npm ci --ignore-scripts --prefix distribution
+      - name: Verify installed owner and immutable upload transport
+        run: |
+          FEEDBACK_PYTHON="$(command -v python)" \
+          FEEDBACK_RESOURCES_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-resources-capability/src/index.js" \
+          node --test components/feedback-capability/test/owner.test.mjs
+
+  coordination-owner:
+    name: Installed coordination owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent coordination owner and qualified Foundation library
+        run: >-
+          python -m pip install
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
+          ./components/coordination-capability/python pytest pytest-asyncio
+      - name: Verify bounded reports and durable unknown outcomes
+        run: python -I -m pytest -q components/coordination-capability/python/tests
+      - run: npm ci --ignore-scripts --prefix distribution
+      - name: Verify installed owner transport and attention coverage
+        run: |
+          COORDINATION_PYTHON="$(command -v python)" \
+          COORDINATION_NODE_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-coordination-capability/dist/index.js" \
+          node --test components/coordination-capability/test/owner.test.mjs
+
+  workspace-owner:
+    name: Installed workspace owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent workspace owner
+        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' './components/workspace-capability/python[test]'
+      - name: Verify original history, crash receipts and safe placement
+        run: python -I -m pytest -q -c components/workspace-capability/python/pyproject.toml components/workspace-capability/python/tests
+      - run: npm ci --ignore-scripts --prefix components/workspace-capability
+      - name: Verify public owner transport against the catalog contract fixture
+        run: |
+          npm run build --prefix components/workspace-capability
+          WORKSPACE_OWNER_PYTHON="$(command -v python)" \
+          node --test --test-name-pattern='installed Python owner' components/workspace-capability/test/owner.test.mjs
+
+  notifications-owner:
+    name: Installed notifications owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent notifications owner
+        run: >-
+          python -m pip install
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
+          './components/notifications-capability/python[test]'
+      - name: Verify delivery receipts, TLS policy and durable intake
+        run: python -I -m pytest -q -c components/notifications-capability/python/pyproject.toml components/notifications-capability/python/tests
+      - run: npm ci --ignore-scripts --prefix distribution
+      - run: npm ci --ignore-scripts --prefix components/notifications-capability
+      - name: Verify public owner and composed completion policy
+        run: |
+          NOTIFICATIONS_PYTHON="$(command -v python)" \
+          NOTIFICATIONS_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-notifications-capability/src/index.js" \
+          HOST_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-host/dist/index.js" \
+          node --test components/notifications-capability/test/owner.test.mjs
+          UNIFIED_OWNERS_PYTHON="$(command -v python)" \
+          node --test distribution/test/notifications.integration.test.mjs
+
+  diagnostics-owner:
+    name: Installed diagnostics owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent diagnostics owner
+        run: >-
+          python -m pip install
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
+          'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'
+          './components/diagnostics-capability/python[test]'
+      - name: Verify explicit capture, SDK delivery and durable intake
+        run: python -I -m pytest -q -c components/diagnostics-capability/python/pyproject.toml components/diagnostics-capability/python/tests
+      - name: Verify public owner transport and scoped pages
+        run: DIAGNOSTICS_PYTHON="$(command -v python)" node --test components/diagnostics-capability/test/owner.test.mjs
+
+  owner-service-matrix:
+    name: Installed held service owners (Node 22, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify sealed independent fixture dependency
+        run: |
+          python - <<'PYTHON'
+          import hashlib, json, tomllib, zipfile
+          from email.parser import BytesParser
+          from pathlib import Path
+          root=Path("distribution/test/packages")
+          receipt=json.loads((root/"publishing.json").read_text())
+          assert hashlib.sha256((root/receipt["artifact"]).read_bytes()).hexdigest()==receipt["sha256"]
+          with zipfile.ZipFile(root/receipt["artifact"]) as wheel:
+              metadata=BytesParser().parsebytes(wheel.read(f'amplifier_publishing-{receipt["version"]}.dist-info/METADATA'))
+              assert metadata["Name"]==receipt["package"] and metadata["Version"]==receipt["version"]
+              for path, expected in receipt["sourceFileSha256"].items():
+                  assert hashlib.sha256(wheel.read(path)).hexdigest()==expected
+          adapter=tomllib.loads(Path("components/publishing-capability/python/pyproject.toml").read_text())
+          assert f'amplifier-publishing=={receipt["version"]}' in adapter["project"]["dependencies"]
+          PYTHON
+      - name: Install optional libraries and independent Python owners
+        run: |
+          python -m pip install pytest pytest-asyncio \
+            'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' \
+            'amplifier-recall @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/recall' \
+            ./distribution/test/packages/amplifier_publishing-0.1.1-py3-none-any.whl \
+            'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'
+          python -m pip install \
+            ./components/workspace-capability/python ./components/coordination-capability/python \
+            ./components/publishing-capability/python ./components/recall-capability/python \
+            ./components/notifications-capability/python ./components/feedback-capability/python \
+            ./components/diagnostics-capability/python
+      - name: Verify installed Python service identity and restart contracts
+        run: python -I -m pytest -q -o asyncio_mode=auto distribution/test/owner-service-matrix.py
+      - name: Build independent public Node owner archives
+        run: |
+          mkdir -p "$RUNNER_TEMP/service-packages" "$RUNNER_TEMP/service-consumer"
+          for owner in workspace coordination publishing recall notifications feedback history worktree recovery diagnostics; do
+            if test -f "components/$owner-capability/package-lock.json"; then
+              npm ci --ignore-scripts --prefix "components/$owner-capability"
+            else
+              node -e "const p=require('./components/'+process.argv[1]+'-capability/package.json'); if(Object.keys(p.dependencies||{}).length||Object.keys(p.devDependencies||{}).length) throw Error('Dependency lock required')" "$owner"
+            fi
+            npm run build --if-present --prefix "components/$owner-capability"
+            npm pack "./components/$owner-capability" --pack-destination "$RUNNER_TEMP/service-packages"
+          done
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          from pathlib import Path
+          root=Path.cwd(); consumer=Path(os.environ['RUNNER_TEMP'])/'service-consumer'
+          artifacts=list((consumer.parent/'service-packages').glob('*.tgz'))
+          resources=json.loads((root/'distribution/components.json').read_text())['components']['@amplifier/unified-resources-capability']['artifact']
+          subprocess.run(['node',str(root/'distribution/test/npm-consumer.mjs'),str(consumer),str(consumer),*map(str,artifacts),str(root/'distribution'/resources)],cwd=root,check=True)
+          PYTHON
+      - name: Verify public installed aggregate service owners
+        env:
+          OWNER_SERVICE_PACKAGE_ROOT: ${{ runner.temp }}/service-consumer
+        run: SERVICE_OWNERS_PYTHON="$(command -v python)" node --test distribution/test/owner-service-matrix.mjs

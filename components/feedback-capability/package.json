@@ -1,0 +1,16 @@
+{
+  "name": "@amplifier/unified-feedback-capability",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": "./src/index.js",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "PROVENANCE.json"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

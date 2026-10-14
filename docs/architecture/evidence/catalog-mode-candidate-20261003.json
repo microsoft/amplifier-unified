@@ -1,0 +1,165 @@
+{
+  "assembled": {
+    "sourceRevision": "afd5c8048b33cf9169dc7c7bab3f0f3dcde69c68",
+    "archive": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-afd5c804/amplifier-unified-0.1.0.tgz",
+    "sha256": "ea0d8bd06abec8eeca637dfb72199099069ae4c8f98e90c78a0e2c5b305e8542",
+    "consumer": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-afd5c804/consumer",
+    "entry": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-afd5c804/consumer/node_modules/@amplifier/unified/src/index.js",
+    "componentFilesMatched": 694,
+    "components": 20,
+    "allInstalledArchiveFilesMatched": 2681,
+    "installedVerified": true,
+    "boundary": "Catalog discovery serialization and mode bridge successor installed and bytes verified. Affected assembled acceptance pending; no live activation."
+  },
+  "host": {
+    "source": "3d413aa64058482a74d76593a26e733d9be147e1",
+    "sha256": "016df05fff8db14e315d7eef96d5ec7144101d09edbfd7bcf8c25ecb025ce84d",
+    "checks": {
+      "build": "passed",
+      "sourceNode22Focused": {
+        "passed": 8,
+        "skipped": 0,
+        "source": "36d15bdd"
+      },
+      "sourceNode25Journals": {
+        "passed": 13,
+        "skipped": 0,
+        "source": "36d15bdd"
+      },
+      "successorExactSettlementSchema": {
+        "passed": 2,
+        "skipped": 0
+      },
+      "installedNode22.22.0": {
+        "passed": 6,
+        "skipped": 0
+      },
+      "installedNode25.2.1": {
+        "passed": 6,
+        "skipped": 0
+      }
+    },
+    "findings": [
+      "Presentation serialization did not cover native or startup catalog hints. Actual sealed host plus catalog created a second derived URI before retained mapping seeding.",
+      "Host-owned durable hint dispatch now pauses and joins before presentation reconstruction; pending hints coalesce and survive failed projection/restart.",
+      "Unsettled catalog writers block reconstruction before metadata work. Stdio timeout waits for actual process exit; custom adapters/restart require exact trusted owner settlement evidence."
+    ],
+    "limits": [
+      "No live host, shared environment, catalog source, or sealed artifact was modified.",
+      "No paid models/accounts. Native protocol peer is independent fixture; catalog is actual installed package.",
+      "Installed candidate files are extracted from the exact archive; immutable already-installed dependencies are symlinked, not a fresh dependency resolver qualification.",
+      "Other scanner/inbox/external writers remain the reconstruction owner responsibility. New process identity alone is never prior-writer settlement.",
+      "Earlier broader runs include fixture bootstrap/cleanup failures and private catalog SQLite I/O failures under low disk; retained separately, not represented as full-suite pass. Final small installed checks passed serially; full host/scale suites not claimed."
+    ],
+    "pr": "https://github.com/microsoft/amplifier-unified-host/pull/4",
+    "independentRootSourceReview": "Both outbox/ordering and exact settlement validation commits read; accepted for candidate intake.",
+    "publication": {
+      "sourceCommit": "3d413aa64058482a74d76593a26e733d9be147e1",
+      "sourceTree": "39fa7b0977f0565562ee40f0620d7e8b64ef62ba",
+      "pullRequest": "https://github.com/microsoft/amplifier-unified-host/pull/4",
+      "state": "MERGED",
+      "mergedAt": "2026-10-03T19:10:01Z",
+      "mergeCommit": "8ea27a5ee879bd49fbc47342686e9ac880a4fcd3",
+      "mergeTreeEqualsSealedSource": true,
+      "mergeMethod": "normal merge with exact head match; no admin bypass",
+      "githubApprovalReviewClaimed": false,
+      "checks": {
+        "pr": {
+          "runId": 37146803262,
+          "conclusion": "success",
+          "passed": 140,
+          "failed": 0,
+          "skipped": 32
+        },
+        "push": {
+          "runId": 37146800078,
+          "conclusion": "success",
+          "passed": 140,
+          "failed": 0,
+          "skipped": 32
+        },
+        "cla": "success"
+      },
+      "preservedPackage": {
+        "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/ahp-host/catalog-hints-20261003/3d413aa64058482a74d76593a26e733d9be147e1/amplifier-unified-host-0.1.0.tgz",
+        "sha256": "016df05fff8db14e315d7eef96d5ec7144101d09edbfd7bcf8c25ecb025ce84d"
+      },
+      "composition": {
+        "rootSource": "afd5c8048b33cf9169dc7c7bab3f0f3dcde69c68",
+        "rootArchiveSha256": "ea0d8bd06abec8eeca637dfb72199099069ae4c8f98e90c78a0e2c5b305e8542",
+        "hostEntry": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-afd5c804/consumer/node_modules/@amplifier/unified/node_modules/@amplifier/unified-host/dist/index.js",
+        "node": "22.22.0",
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "test": "native discovery hints cannot race retained mapping reconstruction; failed projection and restart retain coalesced hints",
+        "log": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/ahp-host/catalog-hints-20261003/publication-3d413aa/composition-afd5c804-node22.log",
+        "scope": "Actual installed public host and actual passive catalog; bounded ACP fixture; failure/restart, exact-ID access and execution availability. No full Core/model/service deployment claim.",
+        "consumerModified": false
+      },
+      "liveServicesChanged": false,
+      "worktreeCleanAfterRemovingOwnedDependencySymlink": true
+    },
+    "publicationReceiptSha256": "6f842f32deddd258cb578959aee7ef3715d7af2c7b336cbbaac89f689deab5df"
+  },
+  "modeBridge": {
+    "source": "8d89364ede7dba17b2edfc0d0698a45754738ed3",
+    "sha256": "69909100e3a8dbd75e815b35e1ff39271b58064a6599ae95bbaf878dcb881027",
+    "pr": "https://github.com/microsoft/amplifier-unified-capability-native/pull/5",
+    "normallyMerged": true
+  },
+  "assembledPresentation": {
+    "receipt": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f17-afd5-installed-receipt.json",
+    "receiptSha256": "90a15a05e051e197443c05f98f40c710c7cee895be9e9dd0f9407190eb69951c",
+    "tests": {
+      "tests": 9,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "exitCode": 0,
+      "durationMs": 26504.033625,
+      "log": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f17-afd5-installed-node22.log",
+      "logSha256": "2cfab7c8bbaa6004f7887a6ce611b57927fdf7ab8e9f9f6b2ae07b0dc92ef820"
+    },
+    "installedBytesUnchanged": true
+  },
+  "limits": [
+    "Fresh graph differs from live b855 preview.",
+    "Full-owner authenticated Linux service fixture and live adoption pending.",
+    "No native context-clear successor in this checkpoint.",
+    "F25 controls browser used mode-onlyb315; presentation browser separately qualifies exactafd5/2368."
+  ],
+  "assembledPresentationBrowser": {
+    "webRevision": "2368b2e345b64bc8809158fadf85224279138352",
+    "webArchiveSha256": "2e2f16e40292e37d26eab8ad8965f008c34a16fd04c3319edb18a81e11650a9a",
+    "receipt": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-static-2368b2e-afd5c804/receipt.json",
+    "receiptSha256": "516aec2859167243804a25812f44381a580dd7f56b4132840a1e74cc1d99333f",
+    "result": {
+      "result": "passed",
+      "checks": [
+        "26 explicit rows selected across bounded pages; complete review and ephemeral exact confirmation; lost hide admission/reload recovers original command without replay, preserving exact-ID access.",
+        "Restore requires a new exact review of the confirmed original selection and separate RESTORE confirmation.",
+        "Actual host marker success and controlled failed catalog projection remain distinct; reload keeps discovery unavailable with exact recovery connected; passive evidence never repeats effect, explicit reviewed rebuild preserves original immutable receipt and hidden selection."
+      ],
+      "canonicalFiles": 78,
+      "canonicalHashesUnchanged": true,
+      "nativeAdministration": false,
+      "globalQuiescence": false,
+      "agentStarts": 0,
+      "modelCalls": 0,
+      "errors": [],
+      "wire": {
+        "prepare": 3,
+        "apply": 3,
+        "rebuild": 1,
+        "receipt": 1
+      },
+      "fixture": "/private/var/folders/jr/dncwc2h95wx42zx7__wq3dq80000gn/T/web-presentation-uITbC1",
+      "distribution": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-afd5c804/consumer/node_modules/@amplifier/unified/src/index.js",
+      "webDirectory": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-consumer-2368b2e/node_modules/@amplifier/unified-client-web/dist",
+      "boundary": "Actual public distribution/host and installed catalog, generic never-start engine. Fixture transport refuses one derived projection; canonical bodies are never read by catalog. No live services, model calls or native reset."
+    }
+  }
+}

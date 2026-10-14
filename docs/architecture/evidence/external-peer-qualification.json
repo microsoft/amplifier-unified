@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-02",
+  "classification": {
+    "claude": "actual standard CLI, authenticated one tool-free model completion through AHP host",
+    "codex": "actual initialize/session/config/prompt; model request rejected HTTP400, no successful inference",
+    "copilot": "official docs only; not installed"
+  },
+  "artifacts": [
+    {
+      "path": "agentclientprotocol-claude-agent-acp-0.81.3-preview.1.tgz",
+      "sha256": "bb148b948d569abeb4ec3705d8d8fa99a58fd025c110d079f6c9a96ac4252e20"
+    },
+    {
+      "path": "agentclientprotocol-codex-acp-1.13.2-preview.5.tgz",
+      "sha256": "e6f14984d80e717849a5bae17843568990ef099aad5261321a7ec3a4d8e7cd8f"
+    }
+  ],
+  "actualHandshake": "claude-handshake.json",
+  "accountMutation": false,
+  "productionServiceMutation": false,
+  "vendorPromptAttempts": {
+    "claude": 1,
+    "codex": 1
+  },
+  "confirmedModelCompletions": {
+    "claude": 1,
+    "codex": 0
+  },
+  "reportedCostUSD": {
+    "claude": 0.04149575
+  },
+  "costScope": "Adapter-reported metadata, not billing confirmation",
+  "actualRuntimeReceipts": [
+    "claude-live-receipt.json",
+    "codex-live-receipt.json",
+    "codex-advertised-models.json"
+  ],
+  "automaticRetry": false
+}

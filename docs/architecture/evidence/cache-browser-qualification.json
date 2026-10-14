@@ -1,0 +1,71 @@
+{
+  "sourceCommit": "9014bea4866a5e8ef1b440bec2aa2c853ba88e7a",
+  "sourceDirty": false,
+  "assetsVerified": 97,
+  "runtimeDependencies": 0,
+  "archive": "web-release-9014bea.tgz",
+  "bytes": 6485892,
+  "sha256": "06df07346809f13df6c903c988c71c0effa1dbd6355cd963713e00daffb990ed",
+  "sharedReadFixCommit": "738c74f",
+  "tests": {
+    "frontend": {
+      "passed": 721,
+      "failed": 0,
+      "skipped": 0
+    },
+    "sharedReadFocused": {
+      "passed": 29,
+      "failed": 0,
+      "skipped": 0
+    },
+    "browserSource": "cache-source.log",
+    "browserInstalledStatic": "cache-final-static.log",
+    "selectionAndWatchFocused": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "graph": {
+    "distribution": "8c8aa460",
+    "recovery": "10f9ed4f21a9ca6291d53b3702cf0c96313e8d19",
+    "native": "4d8982ca57696516dd0c4c3d186e323177e4bf4b",
+    "catalog": "a22491ed",
+    "retentionOwnerPacket": "282b0901",
+    "owners": 18,
+    "python": "private copied cache-native-python; shared graph unchanged"
+  },
+  "behavior": [
+    "Opening cache controls does not scan or start agents",
+    "34 native metadata rows in pages25/9; show/hide and selection private with zero frames",
+    "Owner revision and exact bytecode IDs bound to review; approval cleared on reload",
+    "Changed bytecode after review gives known refusal and preserves bytes",
+    "Concurrent reader admission gives separately saved known scan refusal; new explicit request only after idle evidence",
+    "Lost scan and clear acknowledgements recover exact original command/job, never replay",
+    "Recreated bytecode after successful clear survives receipt recovery",
+    "Every original tracked source file, Git HEAD and canonical events sentinel unchanged",
+    "Shared capability invalidation race fixed for all topics, selected resource scope guarded",
+    "Private recovery journal updates both mounted panels; no stale pending notice",
+    "Hidden cached action results establish advertised watches when revealed",
+    "Superseded conversation and new-draft selections cannot overwrite newer private scope",
+    "Attachment/lifecycle inner reads and client-tool registration reject old selection completions"
+  ],
+  "limits": [
+    "Only generated Python bytecode can be cleared; downloaded source and retained generations remain protected",
+    "External use unknown; no full ecosystem ownership or source retirement claim",
+    "No credentials, live accounts, devices, production data or model calls used",
+    "Cache UI does not authorize managed files disposal, canonical history deletion or global configuration reset"
+  ],
+  "screenshots": [
+    "cache-final-static/cache-review.png",
+    "cache-final-static/cache-outcome.png",
+    "cache-final-static/cache-mobile.png"
+  ],
+  "readWatchAudit": "shared-read-invalidation-audit.json",
+  "correctiveCommits": [
+    "f16ad33c9af0b046ef5ac668cb4e4ba7fe12d364",
+    "9014bea4866a5e8ef1b440bec2aa2c853ba88e7a"
+  ],
+  "supersedes": "0ecbc06 and f16ad33 static archives; use9014bea",
+  "publishedMain": "9014bea4866a5e8ef1b440bec2aa2c853ba88e7a"
+}

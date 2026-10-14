@@ -1,0 +1,102 @@
+{
+  "source": "f5f4c5e6bc61356ca083a246c0f0be0ec08f3863",
+  "run": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229",
+  "checks": [
+    {
+      "link": "https://github.com/apps/microsoft-github-policy-service",
+      "name": "license/cla",
+      "state": "SUCCESS",
+      "workflow": ""
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307692",
+      "name": "Installed workspace owner (Python 3.11)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307636",
+      "name": "Installed notifications owner (Python 3.11)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307619",
+      "name": "Installed feedback owner (Python 3.13)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307615",
+      "name": "Installed coordination owner (Python 3.11)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307694",
+      "name": "Installed coordination owner (Python 3.13)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307626",
+      "name": "Public artifact composition (Node 22)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307705",
+      "name": "Installed workspace owner (Python 3.13)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307709",
+      "name": "Installed feedback owner (Python 3.11)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307698",
+      "name": "Installed notifications owner (Python 3.13)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307532",
+      "name": "Installed diagnostics owner (Python 3.11)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307713",
+      "name": "Installed diagnostics owner (Python 3.13)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307816",
+      "name": "Installed held service owners (Node 22, Python 3.11)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307931",
+      "name": "Installed held service owners (Node 22, Python 3.13)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    },
+    {
+      "link": "https://github.com/microsoft/amplifier-unified/actions/runs/37148520229/job/111277307733",
+      "name": "Public artifact composition (Node 24)",
+      "state": "SUCCESS",
+      "workflow": "AHP ACP distribution fixtures"
+    }
+  ],
+  "scope": "Fourteen hosted matrix jobs plus CLA passed; protocol/owner fixtures, not live deployment or account acceptance. Context successor is a later source revision.",
+  "repairs": [
+    "Notifications fixtures now use explicit host resource scope and test refusal before owner reads.",
+    "Held-owner fixture installs the exact qualified publishing0.1.1 wheel with hash/source metadata and adapter dependency checks."
+  ],
+  "priorFailuresPreserved": "output/ahp-acp-implementation-20261002/ci-root-e269984c"
+}

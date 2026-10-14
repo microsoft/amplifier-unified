@@ -1,0 +1,71 @@
+{
+  "archive": "web-release-b252537.tgz",
+  "sourceCommit": "b2525371e8c0faa7233d1312afcf1714ae99f303",
+  "sourceDirty": false,
+  "sha256": "3380801928e667daec6697b9c2f0c5187df16ea92235db20347b7a893ae8717c",
+  "bytes": 6488612,
+  "assetsVerified": 97,
+  "runtimeDependencies": 0,
+  "publishedMain": "b2525371e8c0faa7233d1312afcf1714ae99f303",
+  "tests": {
+    "frontend": {
+      "passed": 727,
+      "failed": 0,
+      "skipped": 0
+    },
+    "focused": {
+      "passed": 19,
+      "failed": 0,
+      "skipped": 0
+    },
+    "browserSource": "retired-source.log",
+    "browserInstalledStatic": "retired-static.log"
+  },
+  "graph": {
+    "distribution": "8c8aa460",
+    "native": "4d8982ca57696516dd0c4c3d186e323177e4bf4b",
+    "python": "private cache-native-python copy; no shared environment changes"
+  },
+  "acceptance": {
+    "result": "passed",
+    "purgeRequests": 2,
+    "successfulPurgeEffects": 1,
+    "removedFiles": [
+      "metadata.json",
+      "transcript.jsonl"
+    ],
+    "retainedFiles": [
+      "checkpoint.json",
+      "events.jsonl",
+      "unique.txt"
+    ],
+    "checks": [
+      "cold panel no inventory",
+      "configured root choice private",
+      "bounded exact duplicate review",
+      "approval cleared by reload",
+      "stale review known refusal",
+      "lost reply exact original receipt no replay",
+      "new evidence after effect retained",
+      "canonical bytes unchanged",
+      "two-client private selection isolation",
+      "zero native workers during removal",
+      "absent retired marker stays unavailable with no request",
+      "mobile fits"
+    ],
+    "modelCalls": "one owned offline setup turn; none during review/removal",
+    "errors": []
+  },
+  "limits": [
+    "Only selected native history duplicates in launcher-configured retired stores; writer retirement is deployment authority.",
+    "Maximum16 roots,3 removable files,256 selected entries; no all-project/session scan.",
+    "Canonical history/events, unknown/unique files, session directory and workspace remain.",
+    "No production stores, live accounts, paid models or devices used. One offline setup turn per actual browser run.",
+    "Managed generated files disposal, general history deletion and global reset remain separate controls."
+  ],
+  "screenshots": [
+    "retired-static/retired-review.png",
+    "retired-static/retired-outcome.png",
+    "retired-static/retired-mobile.png"
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "qualification": "qualified-offline-installed-browser",
+  "source": "0d0f0e7d4889f94d799db2f34e0b90b499ef933e",
+  "rows": [
+    {
+      "featureId": "F08.02",
+      "scope": "Registered fixture alias selected for future app default; name remains client-local until save.",
+      "gap": "Changed host-default workspace and external/custom source aliases are unqualified.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "qualified-offline-browser"
+    },
+    {
+      "featureId": "F08.06",
+      "scope": "Lost default acknowledgment is recovered from original operation/command/scope; no repeat.",
+      "gap": "Original canonical workspace binding is required; changed host-default workspace is not qualified.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "qualified-offline-browser"
+    },
+    {
+      "featureId": "F09.22",
+      "scope": "Actual native custom save with private name/description; lost save and activation acknowledgments remain distinct across reload and selection changes.",
+      "gap": "Null/unknown activation remains blocked. No real model or external bundle tested.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "qualified-offline-browser"
+    },
+    {
+      "featureId": "F10.01",
+      "scope": "Bundle name entered in browser is present in the original exported body recovered after lost reply.",
+      "gap": "Synthetic fixture export is not qualified as a runnable public bundle.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "qualified-offline-browser"
+    },
+    {
+      "featureId": "F10.02",
+      "scope": "Description entered in browser is present in the exact original exported body after receipt recovery.",
+      "gap": "Synthetic fixture export is not qualified as a runnable public bundle.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "qualified-offline-browser"
+    },
+    {
+      "featureId": "F10.03",
+      "scope": "Lost response recovers original native export body and browser downloads identical bytes without recapture.",
+      "gap": "Legacy IDs without negotiated native receipts cannot recover missing bodies. Copy was qualified previously, not newly repeated here.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "qualified-offline-browser"
+    },
+    {
+      "featureId": "F24.06",
+      "scope": "Exact native activation receipt distinguishes applied, known not-applied, and unknown; save plus activation recovery uses original session.",
+      "gap": "This does not qualify every busy/custom-source failure path.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "qualified-offline-browser"
+    },
+    {
+      "featureId": "F24.09",
+      "scope": "Actual requiresModelChoice/applied:false preserves original review and unchanged mount; missing/unknown activation is not inferred; legacy unsupported is explicit.",
+      "gap": "All remaining bundle failure/refusal variants remain separate; null does not authorize replay.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "partial"
+    },
+    {
+      "featureId": "F24.10",
+      "scope": "Direct switch reaches genuine model-choice refusal without mandatory preview and recovers exact original result.",
+      "gap": "This slice does not qualify a successful direct in-place switch with changed model; prior fork evidence remains separate.",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-source-3/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-focused-final-2.log",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json"
+      ],
+      "status": "partial"
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+{
+  "scope": "Synthetic installed host/catalog with 32 wire clients and 8 independent ACP fixture agents; warm filesystem, fresh host process per catalog size. This developer workstation may run concurrent qualification work. Node memory/CPU includes benchmark clients; subprocess memory, real UI/model, cold native history and slow socket backpressure are separate gates.",
+  "components": {
+    "host": {
+      "revision": "f55a2ff859d500deaab26db8ae78918a7689d4fc",
+      "artifactSha256": "7c31658854d7e003e1c8649bcda99a9cca373e4a94d520a55bd4da081409a481"
+    },
+    "catalog": {
+      "revision": "1b1f99aeb9b226a3757d059473d61c3bc9ff5133"
+    }
+  },
+  "environment": {
+    "node": "v25.2.1",
+    "platform": "darwin",
+    "release": "27.0.0",
+    "cpu": "Apple M4 Max",
+    "logicalCpus": 16,
+    "systemMemoryBytes": 137438953472
+  },
+  "results": [
+    {
+      "indexedSessions": 25000,
+      "indexedWorkspaces": 4000,
+      "presentWorkspaces": 100,
+      "discoverableRoots": 1000,
+      "clients": 32,
+      "activeAgents": 8,
+      "titleActionEcho": {
+        "samples": 160,
+        "p50Ms": 7.654,
+        "p95Ms": 27.472,
+        "p99Ms": 28.996,
+        "maxMs": 29.002
+      },
+      "titleAllFourViewers": {
+        "samples": 160,
+        "p50Ms": 8.254,
+        "p95Ms": 27.556,
+        "p99Ms": 29.838,
+        "maxMs": 29.841
+      },
+      "roundCatalogConvergence": {
+        "samples": 20,
+        "p50Ms": 59.162,
+        "p95Ms": 152.61,
+        "p99Ms": 159.031,
+        "maxMs": 159.031
+      },
+      "convergenceReads": 20,
+      "catalogList50": {
+        "samples": 480,
+        "p50Ms": 27.423,
+        "p95Ms": 43.46,
+        "p99Ms": 115.372,
+        "maxMs": 127.607
+      },
+      "maximumPageBytes": 19877,
+      "harnessAndHostMemory": {
+        "rssBeforeBytes": 133382144,
+        "rssAfterBytes": 217792512,
+        "heapBeforeBytes": 24145744,
+        "heapAfterBytes": 24108256
+      },
+      "hostAndHarnessCpuMs": {
+        "user": 723.543,
+        "system": 146.884
+      },
+      "diagnostics": {
+        "steeringDispositionPending": 0,
+        "turnSettledPending": 0,
+        "turnSettledFailures": 0,
+        "turnSettledDropped": 0,
+        "agentStoppedPending": 0,
+        "agentStoppedFailures": 0,
+        "clients": 32,
+        "activeAgents": 8,
+        "startingAgents": 0,
+        "subscriptions": 64,
+        "serverSeq": 248
+      },
+      "noDormantAgentStarts": true,
+      "exactPrompts": 8,
+      "independentHistoryPages": true,
+      "noProtocolSchemaFailures": true
+    },
+    {
+      "indexedSessions": 100000,
+      "indexedWorkspaces": 4000,
+      "presentWorkspaces": 100,
+      "discoverableRoots": 1000,
+      "clients": 32,
+      "activeAgents": 8,
+      "titleActionEcho": {
+        "samples": 160,
+        "p50Ms": 6.816,
+        "p95Ms": 10.986,
+        "p99Ms": 28.378,
+        "maxMs": 35.514
+      },
+      "titleAllFourViewers": {
+        "samples": 160,
+        "p50Ms": 7.248,
+        "p95Ms": 11.387,
+        "p99Ms": 28.45,
+        "maxMs": 35.527
+      },
+      "roundCatalogConvergence": {
+        "samples": 20,
+        "p50Ms": 50.838,
+        "p95Ms": 58.802,
+        "p99Ms": 68.42,
+        "maxMs": 68.42
+      },
+      "convergenceReads": 20,
+      "catalogList50": {
+        "samples": 480,
+        "p50Ms": 26.407,
+        "p95Ms": 38.496,
+        "p99Ms": 41.002,
+        "maxMs": 43.202
+      },
+      "maximumPageBytes": 19927,
+      "harnessAndHostMemory": {
+        "rssBeforeBytes": 131989504,
+        "rssAfterBytes": 217333760,
+        "heapBeforeBytes": 24150136,
+        "heapAfterBytes": 24152848
+      },
+      "hostAndHarnessCpuMs": {
+        "user": 691.665,
+        "system": 136.647
+      },
+      "diagnostics": {
+        "steeringDispositionPending": 0,
+        "turnSettledPending": 0,
+        "turnSettledFailures": 0,
+        "turnSettledDropped": 0,
+        "agentStoppedPending": 0,
+        "agentStoppedFailures": 0,
+        "clients": 32,
+        "activeAgents": 8,
+        "startingAgents": 0,
+        "subscriptions": 64,
+        "serverSeq": 248
+      },
+      "noDormantAgentStarts": true,
+      "exactPrompts": 8,
+      "independentHistoryPages": true,
+      "noProtocolSchemaFailures": true
+    }
+  ],
+  "harness": {
+    "repository": "microsoft/amplifier-unified-interop",
+    "revision": "37b7a962ffb363ebeb315dd4bbe919dfecd9eff0",
+    "entrypoint": "test/scale-composition.mjs"
+  }
+}

@@ -1,0 +1,284 @@
+{
+  "schema": "context-clear-composition-qualification-v1",
+  "observedAt": "2026-10-03T19:52:21.186430+00:00",
+  "installedComposition": {
+    "schema": "context-clear-installed-root-v1",
+    "rootRevision": "0cf5acc7a62fde5d9ce5c9062ba54eb2d511e556",
+    "archive": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-0cf5acc7/amplifier-unified-0.1.0.tgz",
+    "archiveSHA256": "cd6260d2611bc043be6df21391a0b6132670f135126e467c870a60742fb0941a",
+    "entry": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-0cf5acc7/consumer/node_modules/@amplifier/unified/src/index.js",
+    "installedRootArchiveFilesMatchedBefore": 2683,
+    "installedRootArchiveFilesMatchedAfter": 2683,
+    "installedPackageBytesUnchanged": true,
+    "testCommit": "e4b3c08cb5347189546da7039e35c8c486785c78",
+    "testFile": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/work/distribution-context-clear/distribution/test/context-clear.integration.test.mjs",
+    "testSHA256": "2da3989569977f4ded96614bd7694cf7c3f640a4f7184a2ab99c71fe4c240301",
+    "runtime": "Node22.22.0",
+    "tests": {
+      "tests": 4,
+      "pass": 4,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "exitCode": 0,
+      "durationMs": 4195.419959,
+      "log": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/context-clear-installed-0cf5-node22.log",
+      "logSHA256": "46bb8b4033ad91cab6dba78bf6385dba2369ba0f0786961a1c18be52e190dcd2"
+    },
+    "native": {
+      "revision": "f11b769b0fa29565c909e776416bea795d2f239e",
+      "python": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/native-acp/context-clear-history-20261003/f11b769/python/bin/python",
+      "flags": [
+        "-I",
+        "-B"
+      ],
+      "wheelSHA256": "fb5d3df14cc17116776df574399ea2079cb538e6f3f14ee17ee0c80d8ba1bdde",
+      "filesMatchedAfter": 154
+    },
+    "actualNativeAcceptance": {
+      "composition": "createDistribution",
+      "nativePython": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/native-acp/context-clear-history-20261003/f11b769/python/bin/python",
+      "session": "ahp-session:/773b8226-86b9-4a05-8911-dd04221164bb",
+      "originalNativeSessionId": "e1f44482-33e1-47ef-9272-e4385dd56df0",
+      "canonicalHistoryWorkspace": "/private/var/folders/jr/dncwc2h95wx42zx7__wq3dq80000gn/T/unified-context-native-BkDvZx/history",
+      "executionDirectory": "/private/var/folders/jr/dncwc2h95wx42zx7__wq3dq80000gn/T/unified-context-native-BkDvZx/execution",
+      "changedDefaultWorkspace": "/private/var/folders/jr/dncwc2h95wx42zx7__wq3dq80000gn/T/unified-context-native-BkDvZx/execution",
+      "actualOuterWebSocketReplyDropped": true,
+      "exactSuccessAndRefusalReceipts": true,
+      "workerCommandProhibitedOnColdRecovery": true,
+      "coldActiveAgents": 0,
+      "providerCalls": 0,
+      "replayed": false,
+      "archiveBeforeImageUnchanged": true
+    },
+    "sharedGraphCopied": false,
+    "sharedConsumerModified": false,
+    "sourceOverlay": false,
+    "limits": [
+      "Requested four focused cases only; no broadened suite",
+      "Exact installed combined root entry imports sealed native bridge internally; test WebSocket client dependencies reused read-only",
+      "Source test successor e4b3c08 intake belongs to root; composition288381 already adopted as3343eea1",
+      "Context-simple native implementation only; other native handoff limits retained",
+      "No browser/device/model/account/live-deployment acceptance claimed"
+    ]
+  },
+  "compositionReceiptSha256": "8829e0bfa0fceec79ece3358e07c88466533d4c9ffd9488be07d1c9be4abc92c",
+  "native": {
+    "source": "f11b769b0fa29565c909e776416bea795d2f239e",
+    "wheelSha256": "fb5d3df14cc17116776df574399ea2079cb538e6f3f14ee17ee0c80d8ba1bdde",
+    "sourceTests": 51,
+    "installedTests": 51,
+    "skipped": 0,
+    "pr": "https://github.com/microsoft/amplifier-app-acp/pull/3",
+    "merge": "e6deff8abf0bc04c903b475e77a6b6983f02a8d3",
+    "publicationLimit": "CLA passed; no hosted application test workflow was reported."
+  },
+  "bridge": {
+    "source": "964c1cd3e41174a68f961adce1ea6683f267281b",
+    "archiveSha256": "ea6dd90d39973dcfd9ddc8edc3533a2a6fae9debc0f7530ed6ea143d814b601f",
+    "pr": "https://github.com/microsoft/amplifier-unified-capability-native/pull/6",
+    "merge": "ee5faf35408d029721e8910e1931f50908e921a4",
+    "ci": "https://github.com/microsoft/amplifier-unified-capability-native/actions/runs/37148486678",
+    "checks": "Node22, Node24, CLA passed"
+  },
+  "independentNativeReview": {
+    "path": "output/ahp-acp-implementation-20261002/ahp-host/context-clear-review-20261003/review-f11b769.json",
+    "sha256": "43d7ed4a3577bbb6ab579df974461c2936fc9505e84ccc823568786839f3a2d0",
+    "result": {
+      "commit": "f11b769b0fa29565c909e776416bea795d2f239e",
+      "priorReceipt": "review.json",
+      "priorFingerprints": "after.json",
+      "reviewedFiles": 21,
+      "allReviewedBlobHashesMatch": true,
+      "changedReviewedPaths": [],
+      "additionalCommitPaths": [],
+      "cleanWorktree": true,
+      "blockingFindings": [],
+      "coverage": "Existing independent source/schema review binds exactly to all 21 committed changed files. No changed paths required further review.",
+      "limits": [
+        "Source and installed wheel qualification belongs to native owner; no tests run by reviewer.",
+        "Existing limits remain in review.json, including alternative context implementations and active-only canonical export/fork/edit.",
+        "No live/model work or source changes."
+      ]
+    }
+  },
+  "browser": {
+    "handoff": {
+      "version": 1,
+      "status": "qualified",
+      "sourceCommit": "a560b28733649774bfa697d75daab99ac84b50f1",
+      "sourceClean": true,
+      "predecessor": {
+        "sourceCommit": "2368b2e345b64bc8809158fadf85224279138352",
+        "archiveSha256": "2e2f16e40292e37d26eab8ad8965f008c34a16fd04c3319edb18a81e11650a9a",
+        "preserved": true
+      },
+      "archive": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-release-a560b28/amplifier-unified-client-web-0.1.0.tgz",
+      "archiveSha256": "8850c6e3257667f3892a5abb1df15a6ffcdf4d81e0d4c7b583a13defa57244af",
+      "packageVerification": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-static-package-verification-a560b28.json",
+      "packageFiles": 104,
+      "assets": 97,
+      "distribution": {
+        "revision": "0cf5acc7a62fde5d9ce5c9062ba54eb2d511e556",
+        "sha256": "cd6260d2611bc043be6df21391a0b6132670f135126e467c870a60742fb0941a",
+        "entry": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-0cf5acc7/consumer/node_modules/@amplifier/unified/src/index.js",
+        "bridge": "964c1cd"
+      },
+      "native": {
+        "revision": "f11b769b0fa29565c909e776416bea795d2f239e",
+        "wheelSha256": "fb5d3df14cc17116776df574399ea2079cb538e6f3f14ee17ee0c80d8ba1bdde",
+        "python": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/native-acp/context-clear-history-20261003/f11b769/python/bin/python"
+      },
+      "tests": {
+        "focused": {
+          "passed": 45,
+          "skipped": 0,
+          "log": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-focused-a560b28.log"
+        },
+        "full": {
+          "passed": 808,
+          "skipped": 0,
+          "log": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-tests-a560b28.log"
+        },
+        "build": "passed",
+        "sourceBrowser": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-source-0cf5acc7-2/receipt.json",
+        "installedBrowser": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-static-a560b28/receipt.json"
+      },
+      "screenshots": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-source-0cf5acc7-2/context-clear-mobile.png",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-static-a560b28/context-clear-mobile.png"
+      ],
+      "scope": "Dedicated advertised selected-session context-clear review/apply/exact receipt. Ephemeral confirmation, explicit goal removal, active saved-task pause guard, original command/session binding, no mutation replay. Actual offline native/Core/Foundation browser source and independently installed static package.",
+      "limitations": [
+        "Archived earlier messages remain viewable/copyable; canonical edit, history fork and native export remain limited to active history.",
+        "Receipt recovery describes the original result and leaves later goals untouched. Current goal remains explicitly unverified until the user loads it.",
+        "Older peers and original legacy generic-clear commands remain unsupported for this negotiated receipt contract.",
+        "No real account/device or live deployment acceptance."
+      ],
+      "failuresPreserved": [
+        {
+          "fixture": "/private/var/folders/jr/dncwc2h95wx42zx7__wq3dq80000gn/T/web-context-clear-QZMTgu",
+          "log": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-source-0cf5acc7.log",
+          "reason": "Harness PATH omitted uv; no context clear was attempted. Separate new fixture used corrected tool PATH."
+        }
+      ],
+      "publication": {
+        "local": true,
+        "pushed": false,
+        "deployed": false
+      },
+      "closed": {
+        "sourceBrowser": true,
+        "installedBrowser": true,
+        "fixtureHosts": true
+      }
+    },
+    "handoffSha256": "ca482d84830301d238a2815b50b8f304494fdeb312c3c2b71da5f1eedff811a3",
+    "sourceReceipt": {
+      "result": "passed",
+      "checks": [
+        "Fresh exact review and private confirmation do not survive reload; stale-control review is refused before history changes.",
+        "Preserved archived messages render as view-only: copy remains available, editing and fork boundaries are unavailable.",
+        "Lost clear acknowledgement recovers exact original native receipt after reload without replay; later goal remains intact, current state needs explicit refresh, and canonical archive bytes plus visible history are preserved.",
+        "Active saved task blocks clear with no automatic pause. Explicit rendered Pause task followed by fresh review permits clear and leaves task paused."
+      ],
+      "fixture": "/private/var/folders/jr/dncwc2h95wx42zx7__wq3dq80000gn/T/web-context-clear-ufpeDy",
+      "distribution": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-0cf5acc7/consumer/node_modules/@amplifier/unified/src/index.js",
+      "native": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/native-acp/context-clear-history-20261003/f11b769/python/bin/python",
+      "web": "source dist",
+      "originalCommandId": "3bfeeb55-0706-4dfd-90a4-4e3e33dbdf77",
+      "archiveSha256": "67c30e67c496af81504e6849bdf0d5b828b8a4676d7b073610af8c8eeb6c6abf",
+      "archivedBytesUnchanged": true,
+      "originalClearResult": {
+        "archiveId": "a034eceb235cf98e3fa4360cd9909cf37d4b53eed6a21f6200b495c9efdbfabe",
+        "cleared": true,
+        "eventsPreserved": true,
+        "goalCleared": true,
+        "historyPreserved": true,
+        "historyRevision": "db944b7e3e2483f98e88e51d0ae3ac344a4ae97ec37dc0d1a17a522bf639d4a5",
+        "previousHistoryRevision": "25bea1095692867fd4855dba5781e67ea05636e73c43ba57a828b6747821fce6"
+      },
+      "applyCount": 3,
+      "receiptCount": 1,
+      "errors": [],
+      "boundary": "Owned offline native/Core/Foundation through public installed distribution. No production accounts, live deployment, generic clear, automatic task pause or mutation replay."
+    },
+    "installedReceipt": {
+      "result": "passed",
+      "checks": [
+        "Fresh exact review and private confirmation do not survive reload; stale-control review is refused before history changes.",
+        "Preserved archived messages render as view-only: copy remains available, editing and fork boundaries are unavailable.",
+        "Lost clear acknowledgement recovers exact original native receipt after reload without replay; later goal remains intact, current state needs explicit refresh, and canonical archive bytes plus visible history are preserved.",
+        "Active saved task blocks clear with no automatic pause. Explicit rendered Pause task followed by fresh review permits clear and leaves task paused."
+      ],
+      "fixture": "/private/var/folders/jr/dncwc2h95wx42zx7__wq3dq80000gn/T/web-context-clear-aB9BqY",
+      "distribution": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-0cf5acc7/consumer/node_modules/@amplifier/unified/src/index.js",
+      "native": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/native-acp/context-clear-history-20261003/f11b769/python/bin/python",
+      "web": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-static-consumer-a560b28/node_modules/@amplifier/unified-client-web/dist",
+      "originalCommandId": "e4358ecd-03c5-4702-bf9e-c7e8171994b8",
+      "archiveSha256": "8eb6c3b7aadfd319c6b2b6cf38ca06f45289d3f099c253f6a87385806fbc24ee",
+      "archivedBytesUnchanged": true,
+      "originalClearResult": {
+        "archiveId": "a02fa2ba11507f3cc060a869056fe6fc67d88c5d455acd58e56cd0dfba25e7db",
+        "cleared": true,
+        "eventsPreserved": true,
+        "goalCleared": true,
+        "historyPreserved": true,
+        "historyRevision": "bb48b6ab1e792da4bd3c9d3cda20503b0bfe5562504b39ecfb9c3d1219eed935",
+        "previousHistoryRevision": "f6803d9779bc16b5698ff9c9dc8702f5b584adce7520cd9efa49d1626998751c"
+      },
+      "applyCount": 3,
+      "receiptCount": 1,
+      "errors": [],
+      "boundary": "Owned offline native/Core/Foundation through public installed distribution. No production accounts, live deployment, generic clear, automatic task pause or mutation replay."
+    },
+    "publication": {
+      "version": 1,
+      "pr": "https://github.com/microsoft/amplifier-unified-client-web/pull/4",
+      "sourceCommit": "a560b28733649774bfa697d75daab99ac84b50f1",
+      "mergeCommit": "be0b0c92108ca7c76e624bbce366080a57fc6b9a",
+      "mergedAt": "2026-10-03T20:02:27Z",
+      "tree": "045030710e4e8a90d96726b11f801473aec24415",
+      "mergeTreeIdenticalToSealedSource": true,
+      "sourceWorktree": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/repos/amplifier-client-web",
+      "localBranch": "main",
+      "worktreeClean": true,
+      "archive": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-release-a560b28/amplifier-unified-client-web-0.1.0.tgz",
+      "archiveSha256": "8850c6e3257667f3892a5abb1df15a6ffcdf4d81e0d4c7b583a13defa57244af",
+      "hostedChecks": {
+        "status": "passed",
+        "runs": [
+          "https://github.com/microsoft/amplifier-unified-client-web/actions/runs/37149725052",
+          "https://github.com/microsoft/amplifier-unified-client-web/actions/runs/37149699368"
+        ],
+        "cla": "passed"
+      },
+      "independentReview": {
+        "reviewer": "native_acp",
+        "channel": "agent collaboration",
+        "sourceCommit": "a560b28733649774bfa697d75daab99ac84b50f1",
+        "verdict": "No actionable blockers",
+        "archiveHashVerified": true,
+        "tests": "Reviewed existing 45/808 logs and actual source/static browser receipts; did not rerun tests."
+      },
+      "merge": {
+        "method": "normal GitHub merge",
+        "adminBypass": false,
+        "matchedHead": "a560b28733649774bfa697d75daab99ac84b50f1"
+      },
+      "qualification": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/context-clear-handoff-a560b28.json",
+      "deployed": false,
+      "sealedArchivesUnmodified": true
+    },
+    "publicationReceiptSha256": "b8948cf638044965fbe4e29bf0b2a864f0f0b0ff1503288bb79f55eff4eef37a"
+  },
+  "limits": [
+    "No live deployment of context-clear successor",
+    "Context-simple qualified; context-managed inspected only; context-persistent unavailable",
+    "Archived segments are viewable historical records; edit/fork/native transcript export target active canonical history only",
+    "Receipt inspection is passive; missing or unknown does not authorize replay or overwrite current goal display"
+  ],
+  "featureId": "F25.08",
+  "acceptanceBoundary": "qualified-offline-browser"
+}

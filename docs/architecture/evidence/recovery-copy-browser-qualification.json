@@ -1,0 +1,37 @@
+[
+  {
+    "featureId": "F15.12",
+    "status": "qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/recovery-copy-handoff.json",
+    "scope": "Recorded native failure cause, error type, guidance, historical/current distinction and current runtime message rendered in selected details",
+    "gap": "Only host-supplied bounded failure evidence; no inferred diagnosis"
+  },
+  {
+    "featureId": "F15.14",
+    "status": "qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/recovery-copy-handoff.json",
+    "scope": "Reviewed independent readable-history recovery from actual failed native generation with source unknown input preserved; lost response receipt selects one cold target",
+    "gap": "Corrupt or pending canonical rewrite refuses; no automatic input replay or complete original tool/image payload restoration"
+  },
+  {
+    "featureId": "F15.15",
+    "status": "qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/recovery-copy-handoff.json",
+    "scope": "Actual independently leased grandchild prevents recovery; selected source bytes, source unknown receipt and provider audit preserved; targets cold",
+    "gap": "Coverage is indexed/native worker family ownership, not noncooperating external writers"
+  },
+  {
+    "featureId": "F24.07",
+    "status": "qualified-offline-browser",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/recovery-copy-handoff.json",
+    "scope": "Configured bundle ID and exact revision applied to reviewed full fork or recovery copy; optional model reset and source preservation",
+    "gap": "Only launcher-configured bundle choices; arbitrary source paths unavailable"
+  },
+  {
+    "featureId": "F24.10",
+    "status": "partial",
+    "evidence": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/recovery-copy-handoff.json",
+    "scope": "Detailed configured bundle popup directly forks after explicit review without mandatory bundle.preview, qualified in actual native installed browser",
+    "gap": "Direct in-place switch remains a separate control and is not newly qualified by this receipt"
+  }
+]

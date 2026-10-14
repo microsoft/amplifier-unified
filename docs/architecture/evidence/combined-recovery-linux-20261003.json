@@ -1,0 +1,39 @@
+{
+  "schema": "combined-failed-bootstrap-successor-linux-v1",
+  "sourceRevision": "bf86788b7cf46d5b529eaf07d4187e4c142c141b",
+  "archiveSha256": "02bfca8ec346c869eb8189140e13d7b0864536332461f62e5a9815eaaf33cbf8",
+  "ownerVersion": "0.16.2",
+  "ownerArchiveSha256": "ba387a2daad523b976ada5c44a8eb1789e616c5327b90443cf10dc712d45f86c",
+  "sourceAndInstalledReviewSha256": "fe554f10bb530d78c01595688c3e54892040cfa5fd1ccf4fa03e07655c9d6a8f",
+  "actualLinuxFixtureReceiptSha256": "ba864b62c444fe225d049a464b72531102726890c648c5d63274f3bbed3e1f30",
+  "installedFilesMatched": 2695,
+  "packageCount": 36,
+  "committedPublicFilesMatched": 57,
+  "reusedRuntimeEntriesUnchanged": 13699,
+  "actualOwners": 20,
+  "tlsCertificateMode": "0644",
+  "tlsKeyMode": "0600",
+  "selectedReconstruction": true,
+  "signedSameReleaseHandoff": true,
+  "sourceKernelExit": true,
+  "retiredSourceRelaunchRefused": true,
+  "canonicalHistoryPreserved": true,
+  "sourceTests": {
+    "ownerPassed": 203,
+    "ownerSkipped": 9,
+    "passiveInspectionPassed": 11,
+    "launcherPassed": 8
+  },
+  "hostedCI": {
+    "source": "bf86788b7cf46d5b529eaf07d4187e4c142c141b",
+    "run": 37156265997,
+    "conclusion": "success"
+  },
+  "livePreviewChanged": false,
+  "realModelCalls": 0,
+  "limitations": [
+    "Synthetic isolated state/trust with a fixture-only external loader for the circular qualification prerequisite.",
+    "Installed recovery permit fixture uses20synthetic stores; combined application fixture uses20actual owners.",
+    "Actual stopped-policy review, live recovery/handoff, fresh browser and real-model acceptance remain pending."
+  ]
+}

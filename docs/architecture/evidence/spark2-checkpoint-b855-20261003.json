@@ -1,0 +1,73 @@
+{
+  "distribution": "b855247737c4aa868c0b9978eaaaf5e8d5c72086",
+  "web": "4bfdd9cc1efd6d6e2d6ba53d984dd31aa7472e5a",
+  "native": "a434719266e712f517d01ba45f4a904cf238581d",
+  "pid": 453357,
+  "canonicalFilesPreserved": 28,
+  "oldProcessAndChildrenExited": true,
+  "live": true,
+  "realModelAcceptance": "blocked by configured module preparation; original attempt retained without replay",
+  "startupError": "ConfiguredModuleError: Configured modules could not be prepared: provider-openai-chatgpt: Check the module contract and its required dependencies.",
+  "attempt": {
+    "session": "ahp-session:/87171bb6-ac4c-4a55-9b5c-945f609ede82",
+    "turnId": "6eaae74c-70d8-4f35-ae79-b0b57f466f6d",
+    "selection": {
+      "instance": "openai",
+      "model": "gpt-6-sol"
+    },
+    "creationConfirmed": true
+  },
+  "tlsVerified": true,
+  "serviceLifecycle": "preview-manual-idle-only",
+  "fullOwnerGraphActivated": false,
+  "modelReceiptFound": false,
+  "canonicalHistoryAuthority": "native transcript/metadata/events preserved",
+  "sealedOfflineEvidence": {
+    "distribution": "b8552477",
+    "native": "a434719",
+    "web": "4bfdd9cc",
+    "linuxNetwork": {
+      "passed": 1,
+      "skipped": 0
+    },
+    "linuxSignedManualSystemd": {
+      "passed": 1,
+      "skipped": 0
+    },
+    "installedReset": {
+      "passed": 1,
+      "skipped": 0
+    },
+    "installedStaticBrowser": "passed four parts, three owners, twenty held participants, settings-writer refusal and exact lost-reply recovery"
+  },
+  "limits": [
+    "Native4d2ea06 and bridge d0b5 exact bundle receipt recovery qualified independently; assembled root/browser and live adoption remain separate.",
+    "Existing manual capability subset remains active; twenty-owner signed fixture is separate from live service adoption",
+    "Original previous checkpoint real-model result is not reused as this checkpoint acceptance"
+  ],
+  "browserAcceptance": {
+    "result": "scoped-checks-passed-with-navigation-read-marker",
+    "matchingAssets": 97,
+    "existingChatRendering": true,
+    "privateDraftNavigationAndReload": true,
+    "draftTransmissions": 0,
+    "pageErrors": 0,
+    "sharedReadAcknowledgements": 1,
+    "browserClosed": true,
+    "subsequentHostClients": 0,
+    "subsequentHostActiveAgents": 0,
+    "evidence": "output/ahp-acp-implementation-20261002/web-client/spark2-b855-readonly/handoff.json",
+    "boundary": "Original overly strict navigation assertion failure retained; no model/device/settings/reset/service acceptance."
+  },
+  "providerDiagnosis": {
+    "classification": "latent availability versus structural validation mismatch",
+    "previousAndCurrentNativePreparationIdentical": true,
+    "previousAndCurrentProviderSdkIdentical": true,
+    "automaticMountLogin": false,
+    "localCredentialValid": false,
+    "providerMountReturnsNone": true,
+    "coreValidation": "strictly refuses missing provider",
+    "credentialEffectsPerformed": false,
+    "evidence": "output/ahp-acp-implementation-20261002/native-acp/provider-startup-b855-20261003/diagnosis.json"
+  }
+}

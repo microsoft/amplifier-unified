@@ -1,0 +1,50 @@
+{
+  "name": "@amplifier/unified-distribution-update-owner",
+  "version": "0.16.2",
+  "description": "Standalone, durable owner for qualified distribution updates",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.16"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "PROVENANCE.md",
+    "LICENSE",
+    "SUPERVISOR.md",
+    "HOST-CONTROL.md",
+    "SERVICE-LIFECYCLE.md",
+    "RELEASE-NOTES.md",
+    "STAGED-UPDATES.md",
+    "OFFLINE-SNAPSHOT.md",
+    "STARTUP-DIAGNOSTICS.md",
+    "EXISTING-STATE-HANDOFF.md",
+    "MANUAL-SYSTEMD-HANDOFF.md",
+    "APP-RESET.md",
+    "examples"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "tar": "7.5.22"
+  },
+  "bin": {
+    "amplifier-distribution-supervisor": "dist/supervisor-cli.js"
+  },
+  "bundleDependencies": [
+    "tar"
+  ]
+}

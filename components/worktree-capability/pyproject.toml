@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amplifier-unified-worktree-capability"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["amplifier-worktrees>=0.1.0,<0.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/amplifier_unified_worktrees"]
+
+[tool.uv.sources]
+amplifier-worktrees={git="https://github.com/microsoft/amplifier-foundation",branch="main",subdirectory="libraries/worktrees"}

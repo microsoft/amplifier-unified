@@ -51,6 +51,7 @@ A conversation keeps its agent implementation and native identity.
 Authorized clients can observe and act through the same host without starting
 competing executions. Leaving a view does not cancel work. Switching agent
 implementations is a new conversation, not an implicit conversion of history.
+Catalog visibility and client presentation do not confer or revoke that authority.
 
 ### 7. Small updates perform small work
 A change visits its resource, dependencies and subscribers. It does not copy,
@@ -95,4 +96,5 @@ inspectable with a clear limitation. Saved configuration is not mounted behavior
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-03 | Clarify that visibility does not change execution authority. | Independent presentation-reset boundary review; [WS1](../../contracts/working-set.v1.md) specifies the intended separation, with implementation qualification still pending. |
 | 2026-10-02 | Initial destination for protocol adoption and decomposition. | [Design packet and source assessment](README.md). |

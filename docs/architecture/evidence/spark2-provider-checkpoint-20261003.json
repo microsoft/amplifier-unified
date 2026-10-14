@@ -1,0 +1,79 @@
+{
+  "recordedAt": "2026-10-03T18:07:09.356874+00:00",
+  "instance": "ahp-acp-preview",
+  "url": "https://spark-2.tail8f3c4e.ts.net:18473/",
+  "distribution": "b855247737c4aa868c0b9978eaaaf5e8d5c72086",
+  "web": "4bfdd9cc1efd6d6e2d6ba53d984dd31aa7472e5a",
+  "native": "3c5acc169419596d60cd890c159267bac24e6bc3",
+  "provider": "1a753c5f922a1525a3f051b55c2bc97260584628",
+  "providerAuthority": "explicit candidate-owned trusted-launcher development override; PR21 review pending",
+  "serviceLifecycle": "preview-manual-idle-only",
+  "oldPid": 453357,
+  "newPid": 593654,
+  "oldProcessExited": true,
+  "ownedChildrenExited": true,
+  "canonicalOriginalFiles": 32,
+  "canonicalOriginalsPreserved": true,
+  "acceptance": {
+    "phase": "passed-real-model",
+    "startedAt": "2026-10-03T18:03:55.230Z",
+    "finishedAt": "2026-10-03T18:04:06.593Z",
+    "session": "ahp-session:/19be34af-bdd5-49da-8bcf-7e074200989b",
+    "chat": "ahp-chat:/19be34af-bdd5-49da-8bcf-7e074200989b",
+    "turnId": "1e9ad40e-93b0-41e2-a285-5fe676243c2a",
+    "selection": {
+      "instance": "openai",
+      "model": "gpt-6-sol"
+    },
+    "responseText": "Spark-2 provider checkpoint is ready.",
+    "outcome": {
+      "commandId": "1e9ad40e-93b0-41e2-a285-5fe676243c2a",
+      "channel": "ahp-chat:/19be34af-bdd5-49da-8bcf-7e074200989b",
+      "clientId": "checkpoint-acceptance-96d33d81-47da-4a8a-bc3a-985ab4bc80c0",
+      "clientSeq": 1,
+      "fingerprint": "07d0efb37917c8e4b78bdd12044fda241ff20d6beb2211626e20597adb63970e",
+      "status": "completed",
+      "createdAt": "2026-10-03T18:04:02.772Z",
+      "updatedAt": "2026-10-03T18:04:06.309Z",
+      "detail": "end_turn"
+    },
+    "tlsVerified": true
+  },
+  "runtime": {
+    "resident": true,
+    "instanceId": "9fe3bd2e-5f7b-4cbc-86fe-0604de54ff27",
+    "python": {
+      "executable": "/home/bkrabach/.local/share/amplifier-unified-instances/ahp-acp-preview/candidates/checkpoint-b8552477-native-3c5acc1-provider-1a753c5/runtime/python/bin/python",
+      "version": "3.13.12",
+      "prefix": "/home/bkrabach/.local/share/amplifier-unified-instances/ahp-acp-preview/candidates/checkpoint-b8552477-native-3c5acc1-provider-1a753c5/runtime/python"
+    },
+    "providerLoadedFrom": "/home/bkrabach/.local/share/amplifier-unified-instances/ahp-acp-preview/candidates/checkpoint-b8552477-native-3c5acc1-provider-1a753c5/source-overrides/provider-openai-chatgpt/amplifier_module_provider_openai_chatgpt/provider.py",
+    "providerSourceSealValid": true,
+    "loadedCodeBytesVerified": false,
+    "coldInspectionStartedAgents": 0
+  },
+  "settled": {
+    "activeTurns": 0,
+    "clients": 0,
+    "residentAgents": 1,
+    "workCountsAllZero": true,
+    "workGaps": []
+  },
+  "boundaries": [
+    "Fresh real-model protocol acceptance; no new browser rendering claim.",
+    "Existing b855 distribution and 4bf web remain; assembled 784d presentation changes are not deployed.",
+    "Preview uses manual idle-only service authority; twenty-owner signed lifecycle is separately qualified.",
+    "Previous failed turn remains retained without replay.",
+    "Spark-1 and Spark-2 baseline instances untouched."
+  ],
+  "evidence": {
+    "real-model-acceptance.json": {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/spark2-ahp-provider-fix-20261003/real-model-acceptance.json",
+      "sha256": "1c2d705fc9624567440aa65ddc14b6e1cd788bcd6cfc54f22a706f00f47070d2"
+    },
+    "live-worker-inspection-private.json": {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/spark2-ahp-provider-fix-20261003/live-worker-inspection-private.json",
+      "sha256": "2b144670464fa4473964d794db8602f0ecb145ccc21b7772742e5416a0c7f980"
+    }
+  }
+}

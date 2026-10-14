@@ -1,0 +1,26 @@
+{
+  "result": "passed",
+  "distribution": "c60552f1a18fabe9fe403851e5f1d75ca63ac980",
+  "web": "e10633e118e028e68b63a2a991642235c1ff3545",
+  "webSha256": "f04709d67fd5312a097592df53727819618c9310c113cc5ce53676160e1826c9",
+  "checks": [
+    "light/dark selection and reload",
+    "device color scheme live updates",
+    "all three layouts and reload",
+    "decorations and interface detail reload",
+    "independent tab isolation",
+    "three built-in CSS previews and end-preview UI",
+    "advanced Apply skin/Revert edits/Restore original UI",
+    "desktop/mobile bounds",
+    "zero backend mutation frames",
+    "zero sessions or agent startup"
+  ],
+  "backendMutations": 0,
+  "errors": [],
+  "boundary": "Independently installed immutable local packages; no account/model calls or physical device acceptance",
+  "visualReview": {
+    "desktop": true,
+    "mobile": true,
+    "threePreviewThemes": true
+  }
+}

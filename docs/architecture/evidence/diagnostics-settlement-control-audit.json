@@ -1,0 +1,404 @@
+{
+  "candidateCommit": "d906a1a5df45edfc13b12045f281eb5452e24114",
+  "rows": [
+    {
+      "featureId": "F13.01",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Explicit master enable/disable through real installed owner; only supplied live observations, never history scan.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.02",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "All advertised stream controls and explicit conversation-content disclosure preserved; private content toggle tested in React, actual session metadata forwarded in browser.",
+      "gap": "Actual forwarding for each individual stream and conversation content not exercised; complete distribution event mapping remains separate."
+    },
+    {
+      "featureId": "F13.03",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Retention policy edited/saved through browser with frozen revision; maximum-count control retained and bounded by advertised schema.",
+      "gap": "Retention cleanup at every limit and maximum-count UI mutation not exercised by this browser."
+    },
+    {
+      "featureId": "F13.04",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Actual live record count visible; source tests render dropped/outbox/expired counters.",
+      "gap": "Browser did not trigger retention exhaustion, outbox overflow or expiry."
+    },
+    {
+      "featureId": "F13.05",
+      "status": "implemented-unqualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "React cases preserve configuration/storage errors and unavailable count without hiding editor.",
+      "gap": "No actual failed filesystem/database browser fixture."
+    },
+    {
+      "featureId": "F13.06",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Two dirty editors preserve frozen revision, explicit review/rebase, lost-save reload and exact receipt; confirmed revision protected from legacy presentation patch.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.07",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Saved destination appears on both clients with actual accepted/failed/unknown delivery summaries.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.08",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Add destination is private; its fields survive reload and produce no request before Save.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.09",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Selected destination and return-to-list controls operate locally and persist independently.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.10",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Name and owned loopback URL edited privately, restored on reload and explicitly saved.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.11",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Explicit enable sends later selected observations only; earlier stored record is not uploaded on save.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.12",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Actual Context Intelligence SDK authenticates to owned loopback peer using fixture environment key only.",
+      "gap": "No production credential, external account or deployed forwarding exercised."
+    },
+    {
+      "featureId": "F13.13",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Availability check uses only environment variable name and returns availability; no key value reaches browser.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.14",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Private Entra resource/auth-mode controls retained and tested in React.",
+      "gap": "No actual Microsoft Entra token/account forwarding qualification."
+    },
+    {
+      "featureId": "F13.15",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Private per-destination stream editing retained; browser routes default selected session metadata.",
+      "gap": "Independent stream routing combinations not all exercised in browser."
+    },
+    {
+      "featureId": "F13.16",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Workspace label edited/saved and used by actual loopback SDK envelopes.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.17",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Workspace path filter stays private until Save; edited pattern covered in React.",
+      "gap": "Browser uses wildcard default; include/exclude matching separately belongs to owner qualification."
+    },
+    {
+      "featureId": "F13.18",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Private include-path switch covered in React; browser verifies default false omits actual workspace path.",
+      "gap": "Explicit true forwarding not exercised in browser."
+    },
+    {
+      "featureId": "F13.19",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Private destination save through shared revision, no historical upload, independent other dirty editor preserved.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.20",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Real SDK whoami and one synthetic event; lost reply/reload recovers exact original receipt without another probe.",
+      "gap": "Acceptance does not prove graph indexing; no real account."
+    },
+    {
+      "featureId": "F13.21",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Known400 rejection retries same idempotency envelope explicitly;502 unknown remains unsent and never replayed.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.22",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Actual accepted, failed and unknown counts rendered; source retains remaining counters.",
+      "gap": "Duplicate, queued, dispatching and cancelled transitions not independently browser-qualified."
+    },
+    {
+      "featureId": "F13.23",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Safe owner delivery error shown by retained error-summary control; actual502 unknown exercised.",
+      "gap": "Browser did not assert every detailed error category; raw server bodies intentionally unavailable."
+    },
+    {
+      "featureId": "F13.24",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Destination removed through shared save; unknown original probe receipt remains privately recoverable and capture can be disabled.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.25",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Stream filter stays local, clears mismatched visible page and fetches only on explicit Read.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.26",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Explicit session filter returns an empty page for unrelated session without an extra native read.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.27",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Explicit record reads return count-and-byte-bounded pages; bodies absent initial topic.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.28",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Older records consume owner keyset cursor; page replaces prior window and ends when cursor absent.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F13.29",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/diagnostics-static-final-d906a1a.log",
+        "tests/diagnostics-ui.test.mjs",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Browser downloads exactly currently displayed bounded JSON page; no export backend mutation.",
+      "gap": "No external-account forwarding or whole-product event-coverage claim."
+    },
+    {
+      "featureId": "F12.02",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settlement-static-d906a1a.log",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified.",
+      "gap": "This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+    },
+    {
+      "featureId": "F12.12",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settlement-static-d906a1a.log",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified.",
+      "gap": "This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+    },
+    {
+      "featureId": "F12.13",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settlement-static-d906a1a.log",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified.",
+      "gap": "This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+    },
+    {
+      "featureId": "F12.16",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settlement-static-d906a1a.log",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified.",
+      "gap": "This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+    },
+    {
+      "featureId": "F12.22",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settlement-static-d906a1a.log",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified.",
+      "gap": "This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+    },
+    {
+      "featureId": "F12.23",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settlement-static-d906a1a.log",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified.",
+      "gap": "This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+    },
+    {
+      "featureId": "F12.24",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settlement-static-d906a1a.log",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified.",
+      "gap": "This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+    },
+    {
+      "featureId": "F12.25",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settlement-static-d906a1a.log",
+        "d906a1a5df45edfc13b12045f281eb5452e24114"
+      ],
+      "scope": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified.",
+      "gap": "This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+    }
+  ]
+}

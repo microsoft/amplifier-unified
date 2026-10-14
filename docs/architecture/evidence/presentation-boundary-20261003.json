@@ -1,0 +1,84 @@
+{
+  "status": "Component, source and final assembled package qualified; presentation browser and live adoption pending",
+  "rootComposition": "5d65d2c2",
+  "rootLauncher": "67b6a69a",
+  "host": {
+    "revision": "48f268b7d6f43c6670f6b762b6ecf4763e6b6160",
+    "archiveSha256": "12f718c35a51a8620d05ec9f0da75a8f0e3efad914526e4ccf6f57fb337d5eaf",
+    "installedNode22": {
+      "passed": 5,
+      "skipped": 0
+    },
+    "installedNode25": {
+      "passed": 5,
+      "skipped": 0
+    },
+    "publicationBoundary": "Preserved presentation baseline; corrective terminal-shutdown successor qualified separately"
+  },
+  "recovery": {
+    "revision": "3f9653960e619baf5e26e8888df6bcb741479c98",
+    "archiveSha256": "c9306ab192059c58b8b529f1a7bdbdbc671d9a2c389b51b2539eaa15fb52ee44",
+    "sourceAndInstalledNode22And25": {
+      "passedEach": 45,
+      "skippedEach": 0
+    }
+  },
+  "catalog": {
+    "runtimeRevision": "ca7618684ae5cb61ee5b29a445b41104a6536298",
+    "mergedRevision": "f78a3ff23949a01057107b3a4b57d070afb36d3b",
+    "wheelSha256": "3cea2d18f4eea674d945514ec02cd66abc3abb28232f1b4be896e6c15f71f497"
+  },
+  "compositionOwner": {
+    "revision": "3b32abac61ce93756885f262e073879eb5dcee0f",
+    "actualFactoryNode22And25": {
+      "passedEach": 8,
+      "skippedEach": 0
+    },
+    "receipt": "unified-owner-client-kit-20261003/outputs/f17-composition-receipt.json"
+  },
+  "rootChecks": {
+    "installedComponentFilesMatched": 690,
+    "components": 20,
+    "launcherTestsPassed": 4,
+    "additionalActualJsonPresentationLaunchPassed": true,
+    "independentSourceReview": "No blockers in final host/recovery presentation contract; no test rerun claimed"
+  },
+  "semantics": [
+    "Visibility never revokes authorized exact-ID reads, receipts, artifacts or execution",
+    "Per-selected-row identity and revision conflict checks, including disjoint undo",
+    "Immutable local marker effect separate from derived discovery readiness",
+    "No native authority, fake native ports, global census or all-owner maintenance hold",
+    "One recovery topic owner for either generic presentation or combined native recovery",
+    "Explicit index reconstruction seeds retained identities before a new completed metadata scan",
+    "Lost replies and crash repair never replay original effects or user inputs",
+    "Client-private drafts and selection remain outside shared state"
+  ],
+  "remaining": [
+    "Web controls and installed browser qualification",
+    "Explicit catalog scan scheduling in deployed configuration",
+    "Live adoption and real-account acceptance"
+  ],
+  "currentHost": {
+    "revision": "e9f8ff150d0322a9eb23cad6c34e6d4be6a2ec4d",
+    "archiveSha256": "d82b56568479b13545d7456120a8cbc8e0e1090b71b0f76090a9248e1a25a2a0",
+    "sourceFocusedPassed": 26,
+    "installedTerminalNode22And25PassedEach": 3,
+    "skips": 0,
+    "hostedCI": "pending at artifact seal",
+    "publication": {
+      "mergedRevision": "939c00cab4efa43c699d68f054c34249626aa390",
+      "head": "e9f8ff150d0322a9eb23cad6c34e6d4be6a2ec4d",
+      "hostedPassed": 138,
+      "hostedOptInSkipped": 26,
+      "normalMerge": true
+    }
+  },
+  "finalAssembled": {
+    "revision": "784d081e0c5090d3e079c0e5e7f813060d57a93b",
+    "archiveSha256": "8dee8772ffaf383822c0575b206380d2b914e0a7bd8524f7ed2845bf66825d7a",
+    "installedPassed": 9,
+    "installedSkipped": 0,
+    "installedNode": "22.22.0",
+    "evidence": "assembled-784d081e-20261003.json"
+  }
+}

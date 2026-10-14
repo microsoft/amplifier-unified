@@ -1,0 +1,85 @@
+{
+  "candidateCommit": "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8",
+  "rows": [
+    {
+      "featureId": "F01.01",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "output/ahp-acp-implementation-20261002/web-client/appearance-static/appearance-export-receipt.json",
+        "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8"
+      ],
+      "scope": "Client-local browser control qualified against independently installed static package; no device/account claim.",
+      "gap": ""
+    },
+    {
+      "featureId": "F01.04",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "output/ahp-acp-implementation-20261002/web-client/appearance-static/appearance-export-receipt.json",
+        "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8"
+      ],
+      "scope": "Client-local browser control qualified against independently installed static package; no device/account claim.",
+      "gap": ""
+    },
+    {
+      "featureId": "F01.05",
+      "status": "partial",
+      "evidence": [
+        "output/ahp-acp-implementation-20261002/web-client/appearance-static/appearance-export-receipt.json",
+        "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8"
+      ],
+      "scope": "Local action qualified; gallery Apply choice exercised through UI.",
+      "gap": "Separate advanced Apply skin/reset button gesture not exercised in this qualifier."
+    },
+    {
+      "featureId": "F01.06",
+      "status": "partial",
+      "evidence": [
+        "output/ahp-acp-implementation-20261002/web-client/appearance-static/appearance-export-receipt.json",
+        "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8"
+      ],
+      "scope": "Explicit action preview/revert qualified; three built-in gallery choices apply locally. No continuous backend activity.",
+      "gap": "Visual three-theme preview screenshot coverage remains narrower than all CSS variants."
+    },
+    {
+      "featureId": "F01.08",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "output/ahp-acp-implementation-20261002/web-client/appearance-static/appearance-export-receipt.json",
+        "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8"
+      ],
+      "scope": "Client-local browser control qualified against independently installed static package; no device/account claim.",
+      "gap": ""
+    },
+    {
+      "featureId": "F01.09",
+      "status": "partial",
+      "evidence": [
+        "output/ahp-acp-implementation-20261002/web-client/appearance-static/appearance-export-receipt.json",
+        "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8"
+      ],
+      "scope": "Actual file picker upload and parser rejection qualified at existing current1MB limit; drag-and-drop gesture not exercised. Old ledger250KB disagrees with retained current1MB implementation.",
+      "gap": "Drag/drop gesture and historical folder migration unqualified."
+    },
+    {
+      "featureId": "F01.10",
+      "status": "partial",
+      "evidence": [
+        "output/ahp-acp-implementation-20261002/web-client/appearance-static/appearance-export-receipt.json",
+        "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8"
+      ],
+      "scope": "Local action qualified; gallery Apply choice exercised through UI.",
+      "gap": "Separate advanced Apply skin/reset button gesture not exercised in this qualifier."
+    },
+    {
+      "featureId": "F10.03",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "output/ahp-acp-implementation-20261002/web-client/appearance-static/appearance-export-receipt.json",
+        "f0cd1a57b1d0e8a661ed166469a48bb8f1d96ea8"
+      ],
+      "scope": "Actual native capture, review, exact browser download/copy; reload and original command status; explicit fresh capture only after conclusive settlement.",
+      "gap": "Host does not preserve original export body after lost reply. Exported synthetic fixture references are not qualified as a runnable public bundle."
+    }
+  ]
+}

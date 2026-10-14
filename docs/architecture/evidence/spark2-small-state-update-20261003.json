@@ -1,0 +1,15 @@
+{
+  "source": "e16f9dbb23076dd24ad1662553723940e64a2e81",
+  "operation": "session/titleChanged",
+  "acknowledgedMs": 43.62375,
+  "firstActionMs": 29.673458999999994,
+  "updateWireBytes": 347,
+  "eventTypes": [
+    "session/titleChanged"
+  ],
+  "confirmed": true,
+  "modelCalls": 0,
+  "limits": [
+    "One API-path sample over Tailscale from Mac to Spark-2; no browser paint measurement or production-scale latency claim"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@amplifier/unified-notifications-capability",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "types": "./src/index.d.ts",
+    "default": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "PROVENANCE.json"
+  ],
+  "engines": {
+    "node": ">=22.16"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@microsoft/agent-host-protocol": "^0.9.0"
+  },
+  "types": "./src/index.d.ts"
+}

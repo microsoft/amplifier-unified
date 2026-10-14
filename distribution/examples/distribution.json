@@ -1,0 +1,40 @@
+{
+  "account": "local-user",
+  "stateDirectory": "/owned/unified/state",
+  "webDirectory": "/installed/web-release/dist",
+  "defaultWorkspace": "/owned/workspace",
+  "allowedWorkspaceRoots": [
+    "/owned/workspace"
+  ],
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 0
+  },
+  "engines": [
+    {
+      "id": "amplifier",
+      "label": "Amplifier",
+      "command": "/installed/native-env/bin/amplifier-acp",
+      "args": [
+        "--config",
+        "/owned/native/agent.json"
+      ]
+    }
+  ],
+  "nativeAdmin": {
+    "engine": "amplifier"
+  },
+  "catalogProcess": {
+    "command": "/installed/catalog-env/bin/amplifier-session-catalog",
+    "args": [
+      "serve",
+      "--db",
+      "/owned/unified/catalog.sqlite",
+      "--home",
+      "/owned/native/history",
+      "--scan-on-start",
+      "--app-home",
+      "/owned/native/app"
+    ]
+  }
+}

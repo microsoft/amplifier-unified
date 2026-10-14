@@ -25,6 +25,14 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
 1. **WS1 — Preserve the durable record.** Native transcripts, metadata and retained
    event logs survive catalog exclusion, index rebuild and cache eviction. Derived
    indexes never become an alternative resume authority or replay past execution.
+   Product visibility remains host-owned retained state. If an index cannot apply
+   visibility before discovery, listing stays unavailable through complete bounded
+   reconstruction; index loss cannot temporarily expose hidden conversations.
+   Visibility is not execution authority. Hiding a product row or rebuilding its
+   derived listing preserves authorized exact-ID history, receipts, artifacts,
+   commands and deferred continuation. Existing execution/permission fences still
+   apply. A reversible visibility transaction coordinates only its selected rows
+   and actual dependencies; it does not require unrelated capability owners to stop.
    Broken: removing a missing directory deletes its history. Affected: owners of historical work.
 
 2. **WS2 — Filter before loading pages.** Default project discovery includes confirmed
@@ -40,6 +48,10 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
 4. **WS4 — Bound resident work.** Runtime, projection, replay and subscriber caches
    have explicit count/byte/idle or admission budgets. Active execution and unresolved
    decisions cannot be evicted as idle; overload has a visible queued/refused outcome.
+   Bulk historical payload verification checks complete bounded metadata totals
+   before body I/O. Producers and consumers negotiate compatible count, identifier
+   and byte bounds; excess selection is refused or explicitly reviewed with omissions.
+   A source that is not an admitted regular file cannot block the owner on opening.
    Broken: one slow client grows memory without limit or eviction cancels work. Affected: all users.
 
 5. **WS5 — Charge updates to dependencies.** A resource update touches its record,
@@ -50,6 +62,11 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
 6. **WS6 — Discover without rereading history.** New native writers publish incremental
    discovery hints after durable changes. Bounded reconciliation recovers missed hints;
    initial migration can scan in the background with visible progress and throttling.
+   Metadata reconstruction excludes concurrent discovery writers before seeding
+   retained identities. Pending hints are bounded and durable; overflow requires
+   explicit reconciliation. An unresolved writer requires its original response or
+   observed exit evidence, not a replacement process or timeout. This discovery hold
+   does not block unrelated execution or authorized exact-ID recovery.
    Broken: every refresh parses every events file or missing a watcher loses a session forever. Affected: legacy users.
 
 ## Not in v1
@@ -60,10 +77,19 @@ decision. Cross-machine path equivalence is not inferred from a matching path st
 ## How the kit checks it
 
 - WS1: checksum native records before/after exclusion, index loss and recovery.
+- WS1: interrupt visibility reconstruction, restart, and verify listing remains
+  fenced until all retained markers and the final checkpoint are verified.
+- WS1: while hidden or rebuilding discovery, verify authorized exact-ID recovery
+  and execution still work; deny unauthorized access, serialize selected-row
+  changes and allow disjoint reset/undo without a global owner hold.
 - WS2/WS3: trace filesystem reads and worker starts on the large-history fixture.
 - WS4: disconnect viewers, stress slow subscribers and exhaust runtime admission.
+- WS4: reject aggregate-overbudget manifests before body reads and special-file
+  sources without blocking; verify mismatched peer limits never silently truncate.
 - WS5: compare update work as stored sessions grow with the active set fixed.
 - WS6: duplicate/drop hints, interrupt rebuild and restart the legacy writer.
+- WS6: race native and startup hints with retained mapping reconstruction; inject a
+  late writer and require exact settlement before repair without aliasing identities.
 
 Numeric candidate budgets and fixture composition live in the delivery plan, not as passes here.
 
@@ -76,5 +102,8 @@ Which directory freshness policy handles offline mounts without noisy catalog ch
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-03 | Require discovery writer ordering and exact settlement during reconstruction. | Actual host/catalog race created an alternate URI; bounded host correction and installed checks are recorded separately. |
+| 2026-10-03 | Clarify visibility versus authority and selected-row transaction ownership. | Independent review of host d8508cfe found visibility admission and global maintenance coupling; correction and qualification remain in progress. |
+| 2026-10-03 | Clarify WS1 reconstruction visibility and WS4 pre-I/O payload bounds. | Catalog projection review and reproduced payload aggregate/FIFO defects; host composition remains separately qualified. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial WS1–6. | [Scale requirements and measurements](../docs/architecture/evidence.md). |

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+python/.venv/
+__pycache__/
+.pytest_cache/
+*.tgz
+*.whl

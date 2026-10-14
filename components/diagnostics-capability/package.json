@@ -1,0 +1,10 @@
+{
+  "name": "@amplifier/unified-diagnostics-capability",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": "./src/index.js",
+  "files": ["src", "README.md", "LICENSE", "PROVENANCE.json"],
+  "engines": {"node": ">=22.16"},
+  "scripts": {"test": "node --test test/*.test.mjs"}
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@amplifier/unified-notifications-capability",
+  "scope": "Retained Amplifier Unified remote ntfy notifications, independent optional owner",
+  "sourceReferences": [
+    "amplifier_web/notifications.py",
+    "amplifier_web/service.py generation.finished notification hook",
+    "amplifier_web/schedules.py schedule notification policy",
+    "docs/settings-inventory.csv F03.04-F03.10",
+    "docs/validation/everyday-settings.md"
+  ],
+  "implementation": "New bounded private owner and public capability; no runtime or AppService imports",
+  "reusableDependency": "amplifier-operations DurableIntakeFence from microsoft/amplifier-foundation libraries/operations",
+  "license": "MIT",
+  "validationBoundary": "Fixtures and owned local HTTPS only; no real account send or physical device acceptance"
+}

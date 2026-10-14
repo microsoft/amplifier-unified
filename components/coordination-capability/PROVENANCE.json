@@ -1,0 +1,1 @@
+{"source": "amplifier-unified/amplifier_web/coordination.py", "sourceRevision": "95e96851b799b2e63c44344d69457ca044572c45", "retained": "Explicit target controls and bounded result delivery; implementation replaces global AppService with public callbacks and Foundation operations.coordination."}

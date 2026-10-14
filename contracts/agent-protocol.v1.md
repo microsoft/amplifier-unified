@@ -66,6 +66,29 @@ only with explicit semantics and independent acceptance. No new kernel protocol 
 
 Inspect the full control inventory before declaring native feature parity.
 
+## Reviewed native context clearing
+
+The optional native adapter owns [context-clear v1](https://github.com/microsoft/amplifier-app-acp/blob/main/docs/context-clear.md)
+and its schemas; the [native bridge contract](https://github.com/microsoft/amplifier-unified-capability-native/blob/main/contracts/native-bridge.v1.md)
+owns the corresponding authenticated host actions. This is an AP3–6 extension,
+not an additional core ACP requirement. Hosts advertise review, apply and passive
+receipt inspection only after actual capability negotiation. Older peers have no
+generic-clear fallback.
+
+Apply requires the reviewed history/control revisions and the original public
+command identity. The adapter preserves transcript and metadata before-images and
+event logs, clears the explicit goal, and refuses an unfinished task until the
+user explicitly pauses it. Archived segments are display history; canonical
+edit, fork and native transcript export remain limited to active history.
+
+Receipt lookup retains the original native session and canonical workspace even
+after relocation or a change to the host's default workspace. It starts no worker,
+repeats no mutation and does not infer an outcome from missing or unknown evidence.
+An older success receipt cannot replace a newer goal. Clients discard stale
+reviews and confirmations after relevant state or selection changes and explicitly
+refresh current goal state when needed. The assembled qualification is recorded
+in [the dated integration receipt](../docs/architecture/evidence/context-clear-composition-20261003.json).
+
 ## Open questions
 
 Which advanced loop controls need extensions beyond current upstream capabilities?
@@ -75,5 +98,6 @@ Which extracted native policies need separate reusable packages to keep the agen
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-03 | Trace negotiated context clearing, native history ownership and passive original-identity recovery. | Native and bridge owner contracts plus exact installed composition qualification. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial AP1–6. | [Native runtime and external adapter review](../docs/architecture/evidence.md). |

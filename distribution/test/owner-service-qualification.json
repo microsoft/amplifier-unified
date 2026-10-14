@@ -1,0 +1,67 @@
+{
+  "foundationMergedCommit": "467f870abb4487184789386ecdb460410f64bd9f",
+  "foundationWheelSHA256": "676708bccd4564ef93c7121a231f8fe945023694c5e1fb2842f6d6a048329265",
+  "node": "22.22.0",
+  "python": [
+    "3.11.14",
+    "3.13.11"
+  ],
+  "pythonServiceMatrixEach": 7,
+  "nodePublicMatrixEach": 13,
+  "matrixSkipped": 0,
+  "regressions": {
+    "workspace": {
+      "nodePassed": 4,
+      "nodeSkipped": 0,
+      "python311Passed": 14,
+      "python313Passed": 14
+    },
+    "coordination": {
+      "nodePassed": 5,
+      "nodeSkipped": 1,
+      "python311Passed": 7,
+      "python313Passed": 7
+    },
+    "publishing": {
+      "nodePassed": 1,
+      "nodeSkipped": 0,
+      "python311Passed": 9,
+      "python313Passed": 9
+    },
+    "recall": {
+      "nodePassed": 1,
+      "nodeSkipped": 0,
+      "python311Passed": 9,
+      "python313Passed": 9
+    },
+    "notifications": {
+      "nodePassed": 4,
+      "nodeSkipped": 0,
+      "python311Passed": 16,
+      "python313Passed": 16
+    },
+    "feedback": {
+      "nodePassed": 1,
+      "nodeSkipped": 0,
+      "python311Passed": 12,
+      "python313Passed": 12
+    },
+    "history": {
+      "nodePassed": 7,
+      "nodeSkipped": 0
+    },
+    "worktree": {
+      "nodePassed": 13,
+      "nodeSkipped": 0
+    },
+    "recovery": {
+      "nodePassed": 13,
+      "nodeSkipped": 2
+    }
+  },
+  "limits": [
+    "No account, real native execution, live service, or deployment acceptance claimed.",
+    "Coordination one optional native worker case and recovery two optional integration cases were skipped in source regressions; service matrices run without skips.",
+    "Foundation and owner participants retain intake/proof; host authenticates platform authority."
+  ]
+}

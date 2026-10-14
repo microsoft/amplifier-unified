@@ -1,0 +1,108 @@
+{
+  "schema": "spark2-smart-tools-live-checkpoint-v1",
+  "release": {
+    "id": "ahp-acp-full-owner-preview-3",
+    "version": "0.1.0-preview.fullowner.3",
+    "revision": "a6f928cdc383755d5671870a36f7402a60905d7f",
+    "digest": "19c72bd3a2811c5562775f8f06805623b67446d9aef80c530994fbd9533d8b5e"
+  },
+  "instanceId": "f4bbecf0-f1e3-49b2-8a99-4cf66b4867e1",
+  "ready": true,
+  "activation": {
+    "id": "smart-tools-activate-20261004-v3",
+    "command": "activate",
+    "status": "succeeded",
+    "phase": "ready",
+    "createdAt": 1791079828251,
+    "updatedAt": 1791079856526,
+    "target": {
+      "id": "ahp-acp-full-owner-preview-3",
+      "version": "0.1.0-preview.fullowner.3",
+      "revision": "a6f928cdc383755d5671870a36f7402a60905d7f",
+      "digest": "19c72bd3a2811c5562775f8f06805623b67446d9aef80c530994fbd9533d8b5e"
+    },
+    "activation": {
+      "startedAt": 1791079832051,
+      "completedAt": 1791079832336
+    },
+    "admissionSettlement": {
+      "state": "settled",
+      "outcome": "ready",
+      "updatedAt": 1791079856526
+    },
+    "admission": {
+      "activeWork": 0,
+      "intakeClosed": true,
+      "observedAt": 1791079831509
+    }
+  },
+  "preservation": {
+    "schema": "post-smart-tools-successor-preservation-v1",
+    "at": "2026-10-04T02:12:00.101025+00:00",
+    "canonicalFilesChecked": 70,
+    "canonicalChanged": [],
+    "installationRecordsChecked": 7,
+    "installationChanges": [],
+    "priorOperationRecordsChecked": 2,
+    "priorOperationChanges": [],
+    "noEffectsReplayed": true
+  },
+  "runtime": {
+    "allSignedFilesVerified": 2797,
+    "packages": 36,
+    "packagedWebFilesVerified": 97,
+    "mcpRuntimeSha256": "adadf4f8e65e6c8a777b47f863c3dff6d9449008532d87fcb8d43e5066a65ce3",
+    "baseConfigurationUnchanged": true,
+    "mcpProcessUsesQualifiedPython": true,
+    "mcpPythonVersion": "3.13.15",
+    "mcpBytecodeWritesDisabled": true,
+    "supervisorProcessUnchanged": true
+  },
+  "browser": {
+    "result": "passed-with-harness-allowlist-correction",
+    "sevenInstalledPackagesVisible": true,
+    "advancedReturnPreservesInstalledList": true,
+    "errorsCollapsedAndSafe": true,
+    "mobileWidthAndVisibilityAssertions": "passed",
+    "pageErrors": [],
+    "loadedEntryFilesMatchSealedWeb": true,
+    "liveInstallConnectRetryToolModelOperations": 0,
+    "originalAllowlistFailureRetained": true,
+    "offlineCorrection": "providers.list and routing.list are expected passive settings reads",
+    "screenshots": "over-masked; no claim of useful deployed visual screenshot evidence",
+    "browserClosed": true
+  },
+  "qualifiedSource": {
+    "web": "4886f5f08ee743f07163dbf138f0366ab8259bfc",
+    "mcp": "8fb76c105ba3a167caa2191c5a41c58076dfb026",
+    "successorLauncher": "0c2996196c3f401962467679c5b2a413a2805ee5",
+    "hostedRootChecks": 15
+  },
+  "preparationIssue": {
+    "originalReceipt": "smart-tools-prepare-20261004-v3",
+    "failure": "candidate_inventory_mismatch",
+    "cause": "service umask077 clamped archive file modes",
+    "recovery": "same public SignedReleaseAdapter prepared identical verified content in an isolated022 process; existing supervisor verified and staged it normally",
+    "supervisorPermissionsOrLedgerEdited": false,
+    "permanentSourceFix": "separate update-owner PR; not adopted by running supervisor"
+  },
+  "upstreamPending": [
+    "https://github.com/robotdad/amplifier-smart-tool-stories/pull/21",
+    "https://github.com/microsoft/amplifier-smart-tool-tmux/pull/17",
+    "https://github.com/colombod/amplifier-smart-tools-research/pull/3"
+  ],
+  "limits": [
+    "No failed tool installations replayed; original successful installations and failed receipts remain available.",
+    "Upstream pending fixes do not change catalog defaults before maintainer merge.",
+    "No new paid inference, external-account connection or video rendering acceptance.",
+    "Full architecture/client parity remains outside this bounded repair checkpoint."
+  ],
+  "receiptSha256": {
+    "receipt-activated-v3.json": "d982230a382b2b09b4f339448770b09e48ab7fcca9dca2adf4c9868927476300",
+    "preservation-v3.json": "cbbb6f24338d6f6f1e59fc986ce35067ec2843367bcce6dbd2eb1358713c23f6",
+    "final-preflight.json": "2c29a535ecf33563e8345f474ec06c15845426ae9ed7b725903dbc799a2492ae",
+    "running-processes-v3.json": "c200001c8b2cd495ee583fc57c5041fb0a271bb830aae50456029236d9356fba",
+    "classification.json": "f1f9e4fdd0ef725028a9310888a86bd0fbc1c4627393605eb769a4c3a1e72646",
+    "handoff.json": "360cb76d99823ab0fac97c1551a3acd8d07a8b305d03030870d4697945668d48"
+  }
+}

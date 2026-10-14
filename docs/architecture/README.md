@@ -1,11 +1,14 @@
 # Amplifier Unified: protocol and ownership redesign
 
-**Design packet, 2026-10-02. Implementation pending.** The product direction is
+**Ratified design and active implementation, 2026-10-02.** The product direction is
 authorized: adopt AHP/ACP, preserve Amplifier modularity, move private UI state
 to clients, bound working sets, and develop across independently owned repos.
 The vision and contracts are ratified by user approval on 2026-10-02.
 Numeric performance budgets remain candidate targets pending measurement.
-This packet changes documentation; it does not establish protocol conformance.
+Independent components and an installed-package distribution candidate now exist.
+[Implementation and acceptance status](implementation-status.md) distinguishes
+landed source, installed qualification, feature gaps and deployment. This design
+packet alone does not establish protocol conformance.
 
 ## Decision
 
@@ -52,6 +55,7 @@ building block and is excluded from this migration.
 | [Agent protocol contract](../../contracts/agent-protocol.v1.md) | ACP boundary and preservation of native runtime behavior |
 | [Working-set contract](../../contracts/working-set.v1.md) | Discovery, residency, history preservation and bounded work |
 | [Component contract](../../contracts/component-boundaries.v1.md) | Independently runnable, replaceable parts |
+| [Maintenance contract](../../contracts/maintenance.v1.md) | Actual owner intake, signed replacement and reviewed recovery |
 | [Existing client contracts](../clients/direction.md) | Experience, state ownership and coordinated development |
 | [State and storage design](state-and-storage.md) | Client caches, catalog, history, memory and recovery |
 | [Protocol fit and interoperability](protocol-fit.md) | Standard versus extension, tradeoffs and external candidates |

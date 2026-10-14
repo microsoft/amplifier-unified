@@ -1,0 +1,59 @@
+{
+  "checkpointDate": "2026-10-03",
+  "source": "e16f9dbb23076dd24ad1662553723940e64a2e81",
+  "host": "25a7255604f4a2644e042e4e9a0909c2c8c04bbd",
+  "native": "4d8982ca57696516dd0c4c3d186e323177e4bf4b",
+  "web": "ff06d4b7188e22f0b354b402b4c64704c4f0fcc7",
+  "originalCanonicalFilesUnchanged": 24,
+  "realModel": {
+    "instance": "openai",
+    "model": "gpt-6-sol",
+    "status": "completed",
+    "stopReason": "end_turn",
+    "durationMs": 3071,
+    "browserVerified": false
+  },
+  "configuredAmplifierPackages": 46,
+  "editableConfiguredPackages": 0,
+  "fixtureProviderInstalled": false,
+  "servedScripts": [
+    {
+      "path": "/connection.js",
+      "bytes": 52,
+      "sha256": "da295ec4c8f14f650e9d234ccc9d14eab33309b958c258b45b638882c0bfd662"
+    },
+    {
+      "path": "/appearance-bootstrap.js",
+      "bytes": 1034,
+      "sha256": "e84d3849cce7ad5eadc22c329e2bbd1d9b31a386b812a1f53a8f9f6dd881fdd5"
+    },
+    {
+      "path": "/pwa.js",
+      "bytes": 396,
+      "sha256": "f45e20c177ce69bed00b23a6935816e57fe7f194fa51db6a26c3f38c8f3be792"
+    },
+    {
+      "path": "/assets/app-DC6TlqIU.js",
+      "bytes": 1994792,
+      "sha256": "307a321d548943dcec1e05600b7473061c71824fff015fc61a30c8444a9821ef"
+    }
+  ],
+  "localInstalledBrowser": {
+    "webTests": 689,
+    "skipped": 0,
+    "managedCreation": true,
+    "selectedNativeReset": true,
+    "archiveEntries": 2130,
+    "archiveBytes": 3256320,
+    "archiveChunks": 13
+  },
+  "limits": [
+    "No remote Spark2 changes or acceptance performed by this lane; deployment remains coordinator-owned",
+    "No real accounts, physical devices or paid model calls in these local fixtures",
+    "Managed bundle choices are trusted launcher aliases; no arbitrary browser bundle paths",
+    "Managed hard deletion, allocation disposal, relocation/transfer, and global/product reset are not qualified by this checkpoint",
+    "Typed RESET covers selected native session configuration only; full-product backup and global credentials/product-row reset remain separate",
+    "Cache cleanup and retention UI remain pending separate advertised owner integration"
+  ],
+  "deploymentScope": "Existing manual preview capability subset plus managed chat creation; full service owner handoff pending"
+}

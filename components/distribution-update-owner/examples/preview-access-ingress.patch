@@ -1,0 +1,20 @@
+--- a/preview-access.mjs
++++ b/preview-access.mjs
+@@ -5,3 +5,3 @@
+ // Task-owned preview access only. This is not the product authentication owner.
+-export async function createPreviewAccess({origin,host,port,key,cert,accessCode,backendPort}) {
++export async function createPreviewAccess({origin,host,port,key,cert,accessCode,backendPort,ingressGate}) {
+  const authority=new URL(origin).host,cookieName='__Host-unified-ahp-preview',sessions=new Map(),peers=new Set();
+@@ -16,3 +16,6 @@
+  function refuse(res,status=403){res.writeHead(status,{'Cache-Control':'no-store','Content-Type':'text/plain','Referrer-Policy':'no-referrer'});res.end('Preview access required');}
+- const server=createServer({key,cert},(req,res)=>{void(async()=>{
++ const server=createServer({key,cert},(req,res)=>{
++  const done=ingressGate.enter();if(!done)return refuse(res,503);
++  res.once('close',done);
++  void(async()=>{
+   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');
+@@ -42,2 +45,4 @@
+   if(closing||!authorityOK(req)||req.headers.origin!==origin||!authorized(req)||req.url!=='/ahp'||peers.size>=128){socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
++  const done=ingressGate.enter();if(!done){socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');return;}
++  socket.once('close',done);
+   // Count and own the front socket before awaiting the upstream handshake. An
