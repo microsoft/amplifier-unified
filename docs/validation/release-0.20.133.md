@@ -95,6 +95,8 @@ summary construction. These check work avoided, not only elapsed time.
   including checkpoint corruption/replacement/truncation/partial append, exact
   raw output after eviction, active-client routing, indexed history, usage,
   publication durability, fork recovery, assignment integration and draft defaults.
+  The separate native-child assignment file was skipped because the optional
+  `amplifier_module_context_simple` module is absent in this host test environment.
 - 686 frontend unit tests passed.
 - Final production browser: work-activity paging, delegate activity, new-chat
   controls/draft reload and workspace switching all passed. Chromium uses the
