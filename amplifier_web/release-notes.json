@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.148",
+      "title": "Skip media lookups in chats without linked media",
+      "changes": [
+        "Chats with no linked media no longer request empty media descriptions for each visible assistant message. The server checks the selected chat\u2019s media registry without loading other history.",
+        "Linked images and videos still use the existing metadata and file authorization checks. Imported and forked media remain discoverable, including before their first media revision.",
+        "Retained-history browser qualification now discovers saved chats through the canonical directory before testing their message windows."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.147",
       "title": "Discover interface updates through the live connection",
       "changes": [

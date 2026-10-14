@@ -47,10 +47,11 @@ test('media keeps current dispatch and revision outside the memoized text body',
   await act(async()=>{root=create(render(props))});
   const media=()=>root.root.findByType(InlineMedia);
   assert.equal(media().props.dispatch,first);
-  props={...props,dispatch:next,session:{...props.session,mediaRevision:2}};
+  props={...props,dispatch:next,session:{...props.session,mediaRevision:2,linkedMediaAvailable:true}};
   await act(async()=>root.update(render(props)));
   assert.equal(media().props.dispatch,next);
   assert.equal(media().props.mediaRevision,2);
+  assert.equal(media().props.linkedMediaAvailable,true);
   assert.equal(media().props.sessionId,'chat');assert.equal(media().props.messageId,'answer');
   media().props.dispatch('canvas.openGif',{id:'synthetic-media'});
   assert.deepEqual(calls,[['next','canvas.openGif',{id:'synthetic-media'}]]);

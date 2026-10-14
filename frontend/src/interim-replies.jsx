@@ -60,7 +60,7 @@ export function useInterimReplies(rows,data,enabled,sessionId,pane,expanded,act)
 export function ConversationWork({row,data,state,act,dispatch,session,working}){
  const open=row.interim&&interimOpen(new Set(state.view?.executionExpanded||[]),row);
  const outputs=message=><div data-interim-output={message.id}>
-  <InlineMedia sessionId={session.id} messageId={message.id} mediaRevision={session.mediaRevision||0} dispatch={dispatch}/>
+  <InlineMedia sessionId={session.id} messageId={message.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} dispatch={dispatch}/>
   <ArtifactLinks state={state} message={message} act={act} dispatch={dispatch}/>
  </div>;
  return <>

@@ -162,12 +162,19 @@ async def serve(root, app):
             {'role': 'user', 'content': 'Synthetic child input.'},
             {'role': 'assistant', 'content': 'Synthetic child saved response.'},
         ], {'name': 'Synthetic native child', 'parent_session_id': sid})
+        empty_native = uuid.uuid4().hex
+        SessionStore.for_app(service.data_dir, root).save(empty_native, [
+            row for index in range(1000) for row in (
+                {'role': 'user', 'content': f'Empty native input {index}.'},
+                {'role': 'assistant', 'content': f'Empty native assistant {index}.'},
+            )
+        ], {'name': 'Long native conversation without media'})
         await service.history.refresh()
         # Discovery is cooperative: one refresh need not have reached a newly
         # written child. Wait for canonical directory membership before asking
         # the ordinary owner to admit it; never manufacture a worker UI role.
         async with asyncio.timeout(30):
-            while service.directory.resolve(child_native) is None:
+            while any(service.directory.resolve(identity) is None for identity in (child_native, empty_native)):
                 if error := service.state.get('sharedHistory', {}).get('error'):
                     raise AssertionError(error)
                 await service.history.refresh(force=False)
@@ -316,6 +323,8 @@ async def serve(root, app):
             app['allowed_origins'] |= {f'http://127.0.0.1:{port}'}
             print(json.dumps({'url': f'http://127.0.0.1:{port}', 'sessionId': sid, 'messageId': message_id,
                               'workerSessionId': child['id'],
+                              'emptyLongSessionId': service.directory.resolve(empty_native)['id'],
+                              'emptyLongMessageCount': 2000,
                               'mode': MODE, 'python': Path(sys.executable).name,
                               'frontendAssets': [{'filename': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
                                                  for path in sorted((Path(amplifier_web.__file__).parent / 'static' / 'assets').glob('*.js'))],

@@ -77,8 +77,16 @@ async def main():
             await asyncio.gather(service.history.task, return_exceptions=True)
             service.history.task = None
         await service.history.refresh()
+        project = project_slug(root)
+        # Discovery is cooperative; resolve metadata without admitting every
+        # history merely to identify the timing cases.
+        async with asyncio.timeout(30):
+            while any(service.directory.resolve(case['identity'], project) is None for case in cases):
+                if error := service.state.get('sharedHistory', {}).get('error'):
+                    raise AssertionError(error)
+                await service.history.refresh(force=False)
         for case in cases:
-            row = next(s for s in service.state['sessions'] if s.get('nativeIdentity') == case['identity'])
+            row = service.directory.resolve(case['identity'], project)
             case['id'] = row['id']
             assert not row.get('historyLoaded')
         await service.dispatch('session.create', {'title': 'Timing home'})
