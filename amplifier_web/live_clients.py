@@ -108,6 +108,7 @@ def setup_routes(app, streams):
             "approval.respond": "sessionId", "runtime.control": "sessionId",
             "session.takeover": "id", "session.history": "id", "session.rename": "id",
             "session.warm": "id", "session.naming": "id",
+            **{name: "sessionId" for name in ("worktree.inspect", "worktree.list", "worktree.status", "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile")},
             "assignment.read": "sessionId", "assignment.start": "sessionId",
             "assignment.set": "sessionId", "assignment.stop": "sessionId", "assignment.detach": "sessionId",
         }.get(action)

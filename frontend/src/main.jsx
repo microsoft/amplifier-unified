@@ -256,7 +256,7 @@ function App(){
  // before its queued action; refresh only after the server accepts that scope.
  const shell=useShell(serverState.current,dispatch,clientId,state,{onError:reportError,onRecovered:()=>setConnectionFailure(afterReconnect)});
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
- const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>reportError(e)),[dispatch,reportError]);
+ const act=useCallback((name,args={},meta={})=>dispatch(name,args,meta).catch(e=>reportError(e)),[dispatch,reportError]);
  useEffect(()=>{
   if(!chatLinkReceiver.current)chatLinkReceiver.current=createChatLinkReceiver({location,history,
    launchQueue:window.launchQueue,onChange:setChatLink});
