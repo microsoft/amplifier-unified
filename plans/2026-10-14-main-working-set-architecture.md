@@ -40,7 +40,7 @@ considering a Rust implementation behind the same interface.
 
 ## Implementation progress, October 14
 
-Releases .143 through .149 are published. Release .143 introduced bounded
+Releases .143 through .151 are published. Release .143 introduced bounded
 requested navigation pages and removed duplicate ordinary-state projections;
 .142 was not published. Release .144 replaced repeated whole-shell reads with
 [resources on the existing state stream](../docs/browser-state-transport.md#shell-bootstrap-and-active-resources).
@@ -71,6 +71,49 @@ These are individual observations, not sustained percentile qualification or
 completion of the performance exits. Retained release and live-adoption receipts
 are under `output/work-activity-20261013/bounded-directory/release143/` through
 `release149/` in the operator workspace.
+
+Release .150 repaired stale validation fixtures, recorded every extended-browser
+scenario and retained cleanup failures instead of silently skipping later checks.
+Release .151 made earlier-history paging require a directional user gesture and
+canceled obsolete detail reads on selection changes. It also separated workspace
+aggregate invalidation from unrelated worker/title updates and corrected the
+runner's treatment of unchanged pre-existing processes. Tests preserve fail-closed
+cleanup for new or reused processes whose ownership cannot be established.
+
+Live .151 observations on the existing Mac window showed no unsolicited earlier
+history request during two sidebar switches and a workspace-list open. Sidebar
+messages/Work first appeared in 1.99 seconds and 0.74 seconds; these are spot checks,
+not percentile acceptance. The workspace target opened with messages and Work,
+but the old timing recorder could not qualify readiness for an unpinned target
+absent from the sidebar. Its limitation is recorded separately from product
+behavior. Expensive real list invalidations and selected-history reconstruction
+remain active work. Publication is distinct from broad validation: .150 readiness
+and installed-package checks passed, while its browser run stopped on a cleanup
+failure and its full Python run exposed stale runner/evidence tests. Subsequent
+releases repair those findings; the earlier run remains failed/incomplete.
+
+Release .152 is being qualified from reviewed PRs #704, #705 and #707. The
+selected-history lane adds bounded Linux process isolation and six requested
+read models, with unchanged-input reuse, supported incremental updates and exact
+reference reconstruction for broader changes. Other operating systems retain the
+existing reader pending native qualification. Cold selected trees still materialize
+in host memory within explicit limits; this is not a fully paged transcript store.
+
+The catalog lane now reuses ordinary selection-independent sidebar pages, separates
+root navigation dependencies from unrelated worker changes, and narrows workspace
+candidates through existing indexes. Fixed 100-switch tests at 270, 2,700 and 27,000
+records issued zero navigation-page queries and decoded zero page rows. This is
+synthetic SQL evidence, not end-to-end latency acceptance. Cold arbitrary global
+filtered counts/order remain potentially expensive, and reconciliation still uses
+threads. The next live qualification records sustained six-chat observations and
+large selected histories separately before declaring performance exits complete.
+
+The .151 extended browser runner completed all 65 scenarios: 43 passed and 22
+failed, including one scenario that passed its assertions but left processes for
+cleanup. Its full coverage exposes stale controls and possible product defects
+that are being repaired; publication is not a claim of clean broad verification.
+Five duplicate source-browser runs were removed from the readiness workflow while
+preserving each distinct journey and package-install coverage.
 
 ## Ownership and data flow
 
