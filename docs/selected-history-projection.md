@@ -55,6 +55,10 @@ retains only the most recent 16 sanitized failure records in performance
 diagnostics; no source paths, identities, content, or exception text cross this
 diagnostic boundary. A `memory_limit` outcome alone does not identify which
 memory measurement was exceeded or justify increasing the budget.
+Startup distinguishes memory-policy setup, model import, and model-store creation.
+Only `MemoryError` or the explicit memory-policy refusal reports `memory_limit`;
+other startup exceptions report `worker_failed`. An allowlisted exception type
+and bounded numeric errno distinguish those failures without retaining their text.
 
 ## Generations and incremental dependencies
 
