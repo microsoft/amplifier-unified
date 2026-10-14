@@ -11,6 +11,7 @@ from pathlib import Path
 import time
 import uuid
 
+from .history_read_retry import retry_indexed_read
 from .session_files import amplifier_home, project_slug
 from .managed_chats import catalog_locations
 from amplifier_foundation.session.history import SessionHistoryStore
@@ -110,6 +111,9 @@ def display_message(row, index, session, *, include_internal=False):
             **input_identity, **observation, **voice_fields}
 
 
+
+
+@retry_indexed_read
 def read_transcript(session, *, before=None, limit=100):
     """Read a display page, or a full view for ordered web-history merging."""
     from .native_activity import activity_page

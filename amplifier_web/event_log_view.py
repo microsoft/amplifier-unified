@@ -19,6 +19,7 @@ from pathlib import Path
 import sys
 import threading
 
+from .history_read_retry import retry_indexed_read
 from .execution import LIVE_PHASES, refresh_usage
 from .execution_events import public_usage
 from .session_files import amplifier_home, project_slug
@@ -133,6 +134,11 @@ def read_event_data(reference):
     return json.loads(raw)['data']
 
 
+def event_field_digest(reference):
+    """Opaque validator binds exact source bytes and selected field."""
+    return hashlib.sha256(('event-field-v1:' + reference['sha256'] + ':' + reference['key']).encode()).hexdigest()
+
+
 def read_field(reference):
     value = read_event_data(reference)[reference['key']]
     if reference.get('delegateField'):
@@ -208,19 +214,25 @@ class EventIndex:
         key = next((key for key in keys if key in data), None)
         if key is None:
             return
-        value = text(data[key])
+        node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
+        # A model recording is not visible until explicitly opened. Bind its
+        # reference to the original event bytes and field instead of formatting
+        # every raw request/response just to count/hash the unseen pretty JSON.
+        value = text(data[key]) if preview else None
         if preview:
             node[field] = value[:512]
-        node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
         if field in ('request', 'response'):
             from .provider_payloads import metadata
             files = data.get('provider_payloads')
             payload = metadata(files.get(key)) if isinstance(files, dict) else None
             if payload:
                 node[field + 'Recording'] = payload
-        node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
-                                 'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if not preview or len(value) > 512 else None
-        if field in ('request', 'response'):node[field + 'Detail']['lines'] = value.count('\n') + 1
+        if not preview:
+            node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
+                'digest': event_field_digest(node['_eventFields'][field]), 'digestKind': 'event-field-v1'}
+        else:
+            node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
+                'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if len(value) > 512 else None
 
     def delegate_field(self, node, field, data, keys, reference):
         from .delegate_exchange import select
@@ -391,6 +403,7 @@ class EventIndex:
                     node['responseCapture']['limit_chars'] = capture['limit_chars']
         self.field(node, 'error', data, ('error', 'error_message'), reference)
 
+    @retry_indexed_read
     def associations(self, directory):
         """Use Foundation's exact transcript associations for undated history."""
         from amplifier_foundation.session.history import SessionHistoryStore, associate_events
@@ -538,15 +551,17 @@ class EventLogView:
 
     def read(self, session):
         with self._read_lock:
+            self._read_touched = set()
             try:
                 return self._read(session)
             except BaseException:
-                # Any failure after mutable parsing/association work must not
-                # leave resident entries with stale, smaller byte charges.
-                self.indexes.clear()
-                self._index_sizes.clear()
-                self.retained_index_bytes = 0
+                # Discard potentially grown indexes from this read, without
+                # forcing every unrelated chat to reparse its whole history.
+                for key in self._read_touched:
+                    self._forget_index(key)
                 raise
+            finally:
+                self._read_touched = set()
 
     def _read(self, session):
         root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
@@ -567,6 +582,7 @@ class EventLogView:
             index = self.indexes.get(str(path))
             if index is None:
                 index = EventIndex(path, sid)
+            self._read_touched.add(str(path))
             try:
                 available = index.refresh()
             except BaseException:
@@ -828,6 +844,33 @@ class EventLogView:
         for index in indexes:
             self._retain_index(index)
         return tree
+
+    def read_plan(self, session, *, include_items=False):
+        """Read root todo receipts without child trees or transcript association.
+
+        Workspace summaries share the incremental event index, but do not
+        hydrate a saved execution graph or build the full chat display model.
+        """
+        from .chat_plan import overview
+        identity = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
+        path = event_path(session, identity)
+        key = str(path)
+        with self._read_lock:
+            index = self.indexes.get(key) or EventIndex(path, identity)
+            try:
+                if not index.refresh():
+                    self._forget_index(key)
+                    return {'sessionId': session['id'], 'plan': None}
+                aliases = {identity, session['id']}
+                nodes = [row for row in index.nodes.values()
+                         if row.get('kind') == 'tool' and row.get('label') == 'todo'
+                         and row.get('sessionId') in aliases]
+                result = overview({**session, 'execution': {'nodes': nodes}}, include_items=include_items)
+                self._retain_index(index)
+                return result
+            except BaseException:
+                self._forget_index(key)
+                raise
 
     async def refresh(self, identity):
         async with self.lock:

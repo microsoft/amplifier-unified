@@ -111,6 +111,7 @@ def ingest(session,event):
     if safe.get('kind') != 'tool':
         for key in ('input','output','error'):safe.pop(key,None)
     node=next((n for n in tree['nodes'] if n['id']==identity),None)
+    prior_topology = tuple(node.get(key) for key in ('kind', 'parentId', 'turnId')) if node else None
     if node:
         if safe.get('revision', 0) < node.get('revision', 0): return
         if node.get('phase') == 'outcome_unknown' and safe.get('phase') in LIVE_PHASES and safe.get('revision', 0) <= node.get('revision', 0): return
@@ -124,6 +125,14 @@ def ingest(session,event):
         node.update(safe)
     else:
         node=safe;tree['nodes'].append(node)
+    # Tool output/progress cannot change model-call usage. Preserve the existing
+    # aggregates when neither call membership nor ownership/turn mapping changed.
+    # A late parent or an unassigned turn still requires the complete rebuild.
+    if node.get('kind') in {'tool', 'worker'} and tree.get('aggregateUsage') is not None:
+        topology = tuple(node.get(key) for key in ('kind', 'parentId', 'turnId'))
+        if (prior_topology == topology and node.get('aggregateUsage') is not None
+                and all(row.get('turnId') for row in tree['nodes'])):
+            return
     refresh_usage(tree)
 
 

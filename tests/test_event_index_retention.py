@@ -211,3 +211,27 @@ async def test_cancelled_refresh_keeps_reader_accounting_serialized(home, monkey
     assert maximum == 1
     assert view.retained_index_bytes == sum(size for _, size in view._index_sizes.values())
     assert view.retained_index_bytes <= view.MAX_INDEX_BYTES
+
+
+def test_failed_chat_read_preserves_other_chats_parsed_history(home, monkeypatch):
+    view = events.EventLogView(None)
+    healthy, changing = (session(home, identity) for identity in ('healthy', 'changing'))
+    for row in (healthy, changing):
+        append(events.event_path(row, row['id']), row['id'])
+        view.read(row)
+    key = str(events.event_path(healthy, healthy['id']))
+    retained = view.indexes[key]
+    original = events.EventIndex.associations
+
+    def fail(index, directory):
+        if index.identity == 'changing':
+            raise ValueError('Session history changed during indexed read')
+        return original(index, directory)
+
+    monkeypatch.setattr(events.EventIndex, 'associations', fail)
+    with pytest.raises(ValueError, match='indexed read'):
+        view.read(changing)
+    assert view.indexes[key] is retained
+    assert view.retained_index_bytes == sum(size for _, size in view._index_sizes.values())
+    view.read(healthy)
+    assert view.indexes[key] is retained

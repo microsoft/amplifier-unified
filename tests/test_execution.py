@@ -123,3 +123,29 @@ def test_usage_refresh_does_not_multiply_history_reads_by_turn_count():
     assert tree['aggregateUsage']['calls'] == 600
     assert all(turn['aggregateUsage']['calls'] == 2 for turn in turns)
     assert all(turn['aggregateUsage']['grossTotalTokens'] == 10 for turn in turns)
+
+
+def test_tool_output_updates_do_not_rescan_model_usage_but_reparenting_does():
+    from amplifier_web.execution import refresh_usage
+    reads = []
+    class ObservedCall(dict):
+        def get(self, key, default=None):
+            if key == 'usage':
+                reads.append(True)
+            return super().get(key, default)
+    session = {'execution': {'currentTurnId': 'turn', 'turns': [{'id': 'turn'}], 'nodes': [
+        {'id': 'tool', 'kind': 'tool', 'turnId': 'turn'},
+        {'id': 'other', 'kind': 'worker', 'turnId': 'turn'},
+        *[ObservedCall(id=f'call-{n}', kind='llm', parentId='tool', turnId='turn',
+                       usage={'inputTokens': n, 'outputTokens': 2}) for n in range(200)]]}}
+    refresh_usage(session['execution'])
+    before = session['execution']['aggregateUsage'].copy()
+    reads.clear()
+    for number in range(10):
+        ingest(session, {'id': 'tool', 'kind': 'tool', 'phase': 'completed', 'output': f'Result {number}'})
+    assert reads == []
+    assert session['execution']['nodes'][0]['output'] == 'Result 9'
+    assert session['execution']['aggregateUsage'] == before
+    ingest(session, {'id': 'tool', 'kind': 'tool', 'parentId': 'other'})
+    assert reads
+    assert session['execution']['nodes'][1]['aggregateUsage'] == before

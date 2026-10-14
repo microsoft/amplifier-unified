@@ -21,9 +21,13 @@ def successor_manager(tmp_path, monkeypatch):
     monkeypatch.setattr(app_updates,'installed_extras',lambda:['native-desktop'])
     monkeypatch.setattr(app_updates.components,'installed_graph',lambda:[deepcopy(app)])
     calls=[]
+    async def github_read(path, **kwargs):
+        calls.append(('github_read', path))
+        assert path == f'repos/{app_updates.REPOSITORY}/releases/tags/v{__version__}'
+        return json.dumps({'tag_name':'v'+__version__,'draft':False,'prerelease':False})
+    monkeypatch.setattr(app_updates,'github_read',github_read)
     async def process(*args,**kwargs):
         calls.append(args)
-        if args[0]=='gh':return json.dumps({'tag_name':'v'+__version__,'draft':False,'prerelease':False})
         if args[0]=='git':return REVISION+'\trefs/tags/v'+__version__
         assert args[1:4]==('-I','-c',app_updates.PROBE) and args[4:]==('native-desktop',)
         return 'AMPLIFIER_UPDATE_PROBE='+json.dumps({'ok':True,'isolated':True,'stage':'complete','version':__version__})
@@ -58,12 +62,15 @@ async def test_unverified_or_ineligible_successor_keeps_pending_restart(tmp_path
     if broken=='lost_extra':monkeypatch.setattr(app_updates,'installed_extras',lambda:[])
     if broken=='replacement':service.state['updates']['pendingReplacement']={'unqualified':True}
     if broken=='feature':target['featureSelection']={'kind':'add-feature'}
+    original_metadata = app_updates.github_read
+    async def metadata(*args, **kwargs):
+        if broken=='unpublished':raise RuntimeError('release unavailable')
+        if broken in {'wrong_tag','draft','prerelease'}:
+            return json.dumps({'tag_name':'v0.0.2' if broken=='wrong_tag' else 'v'+__version__,
+                'draft':broken=='draft','prerelease':broken=='prerelease'})
+        return await original_metadata(*args, **kwargs)
+    monkeypatch.setattr(app_updates,'github_read',metadata)
     async def process(*args,**kwargs):
-        if args[0]=='gh':
-            if broken=='unpublished':raise RuntimeError('release unavailable')
-            if broken in {'wrong_tag','draft','prerelease'}:
-                return json.dumps({'tag_name':'v0.0.2' if broken=='wrong_tag' else 'v'+__version__,
-                    'draft':broken=='draft','prerelease':broken=='prerelease'})
         if args[0]=='git' and broken=='wrong_revision':return 'f'*40+'\trefs/tags/v'+__version__
         if '-I' in args:
             if broken=='bad_probe':return 'AMPLIFIER_UPDATE_PROBE={"ok":false}'

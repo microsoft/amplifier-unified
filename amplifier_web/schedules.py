@@ -220,6 +220,9 @@ class Schedules:
             if (authority_session.get('workspace') != session.get('workspace') or
                     authority_session.get('interruptionRevision', 0) != handoff['sourceInterruptionRevision']):
                 return 'The authorizing chat was stopped or changed workspace. Review authorization.'
+            from .schedule_handoff import latest_human
+            if (latest_human(authority_session) or {}).get('id') != authorization.get('messageId'):
+                return 'The authorizing chat has a newer human request. Review schedule authorization.'
         if authorization.get('messageId'):
             source = next((row for row in authority_session['messages'] if row['id'] == authorization['messageId']), None)
             if handoff and source is None:

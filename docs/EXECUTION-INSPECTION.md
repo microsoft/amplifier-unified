@@ -69,8 +69,19 @@ host limit; some providers emit only summaries. Old uncaptured calls cannot be
 reconstructed. The download is local and is not automatically sent as feedback.
 
 No payload enters initial browser state or a saved execution projection; only
-a digest/length reference and bounded metadata are indexed. Provider identities
+an opaque digest reference and bounded metadata are indexed. Model-recording
+references use `digestKind: event-field-v1`, binding the exact source record and
+field; formatted length/line counts are omitted until the payload is opened.
+Clients must pass the supplied digest unchanged and tolerate absent length.
+The host validates source bytes before returning the same complete formatted
+payload; this does not change capture, redaction, or download contents. Existing
+text-digest references remain readable. Provider identities
 are checked before merging native and app lifecycle telemetry. Ambiguous calls
 are never assigned another call's recording. Failed reads offer retry, and
 replaced logs invalidate old references. Closing or changing the call cancels
 pending reads. Payload disclosures close when their model row is remounted.
+
+Workspace plan summaries read root todo receipts through the incremental event
+index. They do not hydrate the saved execution graph, traverse child logs, or
+associate the conversation transcript. A changing chat's read failure retires
+only the indexes touched by that read, not every other chat's parsed history.

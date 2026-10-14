@@ -22,13 +22,13 @@ export function createConversationNavigation(limit=32){
  function apply(state){
   if(!state||!pending.size)return state;
   const {id,row}=Array.from(pending.values()).at(-1);
-  if(state.selectedSessionId===id)return {...state,navigationPending:true};
+  if(state.selectedSessionId===id)return {...state,navigationPending:true,view:{...state.view,workSurface:'chat'}};
   const saved=cache.get(id),summary=state.sessions?.find(row=>row.id===id)||row;
   const {messages,workers,workerSummary,approvals,execution,streaming,historyActivity,messageWindow,executionWindow,runtimeEvents,generations,messageAnnotations,messageQuotes,...metadata}=summary;
   const session={...metadata,draft:saved?.session.draft??summary.draft,historyLoading:true,messages:[],workers:[],approvals:[]};
   return {...state,selectedSessionId:id,selectedWorkspaceId:session.workspaceId??state.selectedWorkspaceId,navigationPending:true,
    sessions:[...(state.sessions||[]).filter(row=>row.id!==id),session],
-   view:{...state.view,draft:session.draft||''},
+   view:{...state.view,workSurface:'chat',draft:session.draft||''},
    canvas:{open:false},canvasWorkspace:{views:[]},canvasArtifacts:[]};
  }
  return {remember,begin,apply,settle:token=>pending.delete(token)};

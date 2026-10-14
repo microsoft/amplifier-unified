@@ -20,7 +20,7 @@ try{
  assert.equal(detailReads.filter(url=>url.searchParams.get('part')==='nodes').length,0);
  for(const group of await page.locator('button.a-execution-turn-line').all())await group.click();
  const model=page.locator('[data-kind="llm"]'),modelLine=model.locator('.a-execution-line');
- assert.match(await modelLine.innerText(),/pending/);
+ assert.match(await modelLine.innerText(),/running/);
  assert.equal(await model.locator('button.a-execution-action-line').count(),1);
  assert.equal(await model.locator('.a-execution-body').count(),0);
  const firstTimer=await modelLine.innerText();await page.waitForFunction(first=>document.querySelector('[data-kind="llm"] .a-execution-line')?.innerText!==first,firstTimer);

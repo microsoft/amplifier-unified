@@ -8,6 +8,9 @@ on:
         type: boolean
         default: false
   workflow_call:
+    secrets:
+      LOOP_LIVE_CI_READ_KEY:
+        required: true
     inputs:
       revision:
         type: string
@@ -28,6 +31,24 @@ jobs:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --group dev --group artifacts
+      - name: Resolve the declared live-runtime source
+        id: runtime-dependency
+        run: |
+          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ${{ steps.runtime-dependency.outputs.revision }}
+          path: .ci/loop-live
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - name: Install runtime prerequisites for host and child tests
+        run: >-
+          uv pip install --python .venv/bin/python
+          .ci/loop-live
+          'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main'
+          'amplifier-module-loop-streaming @ git+https://github.com/microsoft/amplifier-module-loop-streaming@main'
+          'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
       - name: Run the complete Python suite
         run: uv run --no-sync pytest -q --tb=short
   core-wheels:
