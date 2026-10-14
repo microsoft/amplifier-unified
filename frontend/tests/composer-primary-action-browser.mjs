@@ -22,7 +22,11 @@ try{
  await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),primary=page.locator('[data-part="composer-primary-action"]');await composer.waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const inspect=()=>page.request.get(url+'/fixture').then(response=>response.json());
- const matches=async(label,action,icon)=>{await expect(primary).toHaveCount(1);await expect(primary).toHaveAttribute('aria-label',label);await expect(primary).toHaveAttribute('title',label);await expect(primary).toHaveAttribute('data-action',action);await expect(primary.locator('svg')).toHaveClass(new RegExp('lucide-'+icon));};
+ const matches=async(label,action,icon)=>{
+  await expect(primary).toHaveCount(1);await expect(primary).toHaveAccessibleName(label);await expect(primary).toHaveAttribute('data-action',action);await expect(primary.locator('svg')).toHaveClass(new RegExp('lucide-'+icon));
+  // Shared tooltips remove native title on hover/focus; accessible action names
+  // stay authoritative across voice transitions (tooltip behavior has its own test).
+ };
  await matches('Start voice call','call.start','audio-lines');await expect(primary).toBeEnabled();await expect(page.locator('.a-call-button')).toHaveCount(0);
  await composer.press('Enter');assert.equal(calls.filter(row=>row.action==='call.start').length,0,'Empty Enter never starts voice');
  await composer.fill(' \n');await matches('Start voice call','call.start','audio-lines');await clearComposer(composer);
@@ -31,8 +35,9 @@ try{
  await primary.click();await matches('Start voice call','call.start','audio-lines');
  await page.evaluate(()=>{window.delayMicrophone=false;window.releaseMicrophone()});
  await primary.click();await matches('End voice call','call.end','x');
- await page.getByRole('button',{name:'Chat controls',exact:true}).click();
- await page.getByRole('button',{name:'Computer use',exact:true}).click();
+ await page.getByRole('button',{name:'Chat',exact:true}).click();
+ await page.getByRole('button',{name:'Advanced',exact:true}).click();
+ await page.getByRole('button',{name:/^Computer access/}).click();
  await expect(page.getByRole('button',{name:'Choose screen source',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
