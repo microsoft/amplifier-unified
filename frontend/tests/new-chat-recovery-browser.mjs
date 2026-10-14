@@ -3,7 +3,7 @@ import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
-import {shellFor} from './shell-host.mjs';
+import {createShellHttpFixture} from './shell-http-fixture.mjs';
 
 let state={revision:1,settings:{workspace:'/existing'},runtime:{available:true},view:{navPinned:true,setupJourney:'done',newSessionDraft:{workspace:'/missing'}},
  sessions:[{id:'old',title:'Previous conversation',sessionKind:'root',workspace:'/existing',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],
@@ -11,8 +11,9 @@ let state={revision:1,settings:{workspace:'/existing'},runtime:{available:true},
  setup:{providers:[{id:'fixture',module:'provider-fixture',config:{model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/existing'},
  registeredBundles:[{value:'work',label:'Work'}],draftDefaults:Object.fromEntries(['/missing','/existing'].map(workspace=>[JSON.stringify([workspace,'']),{phase:'ready',bundle:'work',effective:{instance:'fixture',model:'fixture-model'},providers:[{id:'fixture'}]}])),canvas:{open:false}};
 const calls=[],workers=[],folders=[],errors=[];let browser,vite,page;
+const shell=createShellHttpFixture(()=>state);
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
-const reply=(route,extra={})=>{state.revision++;return route.fulfill({json:{accepted:true,state,...extra}})};
+const reply=(route,extra={})=>{state.revision++;return route.fulfill({json:{accepted:true,state:shell.state(),...extra}})};
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{ }),...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
@@ -24,8 +25,9 @@ try{
  });
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
-  if(path==='/api/state')return route.fulfill({json:state});
-  if(path==='/api/shell')return route.fulfill({json:shellFor(state,()=>{}).data});
+  const shellResponse=shell.response(route.request());
+  if(shellResponse!==undefined)return route.fulfill({json:shellResponse});
+  if(path==='/api/state')return route.fulfill({json:shell.state()});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
   const original=route.request().postDataJSON();calls.push(original);

@@ -351,21 +351,41 @@ async def test_workspace_preferences_do_not_evict_other_clients_or_stale_on_file
     assert len(reads) == 3
 
 
-async def test_shell_key_tracks_offpage_navigation_not_unrelated_progress(app_factory):
+def register_shell_resources(app):
+    from amplifier_web.shell_resources import scope_for
+    app.shell.resources.register('client-0', 1, ['chatNavigation'], scope_for(app.state))
+
+
+def chat_resource(frame):
+    return frame['shellResources']['instances']['chats']['resources']['chatNavigation']
+
+
+async def test_shell_resources_track_offpage_navigation_not_unrelated_progress(app_factory):
     app, rows = fixture(app_factory)
     with app.clients.bind('client-0'):
-        original = app.browser_state()['shellDataKey']
+        register_shell_resources(app)
+        original = app.browser_state()
+        visible = {row['id'] for row in chat_resource(original)['value']['chatNavigation']['items']}
+        target = next(row for row in reversed(rows[:1000])
+                      if row['workspaceId'] == rows[0]['workspaceId'] and row['id'] not in visible)
         rows[0]['streaming'] = 'A delta with unchanged navigation facts'
         app.state['diagnostics']['local']['sampleCount'] = 42
         app._publish()
-        assert app.browser_state()['shellDataKey'] == original
-        rows[900]['title'] = 'Renamed off page'
+        assert app.browser_state()['shellResources'] == original['shellResources']
+        target['title'] = 'Renamed off page'
         app._publish()
-        changed = app.browser_state()['shellDataKey']
-        assert changed != original
-        rows[900]['approvals'] = [{'id': 'permission', 'status': 'pending'}]
+        # Descriptor identity stays stable; a newly requested filtered page
+        # must still observe a change outside the previous bounded page.
+        await app.dispatch('shell.view.update', {'clientId':'client-0', 'instanceId':'chats',
+                           'patch':{'navFilter':'Renamed off page'}})
+        changed = app.browser_state()
+        assert changed['shellBootstrapKey'] == original['shellBootstrapKey']
+        assert [row['id'] for row in chat_resource(changed)['value']['chatNavigation']['items']] == [target['id']]
+        target['approvals'] = [{'id': 'permission', 'status': 'pending'}]
         app._save()
-        assert app.browser_state()['shellDataKey'] != changed
+        latest = app.browser_state()
+        assert chat_resource(latest)['revision'] > chat_resource(changed)['revision']
+        assert chat_resource(latest)['value'] != chat_resource(changed)['value']
 
 
 async def test_cached_browser_and_uncached_agent_navigation_share_attention_filters(app_factory):
@@ -384,17 +404,23 @@ async def test_cached_browser_and_uncached_agent_navigation_share_attention_filt
 async def test_ordinary_snapshots_repair_a_dropped_shell_invalidation(app_factory):
     app, _ = fixture(app_factory, count=20)
     with app.clients.bind('client-0'):
+        register_shell_resources(app)
         queue = app.subscribe()
         first = app.browser_state()
         await app.dispatch('shell.view.update', {'clientId': 'client-0', 'instanceId': 'chats', 'patch': {'navFilter': 'changed'}})
         immediate = app.browser_state()
-        assert immediate['shellChangeToken'] != first['shellChangeToken']
-        assert immediate['shellDataKey'] == first['shellDataKey']
+        context = immediate['shellResources']['instances']['chats']['resources']['context']
+        assert context['value']['view']['navFilter'] == 'changed'
+        assert context['value']['viewRevision'] > first['shellResources']['instances']['chats']['resources']['context']['value']['viewRevision']
+        assert immediate['shellBootstrapKey'] == first['shellBootstrapKey']
+        assert chat_resource(immediate)['value']['chatNavigation']['total'] == 0
         for _ in range(4):
             app._publish()
         frames = [queue.get_nowait() for _ in range(4)]
         assert all('shellClientId' not in frame for frame in frames)
-        assert all(frame['shellChangeToken'] == immediate['shellChangeToken'] for frame in frames)
+        assert all(frame['shellResources'] == immediate['shellResources'] for frame in frames)
+        assert all(frame['shellResources']['demandId'] == 1 for frame in frames)
+        app.unsubscribe(queue)
 
 
 def test_shared_workspace_index_preserves_duplicate_registration_selection():
@@ -467,6 +493,7 @@ async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_row
         return original(*args, **kwargs)
     monkeypatch.setattr(app.directory, 'chats', counted)
     with app.clients.bind('client-0'):
+        register_shell_resources(app)
         first = app.browser_state()
         navigation = app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)})
         builds.clear()
@@ -476,7 +503,7 @@ async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_row
             app._publish()
             current = app.browser_state()
             assert 'chatNavigation' not in current
-            assert current['shellDataKey'] == first['shellDataKey']
+            assert current['shellResources'] == first['shellResources']
             assert app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)}) == navigation
             assert current['revision'] > first['revision']
         assert builds == []
@@ -488,7 +515,12 @@ async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_row
         app.browser_state()
         assert builds == []
         replacement.update(title='Changed off page', status='working')
+        saved_revision = app.state['revision']
         app._save()  # No revision change: still must invalidate all queries.
+        fresh = app.browser_state()
+        assert fresh['revision'] == saved_revision
+        assert chat_resource(fresh)['revision'] > chat_resource(first)['revision']
+        assert chat_resource(fresh)['value']['chatNavigation']['activityCounts']['working'] == 1
         app.state['view']['navFilter'] = 'Changed off page'
         changed = app.browser_state()
         assert 'chatNavigation' not in changed
