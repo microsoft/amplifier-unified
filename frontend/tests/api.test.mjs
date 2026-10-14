@@ -44,11 +44,11 @@ test('publishing rejection preserves authoritative unknown receipt even on HTTP4
 });
 
 test('visible view recognizes the WCO display mode as installed',()=>{
- const values={window:{matchMedia:query=>({matches:query==='(display-mode: window-controls-overlay)'}),getSelection:()=>null},navigator:{onLine:true},document:{},innerWidth:1000,innerHeight:800,scrollX:0,scrollY:0,location:{pathname:'/'}};
+ const values={window:{matchMedia:query=>({matches:query==='(display-mode: window-controls-overlay)'}),getSelection:()=>null},navigator:{onLine:true},document:{createTreeWalker:()=>({nextNode:()=>null})},NodeFilter:{SHOW_ELEMENT:1,SHOW_TEXT:4},innerWidth:1000,innerHeight:800,scrollX:0,scrollY:0,location:{pathname:'/'}};
  const descriptors=Object.fromEntries(Object.keys(values).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
  try{
   for(const [key,value] of Object.entries(values))Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
-  const root={querySelectorAll:()=>[],querySelector:()=>null,innerText:''};
+  const root={closest:()=>null,querySelectorAll:()=>[],querySelector:()=>null,innerText:''};
   assert.equal(visibleView(root,'test-client').webApp.standalone,true);
   window.matchMedia=()=>({matches:false});
   assert.equal(visibleView(root,'test-client').webApp.standalone,false);

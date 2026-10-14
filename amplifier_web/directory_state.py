@@ -24,7 +24,7 @@ def _count(directory, where='1', params=()):
                                 (*bound, *params)).fetchone()[0]
 
 
-def _owner(directory, metadata, state):
+def _owner(directory, metadata, state, session_id=None):
     from .cold_display import detached
     service = directory.service
     resident = next((row for row in service._state['sessions'] if row['id'] == metadata['id']), None)
@@ -41,6 +41,9 @@ def _owner(directory, metadata, state):
             hydrate(service.data_dir, context, directory.db)
             row = context['sessions'][0]
             row.update(metadata)
+    if session_id is not None:
+        from .agent_private_state import session
+        return session(row)
     client = service.clients.records.get(state.get('client', {}).get('id'))
     if client is not None:
         row['draft'] = client.get('drafts', {}).get(row['id'], '')
@@ -61,7 +64,7 @@ def _overview(directory, state, session_id):
     selected_rows = _ranked(directory, 'id=?', (selected,), limit=1)
     # Build the existing caller-scoped overview from one owner, then attach
     # SQL-paged metadata. Its pointers keep the complete catalog's ordinals.
-    owner = _owner(directory, selected_rows[0][1], state) if selected_rows else None
+    owner = _owner(directory, selected_rows[0][1], state, session_id) if selected_rows else None
     result = overview({**state, 'sessions': [owner] if owner is not None else []}, selected,
                       positions={selected: selected_rows[0][0]} if selected_rows else {})
     result['conversations'] = [{'id': row['id'], 'title': row.get('title'), 'status': row.get('status'),
@@ -77,7 +80,7 @@ def _overview(directory, state, session_id):
     return result
 
 
-def _sessions(directory, state, args, resolve, reference_key):
+def _sessions(directory, state, args, resolve, reference_key, session_id):
     from .agent_state import read_state, _preview, _size
     path = args['path']
     tokens = path.split('/')[1:]
@@ -87,7 +90,7 @@ def _sessions(directory, state, args, resolve, reference_key):
         for position, metadata in _ranked(directory, limit=limit, offset=offset):
             pointer = '/sessions/' + str(position)
             item = {'key': position, 'path': pointer,
-                    'value': _preview(_owner(directory, metadata, state), pointer, 2500, reference_key=reference_key)}
+                    'value': _preview(_owner(directory, metadata, state, session_id), pointer, 2500, reference_key=reference_key)}
             size = _size(item)
             if items and used + size > 24000:
                 break
@@ -107,11 +110,11 @@ def _sessions(directory, state, args, resolve, reference_key):
         raise ValueError('That state path does not exist.')
     # A one-key mapping resolves this exact pointer without allocating a sparse
     # list or rewriting any paths inside user-provided JSON values.
-    return read_state({**state, 'sessions': {tokens[1]: _owner(directory, rows[0][1], state)}},
-                      args, resolve=resolve, reference_key=reference_key)
+    return read_state({**state, 'sessions': {tokens[1]: _owner(directory, rows[0][1], state, session_id)}},
+                      args, session_id=session_id, resolve=resolve, reference_key=reference_key)
 
 
-def _runtime(directory, state, args, resolve, reference_key):
+def _runtime(directory, state, args, resolve, reference_key, session_id):
     from .agent_state import read_state
     from .cold_display import ColdRecord, detached
     controls = directory.service._state.get('runtimeControl', {})
@@ -135,7 +138,7 @@ def _runtime(directory, state, args, resolve, reference_key):
             if value is not None:
                 values[identity] = ColdRecord(value, directory.db)
     result = read_state({**state, 'runtimeControl': values}, {**args, **({'offset': 0} if path == '/runtimeControl' else {})},
-                        resolve=resolve, reference_key=reference_key)
+                        session_id=session_id, resolve=resolve, reference_key=reference_key)
     if path == '/runtimeControl':
         end = offset + len(result['items'])
         result.update(offset=offset, total=total, nextOffset=end if end < total else None)
@@ -149,9 +152,9 @@ def _read(directory, state, args, *, session_id=None, resolve=None, reference_ke
     if not isinstance(path, str):
         return False, None
     if path == '/sessions' or path.startswith('/sessions/'):
-        return True, _sessions(directory, state, args, resolve, reference_key)
+        return True, _sessions(directory, state, args, resolve, reference_key, session_id)
     if path == '/runtimeControl' or path.startswith('/runtimeControl/'):
-        return True, _runtime(directory, state, args, resolve, reference_key)
+        return True, _runtime(directory, state, args, resolve, reference_key, session_id)
     if path == '':
         # A root page advertises the complete catalog, not just its residents.
         from .agent_state import read_state

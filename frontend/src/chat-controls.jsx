@@ -8,7 +8,7 @@ import {useComposerPopover} from './composer-popover';
 import {providerOptions} from './provider-options';
 import {useDraftDiscovery} from './use-draft-discovery';
 const EMPTY={};
-export function AttachmentStrip({items=[],remove,act,sessionId}){
+export function AttachmentStrip({items=[],remove,act,sessionId,privateDraft=false}){
  const [error,setError]=useState(''),[pending,setPending]=useState(null);
  async function preview(file){
   if(pending)return;setPending(file.id);setError('');
@@ -17,7 +17,7 @@ export function AttachmentStrip({items=[],remove,act,sessionId}){
   finally{setPending(null)}
  }
  if(!items.length)return null;
- return <div className="a-attachments">{items.map(file=><div className="a-attachment" key={file.id}>{file.mime?.startsWith('image/')?<a href={file.url} target="_blank" rel="noopener noreferrer"><img src={file.url} alt={file.name}/></a>:<Paperclip/>}{act&&sessionId&&file.mime==='text/plain'&&file.size<=1000000?<button type="button" className="a-link" disabled={!!pending} data-action="canvas.openAttachment" onClick={()=>preview(file)}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{file.source==='clipboard-text'?'Pasted text · ':''}{Math.ceil(file.size/1024)} KB</small></a>}{act&&sessionId&&<a href={file.url} download={file.name} aria-label={"Download "+file.name}><Download size={14}/></a>}{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}{error&&<span role="alert">{error}</span>}</div>;
+ return <div className="a-attachments" data-private={privateDraft||undefined}>{items.map(file=><div className="a-attachment" key={file.id}>{file.mime?.startsWith('image/')?<a href={file.url} target="_blank" rel="noopener noreferrer"><img src={file.url} alt={file.name}/></a>:<Paperclip/>}{act&&sessionId&&file.mime==='text/plain'&&file.size<=1000000?<button type="button" className="a-link" disabled={!!pending} data-action="canvas.openAttachment" onClick={()=>preview(file)}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{file.source==='clipboard-text'?'Pasted text · ':''}{Math.ceil(file.size/1024)} KB</small></a>}{act&&sessionId&&<a href={file.url} download={file.name} aria-label={"Download "+file.name}><Download size={14}/></a>}{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}{error&&<span role="alert">{error}</span>}</div>;
 }
 function configuredEffort(row,model){
  const field=providerFields(row,{model,default_model:model}).find(field=>field.id==='reasoning_effort');

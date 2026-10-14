@@ -78,6 +78,12 @@ async def main():
             def lifecycle(self,event):self.observer.lifecycle(event)
         async def control(request):
             args=await request.json(); op=args.get('op')
+            if op == 'agent-bridge':
+                try:
+                    result = await service.app_bridge(args['operation'], args.get('args', {}), args['sessionId'])
+                    return web.json_response(result)
+                except ValueError as error:
+                    return web.json_response({'error': str(error)}, status=400)
             if op=='setup':
                 write_private(temp/'native'/'settings.yaml',yaml.safe_dump(provider_settings if args.get('connected') else {'config':{'providers':[]}}))
                 manager=SetupManager(temp/'app')

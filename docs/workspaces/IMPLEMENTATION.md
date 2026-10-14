@@ -467,6 +467,26 @@ including an acknowledgment lost after commit, retain the original outcome.
 The browser preserves unsent text and retry identity through navigation, stale
 saves and reload, with the optional form under progressive disclosure.
 
+Ordinary `app_control` state readback excludes private composer text, unfinished
+message edits and pending attachments, including parent/root pointers, resident
+and dormant session aliases, unrelated dispatch readback and rendered browser
+observations. Device observations require the selected caller client and its
+reported conversation to match. Only a user-requested, exact `/view/draft` or
+`/view/messageEdit` read with an explicit `clientId` displaying the calling chat
+opts into that editor; it does not expose untargeted clients or another chat's input. The latter editor must also belong to the calling chat. Browser report
+text, controls, labels and selected ranges exclude private subtrees, including
+the local state debugger. Public controls and selection remain inspectable.
+
+This is a model projection over the existing private UI owner; it does not move
+all draft storage to the browser, introduce a separate approval system, or change
+the established nonsecret Settings/feedback editor contracts. Explicit draft
+mutations such as `canvas.reference` retain their targeted results and revision
+checks. Focused service/directory tests cover client selection, pointer aliases,
+lazy owner preservation and positive explicit reads. The production browser
+journey verifies served asset bytes, independent same-chat drafts, private DOM
+and selection exclusion and reload preservation using a synthetic runtime;
+it does not claim real-provider or deployed acceptance.
+
 A real native-loop probe exposed accumulation of hook observations within one
 turn despite their ephemeral designation. Dynamic coordination references now
 use the existing fitted provider-delivery boundary. Both native reminder modes

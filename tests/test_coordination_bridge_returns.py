@@ -433,7 +433,11 @@ async def test_noncoordination_bridge_ui_and_explicit_state_keep_existing_contra
     assert response["state"] == explicit
     assert explicit["session"]["id"] == source["id"] and explicit["session"]["pinned"]
     assert "conversations" in explicit and "sections" in explicit["_stateAccess"]
-    pointer = await app.app_bridge("get_state", {"path": "/view/draft"}, source["id"])
+    assert "Private unsent draft" not in json.dumps(explicit)
+    with pytest.raises(ValueError, match="explicit clientId"):
+        await app.app_bridge("get_state", {"path": "/view/draft"}, source["id"])
+    app.clients.attach("draft-browser")
+    pointer = await app.app_bridge("get_state", {"path": "/view/draft", "clientId": "draft-browser"}, source["id"])
     assert pointer["value"] == "Private unsent draft"
     ui = await app.dispatch("session.pin", {"id": source["id"], "pinned": False},
                             origin="ui", command_id="ui-pin")
