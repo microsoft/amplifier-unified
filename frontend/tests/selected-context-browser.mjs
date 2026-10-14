@@ -13,7 +13,8 @@ const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-selected-context
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  ['-u',root+'tests/fixtures/chat_library_server.py'],{stdio:['ignore','pipe','pipe']});
 let browser,page,primaryError,stderr='';
-const checks=[],errors=[];
+const checks=[],errors=[],canvasChecks=[];
+const captureCanvas=async step=>{if(!page)return;canvasChecks.push({step,...await page.evaluate(()=>{const state=window.amplifier.getState(),canvas=state.canvas||{},frame=document.querySelector('[data-canvas-view="primary"] .a-canvas-html');return {sameFrame:window.selectedContextFrame===frame,framePresent:!!frame,frameSrc:frame?.getAttribute('src'),id:canvas.id,kind:canvas.kind,preview:canvas.renderReports?.preview,views:(state.canvasWorkspace?.views||[]).map(({viewId,resourceId,resourceRevision,generation,activation})=>({viewId,resourceId,resourceRevision,generation,activation}))}}),inputValue:await page.frameLocator('[data-canvas-view="primary"] .a-canvas-html').getByRole('textbox').inputValue({timeout:1000}).catch(error=>error.message.slice(0,200))})};
 fixture.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-16384)});
 function contextShape(state,children=false){
  assert.deepEqual(state.browserResources,children?['selectedContext','subagentNavigation']:['selectedContext']);
@@ -48,25 +49,26 @@ try{
  checks.push({ordinaryContext:true,subagentCount:selected.subagentCount,rootCount:initial.rootCount,sessionCount:first.sessions.length});
  await composer.fill('Keep my selected-context draft');
  await act('canvas.show',{kind:'html',title:'Selected context canvas',content:'<input aria-label="Local canvas draft">'});
- await page.frameLocator('.a-canvas-html').getByRole('textbox').fill('Preserved local Canvas input');
- await page.evaluate(()=>{window.selectedContextFrame=document.querySelector('.a-canvas-html')});
+ await page.frameLocator('[data-canvas-view="primary"] .a-canvas-html').getByRole('textbox').fill('Preserved local Canvas input');
+ await page.evaluate(()=>{window.selectedContextFrame=document.querySelector('[data-canvas-view="primary"] .a-canvas-html')});
+ await captureCanvas('baseline');
  const open=()=>act('view.update',{patch:{panel:'subagent-history',subagentHistory:{sessionId:parent,filter:'',index:0}}});
  await open();
  const dialog=page.getByRole('dialog',{name:'Subagent history',exact:true});await expect(dialog).toBeVisible();
- let value=await coverage(true);
+ let value=await coverage(true);await captureCanvas('dialog open');
  assert.deepEqual(value.subagentNavigation.scope,{sessionId:parent,filter:'',index:0});
  assert.equal(value.subagentNavigation.total,1);assert.equal(value.subagentNavigation.unfilteredTotal,1);
  await expect(dialog.getByRole('button',{name:'Hidden worker',exact:true})).toBeVisible();
  await dialog.getByRole('searchbox',{name:'Find subagent conversations',exact:true}).fill('does not exist');
  await expect(dialog.getByText('No matching subagent conversations.',{exact:true})).toBeVisible();
- value=await coverage(true);assert.equal(value.subagentNavigation.scope.filter,'does not exist');assert.equal(value.subagentNavigation.total,0);
+ value=await coverage(true);await captureCanvas('empty filter');assert.equal(value.subagentNavigation.scope.filter,'does not exist');assert.equal(value.subagentNavigation.total,0);
  await dialog.getByRole('searchbox',{name:'Find subagent conversations',exact:true}).fill('Hidden');
  await expect(dialog.getByRole('button',{name:'Hidden worker',exact:true})).toBeVisible();
- value=await coverage(true);assert.equal(value.subagentNavigation.scope.filter,'Hidden');
- await dialog.getByRole('button',{name:'Close panel',exact:true}).click();await expect(dialog).toHaveCount(0);await coverage(false);
+ value=await coverage(true);await captureCanvas('matching filter');assert.equal(value.subagentNavigation.scope.filter,'Hidden');
+ await dialog.getByRole('button',{name:'Close panel',exact:true}).click();await expect(dialog).toHaveCount(0);await coverage(false);await captureCanvas('dialog closed');
  await expect(composer).toHaveDraft('Keep my selected-context draft');
- assert.equal(await page.evaluate(()=>window.selectedContextFrame===document.querySelector('.a-canvas-html')),true);
- await expect(page.frameLocator('.a-canvas-html').getByRole('textbox')).toHaveValue('Preserved local Canvas input');
+ assert.equal(await page.evaluate(()=>window.selectedContextFrame===document.querySelector('[data-canvas-view="primary"] .a-canvas-html')),true);
+ await expect(page.frameLocator('[data-canvas-view="primary"] .a-canvas-html').getByRole('textbox')).toHaveValue('Preserved local Canvas input');
  checks.push({childPageOnlyInDialog:true,filterResultsAuthoritative:true,draftAndCanvasPreserved:true});
  await open();await expect(dialog.getByRole('button',{name:'Hidden worker',exact:true})).toBeVisible();
  const child=(await state()).subagentNavigation.items[0].id;
@@ -87,5 +89,5 @@ finally{
  try{await browser?.close()}catch(error){cleanupErrors.push(String(error));console.error('Browser cleanup failed',error)}
  try{if(fixture.exitCode===null&&fixture.signalCode===null){fixture.kill('SIGTERM');await new Promise(resolve=>{const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},5000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})})}}catch(error){cleanupErrors.push(String(error));console.error('Fixture cleanup failed',error)}
  if(cleanupErrors.length&&!primaryError)process.exitCode=1;
- await writeFile(path.join(output,'selected-context.json'),JSON.stringify({passed:!primaryError&&!cleanupErrors.length,checks,pageErrors:errors,error:primaryError?.stack,cleanupErrors,fixturePid:fixture.pid,fixtureStderr:stderr},null,2)).catch(error=>{console.error('Evidence write failed',error);if(!primaryError)process.exitCode=1});
+ await writeFile(path.join(output,'selected-context.json'),JSON.stringify({passed:!primaryError&&!cleanupErrors.length,checks,canvasChecks,pageErrors:errors,error:primaryError?.stack,cleanupErrors,fixturePid:fixture.pid,fixtureStderr:stderr},null,2)).catch(error=>{console.error('Evidence write failed',error);if(!primaryError)process.exitCode=1});
 }
