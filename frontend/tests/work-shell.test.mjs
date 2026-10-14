@@ -117,6 +117,32 @@ test('mismatched bounded search scope stays pending instead of using a local fal
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
  assert.match(main,/Searching…/);assert.doesNotMatch(main,/Research ideas/);
 });
+test('hidden main browser leaves controllers and saved edits intact without reading chat pages',()=>{
+ const current={...snapshot,view:{workspaceDraft:{mode:'rename',id:'b',name:'Keep this edit'}}};
+ Object.defineProperty(current,'sidebarNavigation',{enumerable:true,get(){throw Error('Hidden chat page read');}});
+ const scopedHost={...host,getSnapshot:()=>current};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chat'}},act:host.dispatch})));
+ assert.match(main,/hidden=""/);assert.match(main,/Keep this edit/);
+ assert.doesNotMatch(main,/a-work-browser-heading|aria-label="Search chats"|workspace-resources/);
+ assert.equal(current.view.workspaceDraft.name,'Keep this edit');
+});
+test('workspace details do not compute the hidden chat page',()=>{
+ const current={...snapshot};
+ Object.defineProperty(current,'sidebarNavigation',{enumerable:true,get(){throw Error('Hidden workspace chat page read');}});
+ const scopedHost={...host,getSnapshot:()=>current};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'details'},workspaces:[workspace]},act:host.dispatch})));
+ assert.match(main,/Rename workspace/);assert.doesNotMatch(main,/Research ideas/);
+});
+test('omitted scoped workspace page displays loading instead of a false empty result',()=>{
+ const current={...snapshot,navigationResources:['pinnedNavigation','recentNavigation','workspaceShortcuts']};
+ delete current.workspaceExplorer;
+ const scopedHost={...host,getSnapshot:()=>current};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'workspaces'}},act:host.dispatch})));
+ assert.match(main,/Loading workspaces…/);assert.doesNotMatch(main,/Create a workspace to start a chat/);
+});
 test('workspace shortcut browses without changing execution scope',async()=>{
  const calls=[],selects=[];let root;
  await act(async()=>{root=create(React.createElement(WorkspaceExplorer,{state:snapshot,compact:true,act:async(...args)=>calls.push(args),onSelect:row=>selects.push(row.workspaceId)}))});
