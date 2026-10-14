@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.144",
+      "title": "Stream only the navigation sections you need",
+      "changes": [
+        "Navigation receives changed sections over the existing browser connection instead of repeatedly fetching the complete shell. Unrelated chat events no longer rebuild unchanged navigation pages.",
+        "Opening or closing a navigation surface changes only its requested pages. Late responses and reconnects preserve newer page choices, independent windows, drafts and Canvas input.",
+        "Shell diagnostics record bounded request reasons and timings without conversation content. Selected work-history reconstruction remains a separate performance investigation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.143",
       "title": "Build only the selected chat context",
       "changes": [

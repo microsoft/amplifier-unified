@@ -131,13 +131,19 @@ async def test_all_chats_and_managed_filter_are_authoritative(app):
     workspace = (await command(app, 'web', 'session.create', {'title': 'Project chat'}))['sessionId']
     managed = (await command(app, 'web', 'session.create', {'title': 'Managed chat', 'location': {'kind': 'managed'}}))['sessionId']
     await command(app, 'web', 'view.update', {'patch': {'navChatScope': 'all', 'navLocationFilter': 'all'}})
-    state = snapshot(app, 'web'); page = state['chatNavigation']
+    state = snapshot(app, 'web')
+    assert 'chatNavigation' not in state
+    assert {row['id'] for row in state['sessions']} == {managed}
+    with app.clients.bind('web'):
+        page = app.projections.chats(app.state)
     assert {r['id'] for r in page['items']} == {workspace, managed}
     row = next(r for r in page['items'] if r['id'] == managed)
     assert row['workspaceId'] is None and row['workspaceLabel'] == 'No workspace'
     await command(app, 'web', 'view.update', {'patch': {'navLocationFilter': 'managed'}})
-    assert [r['id'] for r in snapshot(app, 'web')['chatNavigation']['items']] == [managed]
-    assert snapshot(app, 'web')['chatNavigation']['scope']['locationFilter'] == 'managed'
+    with app.clients.bind('web'):
+        filtered = app.projections.chats(app.state)
+    assert [r['id'] for r in filtered['items']] == [managed]
+    assert filtered['scope']['locationFilter'] == 'managed'
     await command(app, 'agent', 'view.update', {'patch': {'navChatScope': 'all'}})
     assert len(snapshot(app, 'agent')['chatNavigation']['items']) == 2
 

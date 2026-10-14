@@ -17,8 +17,11 @@ try{
  const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const inspect=()=>action('shell.inspect',{clientId}).then(row=>row.result);
+ const openPreferences=async()=>{await page.locator('[data-settings-section="advanced"]').click();await page.locator('[data-settings-destination="shell:preferences"]').click()};
  const change=async composition=>{const current=await inspect();const prepared=await action('shell.changes.prepare',{clientId,expectedRevision:current.revision,composition});return {clientId,expectedRevision:current.revision,changeId:prepared.result.id}};
  await action('session.create',{title:'Component acceptance'});
+ // App status/actions belong to the navigation footer in the current shell.
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await action('canvas.show',{kind:'html',title:'Keep this viewer',content:'<h1>Persistent view</h1><input aria-label="Viewer note" value="Preserved"/>'});
  await page.locator('.a-canvas-viewer iframe').waitFor();
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Draft survives contribution changes');
@@ -43,7 +46,7 @@ try{
  await controls.getByRole('button',{name:'Toggle compact spacing'}).click();
  await expect(page.locator('#amp-one')).toHaveAttribute('data-density','compact');
  await page.getByRole('button',{name:'Settings',exact:true}).click();
- await page.locator('[data-settings-section="shell:preferences"]').click();
+ await openPreferences();
  const editor=page.locator('[data-shell-component="preferences"]');
  await editor.getByLabel('Component note').fill('Keep this unfinished edit');
  await expect.poll(async()=>((await inspect()).views.preferences||{}).dirty).toBe(true);
@@ -65,7 +68,7 @@ try{
  await expect.poll(async()=>(await inspect()).reported?.instances?.preferences).toBe('inactive');
  assert.equal((await inspect()).reported.status,'incomplete');
  await page.getByRole('button',{name:'Settings',exact:true}).click();
- await page.locator('[data-settings-section="shell:preferences"]').click();
+ await openPreferences();
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
  await expect.poll(async()=>(await inspect()).reported?.status).toBe('ready');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
@@ -74,10 +77,11 @@ try{
  const output=root+'output/shell-components-proof/';await mkdir(output,{recursive:true});await page.screenshot({path:output+'contributions.png'});
  for(const width of [320,390,600,760]){
   await page.setViewportSize({width,height:844});
-  await expect.poll(()=>page.locator('.a-top').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  if(!await page.locator('#workspace-navigation').isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+  await expect.poll(()=>page.locator('.a-work-footer').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
  }
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:output+'mobile-contributions.png'});
- assert.ok(await page.locator('.a-top').evaluate(el=>el.scrollWidth<=el.clientWidth),'Header contributions fit a narrow viewport');
+ assert.ok(await page.locator('.a-work-footer').evaluate(el=>el.scrollWidth<=el.clientWidth),'Navigation footer contributions fit a narrow viewport');
  const additional=page.getByRole('button',{name:'Additional controls',exact:true});await additional.click();
  await expect(controls.getByRole('button',{name:'Toggle compact spacing'})).toBeVisible();
  await controls.getByRole('button',{name:'Toggle compact spacing'}).click();
@@ -94,9 +98,11 @@ try{
  const settings=page.locator('.a-settings-experience');
  await expect(settings).toHaveAttribute('data-settings-route','shell:preferences');
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
+ await page.getByRole('button',{name:'Back to Advanced',exact:true}).click();
+ await expect(settings).toHaveAttribute('data-settings-route','advanced');
  await page.getByRole('button',{name:'Back to Settings',exact:true}).click();
  await expect(settings).toHaveAttribute('data-settings-route','index');
- await page.locator('[data-settings-section="shell:preferences"]').click();
+ await openPreferences();
  await expect(settings).toHaveAttribute('data-settings-route','shell:preferences');
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
  await page.getByRole('button',{name:'Close settings',exact:true}).click();await expect(settings).toHaveCount(0);
@@ -108,7 +114,7 @@ try{
  await action('shell.changes.apply',await change(updated));
  await assert.rejects(()=>action('shell.command',{clientId,instanceId:'extra-actions',generation:old.generation,action:'panel.open',args:{panel:'settings'}}),/replaced/);
  await page.reload();await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
- await page.getByRole('button',{name:'Settings',exact:true}).click();await page.locator('[data-settings-section="shell:preferences"]').click();
+ await page.getByRole('button',{name:'Settings',exact:true}).click();await openPreferences();
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  // Reload attaches a fresh client while cloning this composition and view state.

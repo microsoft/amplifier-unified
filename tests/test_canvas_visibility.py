@@ -98,12 +98,15 @@ async def test_visibility_uses_cached_catalog_projection_and_rolls_back_failed_s
     await command(app, 'canvas.show', {'kind': 'text', 'content': 'Cached'})
     with app.clients.bind('one'):
         before = app.browser_state()
+        page = app.projections.chats(app.state)
     def forbidden(*args, **kwargs):
         pytest.fail('Cached visibility must not rebuild the chat and workspace catalog')
     with monkeypatch.context() as patch:
         patch.setattr(app, 'state_context', forbidden)
         result = await command(app, 'canvas.visibility', visibility(app, False))
-    assert result['state']['chatNavigation'] is before['chatNavigation']
+    assert 'chatNavigation' not in before and 'chatNavigation' not in result['state']
+    with app.clients.bind('one'):
+        assert app.projections.chats(app.state) is page
     saved = deepcopy(app.clients.records['one'])
     revision = app._state['revision']
     def failed(*args, **kwargs):
