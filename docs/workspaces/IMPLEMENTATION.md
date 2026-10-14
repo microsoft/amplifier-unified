@@ -27,17 +27,21 @@ neither enters saved history. Provider budget checks and normal/streamed
 transport share the same fitted observation. Host read failure reports unknown
 coverage, and auxiliary calls do not request workspace context.
 
-Local qualification: 259 installed-package Python checks pass outside the source
-checkout, including both native reminder modes. Another 77 child authority,
-file and image policy checks pass using the selected native runtime; 115 focused
-source/provider-delivery checks pass with one optional module skip. All 668
+Local qualification: 290 installed-package Python checks pass outside the source
+checkout, including both native reminder modes, with two optional loop-module
+skips. Another 77 child authority/file/image policy checks and 38 image/guidance
+checks pass using the selected native runtime, covering those optional paths.
+The combined source/provider-delivery set has 242 passes and three optional
+runtime skips, covered by the native runs. All 668
 frontend tests pass, the production frontend builds, and the new browser journey
 passes private drafts, overlap, explicit reads, navigation, stale revision,
 reload, lost-response retry, pagination, mobile layout, clearing and idle
 transition. The existing two-peer/two-round coordination browser journey also
 passes; its no-paperwork assertion now excludes the optional collapsed file
 declaration form. Browser activity is scripted and sends no model input. The candidate
-wheel's 290 application/worktree Python files match source bytes.
+wheel's 290 application/worktree Python files and 311 static files match source
+bytes. Selected image evidence remains after general workspace observations;
+adjacent image comparison/selection regressions cover this ordering.
 
 Two bounded two-round checks through a fresh real-provider worker and the
 installed candidate pass. The worker identifies an independent peer from ambient
