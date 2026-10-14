@@ -19,13 +19,17 @@ async def main(home):
     from amplifier_web.server import create_app
     from amplifier_web.service import AppService
     from test_automatic_history import native_session, files_snapshot
+    from amplifier_web.session_files import project_slug
 
     workspace = home / 'workspace'
     source = native_session(workspace, 'restored-chat')
     original = files_snapshot(source)
     previous = AppService(home / 'app', Runtime(), workspace=workspace)
     await previous.history.refresh()
-    sid = next(row['id'] for row in previous.state['sessions'] if row.get('nativeIdentity') == 'restored-chat')
+    # Discovery indexes metadata without admitting every saved conversation.
+    restored = previous.directory.resolve('restored-chat', project_slug(workspace))
+    assert restored is not None and restored['nativeIdentity'] == 'restored-chat'
+    sid = previous._session(restored['id'], hydrate=False)['id']
     previous.clients.attach('previous-browser')
     with previous.clients.bind('previous-browser'):
         previous.state['selectedSessionId'] = sid
