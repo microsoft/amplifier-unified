@@ -247,11 +247,11 @@ class SmartCanvas:
                 async with self.service.lock:
                     try:
                         active, _ = self.binding(args['canvasId'], args.get('expectedRevision'), args if 'viewId' in args else None)
+                        self.local_update(args, active, {'lastOperationId': operation_id})
                     except api.AppError:
                         # The accepted operation still owns its actual outcome.
                         # Detachment never replays work or delivers to another view.
                         return
-                    self.local_update(args, active, {'lastOperationId': operation_id})
                     self.service._publish_smart_tool_update(defer_publish=defer_publish)
             return
         return await manager.command(action, args, operation_id, origin)
@@ -343,10 +343,11 @@ class SmartCanvas:
         else:
             # Keep only transient fields in the actual primary preference.
             # Canonical mcpState continues to own account/config/grant authority.
-            row, preference = self.service.canvas_views.resolve('primary')
-            if row['id'] != canvas['id']:
-                raise api.AppError('This primary tool view changed.', 409)
-            preference.setdefault('mcp', {}).update(copy.deepcopy(update))
+            if self.service.clients.current.get():
+                row, preference = self.service.canvas_views.resolve('primary')
+                if row['id'] != canvas['id']:
+                    raise api.AppError('This primary tool view changed.', 409)
+                preference.setdefault('mcp', {}).update(copy.deepcopy(update))
             canvas['mcp'].update(copy.deepcopy(update))
 
 

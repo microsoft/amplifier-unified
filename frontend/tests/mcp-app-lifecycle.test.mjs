@@ -19,6 +19,33 @@ const response=value=>({ok:true,status:200,text:async()=>JSON.stringify(value)})
 const available={source:'available',status:'ready',message:'Tool view connected',canReconnect:true,bindingRevision:'saved-binding'};
 test.beforeEach(()=>{globalThis.fetch=async path=>{assert.ok(path.endsWith('/status'));return response(available)}});
 
+test('new and legacy launches initialize only through exact saved-result boundary; missing retained results are visible',async()=>{
+ for(const kind of ['new','legacy','missing']){
+  const target={viewId:'inline-saved',resourceId:'saved',resourceRevision:'r1',generation:2};
+  const canvas={...target,id:'saved',open:true,mcp:{operationId:'prior-launch',...(kind==='new'?{savedResult:{$resource:'saved-result'}}:{})}};
+  const paths=[],delivered=[],reports=[];let component;
+  globalThis.fetch=async path=>{
+   paths.push(path);const url=new URL(path,'http://fixture.invalid');
+   for(const [key,value] of Object.entries(target))assert.equal(url.searchParams.get(key),String(value));
+   if(url.pathname.endsWith('/status'))return response(available);
+   assert.equal(url.pathname,'/api/canvas/saved/result');
+   return response({result:kind==='missing'?null:{structuredContent:{saved:'launch'}}});
+  };
+  await act(async()=>{component=create(React.createElement(McpAppViewer,{canvas,act:async(name,args)=>reports.push({name,args})}),{createNodeMock:node=>node.type==='iframe'?{contentWindow:{}}:null})});
+  const bridge=mcpTestBridges.at(-1);bridge.sendToolResult=async result=>delivered.push(result);
+  try{
+   await act(async()=>bridge.oninitialized());
+   assert.equal(paths.filter(path=>new URL(path,'http://fixture.invalid').pathname.endsWith('/result')).length,1);
+   assert.equal(paths.some(path=>path.includes('/operations/')||path.includes('/tools/call')),false);
+   if(kind==='missing'){
+    assert.equal(delivered.length,0);
+    assert.ok(JSON.stringify(component.toJSON()).includes('saved launch result is unavailable'));
+    assert.ok(reports.some(row=>row.args.status==='error'));
+   }else assert.deepEqual(delivered,[{structuredContent:{saved:'launch'}}]);
+  }finally{await act(async()=>component.unmount())}
+ }
+});
+
 test('canvas, Library and document visibility update context without remounting an edited iframe',async()=>{
  const frame={contentWindow:{},draft:'unsaved'},canvas={id:'view',open:true};let component,visible=true;
  const render=()=>React.createElement(McpAppVisibilityProvider,{visible},React.createElement(McpAppViewer,{canvas,act:async()=>({})}));

@@ -84,7 +84,7 @@ export function CanvasAppViewer({canvas,dispatch}){
    if(!sameDefinition(canvas,mounted)&&dirtyRef.current)inlineOwnership.intent(targetOf(canvas),true);
    send();
   }
- },[canvas]);
+ },[canvas,transitioning]);
  useEffect(()=>{
   const epoch=channel.current;
   const timer=setTimeout(()=>{

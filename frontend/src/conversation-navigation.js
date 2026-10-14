@@ -43,7 +43,17 @@ export function createInlineOwnership(){
  };
  const successor=(hold,view)=>view?.viewId===hold.target.viewId&&view.resourceId===hold.target.resourceId&&
   view.publishedVersion===hold.version&&view.followLatest===hold.followLatest&&
-  view.selectedVersion===(hold.followLatest?null:hold.version);
+  view.selectedVersion===(hold.followLatest?null:hold.version)&&
+  Number.isSafeInteger(view.generation)&&view.generation>=hold.target.generation;
+ const confirmCurrent=(hold,state)=>{
+  hold.reconciled=false;delete hold.next;
+  if(!hold.receipt||hold.closed||hold.scope!==scopeOf(state)||hold.sessionId!==state?.selectedSessionId)return false;
+  const view=state?.canvasWorkspace?.views?.find(view=>successor(hold,view)&&
+   view.generation>=hold.receipt.result.generation&&
+   (view.generation!==hold.receipt.result.generation||sameTarget(view,hold.receipt.result)));
+  if(!view)return false;
+  hold.next={...view};hold.reconciled=true;return true;
+ };
  return {
   subscribe(listener){listeners.add(listener);return ()=>listeners.delete(listener)},
   register(state,target,owner){
@@ -85,17 +95,19 @@ export function createInlineOwnership(){
    if(!view||view.dirty||matching(hold.target).some(record=>record.dirty)||!hold.adapter.validate(hold.id,hold.proof))throw Error(inlineEditNotice);
   },
   refuseTransition:releaseTransition,
-  adoptTransition(target,id){
+  adoptTransition(target,id,state){
    const hold=matching(target).find(held)?.transition;
-   if(hold?.id===id&&hold.reconciled)releaseTransition(hold);
+   if(hold&&state)confirmCurrent(hold,state);
+   if(hold?.id===id&&hold.reconciled){const next=hold.next;releaseTransition(hold);return next}
   },
   async completeTransition(hold,receipt,state){
    const next=receipt?.result;
    if(receipt?.accepted!==true||!successor(hold,next))throw Object.assign(Error('The host did not confirm the exact publication view.'),{unconfirmed:true});
-   hold.next={...next};
-   if(state?.canvasWorkspace?.views?.some(view=>sameTarget(view,next))){hold.reconciled=true;return}
-   // Receipt is not successor replication. Keep the old DOM frozen if state
-   // recovery cannot establish the exact successor; no compensating follow.
+   if(hold.receipt&&!sameTarget(hold.receipt.result,next))throw Object.assign(Error('The original version change receipt changed.'),{unconfirmed:true});
+   hold.receipt??=receipt;
+   if(confirmCurrent(hold,state))return;
+   // A confirmed follow may already have advanced again. Only the current
+   // host projection with identical scope/intent can supersede its receipt.
    await new Promise((resolve,reject)=>{
     const done=()=>{clearTimeout(timer);resolve()};
     const timer=setTimeout(()=>{hold.waiters.delete(done);reject(Object.assign(Error('Version change accepted; waiting for its exact view state. Retry the same change to reconcile.'),{unconfirmed:true}))},1800);
@@ -125,6 +137,10 @@ export function createInlineOwnership(){
    return [...mounts].some(record=>protectedRecord(record)&&record.sessionId===owner.sessionId&&record.messageId===owner.messageId&&
     record.version===owner.version&&record.target.resourceId===owner.resourceId);
   },
+  protectsMessage(sessionId,messageId){
+   return [...mounts].some(record=>!record.renderer&&protectedRecord(record)&&
+    record.sessionId===sessionId&&record.messageId===messageId);
+  },
   blocksWindow(sessionId,messages){
    const ids=new Set((messages||[]).map(row=>row.id));
    return [...mounts].some(record=>!record.renderer&&protectedRecord(record)&&(record.sessionId!==sessionId||!ids.has(record.messageId)));
@@ -136,8 +152,8 @@ export function createInlineOwnership(){
     const scopeMatches=record.renderer||record.scope===scopeOf(state)&&
      (state?.selectedSessionId===undefined||record.sessionId===state.selectedSessionId);
     if(scopeMatches&&hold&&views.some(view=>sameTarget(record.target,view)||successor(hold,view))){
-     if(hold.next&&views.some(view=>sameTarget(hold.next,view))){
-      hold.reconciled=true;for(const done of hold.waiters)done();hold.waiters.clear();
+     if(confirmCurrent(hold,state)){
+      for(const done of hold.waiters)done();hold.waiters.clear();
      }
      continue;
     }

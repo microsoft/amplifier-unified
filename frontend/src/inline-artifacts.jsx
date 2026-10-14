@@ -346,11 +346,12 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    loaded.pendingFollow=true;
    const command=followCommand.current,receipt=await run.current(command.action,command.args,{id:command.id});
    if(receipt?.accepted!==true)throw Error(receipt?.error||'The preview version change was not confirmed.');
-   const next=receipt.result;
-   if(next?.viewId!==view.viewId||next.resourceId!==row.id||next.publishedVersion!==version||next.followLatest!==command.args.followLatest||
-    (next.followLatest?next.selectedVersion!==null:next.selectedVersion!==version))throw Error('The host did not return the exact publication view binding.');
+   const confirmed=receipt.result;
+   if(confirmed?.viewId!==view.viewId||confirmed.resourceId!==row.id||confirmed.publishedVersion!==version||confirmed.followLatest!==command.args.followLatest||
+    (confirmed.followLatest?confirmed.selectedVersion!==null:confirmed.selectedVersion!==version))throw Object.assign(Error('The host did not return the exact publication view binding.'),{unconfirmed:true});
+   const next=inlineOwnership.adoptTransition(command.args,command.id,latest.current);
+   if(!next)throw Object.assign(Error('Waiting for the confirmed current publication view.'),{unconfirmed:true});
    followCommand.current=null;
-   inlineOwnership.adoptTransition(command.args,command.id);
    loaded.lifecycle.unregister?.();loaded.lifecycle.view=next;
    const record={...loaded,view:next,canvas:null,bodyBinding:null,seen:false,revoked:false,pendingFollow:false,stateRevision:receipt.stateRevision??receipt.state?.revision};
    owned.current=record;

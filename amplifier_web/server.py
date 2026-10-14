@@ -533,11 +533,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def smart_canvas_saved_result(request):
         target = check_tool_view(request)
-        from .mcp_view_recovery import saved
-        from .state_storage import resource
-        canvas, _ = saved(service, request.match_info['identity'], view_target=target)
-        reference = canvas['mcp'].get('savedResult')
-        return web.json_response({'result': resource(service.db, reference['$resource']) if reference else None}, headers={'Cache-Control': 'no-store'})
+        from .mcp_view_recovery import saved_result
+        return web.json_response({'result': saved_result(service, request.match_info['identity'], target)}, headers={'Cache-Control': 'no-store'})
 
     app.router.add_get('/api/canvas/{identity}/result', smart_canvas_saved_result)
 

@@ -56,6 +56,48 @@ def saved(service, identity, *, require_binding=True, view_target=None):
     return canvas, row
 
 
+def saved_result(service, identity, view_target=None):
+    """Read only the launch result admitted into this exact saved definition."""
+    from .service import AppError
+    from .canvas_versions import definition
+    canvas, row = saved(service, identity, view_target=view_target)
+    row = definition(row, canvas.get('selectedVersion'), service.db)
+    try:
+        binding = resource(service.db, row['mcpState']['$resource'])
+        if not isinstance(binding, dict):
+            raise ValueError('Invalid saved tool binding')
+        if 'savedResult' in binding:
+            reference = binding['savedResult']
+            return resource(service.db, reference['$resource'])
+    except (KeyError, ValueError, TypeError, OSError):
+        raise AppError('The saved launch result is unavailable. No tool work was repeated.', 404) from None
+    operation_id = binding.get('operationId')
+    if not operation_id:
+        return None
+    if any(not isinstance(binding.get(key), str) or not binding[key]
+           for key in ('operationId', 'serverId', 'configuration', 'tool')):
+        raise AppError('The saved launch result is unavailable. No tool work was repeated.', 404)
+    try:
+        operation = service.smart_tools.operation(operation_id)
+    except (KeyError, ValueError, TypeError, OSError):
+        raise AppError('The saved launch result is unavailable. No tool work was repeated.', 404) from None
+    target = operation.get('target', {}) if isinstance(operation, dict) else {}
+    # Match open admission plus the retained launch input. Never authorize an
+    # arbitrary caller-supplied operation or derive authority from an input hash.
+    if (not isinstance(operation, dict) or not isinstance(target, dict)
+            or operation.get('id') != operation_id or operation.get('status') != 'completed'
+            or operation.get('action') != 'smartTools.call'
+            or target.get('id') != binding.get('serverId')
+            or target.get('name') != binding.get('tool')
+            or target.get('sessionId') not in {None, canvas['sessionId']}
+            or operation.get('configuration') != binding.get('configuration')
+            or not isinstance(binding.get('toolArguments'), dict)
+            or operation.get('arguments', {}) != binding.get('toolArguments', {})
+            or 'result' not in operation):
+        raise AppError('The saved launch result is unavailable. No tool work was repeated.', 404)
+    return copy.deepcopy(operation['result'])
+
+
 def source(service, identity, view_target=None):
     from .service import AppError
     canvas, row = saved(service, identity, require_binding=False, view_target=view_target)

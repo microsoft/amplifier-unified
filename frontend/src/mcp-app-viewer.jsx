@@ -168,7 +168,8 @@ export function McpAppViewer({canvas,act,connectionKey}){
     try{
      await bridge.sendToolInput({arguments:canvas.mcp?.toolArguments||{}});
      const operationId=canvas.mcp?.operationId;
-     const result=canvas.mcp?.savedResult?(await request(viewUrl(canvas,'result'),{signal:controller.signal})).result:operationId?(await request(operationUrl(operationId,canvas),{signal:controller.signal})).result:canvas.mcp?.result;
+     const result=canvas.mcp?.savedResult||operationId?(await request(viewUrl(canvas,'result'),{signal:controller.signal})).result:canvas.mcp?.result;
+     if((canvas.mcp?.savedResult||operationId)&&!result)throw Error('The saved launch result is unavailable. No tool work was repeated.');
      assertLive(false);
      if(result)await bridge.sendToolResult(result);
      const availability=connection.current;

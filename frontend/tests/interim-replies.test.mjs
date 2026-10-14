@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {foldInterimRows,interimResponse,interimOpen,groupForMessage,retainInterimIds} from '../src/interim-replies.js';
 import {conversationWorkRows,turnPlacements,combinedWork} from '../src/timeline-data.js';
 import {withArtifactRows} from '../src/artifact-placement.js';
+import {createInlineOwnership} from '../src/conversation-navigation.js';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
 
 const response={version:1,generationId:'g',status:'completed',phase:'interim',finalMessageIds:['final','final-2'],inputIds:['input'],anchorMessageId:'user'};
 const message=(id,extra={})=>({id,role:'assistant',generationId:'g',text:id,...extra});
@@ -69,4 +72,66 @@ test('explicit disclosure choices win; Everything is not a default-open override
  assert.equal(interimOpen(new Set([group.id]),group),true);
  assert.equal(interimOpen(new Set(['turn:input@progress']),group),true);
  assert.equal(interimOpen(new Set(['turn:input@progress','closed:'+group.id]),group),false);
+});
+
+// Exercise the production hook without mounting the app or inventing a second
+// folding algorithm. The browser regression checks actual DOM identity.
+function foldingHook(edits){
+ const source=readFileSync(new URL('../src/interim-replies.jsx',import.meta.url),'utf8');
+ const slots=[],effects=[];let index=0;
+ const hook=runInNewContext(source.slice(source.indexOf('function reading('),source.indexOf('export function ConversationWork('))
+  .replace('export function useInterimReplies','function useInterimReplies')+';useInterimReplies',{
+   inlineOwnership:edits,foldInterimRows,groupForMessage,interimResponse,interimOpen,retainInterimIds,
+   useRef:value=>{const key=index++;return slots[key]??= {current:value}},
+   useState:value=>{const key=index++;if(!(key in slots))slots[key]=value;return [slots[key],next=>{slots[key]=typeof next==='function'?next(slots[key]):next}]},
+   useMemo:fn=>fn(),useCallback:fn=>fn,
+   useLayoutEffect:(fn,deps)=>{
+    const key=index++,old=slots[key];
+    if(!old||deps.some((value,i)=>value!==old.deps[i]))effects.push(()=>{old?.cleanup?.();slots[key]={deps,cleanup:fn()}});
+   }
+  });
+ return {render(rows,data,enabled=true){index=0;const value=hook(rows,data,enabled,'chat',{current:null},[],async()=>{});
+  while(effects.length)effects.shift()();return value.rows},
+  dispose(){for(const slot of slots)slot?.cleanup?.()}};
+}
+
+test('real hook defers only protected publication grouping, keeps fresh rows, and allows clean fold/unfold',async()=>{
+ const edits=createInlineOwnership(),hook=foldingHook(edits),{rows,data}=fixture();
+ const target={viewId:'inline',resourceId:'app',resourceRevision:'r1',generation:1};
+ const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'chat',canvasWorkspace:{views:[target]}};
+ const unregister=edits.register(scope,target,{sessionId:'chat',messageId:'progress',version:1});
+ const initial=rows.map(row=>row.message?{...row,message:{...row.message,response:undefined}}:row);
+ try{
+  hook.render(initial,data);edits.intent(target,true);
+  const updated=rows.map(row=>row.message?.id==='progress'?{...row,message:{...row.message,text:'Fresh completion metadata'}}:row);
+  let rendered=hook.render(updated,data);
+  assert.equal(rendered.some(row=>row.interim),false);
+  assert.equal(rendered.find(row=>row.id==='progress').message.text,'Fresh completion metadata','Never freeze session/message metadata');
+  const other={kind:'message',id:'other',message:message('other',{generationId:'other-generation',
+   response:{...response,generationId:'other-generation',finalMessageIds:['other-final']}})};
+  hook.render([...updated,other],data);rendered=hook.render([...updated,other],data);
+  assert.ok(groupForMessage(rendered,'other'),'Unrelated completed history can fold');
+  assert.equal(groupForMessage(rendered,'progress'),undefined);
+  edits.settle(edits.intent(target,false),{accepted:true});
+  hook.render(updated,data);rendered=hook.render(updated,data);
+  const group=rendered.find(row=>row.interim);assert.ok(group);
+  edits.intent(target,true);rendered=hook.render(updated,data,false);
+  assert.equal(rendered.find(row=>row.interim)?.id,group.id,'Preference OFF cannot ungroup a dirty publication');
+  edits.settle(edits.intent(target,false),{accepted:true});
+  assert.equal(hook.render(updated,data,false).some(row=>row.interim),false);
+  // A transport-unknown hold provides the same grouping protection, with no
+  // dirty input and no receipt inferred from the new response metadata.
+  hook.render(updated,data);hook.render(updated,data);
+  const stopRenderer=edits.registerRenderer(target,{prepare:async()=>({}),validate:()=>true,release(){}});
+  const hold=await edits.prepareTransition(target,'unknown-fold',true,scope);hold.sent=true;
+  assert.ok(hook.render(updated,data,false).some(row=>row.interim));
+  assert.equal(hold.receipt,undefined);
+  edits.refuseTransition(hold);stopRenderer();
+  assert.equal(hook.render(updated,data,false).some(row=>row.interim),false);
+ }finally{unregister();hook.dispose()}
+});
+
+test('interim output uses current artifact rows to suppress the legacy duplicate media player',()=>{
+ const source=readFileSync(new URL('../src/interim-replies.jsx',import.meta.url),'utf8');
+ assert.match(source,/<InlineMedia[^>]+artifactRows=\{state.canvasArtifacts\}/);
 });
