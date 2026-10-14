@@ -15,7 +15,7 @@ try{
  const a=await browser.newPage(options),b=await browser.newPage(options),errors=[];
  for(const page of [a,b])page.on('pageerror',error=>errors.push(error.message));
  const act=(page,action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
- const open=async page=>{await act(page,'view.update',{patch:{panel:'chat-work'}});await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();const recap=page.getByRole('region',{name:'Changes since your last view'});await expect(recap).toHaveCount(1);await recap.scrollIntoViewIfNeeded();return recap};
+ const open=async page=>{await act(page,'view.update',{patch:{panel:'chat-work'}});await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();await page.getByText('Changes since your last view and diagnostics',{exact:true}).click();const recap=page.getByRole('region',{name:'Changes since your last view'});await expect(recap).toHaveCount(1);await recap.scrollIntoViewIfNeeded();return recap};
  const close=page=>page.getByRole('button',{name:'Close panel',exact:true}).click();
  await a.goto(url);await a.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const workspace=(await a.evaluate(()=>window.amplifier.getState())).workspaces[0];

@@ -1068,3 +1068,28 @@ Stop/detachment, restart with explicit later completion, delayed admission, dura
 commit failure and lost acknowledgement, shared UI/agent actions, scoped passive
 waits, and UI identity/reconnect behavior. Installed package, real-provider and
 computer-use acceptance remain separate integration checks.
+
+## Workspace work overview and combined-check controls
+
+The chat header now opens Workspace work directly while retaining the selected
+chat and composer draft. Initial inspection reads the current chat context and
+one workspace-scoped page of twenty root summaries. Active work and file-overlap
+information still come from the bounded awareness owner; paging is explicit.
+The page distinguishes independent active peers, commissioned helpers, attention
+and recent request outcomes. Shared tasks/assignment controls, follow-up watches,
+recap diagnostics and exact messages/results are disclosures. No inspection
+starts work, changes execution placement or assigns an independent chat.
+
+Combined checks now select known working copies or an explicit repository folder,
+retain inspected source versions, and choose saved validation runs per repository.
+The selected candidate survives source rechecks and provenance inspection; each
+run selection stays bound to that exact candidate. Acknowledgement loss preserves
+the original invocation identity and arguments across reload. Collection reads
+native outcomes without replaying commands. Exact identities, manual JSON/import
+expectations and reported publication remain available as advanced evidence.
+
+Focused component checks cover passive bounded reads, stale visits, duplicate
+repository names, exact source capture, candidate changes, saved-run paging and
+uncertain retries. The production frontend builds successfully. Browser scripts
+were updated for the explicit disclosures; actual browser, responsive layout and
+provider acceptance remain separate integration-owner checks.
