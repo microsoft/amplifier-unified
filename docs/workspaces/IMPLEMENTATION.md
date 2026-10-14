@@ -1,5 +1,33 @@
 # Implementation and evidence
 
+## Current program coverage — 2026-10-14
+
+The integrated source implements the bounded collaboration mechanisms below.
+Independent chats remain independent even when they share a folder. The host
+owns authority, durable admission and observations; agents choose collaborators,
+divide work and judge substantive results. Native history and existing command,
+worktree, resource and usage records remain authoritative.
+
+| Approved workstream | Implemented source | Limit or remaining work |
+| --- | --- | --- |
+| A Authority | Actual root/child identity, intersected file policy, reusable scoped configuration grants, native approval continuation, delayed revocation and common registered-history scope | Supported native consumers and effect families only; no OS, tenant or arbitrary executable-code confinement |
+| B Requests and continuations | Coherent peer creation, retained retry identities, later-generation replies, revision notifications and expiring one-shot watches | Notifications report outcomes; only qualified terminal evidence satisfies a dependency |
+| C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, causal-hop bounds and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
+| D Placement and resources | Explicit per-repository copies, phase-aware handoff, cooperative reservations and observations from Publisher/Operations owners | Automatic dependency mapping and general task-owned scratch/database/browser-profile/dynamic-preview provisioning remain open |
+| E Awareness and cooperation | Bounded active-work packets, advisory file intent, supported file-tool source checks and replacement of volatile guidance | No complete shared task-list/claim service, unknown external-writer detection or universal filesystem fence |
+| F Results and integration | Retained exact reported bytes, scoped artifact reads, loaded-origin observations and immutable combined source-candidate receipts | Observed file hashes do not prove imported bytes, semantic combination, tests or publication; explicit integration responsibility and per-repository integration outcomes remain open |
+| G Recovery and preservation | Durable decisions, cleanup-safe bridge waits, phase-aware recovery and complete managed-checkout archive/restore | Archive retains files without reclaiming space or stopping external resource owners; uncertain effects are never replayed |
+| H Assignment lifecycle | Explicit commissioned membership, model-call allowances/reservations, usage reconciliation and scoped Stop | An independent mixed conversation has no request-only accounting/interruption adapter; unrelated work is not stopped |
+| I Experience and evidence | Shared actions, Related work/details controls, passive inspection, private draft/retry retention and bounded owner diagnostics | Return-since-last-view recaps, complete phase-timing reports and the final combined client/performance acceptance remain open |
+
+This is a current source inventory, not a declaration that the entire approved
+program or its release is complete. [Remaining program gates](#remaining-program-gates)
+separate unfinished authorized work from unsupported or optional capabilities.
+The dated sections below retain each slice's actual test revision and evidence
+limits. Their test counts overlap and must not be added into a combined-suite
+result. Final combined source/package qualification is pending; no publication,
+deployment or fresh-worker adoption is established by this ledger.
+
 ## Preserving checkout archive — 2026-10-14
 
 Unused app-created checkouts now have separate archive and restore actions.
@@ -22,6 +50,178 @@ independent repositories and narrow layouts; the 686 frontend checks pass after
 integrating the current new-chat loading change. Its discovery browser journey also passes.
 This qualification does not claim deployment, immutable backups or resource
 teardown for independently owned processes and services.
+
+## Loaded-source provenance and combined candidates — 2026-10-14
+
+`runtime.provenance` inspects the actual ready worker through its existing
+passive dependencies protocol. Core/Foundation origins, mounted object types
+and up to sixteen explicitly named project modules come from already-loaded
+objects; inspection never imports requested code, installs packages, starts a
+dormant worker or unparks it. Bounded file reads run outside the event loop.
+Loaded origin, file bytes observed after mounting, and file bytes observed now
+are separate evidence. None claims the exact bytes previously imported.
+
+`integration.capture/check/read/list` reuse existing command receipts. A capture
+retains up to eight inspected repository source revisions, optional expected
+module origins/hashes and the exact execution binding. A check compares those
+same expectations and preserves the capture. Wrong sibling origins or source
+drift are mismatches; absent/unloaded modules, changed worker instances or
+changing observations remain unknown. Checks do not merge or rewrite either
+contributor's work. Repository snapshots bracket worker observation; final
+placement and managed-association checks precede the scoped receipt commit.
+The canonical worktree owner serializes the final association check against
+archive/remove. File/Git work remains outside the app lock.
+
+Stable command retries return retained evidence, including after restart or a
+lost acknowledgment. Failed/cancelled preparations create no candidate. Reads
+and bounded listing are scoped to the original conversation, shared through
+the agent bridge and session HTTP commands. An advanced disclosure in task
+execution controls supports the same inspection/capture/check/list/read path.
+
+Bounds are explicit: 64 observed modules, 2 MiB per file, 16 MiB total file
+content, a 512 KiB worker report and a 120-second overall inspection deadline.
+Git inspection retains the worktree owner's existing file/time limits. Read
+workers may finish after cancellation, but cannot write a late receipt. Current
+matching files do not prove a hermetic environment, complete transitive import
+closure, subprocess dependencies, test success, semantic integration or release
+readiness. No project module is auto-imported to make unknown evidence green.
+
+Qualification uses real temporary sibling Git repositories and a subprocess
+mounting real Core/Foundation, loop-live, context-simple and an explicit fixture
+tool. The native probe identifies its loaded sibling origin, rejects the wrong
+expected repository, records the correct candidate, then detects an edited
+dependency while preserving both contributor sources. It never calls a model.
+Route/restart/failure tests cover identity retries, retained reads after source
+deletion, cross-conversation refusal, changed execution/association, malformed
+worker output, time bounds and app-lock responsiveness. Production-service
+Chromium exercises repository-only capture, passive unknown-worker inspection,
+real source drift, immutable reads, reload/list and mobile layout. These are
+bounded local and package observations; combined-program qualification and
+provider/release/shared-host acceptance remain separate.
+
+Local checks: 274 affected installed-wheel tests and two subtests passed using
+the selected native runtime (one explicit optional control probe was skipped).
+Final review added private strong-reference comparisons for same-origin module
+or same-type mounted-object replacement during detached I/O. The rebuilt wheel
+passes all 38 provenance/artifact-runtime cases, including both new races and
+the native sibling-repository probe; this helper is the only application file
+changed after the broader installed check. All 627 packaged Python/static files
+match source. Frontend tests pass (681), and the production-service browser
+journey passes with no page errors.
+
+## Retained reported results — 2026-10-14
+
+Fresh `coordination.reply` declarations capture supported local SHA-256 file
+references before acknowledgment. The existing output registry and private
+resource store own those immutable bytes; request receipts retain only the
+declared references, verification outcomes and output identities. Files are
+bounded to 8 MiB each and 16 MiB per declaration. Opaque references remain
+unverified. The producing generation, execution directory/revision, request
+and declaring operation are retained as provenance. This is an exact file
+snapshot, not proof of repository integration or semantic correctness.
+
+Capture runs outside the service lock, then rechecks generation, Stop, placement
+and response revision. Output relationships and reply acknowledgment commit
+together. Precommit failures roll back the reply and its output relationships;
+postcommit lost acknowledgments return the original identity without rereading
+files. Existing resource reachability preserves saved bytes. Missing/corrupt
+retained resources never fall back silently to a mutable source. Missing,
+changed, over-limit or external sources remain explicit report states and
+cannot qualify a successful dependency.
+
+Canonical resource encoding and hashing run in the capture worker. The existing
+async resource writer retains SQLite writer exclusion while its disk worker
+settles, including cancellation. Artifact API/Canvas reads detach their resource
+index, perform file I/O, decoding and hash verification outside the app lock,
+then recheck request/revision and current navigation before presenting bytes.
+Saved output downloads use the same async reader. No live database connection
+enters those workers. Legacy output inspection/image actions retain their prior
+implementation; this is not a claim that all output paths have been optimized.
+
+`coordination.artifact` exposes bounded text and the exact saved download through
+the agent bridge and per-session HTTP command API. It checks the original
+request participants and workspace, including when reading an explicit older
+response revision. This does not expose the producing conversation's library.
+Related work shows saved-version status, opens those bytes in Canvas and offers
+a download. Source editing, deletion or removal of the original working copy
+does not change the result. Old replies retain their prior digest-checked source
+fallback; they are not relabeled as snapshots.
+
+Qualification after combining with assignment control: 418 focused Python
+checks, including real dispatch/bridge/HTTP routes, rollback/lost acknowledgment,
+restart, deletion before first open, foreign-reader rejection, stale generation,
+placement, Stop and response revisions, total/per-file bounds and corrupt-resource
+refusal. The production-service Chromium journey passes two roots and two rounds,
+deletion before first preview, later edit/deletion, exact download, bounded agent
+read, reload, mobile layout and private-draft preservation. The browser runtime
+and terminal anchors are scripted; it does not claim live model cooperation.
+Frontend tests pass (681). The prior two browser fixture failures assumed that
+reported files still existed and used an unresolved relative Playwright URL;
+their logs were retained and the corrected journey passes.
+
+The installed wheel passes 422 focused checks using the selected native runtime,
+including four Core/Foundation child-admission cases inherited from assignment
+control. All 601 packaged application Python/static files match the candidate
+source. This is package and local-runtime evidence, not publication or installed
+shared-host adoption; broad combined-program qualification remains separate.
+
+Combined source-candidate capture/check and preserving checkout archive are
+implemented in their own sections above. Semantic combined repository/dependency
+validation, repeated complete provider journeys and release/adoption remain
+separate gates.
+
+## Consistent registered-history scope — 2026-10-14
+
+Native history, recall, coordination list/wait/exact-message/window reads and
+applicable shared session-history reads now use the same caller-workspace/all
+selector. Explicit all preserves useful registered own-history search without
+new grant records or repeated approvals. Waits check scope before loading a
+target and after waiting; history/recall recheck after I/O. Recall references
+retain the search scope alongside their exact source revision. Human exact-target
+UI reads retain existing access; an explicitly supplied scope is honored.
+
+Request results keep exact participant/workspace authority even with all, and
+peer output libraries remain caller-owned. Authenticated per-session HTTP paths
+retain their exact chosen target. This is a same-user retrieval rule, not a new
+secrecy boundary for all app state or an assignment-based access mechanism.
+The [route and native-consumer audit](owned-history-scope.md) lists retained
+domain boundaries and qualification limits. The focused source suite passed
+440 checks; native root/finite/resumed/persistent/nested/in-process recipe tools
+and a freshly installed wheel are checked separately. No provider, deployment
+or cross-account isolation is claimed.
+
+## Scoped configuration administration — 2026-10-14
+
+Root agents can request explicit configuration effects and scopes through the
+existing approval card, then reuse approved authority across turns. Direct user
+settings actions remain available. Native app-control requests wait in the
+existing worker approval map; Allow/Deny resumes that tool without replaying any
+write. Raw API requests retain nonblocking receipts. Advanced settings exposes
+the same canonical grant records and revision-checked revocation.
+
+Shared command receipts own grants and decisions. Delayed management/settings
+effects retain grant provenance and recheck after waits. Stop, revocation, expiry
+and workspace changes suppress unperformed effects; queued configuration plans
+survive restart for inspection. Children/new roots do not inherit grants. Peer
+input cannot borrow a higher-authority root's grant; saved dependency returns
+and watch notifications retain the original input lineage. Unknown legacy
+system ancestry does not fabricate authority. Explicitly authorized global
+administration works through the actual mounted root tool.
+
+Qualification after the new-chat discovery merge includes 494 affected Python
+checks, 686 frontend checks, the production build, desktop/narrow browser grant
+approval/reuse/revoke/reload and private-draft preservation. A freshly installed
+wheel passes 100 checks including actual Core/Foundation child/root mounts,
+native approval waiting, durable grants, shared HTTP clients, schedules and
+management. Native orchestrators and browser runtime are scripted; no live
+provider or installed-host adoption is claimed. The broader program's full
+integration remains its own gate.
+
+The [consumer and read-history audit](configuration-authority.md) names each
+covered administration route, alternate settings aliases, live/delayed limits,
+and the separate registered-history scope. These are not OS,
+universal credential, per-tool or multi-tenant isolation guarantees. Existing
+registered own-history access is independent of configuration grants.
 
 ## Assignment admission and scoped Stop — 2026-10-14
 
@@ -205,9 +405,10 @@ The browser uses `allowNextTurn` with the observed generation, and that exact
 semantics passes the corrected check. The failed probe is retained as evidence,
 not treated as a product regression or a successful two-round run.
 
-Shared-folder editing remains cooperative. This slice does not enforce stale
-file writes, grant peer control, provision resources, create assignment-wide
-budgets or establish general parallel-agent efficacy. Those gates remain below.
+This awareness slice is advisory. Later slices add supported file-tool source
+checks and explicit assignment admission without turning workspace proximity
+into peer-control authority. General resource provisioning and parallel-agent
+efficacy remain separate gates.
 
 ## Explicit repository selection — 2026-10-13
 
@@ -297,9 +498,10 @@ general multi-agent efficacy.
 
 This completes cooperative reservation admission, not managed provisioning or
 an OS resource lock. Different aliases and separate app installations remain
-outside its domain. Per-repository bindings, actual command/import/preview
-provenance, supported stale-file writes and the remaining
-assignment/integration gates below still require implementation and evidence.
+outside its domain. Explicit repository selection, owner-observed preview/process
+records, loaded-source provenance, supported file-tool checks and assignment
+admission have their own implemented slices. Automatic environment provisioning
+and semantic integration remain separate gates.
 
 ## Coherent commissioned-task operation — 2026-10-13
 
@@ -344,6 +546,10 @@ they do not establish general task efficacy, shared-host adoption, publication,
 or the broader multi-client assignment experience.
 
 ## Initial repair tranche — 2026-10-13
+
+This section records the initial checkpoint. The later grants, reply-time
+artifact retention, repository, assignment and inbox slices supersede its
+then-current limitations without changing the evidence recorded here.
 
 The implementation program starts with reproduced defects and established
 coordination mechanisms. It does not make the broader assignment/resource
@@ -392,40 +598,100 @@ Open and Remove, and a timer measurement could count a delayed host render.
 The corrected timer probe passes repeated runs and detects a deliberately
 introduced parent render on every tick. Production rendering behavior is unchanged.
 
-Follow-up scope remains explicit: multi-repository resource bindings;
-assignment budgets and scoped Stop across independent roots; full capability
-grants; expiry/fair scheduling beyond the initial inbox bounds; and full
-multi-round, multi-repository and multi-client qualification. The narrow
-installed-package and real-provider creation checks above do not complete
-those broader acceptance journeys.
+The initial follow-ups for explicit repository selection, commissioned-assignment
+budgets/Stop, scoped configuration grants and expiry/fair admission are now
+implemented above. Independent roots retain their separate authority. Full
+combined multi-round, multi-repository and multi-client qualification remains
+distinct from these initial installed-package and provider checks.
 
-## Program delivery gates
+## Reply revisions, watches and fair inbox admission — 2026-10-14
 
-The approved program remains staged. The implementation slices above are
-bounded deliveries, not completion of every workstream in the program.
-Existing native history, command receipts, worktree records and usage receipts
-remain the owners; the remaining work must extend them rather than create
-competing stores.
+A recipient can explicitly correlate a later current root generation with its
+original delivered request using the observed `expectedResponseRevision`. The
+workspace, task, delivery and Stop boundary must still match. Each reply has a
+monotonic revision and stable operation identity; earlier full declarations and
+terminal evidence remain in existing reply command receipts. Questions, deferrals
+and conflicts remain open reports. Exact retries return their retained revision;
+new payloads cannot reuse the same command ID.
 
-| Next outcome | Canonical owners | Remaining acceptance gate |
+Negative reports notify immediately as unqualified claims. Successful dependency
+acceptance still needs the exact checkpointed native terminal row, root,
+generation, delivered input and digest. Unrelated background jobs no longer
+invalidate a proven manager result. Missing anchors, unrelated inputs and
+background-only dispositions never qualify. Rejected/unknown terminal evidence
+notifies without becoming success. A later meaningful report suppresses an
+unsubmitted earlier success notification; both receipts remain inspectable.
+New subscriptions claim at most one continuation per meaningful revision, capped
+at 32 notifications. Old single-notification waits retain their original policy.
+
+One-shot `coordination.watch` actions observe a named root's status or idle
+boundary with explicit expiry and cancellation. They do not load its transcript,
+warm it or start a turn. Pending watches recover after restart, and claimed
+notifications never replay. Their returns use the ordinary guarded inbox and
+cannot satisfy a dependency. The actions are available through the agent bridge,
+generic shared dispatcher and per-session HTTP API used by terminal clients.
+
+Inbox admission retains the existing 64-slot destination bound, including saved
+reply/watch slots, and adds 16 pending inputs per sender and 32 per assignment.
+Pending senders rotate using durable admission order. Accepted substantive input
+remains retained when a caller-selected deadline expires. The default and maximum
+queue duration is one day; callers can choose a shorter deadline. A causal chain
+is bounded to 16 peer-input hops using host-retained input provenance, independently
+of command IDs or wording. Only actual new human input resets that bound.
+Publication failure tests distinguish a rolled-back notification from a committed
+claim with a lost acknowledgement. Neither loses the underlying report or creates
+an extra model turn on retry.
+
+Display attribution checks the exact retained per-revision system claim,
+including negative reports, watches, preparation failures and older successful
+revisions. An Amplifier update label identifies the author; it does not elevate
+that message to human authority or prove current dependency success.
+
+Validation covers service, exact retry/fingerprint, Stop/revision/scope, failure,
+backpressure, restart, passive observation and native lifecycle cases. The actual
+Core/Foundation/live-loop journey uses scripted provider output with real tool
+bridge stamping, delivered inputs, native history and terminal checkpoints. It
+proves a question followed by a later-generation result for the same request and
+two distinct notifications. It is not a real-provider efficacy or process-isolation
+claim. Source, installed-package and final delta receipts are retained separately.
+No browser rendering code, release or shared running host was changed by this slice.
+Safe tool-boundary informational delivery remains adapter-specific; notify remains
+passive and unsupported steering never becomes cancel-and-resend.
+
+## Remaining program gates
+
+The following items were part of the authorized October 13 program and are not
+claimed complete by the delivered mechanisms. Extend the existing owners rather
+than create competing permission, transcript or orchestration stores.
+
+| Remaining outcome | Existing foundation | Required next evidence or behavior |
 | --- | --- | --- |
-| Equivalent authority across supported routes | Host, runtime adapters, configuration controls | Explicit capability grants and revocation across schedules, recipes and background admission; preserve authorized configuration changes |
-| Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Later correlated replies, question/deferral revisions, expiring one-shot watches and fair bounded delivery; no duplicate continuation or false dependency success |
-| Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
-| Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context, advisory overlap and supported file-tool source conflicts delivered above. Remaining: broader independent/commissioned/native-worker lifecycle and concurrency acceptance |
-| Assignment control | Existing task, capacity and interruption owners | Commissioned-root aggregate admission and scoped Stop delivered above. Request-only accounting/interruption inside an independent mixed conversation remains an explicit adapter limitation; no whole-chat control is substituted. |
-| Durable results and integration | Artifact/resource owner and worktree integration | Retain exact versions before mutable sources disappear; validate the combined candidate and preserve uncertain cleanup effects |
-| Complete supported user journeys | Shared action/API layer, browser and terminal clients | Repeated two-round real-provider work, failure and Stop variants, independent and commissioned peers, disconnect/restart, private client state and measured responsiveness |
-| Release and adoption | Existing package/release and instance owners | Qualify the combined package, migrate retained records, activate fresh workers in an owned candidate instance, and separately verify intended release adoption |
+| Supported task environment provisioning | Worktree bindings, resource reservations, Publisher and Operations | Provision supported task-owned scratch, database and browser-profile resources with retained ownership/recovery; bind supported previews to their real owners. Observing a process or reserving a key does not allocate this environment. |
+| Exact multi-repository integration | Per-repository copies, loaded-origin inspection and retained candidate checks | Establish integration responsibility, explicit dependency/environment mapping where supported, combined tests against the recorded candidate and per-repository partial outcomes. Current file matches alone cannot certify the combination. |
+| Return experience and diagnostics | Related work/status details, retained outcomes, automatic descriptions and existing diagnostics exports | A bounded recap of changes since the viewer's last visit and correlated phase/timing evidence that distinguishes host, bridge, provider and client delay without private drafts or unrestricted payloads. |
+| Combined supported user journeys | Slice-specific deterministic, native, package, browser and provider checks | Repeat the two-round journey on the combined installed candidate, including independent and commissioned peers, multiple repositories, failure, disconnect/restart and Stop; verify browser/terminal private state and measured responsiveness. |
+| Release and adoption | Existing package/release and instance owners | Complete combined package qualification, compatibility/migration checks, owned candidate activation and separate publication/fresh-worker adoption evidence under the current release policy. |
 
-Each gate needs evidence at its own layer. A successful narrow provider handoff
-does not substitute for several repositories, assignment limits or client
-parity, and a merged change does not imply a published or adopted release.
+Optional assignment work-item claims were proposed for assignments that use a
+shared task list; no complete task-list/claim service is provided by the current
+assignment ledger. It is distinct from commissioned membership and model-call
+reservation. Universal OS confinement, cross-host filesystem replication and
+cross-engine history continuation were explicitly outside this program's default
+scope. Request-only control inside an independent mixed conversation and safe
+tool-boundary notification remain declared adapter limitations; the fallback
+must preserve unrelated work rather than pretend those capabilities exist.
 
-## Collaborative-workspaces candidate
+No new ordinary correctness defect is implied merely by these capability
+limits. Conversely, a successful narrow provider handoff cannot close the full
+acceptance program. The current release policy, rather than this ledger, owns
+which checks block publication; publication, post-release qualification and
+installed adoption remain separate milestones.
 
-The approved same-host cooperation loop is **qualified for PR review**,
-not a completed release or deployed feature. Current adapters support typed reply
+## Historical collaborative-workspaces candidate — October 6
+
+The following is the earlier candidate's evidence, not the October 14 source
+inventory or final program verdict. At that checkpoint the approved same-host
+cooperation loop was **qualified for PR review**. Its adapters supported typed reply
 declarations sealed against exact checkpointed native terminal evidence,
 generation-anchored steering and one stable-ID saved dependency continuation.
 Host qualification establishes an attributable agent claim plus observed terminal
@@ -437,7 +703,8 @@ See [Task coordination implementation and evidence](../TASK-COORDINATION.md)
 for exact revisions, earlier failures and acceptance limits. Passing deterministic
 surface checks does not ratify replacement execution clauses or qualify later
 code from an earlier model run.
-Shared-folder operation remains cooperative, without enforced conflict prevention.
+Shared-folder operation was cooperative; the later supported file-tool checks
+do not turn it into a universal filesystem fence.
 Actual-model created-task/adjacent-round/steer checks and Fable delta review
 are recorded in the [final PR qualification](../TASK-COORDINATION.md#pr-qualification--2026-10-06),
 with the exact revisions, optional skips and pre-existing smoke-test limit.
@@ -468,7 +735,7 @@ replacement execution contract or remove the documented shared-folder limits.
 
 The accepted vision is the target, not a claim that every execution and integration promise is already implemented. This change implements placement, native-history addressing, and the simplified navigation and draft journey. Existing runtime, worktree and handoff mechanisms remain in use.
 
-## Implemented here
+## Historical placement implementation — September 22
 
 - Name-only placement under a per-host/account configurable default root; per-workspace parent override under More options.
 - Explicit existing-folder attachment and automatic native-history discovery, with files left in place.
@@ -480,7 +747,7 @@ The accepted vision is the target, not a claim that every execution and integrat
 
 The legacy explicit-path create action remains compatible for existing clients. It is not the name-only allocation path. Native-history catalogs are still derived indexes; this change does not migrate or delete legacy app data.
 
-## Evidence
+## Historical placement evidence
 
 `tests/test_workspace_experience.py` covers naming, root changes, explicit attachment, existing bytes, symlink substitution, concurrent collision, lost acknowledgment, interrupted allocation, private draft attachments/model/bundle, native ID discovery/read, ambiguous IDs and empty-workspace listing. Existing creation, managed-chat, native-history, ownership, worktree, handoff and agent-control suites provide compatibility coverage.
 
@@ -513,7 +780,7 @@ The following historical qualification was performed against canonical main `692
 
 The shipping owner retains the immutable release qualification, merge, publication and deployed-host acceptance. These local results do not cover private companion-runtime release gates or live Spark adoption.
 
-## Current-main integration refresh
+## Historical main integration refresh
 
 Refreshed onto `7d139997ce9cf77cddbc6de4622dfdc0158661a8` after the separate v0.20.8 performance release. Source merged without conflicts; generated frontend assets were rebuilt from the combined source. Published v0.20.8 release notes remain unchanged, and pending workspace notes are in `RELEASE-NOTES.md`.
 
@@ -526,12 +793,32 @@ Refreshed onto `7d139997ce9cf77cddbc6de4622dfdc0158661a8` after the separate v0.
 
 Managed Git worktrees use `amplifier_worktrees`, with original source manifests, exact revision checks, explicit dirty-copy support and preservation-aware cleanup. `amplifier_web/worktrees.py` keeps history home separate from execution directory and records pending/applied/unknown handoffs. Native session ownership is enforced by the shared Foundation session protocol. None of these actions run merely because a folder is attached.
 
-## Remaining contract work
+## Broader workspace contract limits
 
-- Workspace home with Files/Directions and repository bindings; attributed, versioned shared directions and instruction provenance.
-- Sources, helper reports and preview ownership in the retained Canvas details surface.
-- Universal folder-level conflicting-writer protection and isolation of arbitrary writing helpers. Native session ownership alone does not protect shared files; the supported file-tool source checks above are narrower than an OS or checkout-wide fence.
-- Multi-repository task environment/port bindings, combination validation, one integration/preview owner, and partial publish reconciliation.
-- Cross-host transfer remains the separate portability implementation's responsibility.
+The workspace vision also describes Files/Directions, attributed versioned
+shared directions and richer instruction provenance. Those surfaces are not
+completed by explicit repository selection. Retained helper artifacts and local
+preview ownership are now available through their named owners, but do not
+constitute every proposed Sources/Canvas workspace surface.
 
-Those are separate runtime/context conformance gates from the placement journey. Do not infer their completion from a green placement/browser suite. Existing terminal and editor edits remain visible at the chosen folder; no hidden checkout isolation was introduced.
+Universal protection from arbitrary writers is not implemented or inferred
+from native session ownership. Existing terminal/editor edits remain visible
+at the chosen folder. Multi-repository environment/integration work is tracked
+in the program gates above; cross-host transfer remains the separate portability
+implementation's responsibility. Historical placement/browser results do not
+close these broader contracts.
+
+## Task resource owner projection — 2026-10-14
+
+`workspace.resources.managed` reads a selected task's local publishing listeners
+and native Operations summaries through their canonical owners, using indexed,
+bounded pages. The workspace Details resource surface exposes the same action.
+Local previews report the actual bound port, immutable release directory and
+owner-observed liveness; Operations reports retained lifecycle evidence without
+re-probing process IDs or exposing commands/output. Stopped and unknown outcomes
+remain visible. Existing reservations are presented alongside these observations
+without inventing a claim-to-process mapping or automatic cleanup.
+
+This is read-only provenance, not generic resource allocation. Scratch/database/
+browser-profile isolation, arbitrary dynamic preview ports, operation cwd missing
+from its owner, remote targets and external processes remain explicit limits.

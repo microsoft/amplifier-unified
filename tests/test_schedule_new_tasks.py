@@ -302,3 +302,22 @@ async def test_managed_inheritance_rejects_reusing_source_folder_before_allocati
         assert not runtime.inputs
     finally:
         await app.close()
+
+
+async def test_new_scheduled_root_does_not_copy_administrative_grants(tmp_path,monkeypatch):
+    app,runtime,now,sid=await fixture(tmp_path,monkeypatch)
+    try:
+        await app.dispatch('capability.grant',{'sessionId':sid,'effects':['file_access'],'scopes':['global'],'reason':'Source-only setup'})
+        await create(app,sid,now[0])
+        now[0]+=61
+        await app.schedules.tick()
+        run=app.schedules.store.runs(sid)[0]
+        target=app._session(run['destinationSessionId'])
+        assert run['phase']=='accepted'
+        assert app.configuration_authority.rows(target['id'])==[]
+        target['collaborationGeneration']={'id':'scheduled-generation','inputIds':[run['inputId']],'terminal':False}
+        from test_coordination_generation import agent
+        with pytest.raises(AppError,match='Configuration authority is required'):
+            await agent(app,target,'permissions.save',{'scope':'global','allowed':[],'denied':[]},'scheduled-admin')
+    finally:
+        await app.close()

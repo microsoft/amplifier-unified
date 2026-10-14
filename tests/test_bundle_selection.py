@@ -10,6 +10,7 @@ from amplifier_web.preferences import SettingsStore
 from amplifier_web.service import AppService, AppError
 from amplifier_web.management import Management
 from amplifier_web.session_store import fork_session
+from configuration_admin import authorized_admin
 
 
 async def test_scoped_defaults_persist_and_do_not_retarget_existing_chats(tmp_path):
@@ -20,7 +21,8 @@ async def test_scoped_defaults_persist_and_do_not_retarget_existing_chats(tmp_pa
     try:
         await app.dispatch('session.create',{})
         original=app._session()['id']
-        await app.app_bridge('dispatch',{'action':'bundle.default','args':{'scope':'app','bundle':'work'}},original)
+        admin=await authorized_admin(app,original,effects=['bundles'],scopes=['global'])
+        await admin('dispatch',{'action':'bundle.default','args':{'scope':'app','bundle':'work'}})
         assert app._new_session({})['bundle']=='work'
         assert settings.read(workspace)['bundle']['active']=='anchors'
         assert app._session(original)['bundle']=='anchors'
@@ -155,12 +157,13 @@ async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path):
     try:
         await app.dispatch('session.create',{'bundle':'anchors'})
         sid=app._session()['id'];app._session()['messages']=[{'role':'user','text':'keep'}]
+        admin=await authorized_admin(app,sid,effects=['bundles'],scopes=['session'])
         await app.app_bridge('dispatch',{'action':'bundle.preview','args':{'sessionId':sid,'bundle':'work'}},sid)
         await settled(app)
         assert app._session()['bundlePreview']['bundle']=='work'
         runtime.fail=True
         args={'sessionId':sid,'bundle':'work','previewId':'token'}
-        await app.app_bridge('dispatch',{'action':'bundle.switch','args':args},sid)
+        await admin('dispatch',{'action':'bundle.switch','args':args})
         await settled(app)
         assert app._session()['bundle']=='anchors'
         assert app._session()['bundleChange']['phase']=='error'
@@ -183,16 +186,17 @@ async def test_agent_fork_is_independent_and_duplicate_does_not_repeat(tmp_path,
     try:
         await app.dispatch('session.create',{'bundle':'anchors'})
         source=app._session();sid=source['id']
+        admin=await authorized_admin(app,sid,effects=['bundles'],scopes=['session'])
         source['messages']=[{'id':'user','role':'user','text':'keep'}]
         if reviewed:
             await app.app_bridge('dispatch',{'action':'bundle.preview','args':{'sessionId':sid,'bundle':'work'}},sid)
             await settled(app)
         payload={'action':'bundle.fork','id':'fork-once','args':{'sessionId':sid,'bundle':'work',**({'previewId':'token'} if reviewed else {})}}
-        await app.app_bridge('dispatch',payload,sid);await settled(app)
+        await admin('dispatch',payload);await settled(app)
         child=app._session();assert child['id']!=sid and child['bundle']=='work'
         assert child['messages']==[{'id':'user','role':'user','text':'keep','nativeIndex':0}]
         assert source['bundle']=='anchors' and source['messages']==[{'id':'user','role':'user','text':'keep'}]
-        await app.app_bridge('dispatch',payload,sid);await settled(app)
+        await admin('dispatch',payload);await settled(app)
         assert len(app.state['sessions'])==2
         assert child['forkTranscript']['jobsReplayed'] is False
     finally: await app.close()
@@ -236,14 +240,15 @@ async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(
         await app.dispatch('session.create',{'bundle':'anchors'})
         sid=app._session()['id']
         app._session()['selection']={'instance':'old','model':'pinned'}
-        await app.app_bridge('dispatch',{'action':'bundle.switch','args':{'sessionId':sid,'bundle':'work'}},sid)
+        admin=await authorized_admin(app,sid,effects=['bundles'],scopes=['session'])
+        await admin('dispatch',{'action':'bundle.switch','args':{'sessionId':sid,'bundle':'work'}})
         await settled(app)
         assert app._session()['bundle']=='anchors'
         assert app._session()['bundlePreview']['previewId']=='model-choice'
         assert app._session()['bundleChange']['phase']=='error'
         assert app._session()['selection']['model']=='pinned'
         assert not app._session()['configurationBusy']
-        await app.app_bridge('dispatch',{'action':'bundle.switch','args':{'sessionId':sid,'bundle':'work','previewId':'model-choice','resetModel':True}},sid)
+        await admin('dispatch',{'action':'bundle.switch','args':{'sessionId':sid,'bundle':'work','previewId':'model-choice','resetModel':True}})
         await settled(app)
         assert app._session()['bundle']=='work'
         assert 'selection' not in app._session()

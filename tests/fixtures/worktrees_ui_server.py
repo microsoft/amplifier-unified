@@ -30,7 +30,11 @@ async def main(home):
     async def restore(request):
         runtime.quiesce_for_handoff.side_effect = None
         return web.json_response({'ok':True})
+    async def change_source(request):
+        (repositories[0] / 'file.txt').write_text('Contributor refinement\n')
+        return web.json_response({'ok':True})
     app.router.add_post('/fixture/fail-release', fail_next); app.router.add_post('/fixture/restore-release',restore)
+    app.router.add_post('/fixture/change-source', change_source)
     runner=web.AppRunner(app); await runner.setup(); site=web.TCPSite(runner,'127.0.0.1',0); await site.start()
     url=f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
     app['allowed_origins']=app['allowed_origins']|{url}

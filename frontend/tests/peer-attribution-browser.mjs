@@ -34,11 +34,13 @@ try{
  await expect(article(facts.agent)).toHaveAttribute('aria-label',caption);
  await expect(article(facts.agent).locator('.a-message-attribution')).toHaveText(caption);
  await expect(article(facts.human)).toHaveAttribute('aria-label','From another chat');
+ await expect(article(facts.notification)).toHaveAttribute('aria-label','Amplifier update');
+ await expect(article(facts.notification).locator('.a-message-attribution')).toHaveText('Amplifier update');
  await expect(article(facts.quote)).toHaveAttribute('aria-label','Your message');
  await expect(article(facts.quote).locator('.a-message-attribution')).toHaveCount(0);
  await expect(article(facts.forged)).toHaveAttribute('aria-label','Message');
  await expect(article(facts.forged).locator('.a-message-attribution')).toHaveCount(0);
- for(const id of [facts.agent,facts.human,facts.forged]){
+ for(const id of [facts.agent,facts.human,facts.forged,facts.notification]){
   await expect(article(id)).not.toHaveClass(/a-user/);
   await expect(article(id).getByRole('button',{name:'Edit message',exact:true})).toHaveCount(0);
  }
@@ -90,6 +92,7 @@ try{
  }
  await page.evaluate(()=>{document.documentElement.style.zoom='1'});
  await page.reload();await expect(article(facts.agent).locator('.a-message-attribution')).toHaveText(caption);
+ await expect(article(facts.notification).locator('.a-message-attribution')).toHaveText('Amplifier update');
  const state=await page.evaluate(()=>window.amplifier.getState());
  const receiving=state.sessions.find(row=>row.id===state.selectedSessionId);
  const older=await (await page.request.get(new URL(`/api/conversation/detail?sessionId=receiving&part=messages&before=${encodeURIComponent(receiving.messageWindow.before)}`,page.url()).href)).json();

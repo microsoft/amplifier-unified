@@ -810,7 +810,7 @@ async def test_two_artifact_rounds_keep_original_bytes_and_exact_result_links(ap
 
 
 @pytest.mark.parametrize("negative", ["ack", "defer", "decline", "jobs", "unrelated", "accepted-only", "refs", "child"])
-async def test_nonresult_or_unproven_terminal_does_not_wake(app, negative):
+async def test_terminal_evidence_distinguishes_negative_notifications_from_dependency_success(app, negative):
     source, target = app.state["sessions"]
     kind = negative if negative in {"ack", "defer", "decline"} else "result"
     await declared_result(app, kind=kind, refs=[] if negative == "refs" else None)
@@ -821,9 +821,14 @@ async def test_nonresult_or_unproven_terminal_does_not_wake(app, negative):
         "child": {"sessionId": "child", "rootSessionId": target["id"]}}
     await finish(app, target, "result-request", **patches.get(negative, {}))
     result = (await app.dispatch("coordination.result", {"requestId": "result-request"}))["result"]
-    assert not result["qualified"]
-    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (wait["result"]["continuationId"],)).fetchone()
+    assert result['qualified'] is (negative == 'jobs')
+    notified = negative in {'jobs', 'unrelated', 'accepted-only', 'refs'}
+    row = app.db.execute('SELECT receipt FROM commands WHERE id=?', (wait['result']['continuationId'],)).fetchone()
+    assert bool(row) is notified
+    if row:
+        assert json.loads(row[0])['dependencySatisfied'] is (negative == 'jobs')
     assert len(app.runtime.inputs) == 1
+
 
 
 async def test_typed_result_seals_and_one_stable_continuation_waits_for_busy_sender(app):
@@ -1163,19 +1168,23 @@ async def test_staged_declaration_restart_is_unknown_not_sealed_or_replayed(app)
         result = (await reopened.dispatch("coordination.result", {"requestId": "result-request"}))["result"]
         assert result["receipt"]["response"]["status"] == "unknown" and not result["qualified"]
         assert "before terminal proof" in result["receipt"]["response"]["detail"]
-        assert result["receipt"]["subscription"]["status"] == "needs_attention"
+        assert result["receipt"]["subscription"]["status"] == "waiting"
         assert not reopened.db.execute("SELECT 1 FROM commands WHERE id=?", (wait["result"]["continuationId"],)).fetchone()
         reopened.collaboration.start()
         await finish(reopened, reopened._session(target["id"]), "result-request")
         assert reopened.collaboration.receipt("result-request")["response"]["status"] == "unknown"
+        continuation = reopened.collaboration.receipt(wait['result']['continuationId'])
+        assert continuation['dependencySatisfied'] is False
+        assert continuation['outcomeSnapshot']['status'] == 'unknown'
         assert not reopened.runtime.inputs
     finally:
         await reopened.close()
 
 
 @pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("scope", ["workspace", "all"])
 @pytest.mark.parametrize("reader", ["sender", "recipient", "foreign", "workspace", "child", "missing", "unknown"])
-async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, reader, legacy):
+async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, reader, legacy, scope):
     source, target = app.state["sessions"]
     await send(app, mode="notify")
     if legacy:
@@ -1193,7 +1202,7 @@ async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, r
         source["workspace"] = "/foreign"
     elif reader == "missing":
         caller = None
-    args = {"requestId": "absent" if reader == "unknown" else "request-1"}
+    args = {"requestId": "absent" if reader == "unknown" else "request-1", "scope": scope}
     if reader in {"sender", "recipient"}:
         # Human stop and legacy suppression prevent work, not scoped reads.
         target["status"] = "stopped"
@@ -1206,6 +1215,23 @@ async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, r
             else:
                 await app.dispatch("coordination.result", args, origin="agent", caller_session_id=caller)
         app.history.ensure_loaded.assert_not_awaited()
+    assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize('moved', ['reader', 'target'])
+async def test_result_rechecks_workspace_after_hydration(app, moved, monkeypatch):
+    source, target = app.state['sessions']
+    await send(app, mode='notify')
+
+    async def hydrate(_):
+        await asyncio.sleep(0)
+        (source if moved == 'reader' else target)['workspace'] += '/other-workspace'
+        target['activity'] = {'detail': 'Activity in the newly moved workspace'}
+
+    monkeypatch.setattr(app.history, 'ensure_loaded', hydrate)
+    with pytest.raises(AppError, match='scope'):
+        await app.dispatch('coordination.result', {'requestId': 'request-1'},
+            origin='agent', caller_session_id=source['id'])
     assert not app.runtime.inputs
 
 
@@ -1495,7 +1521,8 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     assert rejected["response"]["requestId"] == request
     assert rejected["response"]["generationId"] == anchor["generationId"]
     assert rejected["response"]["messageIds"] == [canonical]
-    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (continuation,)).fetchone()
+    notification = app.collaboration.receipt(continuation)
+    assert notification['dependencySatisfied'] is False and notification['outcomeSnapshot']['status'] == 'rejected'
     with sqlite3.connect(app.db.execute("PRAGMA database_list").fetchone()[2]) as db:
         persisted = json.loads(db.execute("SELECT receipt FROM commands WHERE id=?", (request,)).fetchone()[0])
     assert persisted == rejected
@@ -1517,7 +1544,7 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     assert qualified["messageIds"] == [valid_anchor["messageId"]]
     assert app.collaboration.receipt(valid_continuation)["dependencyRequestId"] == "valid-next"
     assert app.collaboration.receipt(request) == rejected
-    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (continuation,)).fetchone()
+    assert app.collaboration.receipt(continuation) == notification
     assert not target.get("error")
 
 

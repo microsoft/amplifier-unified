@@ -218,7 +218,120 @@ not a claim that every v2 proposal or original v1 isolation promise is delivered
 
 No current universal checkout fence is known in this source baseline; this is not proof that all integrations are independent of the earlier promise. Existing explicit worktree handoffs, permission checks and preservation checks stay in place. Consumers must distinguish cooperative from genuinely protected bindings and report unsupported enforcement. The first collaboration increment should retain existing folder behavior, add honest context/coordination, and not claim newly enforced write isolation.
 
+### Retained exact results — 2026-10-14
+
+A fresh response declaration snapshots supported local `path@sha256:<digest>`
+references before the reply is acknowledged. The existing output/resource owner
+retains matching bytes, their producing execution binding and the request
+relationship. File reads are bounded to 8 MiB per file and 16 MiB per declaration,
+inside the producer's execution folder. Reads happen outside the host lock;
+generation, Stop, placement and response revision are rechecked before commit.
+Snapshot and reply records commit together. Exact command retries return the
+retained result without rereading mutable files, including after restart.
+
+Missing, changed, unsupported or over-limit sources remain explicit artifact
+states in the recorded report. An incomplete exact reference cannot satisfy a
+successful dependency. Retained bytes prove the referenced version, not semantic
+correctness, successful integration or independent review. Opaque references
+remain unverified. Older replies keep their checked-source fallback and are not
+retroactively labeled retained. Request-scoped artifact reads expose only the
+declared artifact to the request participants in the recorded workspace; they do
+not grant general access to the producing conversation's output library.
+
+### Observed dependency provenance and combined candidates — 2026-10-14
+
+An explicit passive worker inspection reports already-loaded module origins,
+actual mounted object types, and bounded current-file hashes. It never imports
+requested project code, installs dependencies, starts a dormant worker or
+claims checkout isolation from an editable dependency's origin. Loaded origin,
+file bytes observed at mount, and file bytes observed now are distinct facts;
+none retroactively proves exact imported bytecode or a successful test.
+
+An explicit combined candidate can name up to eight inspected repository
+snapshots and sixteen expected loaded project-module origins/file hashes.
+Existing command receipts retain capture/check results. The host validates
+repository scope against this task's workspace, execution folder and associated
+working copies, rechecks placement and managed associations after reads, and records mismatch or unknown
+rather than substituting another dependency. Later checks compare these exact
+identities and flag source/dependency drift. This is bounded evidence for the
+listed repositories/modules, not a hermetic environment, dependency installer,
+test runner, or blanket proof of integration or release readiness.
+Passive list/read and the advanced task-execution disclosure expose the same
+retained observations as agents and session commands. File/worker reports and
+the total inspection duration are bounded; deadline/cancellation cannot create
+a late candidate receipt. A replacement worker makes prior loaded-state
+continuity unknown even when current source still matches.
+
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.
+
+### Configuration authority addition — 2026-10-14
+
+Configuration authority is a host-issued, revocable grant to one root conversation
+for named configuration effects and explicit scopes. Sharing a folder, receiving
+a peer request, copying a mount plan, or spawning a scheduled/recipe child does
+not convey the source conversation's administrative grants. Existing provider
+and model selection remains an ordinary own-conversation action. Persistent
+connection, module/source, file-access and bundle changes, and replacement or
+enabling of the runtime mount plan, require an applicable grant for agent actors.
+An omitted persistent scope never silently selects global scope. App-wide default
+actions have an explicit global effect; alternate default-setting routes receive
+the same check. A provider-connection grant includes its executable source and
+credential configuration, as displayed in the approval.
+
+The existing command receipts own grants, requests and decisions. A user may
+grant explicitly through the shared action API, or allow an agent's attributable
+request through the ordinary approval control. The authorization remains useful
+across subsequent turns until its expiry, revocation, changed workspace or Stop;
+it is not re-requested for every matching settings action. The host requires the
+actual current root generation for an agent to request or use it. Native children
+retain their own identity and cannot borrow root administration. A fresh peer
+request intersects the receiver grant with its authenticated senders through
+bounded retained input lineage; revoking a sender also fences delayed effects.
+A human can expressly approve the current peer request. Host-created returns to
+the receiver’s own saved dependency wait preserve that receiver’s original grant
+only through verified retained original input lineage. One-shot observations and
+creation-failure returns retain that lineage too; missing legacy observation
+lineage requires explicit approval of the current request, not an assumption that
+its origin was human. Scope names
+describe configuration ownership, not filesystem confinement or read authority.
+
+Accepted delayed changes retain the selected grant revision and interruption
+revision. The host checks these after waiting and before supported settings,
+credential, validation and runtime-control effects. Queued changes survive
+restart with that provenance; revocation or Stop suppresses unperformed effects
+without retrying them or discarding the requested configuration. A request already
+admitted to an external authentication process, validator or worker can complete;
+revocation does not undo external effects. Saving configuration is distinct from
+mounting it. User actions use the same domain checks and do not require an agent
+grant. No grant permits a peer mutation, grants user approval to an agent, or
+adds OS protection around arbitrary shell programs or external modules.
+
+Native root `app_control` requests park the current tool call in the existing
+worker approval map before the host publishes the approval. The durable user
+decision resolves that waiter; the agent then chooses its next action, which
+still checks current authority. No privileged effect is stored for replay.
+Raw API requests return a pending receipt without parking an agent. A decision
+after worker loss saves authority but never starts or replays the lost turn.
+
+## Registered own-history scope addition — 2026-10-14
+
+The authenticated same-user app/tool capability already permits explicit access
+to registered own-history across workspaces. Read scope selects that existing
+library; it is not a new grant database, assignment privilege or multi-tenant
+boundary. Agent history discovery, waits, transcript windows and exact-message
+reads default to the caller's workspace and accept explicit `scope: all` for the
+registered library. Recall source reads retain the search scope explicitly and
+check it again with the original source revision. Applicable shared session
+history actions use the same scope rule. Human UI selection of an exact registered
+conversation retains its existing library access without another approval.
+
+`scope: all` does not widen request-result participation, start/stop/steer
+authority, source references or output-library ownership. Request results retain
+the request participants and saved workspace checks. Artifact references do not
+authorize listing or reading another root's private output library. Existing
+per-session HTTP endpoints remain exact-target user-client routes. All these
+reads remain passive and never acquire a native writer or replay work.
+
 ## Assignment control addition — 2026-10-14
 
 New commissioned roots share an explicit host-owned assignment with their
@@ -265,3 +378,77 @@ Git registration and directory identity to confirm a move or report uncertainty;
 never repeat an uncertain move. Only app-created, unused checkouts qualify.
 Active execution, pending/unknown handoff, attached folders and destination
 collisions are refused. Restore does not start work, replay input or change history.
+
+## Reply revisions and bounded observations — 2026-10-14
+
+A delivered request remains addressable by its original recipient in a later
+current root generation, within its unchanged workspace, task and interruption
+boundary. Later declarations require the observed response revision. Every
+accepted declaration has a monotonic revision and a stable operation identity;
+exact retries return the same receipt and conflicting payloads are rejected.
+Earlier declarations remain in existing command receipts. A question or deferral
+is a report, not request completion. At most 32 declarations and 32 automatic
+outcome notifications belong to one request; reaching the bound is visible and
+requires a new intentional request rather than silent replay or unbounded loops.
+
+Typed negative reports and questions can notify the requester immediately as
+unqualified agent claims. Exact successful root terminal evidence can qualify a
+result separately; unrelated background jobs do not erase that evidence. Only a
+qualified successful result satisfies the dependency. Each report revision
+produces at most one automatic continuation, while rejection or unknown terminal
+qualification remains inspectable. Every continuation retains the requester's
+saved task and Stop boundary. A newer meaningful report supersedes an
+unsubmitted earlier success notification, preserving both receipts and preventing
+stale dependency success. Requests made under older single-notification
+subscriptions keep that behavior until explicitly replaced by a new request.
+
+One-shot status/idle watches are explicit commands with an expiry and cancellation.
+They observe only the named root's public lifecycle, do not load its history or
+start it, and notify through the same bounded guarded inbox. Expiry is a visible
+outcome, not approval or denial. Restart preserves pending watch receipts and
+never replays a claimed notification. Idle means a root status boundary, not proof
+that external effects or all background work have finished.
+
+A destination retains at most 64 queued inputs and reserved reply slots, with
+16 queued inputs from one sender and 32 from one assignment. Admission rotates
+between pending senders using retained admission order. New queued instructions
+expire after a caller-selected duration (default and maximum one day);
+expiration remains an inspectable failed dependency without executing the input.
+Accepted substantive inputs are never silently coalesced or dropped. Informational
+notices still do not start execution; unsupported safe-boundary delivery remains
+an adapter limitation rather than cancellation and resend. Host-retained causal
+input lineage bounds a peer-driven chain to 16 hops regardless of new command IDs
+or wording. A new actual human input resets that bound; observations, peer text
+and model assertions of approval do not.
+
+### Managed resource observations — 2026-10-14
+
+The resource surface may project bounded, explicitly selected task records from
+existing physical owners. The local Publisher owns static preview/site listeners,
+OS-assigned ports, immutable release directories and stopped/interrupted receipts.
+Operations owns recorded native process/kernel lifecycle evidence; a recorded
+running state is an observation, not an independent process-liveness probe.
+The projection must preserve these different evidence levels, omit commands,
+output and environment, and never provision, replay, stop or reassign resources.
+Each owner uses an indexed task-scoped page; inspecting one task must not load
+other tasks or all retained history. Browser and agents use the same read action;
+agents may inspect only their host-bound task, while users may select a workspace
+task. Cooperative reservations remain separately labelled, with no inferred link
+between a user-chosen key and a physical resource.
+
+Dedicated scratch folders, test databases, dynamic application preview listeners
+and browser profiles remain unallocated by this workspace adapter. A documented
+working-files namespace is not provisioned isolation. Unknown operation cwd,
+remote publishing state or resources outside these owners must remain explicit
+coverage limits, never reported absent or safely isolated.
+
+### Notification display provenance — 2026-10-14
+
+A retained versioned notification is labelled as an Amplifier update when its
+exact command, payload binding, original request and per-revision wait claim
+match. This covers negative reports, observations, preparation failures and
+older successful revisions after a later report. It establishes authorship, not
+current qualification, permission or successful dependency completion. Same-root
+preparation updates require the same exact system claim; arbitrary self-messages
+and imported or prose-only attribution remain unverified. Reads use only the
+requested page's bounded command identities and never open the producing chat.

@@ -7,6 +7,7 @@ import time
 import uuid
 
 from amplifier_operations.coordination import ChangeSignal, delivery
+from .owned_history import SCOPE, selected, includes, require
 
 ACTIVE = {"working", "running", "starting", "ready", "queued", "pending", "stopping"}
 ATTENTION = {"error", "failed", "interrupted", "cancelled", "stopped"}
@@ -16,8 +17,9 @@ def definitions():
     from .service import schema, string
     target = {"sessionId": string(200), "workerId": string(200)}
     return {
-        "coordination.list": ("List scoped root summaries without selecting or starting them. Agent discovery defaults to roots only; includeWorkers explicitly adds actual workers.", schema({"sessionId": string(200), "workspace": string(4000), "includeWorkers": {"type": "boolean"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])),
+        "coordination.list": ("List scoped root summaries without selecting or starting them. Agent discovery defaults to caller workspace and roots only; scope=all explicitly reads registered own-history. includeWorkers adds actual workers.", schema({"sessionId": string(200), "scope": SCOPE, "workspace": string(4000), "includeWorkers": {"type": "boolean"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])),
         "coordination.wait": ("Wait on up to eight explicit targets for a report or attention. Carry each nextCursor after consuming results; retries retain result IDs. Does not run or replay work.", schema({
+            "scope": SCOPE,
             "targets": {"type": "array", "minItems": 1, "maxItems": 8, "items": schema({**target, "afterCursor": string(2048)}, ["sessionId"])},
             "waitMs": {"type": "integer", "minimum": 0, "maximum": 60000},
             "maxBytes": {"type": "integer", "minimum": 4096, "maximum": 65536},
@@ -98,7 +100,15 @@ class Coordination:
 
     def list(self, args, caller=None):
         sessions = [self.service._session(args["sessionId"])] if args.get("sessionId") else [row for row in self.service.state["sessions"] if row.get("sessionKind", "root") == "root"]
-        workspace = args.get("workspace") or (self.service._session(caller).get("workspace") if caller else None)
+        owner = self.service._session(caller or self.service.state.get('selectedSessionId'), hydrate=False) if caller or args.get('scope') == 'workspace' else None
+        scope = selected(args, 'workspace' if caller else 'all')
+        if owner:
+            if args.get('sessionId'):
+                require(self.service,owner['id'],args['sessionId'],scope)
+            if args.get('workspace') and scope != 'all' and args['workspace'] != owner.get('workspace'):
+                raise ValueError('Workspace is outside the requested history scope. Use explicit scope=all for registered own-history.')
+            sessions = [row for row in sessions if includes(owner,row,scope)]
+        workspace = args.get("workspace")
         if workspace:
             sessions = [row for row in sessions if row.get("workspace") == workspace]
         offset, limit = args.get("offset", 0), args.get("limit", 100)
@@ -126,7 +136,7 @@ class Coordination:
                             "nextOffset": offset + session_number + 1 if more or include_workers else None}
         return {"items": items, "truncated": more, "nextOffset": offset + limit if more else None}
 
-    async def wait(self, args):
+    async def wait(self, args, caller=None):
         targets = args["targets"]
         identities = [(row["sessionId"], row.get("workerId")) for row in targets]
         if len(set(identities)) != len(identities):
@@ -137,6 +147,8 @@ class Coordination:
             results, errors = [], []
             for target in targets:
                 try:
+                    if caller:
+                        require(self.service,caller,target['sessionId'],selected(args))
                     results.append(delivery(self.snapshot(target), target.get("afterCursor"), max_bytes=max_bytes))
                 except (ValueError, LookupError, AppError) as exc:
                     errors.append({"target": {key: target[key] for key in ("sessionId", "workerId") if key in target}, "error": str(exc)})
@@ -148,12 +160,20 @@ class Coordination:
         if action not in definitions():
             return await self.service.collaboration.dispatch(action, args, origin, command_id, caller_session_id)
         if action in {"coordination.list", "coordination.wait"}:
+            if origin not in {'ui', 'user'} and not caller_session_id:
+                raise AppError('History reads require a registered calling conversation.', 403)
             await self.service._flush_pending_progress()
+            reader = caller_session_id or (self.service.state.get('selectedSessionId') if 'scope' in args else None)
             if action == "coordination.wait":
                 for target in args["targets"]:
+                    if reader:
+                        try:
+                            require(self.service,reader,target['sessionId'],selected(args))
+                        except (AppError, ValueError):
+                            continue  # Return per-target scope errors without loading history.
                     if not target.get("workerId"):
                         await self.service.history.ensure_loaded(target["sessionId"])
-            result = self.list(args, caller_session_id) if action == "coordination.list" else await self.wait(args)
+            result = self.list(args, caller_session_id) if action == "coordination.list" else await self.wait(args,reader)
             return {"accepted": True, "result": result}
         # No model-supplied authorization flag can widen this host-bound scope.
         if origin not in {"ui", "user"} and (not caller_session_id or args["sessionId"] != caller_session_id):

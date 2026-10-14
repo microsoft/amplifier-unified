@@ -1069,6 +1069,22 @@ class RuntimeManager:
         except RuntimeError:
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
 
+    async def provenance(self, session_id, modules=()):
+        """Inspect existing loaded origins; never start or unpark a worker."""
+        row = self.workers.get(session_id)
+        if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
+            return {'status': 'unknown', 'sessionId': session_id, 'reason': 'No ready session runtime.'}
+        if row['ready'].exception() is not None:
+            return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Session runtime did not finish loading.'}
+        try:
+            async with asyncio.timeout(10):
+                result = await self._request(session_id, 'dependencies', provenance=True, modules=list(modules))
+            if self.workers.get(session_id) is not row or row['process'].returncode is not None:
+                return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Worker changed during loaded-source inspection.'}
+            return {**result, 'sessionId': session_id, 'workerInstance': f"{row['process'].pid}:{row['started_at']}"}
+        except (RuntimeError, TimeoutError):
+            return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Loaded-source inspection did not return. No work was started.'}
+
     async def desktop_readiness(self, session_id):
         """Inspect only the mounted worker; do not revive retired conversations."""
         row = self.workers.get(session_id)

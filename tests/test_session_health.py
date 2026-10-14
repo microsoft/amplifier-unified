@@ -84,7 +84,7 @@ async def test_inspection_reports_structured_failure_without_raw_error_or_log_sc
         assert path.name != 'events.jsonl', 'Structured-only inspection does not start a log scan'
         return original_open(path, *args, **kwargs)
     monkeypatch.setattr(Path, 'open', no_events)
-    receipt = await app.dispatch('session.inspect', {'id': session['id']}, origin='agent')
+    receipt = await app.dispatch('session.inspect', {'id': session['id']}, origin='agent', caller_session_id=session['id'])
     report = receipt['result']
     assert report['failure'] == session['failure']
     assert report['capturedAt'] > 0
@@ -211,7 +211,7 @@ async def test_inspection_reads_legacy_root_error_and_exposes_identity_to_agent(
               {'event': 'provider:error', 'session_id': 'child', 'data': {'error': 'authentication failed'}},
               {'event': 'provider:error', 'session_id': 'child', 'data': {'session_id': source['id'], 'error': 'rate limit'}}]
     (folder / 'events.jsonl').write_text('\n'.join(json.dumps(row) for row in events) + '\n{partial')
-    receipt = await app.dispatch('session.inspect', {'id': source['id']}, origin='agent')
+    receipt = await app.dispatch('session.inspect', {'id': source['id']}, origin='agent', caller_session_id=source['id'])
     detail = receipt['result']
     assert detail['runtimeSessionId'] == source['id'] and detail['failure']['category'] == 'invalid_image'
     assert detail['failure']['errorType'] == 'InvalidRequestError'
