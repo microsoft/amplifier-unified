@@ -103,7 +103,7 @@ async def test_passive_preparation_preserves_failed_turn_evidence_and_history(se
     assert session['runtimeReport'] == {'bundle': 'test'}
     for field in ('status', 'error', 'errorAt', 'failure', 'execution', 'messages'):
         assert session.get(field) == before.get(field), field
-    receipt = await service.dispatch('session.inspect', {'id': session['id']}, origin='agent')
+    receipt = await service.dispatch('session.inspect', {'id': session['id']}, origin='agent', caller_session_id=session['id'])
     assert receipt['result']['failure']['category'] == 'invalid_image'
     assert receipt['result']['failure']['inputId'] == 'failed-input'
     assert receipt['result']['status'] == before['status']
