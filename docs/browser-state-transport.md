@@ -72,12 +72,14 @@ whose bootstrap key is unchanged.
 Subsequent updates travel in `state.shellResources` through the existing
 WebSocket/SSE state transport. Its complete bounded envelope is
 `{hostInstanceId, clientId, demandId, bootstrapKey, scope, instances}`. Each
-instance has a generation and named `{revision, value}` resources. The existing
+instance has a generation, monotonic `stateRevision`, a `pending` map, and named
+`{revision, value}` resources. The existing
 immutable state-delta baseline transmits changed branches only. Bounded queue
 coalescing remains safe because retained frames represent the complete current
 resource set, not an unacknowledged chain of partial shell events. Reconnect
 supplies a fresh state baseline. Late HTTP responses cannot overwrite a newer
-resource revision, and old host, module, demand or scope identities are rejected.
+instance state revision, including equal-value pending-to-ready transitions.
+Old host, module, demand or scope identities are rejected.
 
 Page names are `chatNavigation`, `homeNavigation`, `pinnedNavigation`,
 `recentNavigation`, `workspaceShortcuts`, `workspaceExplorer`, `sidebarSearch`,
@@ -116,6 +118,63 @@ local-owner overrides, duplicate identity rules, suppression and final filters.
 Unrelated native workspaces do not participate in that candidate scan. Arbitrary
 global filtered counts and first-page ordering can still scan eligible root facts;
 the reuse and workspace indexes do not claim to eliminate that cold-query cost.
+
+For opted-in bundled navigation, cold chat pages, workspace aggregates and mixed
+pin queries run in one lazy, disposable read-only process. The host captures the
+authorized scalar query and admitted scalar overlays; the worker opens its own
+SQLite connections and pins the existing application/native catalogs. It runs the
+same canonical SQL, including exact counts, aliases, suppression, ordering and
+page selection. It does not construct an AppService, admit a session, open a
+transcript, start a runtime or commit application data. Relevant root/workspace semantic generations,
+application-connection external-write tokens, file identities and current read demand
+must still agree before the host inserts a result into the existing bounded query
+cache. Unrelated application/selection revisions and child transcript/progress changes
+are not completion fences. Native cache changes use its canonical versioned
+writers; file discovery/rename/removal is reconciled through those generations.
+Unversioned direct SQL edits to the disposable native cache are not a supported
+mutation path: repair must invalidate or rebuild it. Source-file replacement and
+out-of-band application-database writes are still fenced.
+
+A cold miss returns promptly with `pending[name] = {status, retryAfterMs}`.
+Status is `pending` or `retry`. A prior value is retained only for the same
+descriptor and normalized query scope, and is explicitly displayed as updating;
+its counts are previous observations, not a completed current query. A changed
+filter/workspace/page omits old coverage and displays loading. Controller metadata
+stays immediate. Completion uses the existing client state notification, not a
+new transport or command replay. A resource failure has bounded backoff and an
+explicit read-only Retry; it cannot become an empty result or a busy retry loop.
+A source-change rejection gets one delayed retry for the still-current read,
+after one second. Another rejection requires explicit Retry. Replaced demand or
+host close cancels that delay; no command is replayed. Ordinary frames do not
+clear a failure when its cooldown expires. Only an explicit resource Retry/manual
+POST (after its five-second cooldown), a changed query or the one source-change
+retry can admit another read. An early explicit retry returns a bounded 429 error.
+Each complete instance entry advances `stateRevision` when pending status changes,
+even if the page value is equal. Late HTTP baselines therefore cannot restore a
+retry marker after a newer streamed completion.
+
+This process boundary is currently qualified on Linux. Other server platforms
+keep the existing synchronous canonical reader until native process-policy
+qualification is complete; they do not enter an unqualified retry loop.
+
+The query owner admits at most eight coalesced jobs and one active process. Each
+input is limited to 8 MiB (with bounded pre-copy scalar accounting), each result
+to 4 MiB and transport spool to 64 MiB; the existing display transport bounds
+worker address space/commit at 768 MiB. Workspace inputs contain only ID, path,
+name, availability and archive facts;
+archive membership and notice predicates exclude their payloads. SQLite
+work has a 10-second cooperative deadline within a 12-second transport deadline.
+Current clients refused by the queue cap receive an existing-stream wakeup when
+a slot opens. Queued obsolete work is dropped. An active read with no remaining
+subscriber is retired; one client's departure cannot cancel a shared reader. The process retires
+after 30 idle seconds and is awaited on host shutdown. Canonical data and commands
+have no lifetime dependency on this disposable process.
+
+Explicit full reads and independent custom snapshots preserve their synchronous
+contracts. This lane does not claim to move every snapshot operation: controller
+metadata, bounded exact selection lookups, archived-ID checks, and workspace page
+assembly remain on the host. Native discovery/reconciliation isolation is a
+separate implementation step.
 
 The shared workspace cache retains only its current aggregate/registry generation
 within the existing bounded query cache. Old local public-fact rows derive the

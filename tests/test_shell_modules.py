@@ -22,6 +22,20 @@ async def service(tmp_path):
     await app.close()
 
 
+async def settled_resources(app, identity):
+    """Observe completed current pages before testing reuse of a warm snapshot."""
+    import asyncio
+    for _ in range(12):
+        with app.clients.bind(identity):
+            result = app.shell.resources.snapshot(identity)
+        if not any(entry['pending'] for entry in result['instances'].values()):
+            return result
+        task = app.shell.resources.queries.runner
+        assert task is not None, result
+        await asyncio.wait_for(asyncio.shield(task), 15)
+    raise AssertionError('Current shell resources did not settle')
+
+
 async def command(app, name, **args):
     return await app.dispatch(name, args, origin='agent')
 

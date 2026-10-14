@@ -1028,24 +1028,39 @@ async def test_promoted_paged_chat_retains_earlier_history_offsets_and_web_messa
     assert [message['nativeIndex'] for message in session['messages']] == list(range(207))
 
 
-async def test_canonical_manual_title_refreshes_after_web_and_cli_renames(tmp_path, app_factory):
+@pytest.mark.parametrize('slice_budget', [None, 1])
+async def test_canonical_manual_title_refreshes_after_web_and_cli_renames(tmp_path, app_factory, monkeypatch, slice_budget):
     directory = native_session(tmp_path / 'cli', 'named-chat', metadata={'name_source': 'manual', 'name': 'First CLI title'})
     app = app_factory()
-    await app.history.refresh()
-    row = native_rows(app)[0]
+    if slice_budget is not None:
+        app.history.index._recovery_budget = slice_budget
+        monkeypatch.setattr(app.history.index, '_invalidations', lambda: (False, set()))
+
+    async def refresh_name(expected):
+        # A forced refresh advances bounded discovery, not an eager full scan.
+        # Drive those slices without sleeping or weakening the exact title.
+        for _ in range(64):
+            await app.history.refresh()
+            rows = native_rows(app)
+            if len(rows) == 1 and rows[0]['title'] == expected:
+                return rows[0]
+        assert [row['title'] for row in rows] == [expected]
+
+    row = await refresh_name('First CLI title')
     assert row['nativeNameSource'] == 'manual'
     assert row['titleSource'] == 'native'
     metadata_path = directory / 'metadata.json'
     metadata = json.loads(metadata_path.read_text())
     metadata['name'] = 'Second CLI title'
     metadata_path.write_text(json.dumps(metadata))
-    await app.history.refresh()
+    await refresh_name('Second CLI title')
     assert app._session(row['id'])['title'] == 'Second CLI title'
     await app.dispatch('session.rename', {'id': row['id'], 'title': 'User web title'})
     metadata['name'] = 'Third CLI title'
     metadata_path.write_text(json.dumps(metadata))
-    await app.history.refresh()
+    await refresh_name('Third CLI title')
     assert app._session(row['id'])['title'] == 'Third CLI title'
+    assert not app.runtime.started and not app.runtime.sent
     await app.close()
     restored = app_factory()
     await restored.history.refresh()

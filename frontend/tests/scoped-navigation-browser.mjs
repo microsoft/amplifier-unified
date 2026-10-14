@@ -10,12 +10,12 @@ import {chromium,expect} from '@playwright/test';
 // No model calls, timing ceilings, or private application state are involved.
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-scoped-navigation';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),
- [fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','pipe']});
+ [fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls','--scoped-query-control'],{stdio:['ignore','pipe','pipe']});
 const base=['pinnedNavigation','recentNavigation','workspaceShortcuts'];
 const requested=extra=>[...base,...extra].sort();
 let browser,page,fixtureHome,allowSearch=()=>{},releaseSearch=()=>{},releaseReplacement=()=>{},primaryError;
 let stderr='';fixture.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-16384)});
-const samples=[],checks=[],errors=[],responseTasks=[],frames=[];let bootstrapCount=0,subscriptionCount=0;
+const samples=[],checks=[],errors=[],responseTasks=[],frames=[];let bootstrapCount=0,subscriptionCount=0,expectRetryCooldown=false;
 function shape(shell,resources){
  const builtin=(shell.resolvedInstances||[]).filter(row=>['builtin.chats','builtin.workspaces'].includes(row.package));
  assert.ok(builtin.length,'Built-in navigation must be present');
@@ -58,9 +58,14 @@ try{
   const sample={resources:demand.resources,demandId:demand.demandId,bootstrap,status:response.status()};samples.push(sample);
   responseTasks.push((async()=>{try{
    const text=await response.text(),wire=JSON.parse(text),envelope=bootstrap?wire.shellResources:wire;sample.bytes=Buffer.byteLength(text);
+   if(response.status()===429){assert.ok(expectRetryCooldown&&!bootstrap&&demand.reason==='manual');sample.valid=true;sample.cooldown=true;return}
    if(bootstrap){assert.equal(Object.hasOwn(wire,'snapshots'),false);assert.ok(wire.instanceGenerations);assert.ok(wire.shellBootstrapKey)}
    assert.equal(envelope.demandId,demand.demandId);
-   for(const entry of Object.values(envelope.instances))assert.deepEqual(Object.keys(entry.resources).sort(),['context',...demand.resources].sort());
+   for(const entry of Object.values(envelope.instances)){
+    assert.ok(Number.isSafeInteger(entry.stateRevision));assert.ok(entry.resources.context);
+    assert.deepEqual([...new Set([...Object.keys(entry.resources),...Object.keys(entry.pending)])].sort(),['context',...demand.resources].sort());
+    for(const value of Object.values(entry.pending))assert.ok(['pending','retry'].includes(value.status));
+   }
    sample.valid=true;sample.keys=Object.keys(envelope.instances);
   }catch(error){sample.error=String(error)}})());
  });
@@ -69,8 +74,9 @@ try{
  const shell=()=>page.evaluate(()=>window.amplifier.getShellState());
  const waitCoverage=async extra=>{
   const resources=requested(extra);
-  await expect.poll(async()=>{const value=await shell();return (value?.resolvedInstances||[]).filter(row=>['builtin.chats','builtin.workspaces'].includes(row.package)).map(row=>value.snapshots[row.id]?.navigationResources)}).toEqual([resources,resources]);
-  shape(await shell(),resources);checks.push({resources});
+  let observed;
+  await expect.poll(async()=>{observed=await shell();return (observed?.resolvedInstances||[]).filter(row=>['builtin.chats','builtin.workspaces'].includes(row.package)).map(row=>{const snapshot=observed.snapshots[row.id];return Object.keys(snapshot?.navigationResourcePending||{}).length?[]:snapshot?.navigationResources})}).toEqual([resources,resources]);
+  shape(observed,resources);checks.push({resources});
  };
  await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await expect(composer).toBeVisible();await waitCoverage([]);
  const home=path.dirname((await state()).workspaceDefaults.root),workspaces=[],chats=[];fixtureHome=home;
@@ -94,7 +100,8 @@ try{
  await expect(recent.locator('[data-session-id]')).toHaveCount(20);
  const beforeRecent={bootstrapCount,subscriptionCount};
  await recent.getByRole('button',{name:'Load older chats',exact:true}).click();
- await expect.poll(async()=>(await shell()).snapshots.chats.recentNavigation.scope.limit).toBe(40);
+ // A changed query omits its old page while the exact replacement is pending.
+ await expect.poll(async()=>(await shell())?.snapshots?.chats?.recentNavigation?.scope?.limit).toBe(40);
  await expect.poll(()=>recent.locator('[data-session-id]').count()).toBeGreaterThan(20);
  await expect(recent.getByRole('alert')).toHaveCount(0);assert.deepEqual({bootstrapCount,subscriptionCount},beforeRecent);
  checks.push({recentReceiptWaitsForStream:true,noRecentReadAfterCommand:true});
@@ -135,6 +142,51 @@ try{
  await body.getByRole('button',{name:'Files',exact:true}).click();await waitCoverage([]);await expect(body.getByRole('button',{name:'Scoped B.txt',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Search chats',exact:true}).click();await waitCoverage(['sidebarSearch']);
  for(const title of ['Scoped A chat','Scoped B chat'])await expect(body.locator('[data-session-id]').getByRole('button',{name:title,exact:true})).toBeVisible();
+ // Hold only fixture-owned Search computation; the real process runs after
+ // release. Existing rows stay visible, reads never replay a user command, and
+ // an explicit retry settles through the normal resource owner and stream.
+ const queryControl=async mode=>{
+  const response=await page.request.post(url+'/fixture/scoped-query',{data:{mode}});
+  assert.equal(response.status(),200);return response.json();
+ };
+ await queryControl('hold');
+ await act('session.rename',{id:chats[1],title:'Scoped B refreshed'});
+ await expect.poll(async()=>(await (await page.request.get(url+'/fixture/scoped-query')).json()).entered).toBeGreaterThan(0);
+ await expect(body.getByRole('status').filter({hasText:'Updating chat search'})).toBeVisible();
+ await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toBeVisible();
+ // Canvas is intentionally retained but hidden on Search. Exercise a visible
+ // local disclosure without changing the held query's demand or forcing input
+ // into the hidden frame; exact Canvas draft conservation is checked below.
+ const beforeDisclosureRequests=subscriptionCount;
+ const filters=body.locator('.a-search-filters');
+ await filters.locator('summary').click();
+ await expect(filters.getByRole('combobox',{name:'Filter chats by location',exact:true})).toBeVisible();
+ await filters.locator('summary').click();
+ await expect(filters.getByRole('combobox',{name:'Filter chats by location',exact:true})).toBeHidden();
+ assert.equal(subscriptionCount,beforeDisclosureRequests);
+ await queryControl('fail');
+ await expect(body.getByRole('button',{name:'Retry chat search',exact:true})).toBeVisible();
+ await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toBeVisible();
+ const priorEntered=(await queryControl('hold')).entered;
+ expectRetryCooldown=true;
+ const rejectedRetry=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/shell/resources'&&response.request().postDataJSON()?.reason==='manual');
+ await body.getByRole('button',{name:'Retry chat search',exact:true}).click();
+ assert.equal((await rejectedRetry).status(),429);
+ await expect(body.getByRole('alert')).toContainText('Navigation resources could not be refreshed');
+ await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toBeVisible();
+ const beforeCooldownRequests=subscriptionCount;
+ // Exercise the documented five-second refusal window; no polling POST or
+ // automatic retry is allowed when the window expires.
+ await page.waitForTimeout(5100);
+ assert.equal(subscriptionCount,beforeCooldownRequests);
+ assert.equal((await (await page.request.get(url+'/fixture/scoped-query')).json()).entered,priorEntered);
+ expectRetryCooldown=false;
+ await body.getByRole('button',{name:'Retry chat search',exact:true}).click();
+ await expect.poll(async()=>(await (await page.request.get(url+'/fixture/scoped-query')).json()).entered).toBeGreaterThan(priorEntered);
+ await queryControl('release');await waitCoverage(['sidebarSearch']);
+ await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B refreshed',exact:true})).toBeVisible();
+ await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toHaveCount(0);
+ checks.push({heldQueryRetainsRows:true,queryFailureExplicitRetry:true,queryWaitKeepsVisibleControlsResponsive:true});
  await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'Your workspaces',exact:true})).toBeVisible();
  await act('session.select',{id:chats[0]});await waitCoverage([]);await expect(composer).toHaveDraft('Keep this unsent scoped-navigation draft');
  assert.equal(await page.evaluate(()=>window.scopedDocument===document.querySelector('#amp-one')&&window.scopedFrame===document.querySelector('.a-canvas-html')),true);

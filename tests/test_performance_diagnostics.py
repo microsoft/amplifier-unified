@@ -54,6 +54,19 @@ def test_projection_failure_evidence_is_bounded_numeric_and_detached():
     assert len(diagnostics.snapshot()['historyProjectionFailures']) == 16
 
 
+def test_projection_failure_is_correlated_to_host_requested_chat_not_worker_identity():
+    diagnostics = PerformanceDiagnostics()
+    failure = {'stage': 'source_retain', 'sessionId': 'untrusted-worker-identity'}
+    diagnostics.record_projection_failure('memory_limit', failure, session_id='first-chat')
+    diagnostics.record_projection_failure('worker_failed', {'stage': 'setup_import'}, session_id='second-chat')
+    diagnostics.record_projection_failure('memory_limit', failure)
+    rows = diagnostics.snapshot()['historyProjectionFailures']
+    assert [row.get('sessionId') for row in rows] == ['first-chat', 'second-chat', None]
+    assert failure['sessionId'] == 'untrusted-worker-identity'
+    diagnostics.record_projection_failure('memory_limit', failure, session_id='x' * 500)
+    assert len(diagnostics.snapshot()['historyProjectionFailures'][-1]['sessionId']) == 200
+
+
 async def test_wait_cancellation_and_monitor_cleanup():
     diagnostics = PerformanceDiagnostics()
     service = SimpleNamespace(performance_diagnostics=diagnostics)

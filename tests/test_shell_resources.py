@@ -31,7 +31,7 @@ class Shell:
     def recent_key(self, client, instance):
         return (self.service.clients.current.get(), instance['id'])
 
-    def navigation(self, client, instance, *, identity, navigation_resources, context_visible_ids=()):
+    def navigation(self, client, instance, *, identity, navigation_resources, context_visible_ids=(), _page_only=False):
         self.calls.append(frozenset(navigation_resources))
         result = {'view': self.scoped_state(client, instance)['view'], 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
                   'selectedSessionId': self.service.state['selectedSessionId'],
@@ -112,11 +112,11 @@ def test_semantic_catalog_global_and_owner_changes_invalidate_without_bootstrap_
     owner.shell.saved['views']['nav']={'view':{'navPinnedPage':2},'viewRevision':1}
     owner.snapshot('one')
     assert owner.bootstrap_key('one')==bootstrap
-    assert owner.shell.calls[calls:] and 'sidebarPinned' in owner.shell.calls[calls]
+    assert any('sidebarPinned' in call for call in owner.shell.calls[calls:])
     calls=len(owner.shell.calls);owner.invalidate({'locationListing'});owner.snapshot('one')
     assert owner.shell.calls[calls:]==[frozenset()]
     calls=len(owner.shell.calls);owner.shell.service.directory.observation_revision.update(navigation=2,root_navigation=2);owner.snapshot('one')
-    assert owner.shell.calls[calls:]==[frozenset({'recentNavigation','sidebarPinned'}),frozenset()]
+    assert owner.shell.calls[calls:]==[frozenset({'recentNavigation'}),frozenset({'sidebarPinned'}),frozenset()]
     owner.shell.saved['views']['nav']['generation']=1
     assert owner.bootstrap_key('one')!=bootstrap
     assert first['instances']['nav']['generation']==0

@@ -92,6 +92,11 @@ class ShellResources:
         self.epochs = {key: 0 for key in GLOBAL_KEYS}
         self.unknown_epoch = 0
         self.total_bytes = 0
+        from .shell_query_owner import ShellQueryOwner
+        self.queries = ShellQueryOwner(self)
+
+    async def close(self):
+        await self.queries.close()
 
     def invalidate(self, global_keys=None):
         """Called with actual changed global keys after a canonical commit."""
@@ -118,6 +123,7 @@ class ShellResources:
                 # disposable projections, not durable client views.
                 for attribute in ('_client_snapshots', '_client_snapshot_preferences'):
                     getattr(service, attribute, {}).pop(identity, None)
+                self.queries.prune()
 
     def registered(self, identity):
         self._prune()
@@ -227,7 +233,7 @@ class ShellResources:
                 scoped.get('selectedSessionId'), encoded({key: query.get(key) for key in fields}))
 
     @staticmethod
-    def _record(value, previous):
+    def _record(value, previous, previous_revision=0):
         wire = encoded(value).encode()
         size = len(wire)
         if size > MAX_CLIENT_BYTES:
@@ -235,8 +241,15 @@ class ShellResources:
         digest = hashlib.sha256(wire).hexdigest()
         if previous is not None and digest == previous['_digest']:
             return previous
-        return {'revision': previous['revision'] + 1 if previous else 1,
+        return {'revision': previous['revision'] + 1 if previous else previous_revision + 1,
                 'value': deepcopy(value), '_digest': digest, '_bytes': size}
+
+    @staticmethod
+    def _entry(generation, own, pending, prior):
+        same = prior.get('generation') == generation and prior.get('resources') == own and prior.get('pending', {}) == pending
+        versions = {**prior.get('versions', {}), **{key: value['revision'] for key, value in own.items()}}
+        return {'generation': generation, 'resources': own, 'pending': pending, 'versions': versions,
+            'stateRevision': prior.get('stateRevision', 0) + (not same)}
 
     def snapshot(self, identity):
         self._prune()
@@ -292,7 +305,7 @@ class ShellResources:
             prior = registration['instances'].get(name, {})
             previous = prior.get('resources', {}) if prior.get('generation') == generation else {}
             previous_keys = registration['keys'].get(name, {}) if prior.get('generation') == generation else {}
-            own, own_keys = {}, {}
+            own, own_keys, pending = {}, {}, {}
             if custom:
                 key = (bootstrap, state.get('revision'), navigation_revision, self._epochs(GLOBAL_KEYS),
                        encoded(client.get('views', {}).get(name, {})))
@@ -304,14 +317,15 @@ class ShellResources:
                     try:
                         self.shell.manifest(instance['package'])
                     except Exception:
-                        instances[name] = {'generation': generation, 'resources': {}}
+                        instances[name] = self._entry(generation, {}, {}, prior)
                         keys[name] = {}
                         continue
                     count(self.shell.service, 'shell.resources.custom.build')
                     with measure(self.shell.service, 'shell.resources.custom', synchronous=True):
                         snapshot = self.shell.snapshot(client, instance, identity=identity)
                         value = self._record({**snapshot, 'viewRevision':
-                            client.get('views', {}).get(name, {}).get('viewRevision', 0)}, value)
+                            client.get('views', {}).get(name, {}).get('viewRevision', 0)}, value,
+                            prior.get('versions', {}).get('customSnapshot', 0))
                 own['customSnapshot'], own_keys['customSnapshot'] = value, key
             else:
                 scoped = self.shell.scoped_state(client, instance)
@@ -319,7 +333,7 @@ class ShellResources:
                 for resource in registration['wanted']:
                     key = (bootstrap, self._page_key(resource, scoped, instance, navigation_revision, client, workspace_revision, root_navigation_revision))
                     own_keys[resource] = key
-                    if previous_keys.get(resource) == key:
+                    if previous_keys.get(resource) == key and resource not in prior.get('pending', {}):
                         own[resource] = previous[resource]
                     else:
                         dirty.add(resource)
@@ -330,11 +344,27 @@ class ShellResources:
                                 workspace_page=resource in {'workspaceExplorer', 'workspaceShortcuts', 'workspaceOverview'})
                             diagnostics.record_resource_rebuild(resource, instance['package'], reasons, globals_changed)
                 if dirty:
-                    count(self.shell.service, 'shell.resources.pages.build', len(dirty))
-                    with measure(self.shell.service, 'shell.resources.pages', synchronous=True):
-                        built = self.shell.navigation(client, instance, identity=identity, navigation_resources=frozenset(dirty))
-                    for resource in dirty:
-                        own[resource] = self._record(page_value(built, resource), previous.get(resource))
+                    from .shell_query_owner import PendingQuery
+                    for resource in sorted(dirty):
+                        key = own_keys[resource]
+                        try:
+                            count(self.shell.service, 'shell.resources.pages.build')
+                            with self.queries.resource(identity, name, resource, key), measure(
+                                    self.shell.service, 'shell.resources.pages', synchronous=True):
+                                built = self.shell.navigation(client, instance, identity=identity,
+                                    navigation_resources=frozenset({resource}), _page_only=True)
+                            own[resource] = self._record(page_value(built, resource), previous.get(resource),
+                                prior.get('versions', {}).get(resource, 0))
+                        except PendingQuery as wait:
+                            pending[resource] = {'status': 'retry' if wait.retry_after else 'pending',
+                                                 'retryAfterMs': wait.retry_after}
+                            old_key = previous_keys.get(resource)
+                            # Retain only a value for the same query/descriptor.
+                            # Its explicit pending marker distinguishes old facts
+                            # from a newly completed exact count/page.
+                            if (resource in previous and old_key and old_key[0] == key[0]
+                                    and old_key[1][2:] == key[1][2:]):
+                                own[resource] = previous[resource]
                 context_key = (bootstrap, self._epochs(GLOBAL_KEYS), navigation_revision,
                     encoded(scoped['view']), encoded(client.get('views', {}).get(name, {})),
                     tuple(registration['scope']), tuple(sorted((key, value['revision']) for key, value in own.items())))
@@ -347,18 +377,20 @@ class ShellResources:
                         built = self.shell.navigation(client, instance, identity=identity,
                             navigation_resources=frozenset(), context_visible_ids=visible_ids(own))
                     own['context'] = self._record(context_value(built), previous.get('context'))
-            instances[name] = {'generation': generation, 'resources': own}
+            instances[name] = self._entry(generation, own, pending, prior)
             keys[name] = own_keys
         size = sum(value['_bytes'] for instance in instances.values() for value in instance['resources'].values())
         if size > MAX_CLIENT_BYTES or self.total_bytes - registration['bytes'] + size > MAX_TOTAL_BYTES:
             raise ResourceLimit()
         envelope = {'hostInstanceId': self.shell.service.instance_id, 'clientId': identity,
             'demandId': registration['demandId'], 'bootstrapKey': bootstrap, 'scope': list(registration['scope']),
-            'instances': {name: {'generation': item['generation'], 'resources': {
+            'instances': {name: {'generation': item['generation'], 'stateRevision': item.get('stateRevision', 0),
+                'pending': item.get('pending', {}), 'resources': {
                 key: {'revision': value['revision'], 'value': value['value']} for key, value in item['resources'].items()}}
                 for name, item in instances.items()}}
         self.total_bytes += size - registration['bytes']
         registration.update(instances=instances, keys=keys, bytes=size)
+        self.queries.prune()
         if registration['envelope'] == envelope:
             return registration['envelope']
         registration['envelope'] = envelope

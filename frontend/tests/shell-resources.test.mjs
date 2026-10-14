@@ -7,11 +7,11 @@ const demand={id:1,scope:['chat','workspace','chat',null,null],resources:['sideb
 const envelope=()=>({
  clientId:'client',hostInstanceId:'host',bootstrapKey:'key',demandId:1,scope:demand.scope,
  instances:{
-  chat:{generation:1,resources:{
+  chat:{generation:1,stateRevision:1,pending:{},resources:{
    context:{revision:1,value:{view:{draft:'private'},sidebarNavigation:{recentView:{query:'private'}}}},
    sidebarSearch:{revision:1,value:{sidebarNavigation:{search:{items:[{id:'one'}]}}}},
   }},
-  custom:{generation:3,resources:{customSnapshot:{revision:1,value:{ownField:42}}}},
+  custom:{generation:3,stateRevision:1,pending:{},resources:{customSnapshot:{revision:1,value:{ownField:42}}}},
  },
 });
 
@@ -28,7 +28,7 @@ test('missing resources stay uncovered and stale identities or scopes cannot bec
 });
 test('per-resource ordering never resurrects removed coverage or crosses demand identities',()=>{
  const prior=envelope();prior.instances.chat.resources.sidebarSearch.revision=5;
- const next=envelope();assert.equal(retainResourceVersions(prior,next).instances.chat.resources.sidebarSearch.revision,5);
+ const next=envelope();next.instances.chat.stateRevision=2;assert.equal(retainResourceVersions(prior,next).instances.chat.resources.sidebarSearch.revision,5);
  delete next.instances.chat.resources.sidebarSearch;assert.equal(retainResourceVersions(prior,next).instances.chat.resources.sidebarSearch,undefined);
  assert.equal(retainResourceVersions(prior,{...envelope(),demandId:2}).instances.chat.resources.sidebarSearch.revision,1);
 });
@@ -94,4 +94,31 @@ test('revision diagnostics never read payloads and remain bounded across many in
  assert.equal(result.resourceRevisions.changedRecords,200*64*13);assert.equal(result.resourceRevisions.changedByName.recentNavigation,200*64);
  assert.equal(result.resourceRevisions.pageRecords,200*64*11);
  assert.doesNotMatch(f.text(),/private|draft|client|host/);
+});
+
+test('pending query assembly keeps matching rows and leaves initial coverage absent',()=>{
+ const value=envelope();value.instances.chat.stateRevision=2;
+ value.instances.chat.pending={sidebarSearch:{status:'pending',retryAfterMs:0}};
+ const updating=resourceSnapshots(bootstrap,value,demand).chat;
+ assert.equal(updating.sidebarNavigation.search.items[0].id,'one');
+ assert.equal(updating.navigationResourcePending.sidebarSearch.status,'pending');
+ delete value.instances.chat.resources.sidebarSearch;
+ const initial=resourceSnapshots(bootstrap,value,demand).chat;
+ assert.deepEqual(initial.navigationResources,[]);assert.equal(initial.sidebarNavigation.search,undefined);
+ assert.equal(initial.navigationResourcePending.sidebarSearch.status,'pending');
+ for(const entry of [{stateRevision:-1},{stateRevision:undefined},{pending:{sidebarSearch:{status:'complete'}}}])
+  assert.equal(resourceSnapshots(bootstrap,{...value,instances:{...value.instances,chat:{...value.instances.chat,...entry}}},demand),null);
+});
+test('late pending and retry entries cannot rewind equal-value completion',()=>{
+ const ready=envelope();ready.instances.chat.stateRevision=4;
+ for(const status of ['pending','retry']){
+  const old=envelope();old.instances.chat.stateRevision=3;old.instances.chat.pending={sidebarSearch:{status,retryAfterMs:1000}};
+  const retained=retainResourceVersions(ready,old);
+  assert.equal(retained.instances.chat,ready.instances.chat);
+  assert.deepEqual(resourceSnapshots(bootstrap,retained,demand).chat.navigationResourcePending,{});
+ }
+ const next=envelope();next.instances.chat.stateRevision=5;next.instances.chat.pending={sidebarSearch:{status:'pending'}};
+ delete next.instances.chat.resources.sidebarSearch;
+ assert.equal(retainResourceVersions(ready,next).instances.chat.resources.sidebarSearch,undefined);
+ const switched={...next,demandId:2};assert.equal(retainResourceVersions(ready,switched),switched);
 });

@@ -359,7 +359,8 @@ class ShellModules:
             view['navChatScope'] = 'all'
         return {**state, 'selectedWorkspaceId': workspace_id, 'view': view}
 
-    def navigation(self, client, instance, *, identity=None, navigation_resources=None, context_visible_ids=None):
+    def navigation(self, client, instance, *, identity=None, navigation_resources=None, context_visible_ids=None,
+                   _page_only=False):
         from .shell_navigation_demand import resources_for
         requested = resources_for(instance, navigation_resources)
         wants = lambda name: requested is None or name in requested
@@ -369,7 +370,9 @@ class ShellModules:
         from .pinned_navigation import ordered_ids
         state = self.service.state
         projections = self.service.projections
-        scoped = {**self.scoped_state(client, instance), 'attention': projections.attention(state)}
+        scoped = self.scoped_state(client, instance)
+        if not _page_only:
+            scoped = {**scoped, 'attention': projections.attention(state)}
         view, workspace_id = scoped['view'], scoped['selectedWorkspaceId']
         from .chat_navigation import RECENT_LIMITS
         # Preserve existing initial preferences, but never migrate an expanded
@@ -416,14 +419,14 @@ class ShellModules:
         # Exact review receipts for these bounded rows; never error bodies or
         # unrelated settings/permission notices from the full attention inbox.
         error_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
-                          for item in scoped['attention']['items']
+                          for item in scoped.get('attention', {}).get('items', ()) if not _page_only
                           if item.get('sessionId') in visible_ids
                           and item['id'] == 'session:' + item['sessionId']]
         overview = ({'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})) if wants('workspaceOverview') else None
         shortcuts = projections.workspaces({**scoped, 'view': {**view, 'navWorkspaceMode': 'recent', 'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}}) if wants('workspaceShortcuts') else None
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
-        result = {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
+        result = {} if _page_only else {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
                 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
                 'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
@@ -452,9 +455,10 @@ class ShellModules:
             result['unpinnedWorkspaceShortcuts'] = [row for row in projections.workspace_shortcuts(scoped) if not pinned_scope or row.get('workspaceId') == workspace_id][:6]
         if wants('workspaceExplorer'):
             result['workspaceExplorer'] = projections.workspaces(scoped)
-        result['conversationOrganization'] = organization_projection(state,
-            {row['id'] for row in chat_page['items']} if requested is None else visible_ids,
-            directory=projections.directory)
+        if not _page_only:
+            result['conversationOrganization'] = organization_projection(state,
+                {row['id'] for row in chat_page['items']} if requested is None else visible_ids,
+                directory=projections.directory)
         if requested is not None:
             result['navigationResources'] = sorted(requested)
         return result
