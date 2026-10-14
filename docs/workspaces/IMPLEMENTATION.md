@@ -34,8 +34,26 @@ source/provider-delivery checks pass with one optional module skip. All 668
 frontend tests pass, the production frontend builds, and the new browser journey
 passes private drafts, overlap, explicit reads, navigation, stale revision,
 reload, lost-response retry, pagination, mobile layout, clearing and idle
-transition. Browser activity is scripted and sends no model input. The candidate
+transition. The existing two-peer/two-round coordination browser journey also
+passes; its no-paperwork assertion now excludes the optional collapsed file
+declaration form. Browser activity is scripted and sends no model input. The candidate
 wheel's 290 application/worktree Python files match source bytes.
+
+Two bounded two-round checks through a fresh real-provider worker and the
+installed candidate pass. The worker identifies an independent peer from ambient
+context, reads its declaration, declares the same file and verifies overlap.
+After the host marks that synthetic peer idle, it observes the new active set
+and clears only its own declaration. Both idle-to-idle and immediate ordinary
+follow-up delivery pass; file bytes and the peer's declaration remain unchanged.
+Only the source worker calls the real provider. Peer activity is a scripted host
+observation, not a second concurrently working model.
+
+The first immediate-follow-up probe omitted the API's explicit ordinary-message
+handoff flag and requested generation-bound steering. That input was retained
+rather than moved to a new turn; the probe timed out without a runtime error.
+The browser uses `allowNextTurn` with the observed generation, and that exact
+semantics passes the corrected check. The failed probe is retained as evidence,
+not treated as a product regression or a successful two-round run.
 
 Shared-folder editing remains cooperative. This slice does not enforce stale
 file writes, grant peer control, provision resources, create assignment-wide
