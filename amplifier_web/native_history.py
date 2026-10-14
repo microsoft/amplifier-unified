@@ -118,6 +118,10 @@ class NativeHistory:
     Returned values are detached from the cache and contain no conversation text.
     """
 
+    RECONCILE_INTERVAL = 15 * 60
+    UNWATCHED_RECONCILE_INTERVAL = 60
+    RECOVERY_SLICE_SECONDS = .025
+
     def __init__(self, home=None, *, known_workspaces=(), watch=False, cache_path=None):
         self.home = Path(home).expanduser().resolve() if home is not None else amplifier_home()
         self.known_workspaces = known_workspaces
@@ -817,19 +821,24 @@ class NativeHistory:
         self._recovery_modified.add(name)
         self._recovery_issues_changed = True
 
-    def _recovery_slice(self, known):
+    def _recovery_slice(self, known, *, watching=True):
         if self._recovery is None:
             self._recovery = self._recover_projects(known)
             self._recovery_status.update(phase='running', steps=0)
         start = time.monotonic()
         steps = 0
-        while steps < self._recovery_budget and time.monotonic() - start < .025:
+        while steps < self._recovery_budget and time.monotonic() - start < self.RECOVERY_SLICE_SECONDS:
             try:
                 next(self._recovery)
                 steps += 1
             except StopIteration:
                 self._recovery = None
-                self._reconcile_at = time.monotonic() + 60
+                # A failed pass is not fresh discovery. Retry unavailable
+                # storage sooner, while completed cold coverage stays cheap.
+                delay = (self.RECONCILE_INTERVAL
+                         if watching and self._recovery_status['phase'] == 'complete'
+                         else self.UNWATCHED_RECONCILE_INTERVAL)
+                self._reconcile_at = time.monotonic() + delay
                 break
         self._recovery_status['steps'] = steps
 
@@ -906,13 +915,21 @@ class NativeHistory:
             self._scan_original_projects = previous_projects
             self._recovery_modified = set()
             self._recovery_issues_changed = False
+            self._recovery_status['steps'] = 0
             self._reads = 0
             self._working_dirs = {}
             self._working_dir_slugs = {}
             watching, dirty = self._invalidations()
-            reconcile = force or time.monotonic() >= self._reconcile_at
+            now = time.monotonic()
+            if not watching:
+                # A lost watch must shorten a healthy-watch deadline, never
+                # continually postpone fallback discovery while it is absent.
+                self._reconcile_at = min(self._reconcile_at,
+                                         now + self.UNWATCHED_RECONCILE_INTERVAL)
+            reconcile = force or now >= self._reconcile_at
             if reconcile:
-                self._reconcile_at = time.monotonic() + 60
+                self._reconcile_at = now + (self.RECONCILE_INTERVAL if watching
+                                            else self.UNWATCHED_RECONCILE_INTERVAL)
             issues = [{'kind': 'unavailable-catalog-cache'}] if self._cache_error else []
             inputs = list(self.known_workspaces if known_workspaces is None else known_workspaces)
             signature = self._known_signature(inputs)
@@ -930,8 +947,9 @@ class NativeHistory:
             self._known_input = signature
             dirty_projects = {item[0] if isinstance(item, tuple) else item for item in dirty}
             wildcard = '*' in dirty_projects
-            incremental = (self._watch_enabled and _changes and not force
-                           and (self._snapshot_revision is not None or self._cached_start))
+            # Missing caches and unavailable watches still use bounded
+            # discovery. Neither condition admits an eager cold-library scan.
+            incremental = self._watch_enabled and _changes and not force
             if incremental:
                 # The previous detached journal retains old project objects.
                 # Discovery and missed-notification coverage advance separately.
@@ -1028,7 +1046,7 @@ class NativeHistory:
                                    if path.relative_to(self.home / 'projects').parts[0] in existing}
                     self._file_projects.intersection_update(existing)
             if incremental and (reconcile or wildcard or self._recovery is not None or self._recovery_urgent):
-                self._recovery_slice(known)
+                self._recovery_slice(known, watching=watching)
                 reconcile = False  # A slice is not a completed full-library merge.
             if incremental:
                 if projects or self._recovery_issues_changed:
@@ -1104,7 +1122,8 @@ class NativeHistory:
                     'reset': reset, 'workspaces': workspaces, 'sessions': upserts,
                     'removed': removed, 'removedProjects': sorted(removed_projects),
                     'issues': issues, 'projectCount': len(projects), **self._totals,
-                    'metadataReads': self._reads, 'reconciled': reconcile})
+                    'metadataReads': self._reads, 'reconciled': reconcile,
+                    'notificationsReady': watching})
                 changes['reconciliation'] = copy.deepcopy(self._recovery_status)
                 changes['base'] = since
                 return self._snapshot_revision, changes

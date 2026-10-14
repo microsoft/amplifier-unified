@@ -32,11 +32,26 @@ with revision checks; a failed save removes only that edit, preserving any newer
 pending choice. Authoritative execution and agent actions keep their existing
 admission and confirmation behavior.
 
-Native history uses file notifications to invalidate the affected project.
-Idle checks avoid rebuilding the catalog. Metadata/transcript changes and
-directory creation or removal matter; runtime event logs and browser checkpoints
-do not. A full stat reconciliation runs at least once per minute, manual refresh
-forces reconciliation, and unavailable file watches fall back to stat discovery.
+Native history uses file notifications to invalidate affected sessions/projects.
+Empty metadata deltas avoid rebuilding the catalog or publishing unchanged state.
+Metadata/transcript changes and directory creation or removal matter; runtime
+event logs and browser checkpoints do not. Cold metadata discovery, including
+startup without a usable cache, advances in slices of at most 64 generator steps
+with a cooperative 25 ms budget, normally once per second. Individual filesystem
+operations can exceed that budget. Session-specific notifications are serviced
+before cold work; project hints join the recovery queue at directory boundaries.
+Pending notifications wake follow-up work after 100 ms. Selected/subscribed
+transcript checks and fresh canonical execution admission remain independent of
+cold discovery.
+
+After a completed pass with working notifications, cold reconciliation is due
+again after 15 minutes. Without notifications, or after an unavailable pass, a new
+bounded pass is due after 60 seconds; losing a working watch shortens any later
+deadline. Neither failure restores eager whole-library background scans. Manual
+refresh still forces reconciliation. Discovery exposes its actual phase and last
+completed time; partial coverage is not advertised as complete and there is no
+fixed whole-library completion deadline. Diagnostic counters distinguish empty
+deltas, skipped/full/delta merges, metadata reads and actual recovery steps.
 Activity projections independently avoid rereading unchanged event files and
 rebuild when a canonical association or lifecycle input, file identity, size,
 timestamp or child changes. Drafts, streamed text and worker progress labels do

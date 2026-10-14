@@ -12,7 +12,7 @@ import time
 import uuid
 
 from .history_read_retry import retry_indexed_read
-from .performance_diagnostics import measured, measure, TimedLock
+from .performance_diagnostics import measured, measure, count, TimedLock
 from .session_files import amplifier_home, project_slug
 from .managed_chats import catalog_locations
 from amplifier_foundation.session.history import SessionHistoryStore
@@ -426,12 +426,13 @@ class AutomaticHistory:
             except (OSError, ValueError, sqlite3.Error):
                 # Optional naming cannot stop native catalog discovery.
                 pass
-            # Idle waits remain cheap. Recovery slices yield between bounded
-            # probes rather than spacing every 64 sessions fifteen seconds apart.
-            recovering = (getattr(self.index, '_recovery', None) is not None
-                          or bool(getattr(self.index, '_recovery_urgent', ()))
-                          or bool(getattr(self.index, '_pending_invalidations', ())))
-            await asyncio.sleep(.1 if recovering else 15)
+            # Prioritize targeted watcher backlog. Ordinary cold discovery
+            # gets one cooperative 64-step/25ms slice per second; it must not
+            # keep the host busy reconciling thousands of dormant histories.
+            targeted = (bool(getattr(self.index, '_recovery_urgent', ()))
+                        or bool(getattr(self.index, '_pending_invalidations', ())))
+            recovering = getattr(self.index, '_recovery', None) is not None
+            await asyncio.sleep(.1 if targeted else 1 if recovering else 15)
 
     def hide_session(self, session):
         project = session.get('nativeProject') or project_slug(session['workspace'])
@@ -454,7 +455,9 @@ class AutomaticHistory:
                 cursor = self._availability_cursor % max(1, len(known))
                 availability = known if force else known[cursor:cursor + 64]
                 self._availability_cursor = (cursor + len(availability)) % max(1, len(known))
+                availability_before = [row.get('available') for row in availability]
                 await asyncio.to_thread(refresh_workspace_availability, availability)
+                availability_changed = availability_before != [row.get('available') for row in availability]
                 delta_mode = (hasattr(self.service, '_history_local_revision')
                           and 'scan_if_changed' not in self.index.__dict__)
                 if delta_mode:
@@ -494,6 +497,35 @@ class AutomaticHistory:
                         self._native_snapshot = incoming
                         self._native_revision = revision_token
                     snapshot = dict(self._native_snapshot)
+                if delta_mode:
+                    count(self.service, 'catalog.delta.rows', len(incoming['sessions']))
+                    count(self.service, 'catalog.metadata.reads', incoming.get('metadataReads', 0))
+                    count(self.service, 'catalog.recovery.steps', incoming.get('reconciliation', {}).get('steps', 0))
+                    if not incoming.get('notificationsReady', False):
+                        count(self.service, 'catalog.scan.unwatched')
+                    empty_delta = not any(incoming[key] for key in
+                                          ('sessions', 'workspaces', 'removed', 'removedProjects'))
+                    if empty_delta:
+                        count(self.service, 'catalog.scan.empty')
+                    skipped = False
+                    if empty_delta and not full_merge and not availability_changed:
+                        async with self.service.lock:
+                            if self.service.closed:
+                                return
+                            # A local commit can win while canonical probing runs
+                            # off-thread. Never acknowledge its epoch without the
+                            # existing full overlay/ownership reconciliation.
+                            if (self._local_revision == self.service._history_local_revision
+                                    and self._catalog_facts_unchanged(incoming)):
+                                self.last_scan = snapshot
+                                self._native_revision = revision_token
+                                skipped = True
+                        if skipped:
+                            count(self.service, 'catalog.merge.skipped')
+                            # Empty metadata is not proof of an unchanged open
+                            # transcript: watchers are hints, including on loss.
+                            await self._refresh_selected_history()
+                            return
                 # Reconcile local changes even when native files are unchanged:
                 # hidden rows, tombstones, managed markers and selected views
                 # have independent invalidation. Filtering must not alter the
@@ -511,10 +543,13 @@ class AutomaticHistory:
                         full_merge = True
                         self._existing = None
                         managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
+                    count(self.service, 'catalog.merge.full' if not delta_mode or full_merge
+                          else 'catalog.merge.delta')
                     from .managed_deletion import tombstones
                     deleted_projects = {row['project'] for row in tombstones(self.service.db)}
                     snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
                     snapshot['sessions'] = [row for row in snapshot['sessions'] if row.get('nativeProject') not in deleted_projects]
+                    count(self.service, 'catalog.merge.rows', len(snapshot['sessions']))
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
                     workspace_pins_changed = False
                     worker_detail_only = (delta_mode and not full_merge
@@ -733,21 +768,12 @@ class AutomaticHistory:
                     if (state['sharedHistory'].get('issues', []) != issues[:100]
                             or state['sharedHistory'].get('issueCount', 0) != len(issues)):
                         changed = True
-                    counts = ({key: incoming[key] for key in ('projectCount', 'sessionCount', 'workerSessionCount', 'internalSessionCount')}
+                    counts = (self._public_catalog_counts(incoming, deleted_projects)
                               if delta_mode else {
                                   'projectCount': len(snapshot['workspaces']),
                                   'sessionCount': sum(row['sessionKind'] == 'root' for row in snapshot['sessions']),
                                   'workerSessionCount': sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']),
                                   'internalSessionCount': sum(row['sessionKind'] == 'internal' for row in snapshot['sessions'])})
-                    if delta_mode:
-                        # Subtract only tombstoned project aggregates, not the
-                        # length of a one-row delta or a library-wide row scan.
-                        for project in deleted_projects:
-                            summary = self._catalog_workspaces.get(project)
-                            if summary is not None:
-                                counts['projectCount'] -= 1
-                                for key in ('sessionCount', 'workerSessionCount', 'internalSessionCount'):
-                                    counts[key] -= summary.get(key, 0)
                     if delta_mode and any(state['sharedHistory'].get(key) != value for key, value in counts.items()):
                         changed = True
                     state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]),
@@ -774,19 +800,7 @@ class AutomaticHistory:
                         # Advance only after the durable publication succeeded.
                         self._native_revision = revision_token
                         self._local_revision = self.service._history_local_revision
-                # Browsers have independent selections. Refresh only connected
-                # views, not every historical client record retained on disk.
-                from .history_demand import subscribed_sessions
-                selected_ids = subscribed_sessions(self.service)
-                by_id = (self.service.projections.sessions(self.service.state).by_id
-                         if hasattr(self.service, 'projections') else
-                         {row['id']: row for row in self.service.state['sessions']})
-                for selected in [by_id[key] for key in selected_ids if key in by_id]:
-                    if not selected.get('nativeProject') or selected.get('status') in BUSY or selected.get('configurationBusy'):
-                        continue
-                    current = await asyncio.to_thread(revision, selected)
-                    if not selected.get('historyLoaded', True) or current != selected.get('nativeRevision'):
-                        await self.load(selected['id'])
+                await self._refresh_selected_history()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -800,6 +814,49 @@ class AutomaticHistory:
                             # boundary. Keep the error and dirty union for retry;
                             # a second disk error must not kill discovery.
                             pass
+
+    def _public_catalog_counts(self, incoming, deleted_projects):
+        counts = {key: incoming[key] for key in
+                  ('projectCount', 'sessionCount', 'workerSessionCount', 'internalSessionCount')}
+        # Retained tombstones can make public totals differ from native totals.
+        # Recheck their compact receipts even when the scanner returns no rows.
+        for project in deleted_projects:
+            summary = self._catalog_workspaces.get(project)
+            if summary is not None:
+                counts['projectCount'] -= 1
+                for key in ('sessionCount', 'workerSessionCount', 'internalSessionCount'):
+                    counts[key] -= summary.get(key, 0)
+        return counts
+
+    def _catalog_facts_unchanged(self, incoming):
+        from .managed_deletion import tombstones
+        shared = self.service.state.get('sharedHistory', {})
+        if shared.get('loading') or shared.get('error'):
+            return False
+        deleted = {row['project'] for row in tombstones(self.service.db)}
+        counts = self._public_catalog_counts(incoming, deleted)
+        issues = incoming.get('issues', [])
+        reconciliation = {key: incoming.get('reconciliation', {}).get(key)
+                          for key in ('phase', 'completedAt')}
+        return (all(shared.get(key) == value for key, value in counts.items())
+                and shared.get('issues', []) == issues[:100]
+                and shared.get('issueCount', 0) == len(issues)
+                and shared.get('reconciliation') == reconciliation)
+
+    async def _refresh_selected_history(self):
+        # Browsers have independent selections. Refresh only connected
+        # views, not every historical client record retained on disk.
+        from .history_demand import subscribed_sessions
+        selected_ids = subscribed_sessions(self.service)
+        by_id = (self.service.projections.sessions(self.service.state).by_id
+                 if hasattr(self.service, 'projections') else
+                 {row['id']: row for row in self.service.state['sessions']})
+        for selected in [by_id[key] for key in selected_ids if key in by_id]:
+            if not selected.get('nativeProject') or selected.get('status') in BUSY or selected.get('configurationBusy'):
+                continue
+            current = await asyncio.to_thread(revision, selected)
+            if not selected.get('historyLoaded', True) or current != selected.get('nativeRevision'):
+                await self.load(selected['id'])
 
     async def refresh_session(self, session_id):
         await self.load(session_id, only_if_changed=True)

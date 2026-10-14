@@ -844,6 +844,7 @@ async def test_local_commit_during_marker_read_rebuilds_aliases(tmp_path, app_fa
         return original(snapshot)
 
     monkeypatch.setattr(module, 'catalog_locations', paused)
+    app.state['sharedHistory']['error'] = 'Earlier scan failed'
     refresh = asyncio.create_task(app.history.refresh(force=False))
     assert await asyncio.to_thread(started.wait, 5)
     async with app.lock:
@@ -885,3 +886,178 @@ async def test_tombstone_totals_are_complete_and_removal_is_published(tmp_path, 
     assert app.state['revision'] > revision
     durable = load_saved_state(app.db)
     assert durable['sharedHistory']['sessionCount'] == 1
+
+
+async def test_empty_recovery_slice_avoids_rewalking_registered_workspace_catalog(
+        tmp_path, app_factory, monkeypatch):
+    from amplifier_web.state_records import load as load_saved_state
+
+    native_session(tmp_path / 'cli', 'saved-root')
+    app = app_factory()
+    await app.history.refresh()
+    app.history.index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, set()))
+    # These independent registrations are navigation metadata, not a request to
+    # inspect their histories. Every pass still samples at most64 real folders.
+    path = app.state['settings']['workspace']
+    app.state['workspaces'].extend({'id': f'dormant-{n}', 'name': f'Folder{n}',
+                                   'path': path, 'available': True} for n in range(2048))
+    app._publish()
+    await app.history.refresh(force=False)  # Reconcile the real local mutation.
+
+    class CountedWorkspaces(list):
+        visits = 0
+        def __iter__(self):
+            self.visits += 1
+            return super().__iter__()
+
+    workspaces = CountedWorkspaces(app.state['workspaces'])
+    app.state['workspaces'] = workspaces
+    revision = app.state['revision']
+    saved = load_saved_state(app.db)
+    before = app.performance_diagnostics.snapshot()['counters'].get('catalog.merge.skipped', 0)
+    await app.history.refresh(force=False)
+    assert app.state['sharedHistory']['error'] is None
+    # One compact input pass is allowed; additional maps/overlay passes over all
+    # registered folders must be reserved for a changed catalog or local overlay.
+    assert workspaces.visits == 1
+    assert app.state['revision'] == revision
+    assert load_saved_state(app.db) == saved
+    assert app.performance_diagnostics.snapshot()['counters']['catalog.merge.skipped'] == before + 1
+
+
+async def test_empty_catalog_delta_still_refreshes_selected_transcript(
+        tmp_path, app_factory, monkeypatch):
+    saved = native_session(tmp_path / 'cli', 'saved-root')
+    app = app_factory()
+    await app.history.refresh()
+    row = next(item for item in app.state['sessions'] if item.get('nativeIdentity') == 'saved-root')
+    app.state['selectedSessionId'] = row['id']
+    app._publish()
+    await app.history.load(row['id'])
+    index = app.history.index
+    index._recovery_budget = 1
+    index._reconcile_at = 0
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    await app.history.refresh(force=False)
+    assert index._recovery is not None
+    before = app.performance_diagnostics.snapshot()['counters'].get('catalog.merge.skipped', 0)
+    # Simulate a missed watcher event: no metadata delta arrives, but open chat
+    # demand must still see canonical transcript changes without a new turn.
+    with (saved / 'transcript.jsonl').open('a') as stream:
+        stream.write(json.dumps({'role': 'assistant', 'content': 'Saved externally'}) + '\n')
+    await app.history.refresh(force=False)
+    assert app.state['sharedHistory']['error'] is None
+    assert row['messages'][-1]['text'] == 'Saved externally'
+    assert not app.runtime.started and not app.runtime.sent
+    assert app.performance_diagnostics.snapshot()['counters']['catalog.merge.skipped'] == before + 1
+    assert index._recovery is not None  # Open demand did not finish the cold library first.
+
+
+@pytest.mark.parametrize('watching', [True, False])
+def test_uncached_background_discovery_is_bounded_and_eventually_complete(
+        tmp_path, monkeypatch, watching):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, f'saved-{n:03d}',
+                     {'working_dir': str(workspace), 'bundle': 'anchors'}) for n in range(80)]
+    originals = [(path / 'transcript.jsonl').read_bytes() for path in paths]
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'new.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (watching, set()))
+    def eager(*args, **kwargs):
+        pytest.fail('Cold startup attempted an eager project scan')
+    monkeypatch.setattr(index, '_scan_project', eager)
+    index._recovery_budget = 12
+    token, first = index.scan_changes()
+    assert first['reset'] and first['reconciliation']['phase'] == 'running'
+    assert first['sessionCount'] < len(paths) and first['metadataReads'] <= 12
+    assert first['notificationsReady'] is watching
+    observed = {row['nativeIdentity'] for row in first['sessions']}
+    for _ in range(100):
+        token, delta = index.scan_changes(since=token)
+        assert delta['reconciliation']['steps'] <= 12
+        observed.update(row['nativeIdentity'] for row in delta['sessions'])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    else:
+        pytest.fail('Incremental startup did not discover the cold library')
+    assert len(observed) == delta['sessionCount'] == len(paths)
+    assert [(path / 'transcript.jsonl').read_bytes() for path in paths] == originals
+    expected_delay = 900 if watching else 60
+    assert expected_delay - 1 < index._reconcile_at - time.monotonic() <= expected_delay
+    index.close()
+
+
+def test_lost_watch_shortens_recovery_deadline_and_discovers_unregistered_chat(
+        tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    session(home, workspace, 'saved-root', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True)
+    clock = [1000.0]
+    monkeypatch.setattr('amplifier_web.native_history.time.monotonic', lambda: clock[0])
+    watching = [True]
+    monkeypatch.setattr(index, '_invalidations', lambda: (watching[0], set()))
+    token, first = index.scan_changes()
+    assert first['reconciliation']['phase'] == 'complete'
+    assert index._reconcile_at == 1900
+    other = tmp_path / 'unregistered'
+    other.mkdir()
+    session(home, other, 'external-root', {'working_dir': str(other), 'bundle': 'anchors'})
+    watching[0] = False
+    token, missing = index.scan_changes(since=token)
+    assert index._reconcile_at == 1060 and missing['sessionCount'] == 1
+    assert missing['reconciliation']['steps'] == 0
+    clock[0] += 15
+    token, _ = index.scan_changes(since=token)
+    assert index._reconcile_at == 1060  # Repeated watcher failures cannot defer discovery.
+    clock[0] = 1060
+    token, discovered = index.scan_changes(since=token)
+    assert {row['nativeIdentity'] for row in discovered['sessions']} == {'external-root'}
+    assert discovered['sessionCount'] == 2 and discovered['reconciliation']['phase'] == 'complete'
+    assert index._reconcile_at == 1120
+    index.close()
+
+
+@pytest.mark.parametrize('change', ['availability', 'error', 'loading', 'issues', 'phase', 'counts', 'tombstone'])
+async def test_empty_delta_preserves_catalog_availability_and_public_facts(
+        tmp_path, app_factory, monkeypatch, change):
+    native = tmp_path / 'cli'
+    native_session(native, 'saved-root')
+    app = app_factory()
+    await app.history.refresh()
+    app.history.index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, set()))
+    await app.history.refresh(force=False)
+    shared = app.state['sharedHistory']
+    expected_count = shared['sessionCount']
+    if change == 'availability':
+        native.rmdir()
+    elif change == 'error':
+        shared['error'] = 'Earlier scan failed'
+    elif change == 'loading':
+        shared['loading'] = True
+    elif change == 'issues':
+        shared.update(issues=[{'kind': 'old'}], issueCount=1)
+    elif change == 'phase':
+        shared['reconciliation'] = {'phase': 'old', 'completedAt': None}
+    elif change == 'counts':
+        shared['sessionCount'] = -1
+    else:
+        monkeypatch.setattr('amplifier_web.managed_deletion.tombstones',
+                            lambda db: [{'project': project_slug(native)}])
+        expected_count = 0
+    revision = app.state['revision']
+    before = app.performance_diagnostics.snapshot()['counters'].get('catalog.merge.skipped', 0)
+    await app.history.refresh(force=False)
+    assert app.state['revision'] > revision
+    assert app.performance_diagnostics.snapshot()['counters'].get('catalog.merge.skipped', 0) == before
+    assert shared['loading'] is False and shared['error'] is None
+    assert shared['issues'] == [] and shared['issueCount'] == 0
+    assert shared['reconciliation']['phase'] != 'old'
+    assert shared['sessionCount'] == expected_count
+    if change == 'availability':
+        workspace = next(item for item in app.state['workspaces'] if item.get('path') == str(native))
+        assert workspace['available'] is False
+        assert any(item.get('nativeIdentity') == 'saved-root' for item in app.state['sessions'])
+    assert load_saved_state(app.db)['sharedHistory'] == shared
