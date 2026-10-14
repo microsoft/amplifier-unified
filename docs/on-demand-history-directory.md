@@ -124,6 +124,15 @@ migration test forbids Python payload decoding and UUID recomputation, then
 reopens with SQLite reads of both payload columns denied while repeated source
 fact reads continue to work.
 
+Navigation resolves workspace, pin and archive membership with per-query direct
+lookups instead of joining each history row against a JSON registry. Scale
+qualification combines 27,000 native rows, 187 local overrides and 1,750
+workspaces. A one-entry semantic revision/count memo reuses unchanged results
+across selection and text updates; native/local generations, exact query inputs
+and database versions retain invalidation. Mutable transactions bypass reuse,
+while read snapshots keep their pinned view. Counts and first-page filtering can
+still inspect scalar directory rows; these are not constant-work queries.
+
 Other focused cases cover scoped duplicate IDs, canonical rename precedence and
 parentage, local overrides, first migration, rollback, dormant save/restart/GC,
 borrowed aliases, cyclic-GC-independent retirement, connected and disconnected
@@ -149,8 +158,8 @@ incomplete discovery immediately while retaining known rows. Workspace-only
 changes refresh just their admitted owners through keyed metadata reads, so an
 open chat receives updated availability and read-only reasons without restoring
 the workspace's dormant histories. The periodic sweep still probes filesystem
-signatures across its requested canonical
-scope, cooperatively; it does not promise constant total work for full discovery.
+signatures across its requested canonical scope, cooperatively; it does not
+promise constant total work for full discovery.
 
 New or unresolved projects, and changed workspace-path interpretation, retain the
 separate cold repair path. That path can temporarily accumulate one project's
