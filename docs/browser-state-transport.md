@@ -96,6 +96,16 @@ root membership, placement, stable recency, activity and notice/read facts can
 change them; chat titles and child/internal progress cannot. Native membership
 changes conservatively invalidate because duplicate identities can alter public
 ownership. Workspace registry commits and pin preferences remain separate inputs.
+
+Root chat pages likewise use their own semantic generation: root labels, filtering,
+ordering, activity and matching notice receipts, plus conservative identity/role
+membership changes that can affect duplicate aliases or suppression. Worker and
+internal title, progress or notice updates do not rebuild root-only pages. Root
+queries retain their exact scoped page and recent cursor until a true dependency
+changes; committed registry, pin and organization epochs remain separate inputs.
+Old query generations are retired within the existing bounded projection cache.
+Child pages, custom snapshots and workspace overview keep their broader contracts.
+
 The shared workspace cache retains only its current aggregate/registry generation
 within the existing bounded query cache. Old local public-fact rows derive the
 additional dependency on keyed access, without a full-library migration read.

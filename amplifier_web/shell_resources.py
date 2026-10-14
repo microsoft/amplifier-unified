@@ -184,7 +184,7 @@ class ShellResources:
     def _epochs(self, keys):
         return self.unknown_epoch, tuple((key, self.epochs[key]) for key in sorted(keys))
 
-    def _page_key(self, name, scoped, instance, navigation_revision, client, workspace_revision):
+    def _page_key(self, name, scoped, instance, navigation_revision, client, workspace_revision, root_navigation_revision):
         view = dict(scoped['view'])
         saved = view.get('navRecentLimit', 20)
         from .chat_navigation import RECENT_LIMITS
@@ -196,6 +196,13 @@ class ShellResources:
         if name in {'workspaceExplorer', 'workspaceShortcuts'}:
             navigation_revision = (workspace_revision, None)
             globals_key = self._epochs({'workspaces', 'pinnedWorkspaceIds'})
+        elif name != 'workspaceOverview':
+            navigation_revision = ((root_navigation_revision, workspace_revision)
+                if name in {'pinnedNavigation', 'sidebarPinned'} else root_navigation_revision, None)
+            fields = {'workspaces', 'pinnedSessionIds', 'conversationOrganization'}
+            if name in {'pinnedNavigation', 'sidebarPinned'}:
+                fields |= {'pinnedWorkspaceIds', 'pinnedItemIds', 'pinOrderCustomized'}
+            globals_key = self._epochs(fields)
         if name in {'workspaceExplorer', 'workspaceShortcuts', 'workspaceOverview'}:
             filters = WORKSPACE_FILTERS if name != 'workspaceOverview' else ()
             return (navigation_revision, globals_key, workspace, mode,
@@ -243,11 +250,12 @@ class ShellResources:
         semantic = directory.observation_revision if directory is not None else {}
         nav = (semantic.get('navigation', state.get('revision')), semantic.get('attention'))
         workspace_revision = semantic.get('workspace', state.get('revision'))
+        root_navigation_revision = semantic.get('root_navigation', state.get('revision'))
         from .shell_components import resolved
         recent = tuple((item['id'], self.shell.recent_limits.get(self.shell.recent_key(client, item)))
                        for item in resolved(self._composition(client, registration['recovery']))
                        if item['slot'] == 'navigation')
-        stamp = (bootstrap, nav, workspace_revision, self._epochs(GLOBAL_KEYS), encoded(client.get('views', {})),
+        stamp = (bootstrap, nav, workspace_revision, root_navigation_revision, self._epochs(GLOBAL_KEYS), encoded(client.get('views', {})),
                  tuple(registration['scope']), registration['wanted'],
                  recent, self.total_bytes,
                  state.get('revision') if any(item['package'] not in ('builtin.chats', 'builtin.workspaces')
@@ -257,7 +265,7 @@ class ShellResources:
             return registration['error_envelope']
         try:
             result = self._snapshot(identity, state=state, client=client, bootstrap=bootstrap,
-                navigation_revision=nav, workspace_revision=workspace_revision)
+                navigation_revision=nav, workspace_revision=workspace_revision, root_navigation_revision=root_navigation_revision)
         except ResourceLimit:
             result = {'hostInstanceId': self.shell.service.instance_id, 'clientId': identity,
                 'demandId': registration['demandId'], 'bootstrapKey': bootstrap,
@@ -270,7 +278,7 @@ class ShellResources:
         registration.pop('error_envelope', None)
         return result
 
-    def _snapshot(self, identity, *, state, client, bootstrap, navigation_revision, workspace_revision):
+    def _snapshot(self, identity, *, state, client, bootstrap, navigation_revision, workspace_revision, root_navigation_revision):
         registration = self.clients[identity]
         from .shell_components import resolved
         from .shell_modules import BUILTINS
@@ -309,7 +317,7 @@ class ShellResources:
                 scoped = self.shell.scoped_state(client, instance)
                 dirty = set()
                 for resource in registration['wanted']:
-                    key = (bootstrap, self._page_key(resource, scoped, instance, navigation_revision, client, workspace_revision))
+                    key = (bootstrap, self._page_key(resource, scoped, instance, navigation_revision, client, workspace_revision, root_navigation_revision))
                     own_keys[resource] = key
                     if previous_keys.get(resource) == key:
                         own[resource] = previous[resource]

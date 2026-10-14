@@ -241,6 +241,10 @@ class HistoryDirectory:
         return self.observation_revision['navigation']
 
     @property
+    def root_navigation_revision(self):
+        return self.observation_revision['root_navigation']
+
+    @property
     def workspace_revision(self):
         return self.observation_revision['workspace']
 
