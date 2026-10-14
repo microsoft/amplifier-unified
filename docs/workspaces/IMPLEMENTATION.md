@@ -1,5 +1,33 @@
 # Implementation and evidence
 
+## Current program coverage — 2026-10-14
+
+The integrated source implements the bounded collaboration mechanisms below.
+Independent chats remain independent even when they share a folder. The host
+owns authority, durable admission and observations; agents choose collaborators,
+divide work and judge substantive results. Native history and existing command,
+worktree, resource and usage records remain authoritative.
+
+| Approved workstream | Implemented source | Limit or remaining work |
+| --- | --- | --- |
+| A Authority | Actual root/child identity, intersected file policy, reusable scoped configuration grants, native approval continuation, delayed revocation and common registered-history scope | Supported native consumers and effect families only; no OS, tenant or arbitrary executable-code confinement |
+| B Requests and continuations | Coherent peer creation, retained retry identities, later-generation replies, revision notifications and expiring one-shot watches | Notifications report outcomes; only qualified terminal evidence satisfies a dependency |
+| C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, causal-hop bounds and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
+| D Placement and resources | Explicit per-repository copies, phase-aware handoff, cooperative reservations and observations from Publisher/Operations owners | Automatic dependency mapping and general task-owned scratch/database/browser-profile/dynamic-preview provisioning remain open |
+| E Awareness and cooperation | Bounded active-work packets, advisory file intent, supported file-tool source checks and replacement of volatile guidance | No complete shared task-list/claim service, unknown external-writer detection or universal filesystem fence |
+| F Results and integration | Retained exact reported bytes, scoped artifact reads, loaded-origin observations and immutable combined source-candidate receipts | Observed file hashes do not prove imported bytes, semantic combination, tests or publication; explicit integration responsibility and per-repository integration outcomes remain open |
+| G Recovery and preservation | Durable decisions, cleanup-safe bridge waits, phase-aware recovery and complete managed-checkout archive/restore | Archive retains files without reclaiming space or stopping external resource owners; uncertain effects are never replayed |
+| H Assignment lifecycle | Explicit commissioned membership, model-call allowances/reservations, usage reconciliation and scoped Stop | An independent mixed conversation has no request-only accounting/interruption adapter; unrelated work is not stopped |
+| I Experience and evidence | Shared actions, Related work/details controls, passive inspection, private draft/retry retention and bounded owner diagnostics | Return-since-last-view recaps, complete phase-timing reports and the final combined client/performance acceptance remain open |
+
+This is a current source inventory, not a declaration that the entire approved
+program or its release is complete. [Remaining program gates](#remaining-program-gates)
+separate unfinished authorized work from unsupported or optional capabilities.
+The dated sections below retain each slice's actual test revision and evidence
+limits. Their test counts overlap and must not be added into a combined-suite
+result. Final combined source/package qualification is pending; no publication,
+deployment or fresh-worker adoption is established by this ledger.
+
 ## Preserving checkout archive — 2026-10-14
 
 Unused app-created checkouts now have separate archive and restore actions.
@@ -137,8 +165,10 @@ control. All 601 packaged application Python/static files match the candidate
 source. This is package and local-runtime evidence, not publication or installed
 shared-host adoption; broad combined-program qualification remains separate.
 
-Remaining scope: semantic combined repository/dependency validation, retention-aware
-checkout cleanup, full repeated provider journeys and release/adoption.
+Combined source-candidate capture/check and preserving checkout archive are
+implemented in their own sections above. Semantic combined repository/dependency
+validation, repeated complete provider journeys and release/adoption remain
+separate gates.
 
 ## Consistent registered-history scope — 2026-10-14
 
@@ -174,8 +204,9 @@ effects retain grant provenance and recheck after waits. Stop, revocation, expir
 and workspace changes suppress unperformed effects; queued configuration plans
 survive restart for inspection. Children/new roots do not inherit grants. Peer
 input cannot borrow a higher-authority root's grant; saved dependency returns
-retain the original input lineage. Explicitly authorized global administration
-works through the actual mounted root tool.
+and watch notifications retain the original input lineage. Unknown legacy
+system ancestry does not fabricate authority. Explicitly authorized global
+administration works through the actual mounted root tool.
 
 Qualification after the new-chat discovery merge includes 494 affected Python
 checks, 686 frontend checks, the production build, desktop/narrow browser grant
@@ -374,9 +405,10 @@ The browser uses `allowNextTurn` with the observed generation, and that exact
 semantics passes the corrected check. The failed probe is retained as evidence,
 not treated as a product regression or a successful two-round run.
 
-Shared-folder editing remains cooperative. This slice does not enforce stale
-file writes, grant peer control, provision resources, create assignment-wide
-budgets or establish general parallel-agent efficacy. Those gates remain below.
+This awareness slice is advisory. Later slices add supported file-tool source
+checks and explicit assignment admission without turning workspace proximity
+into peer-control authority. General resource provisioning and parallel-agent
+efficacy remain separate gates.
 
 ## Explicit repository selection — 2026-10-13
 
@@ -466,9 +498,10 @@ general multi-agent efficacy.
 
 This completes cooperative reservation admission, not managed provisioning or
 an OS resource lock. Different aliases and separate app installations remain
-outside its domain. Per-repository bindings, actual command/import/preview
-provenance, supported stale-file writes and the remaining
-assignment/integration gates below still require implementation and evidence.
+outside its domain. Explicit repository selection, owner-observed preview/process
+records, loaded-source provenance, supported file-tool checks and assignment
+admission have their own implemented slices. Automatic environment provisioning
+and semantic integration remain separate gates.
 
 ## Coherent commissioned-task operation — 2026-10-13
 
@@ -513,6 +546,10 @@ they do not establish general task efficacy, shared-host adoption, publication,
 or the broader multi-client assignment experience.
 
 ## Initial repair tranche — 2026-10-13
+
+This section records the initial checkpoint. The later grants, reply-time
+artifact retention, repository, assignment and inbox slices supersede its
+then-current limitations without changing the evidence recorded here.
 
 The implementation program starts with reproduced defects and established
 coordination mechanisms. It does not make the broader assignment/resource
@@ -561,12 +598,11 @@ Open and Remove, and a timer measurement could count a delayed host render.
 The corrected timer probe passes repeated runs and detects a deliberately
 introduced parent render on every tick. Production rendering behavior is unchanged.
 
-Follow-up scope remains explicit: multi-repository resource bindings;
-assignment budgets and scoped Stop across independent roots; full capability
-grants; expiry/fair scheduling beyond the initial inbox bounds; and full
-multi-round, multi-repository and multi-client qualification. The narrow
-installed-package and real-provider creation checks above do not complete
-those broader acceptance journeys.
+The initial follow-ups for explicit repository selection, commissioned-assignment
+budgets/Stop, scoped configuration grants and expiry/fair admission are now
+implemented above. Independent roots retain their separate authority. Full
+combined multi-round, multi-repository and multi-client qualification remains
+distinct from these initial installed-package and provider checks.
 
 ## Reply revisions, watches and fair inbox admission — 2026-10-14
 
@@ -606,6 +642,11 @@ Publication failure tests distinguish a rolled-back notification from a committe
 claim with a lost acknowledgement. Neither loses the underlying report or creates
 an extra model turn on retry.
 
+Display attribution checks the exact retained per-revision system claim,
+including negative reports, watches, preparation failures and older successful
+revisions. An Amplifier update label identifies the author; it does not elevate
+that message to human authority or prove current dependency success.
+
 Validation covers service, exact retry/fingerprint, Stop/revision/scope, failure,
 backpressure, restart, passive observation and native lifecycle cases. The actual
 Core/Foundation/live-loop journey uses scripted provider output with real tool
@@ -617,33 +658,40 @@ No browser rendering code, release or shared running host was changed by this sl
 Safe tool-boundary informational delivery remains adapter-specific; notify remains
 passive and unsupported steering never becomes cancel-and-resend.
 
-## Program delivery gates
+## Remaining program gates
 
-The approved program remains staged. The implementation slices above are
-bounded deliveries, not completion of every workstream in the program.
-Existing native history, command receipts, worktree records and usage receipts
-remain the owners; the remaining work must extend them rather than create
-competing stores.
+The following items were part of the authorized October 13 program and are not
+claimed complete by the delivered mechanisms. Extend the existing owners rather
+than create competing permission, transcript or orchestration stores.
 
-| Next outcome | Canonical owners | Remaining acceptance gate |
+| Remaining outcome | Existing foundation | Required next evidence or behavior |
 | --- | --- | --- |
-| Equivalent authority across supported routes | Host, runtime adapters, configuration controls | Explicit capability grants and revocation across schedules, recipes and background admission; preserve authorized configuration changes |
-| Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Reply revisions, question/deferral notifications, expiring one-shot watches and fair bounded admission delivered above. Remaining: repeated combined real-provider journeys, broader client presentation and supported safe tool-boundary informational delivery |
-| Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
-| Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context, advisory overlap and supported file-tool source conflicts delivered above. Remaining: broader independent/commissioned/native-worker lifecycle and concurrency acceptance |
-| Assignment control | Existing task, capacity and interruption owners | Commissioned-root aggregate admission and scoped Stop delivered above. Request-only accounting/interruption inside an independent mixed conversation remains an explicit adapter limitation; no whole-chat control is substituted. |
-| Durable results and integration | Artifact/resource owner and worktree integration | Exact reported bytes and explicit combined source/dependency observations delivered above; semantic combination/test acceptance and uncertain cleanup effects remain separate |
-| Complete supported user journeys | Shared action/API layer, browser and terminal clients | Repeated two-round real-provider work, failure and Stop variants, independent and commissioned peers, disconnect/restart, private client state and measured responsiveness |
-| Release and adoption | Existing package/release and instance owners | Qualify the combined package, migrate retained records, activate fresh workers in an owned candidate instance, and separately verify intended release adoption |
+| Supported task environment provisioning | Worktree bindings, resource reservations, Publisher and Operations | Provision supported task-owned scratch, database and browser-profile resources with retained ownership/recovery; bind supported previews to their real owners. Observing a process or reserving a key does not allocate this environment. |
+| Exact multi-repository integration | Per-repository copies, loaded-origin inspection and retained candidate checks | Establish integration responsibility, explicit dependency/environment mapping where supported, combined tests against the recorded candidate and per-repository partial outcomes. Current file matches alone cannot certify the combination. |
+| Return experience and diagnostics | Related work/status details, retained outcomes, automatic descriptions and existing diagnostics exports | A bounded recap of changes since the viewer's last visit and correlated phase/timing evidence that distinguishes host, bridge, provider and client delay without private drafts or unrestricted payloads. |
+| Combined supported user journeys | Slice-specific deterministic, native, package, browser and provider checks | Repeat the two-round journey on the combined installed candidate, including independent and commissioned peers, multiple repositories, failure, disconnect/restart and Stop; verify browser/terminal private state and measured responsiveness. |
+| Release and adoption | Existing package/release and instance owners | Complete combined package qualification, compatibility/migration checks, owned candidate activation and separate publication/fresh-worker adoption evidence under the current release policy. |
 
-Each gate needs evidence at its own layer. A successful narrow provider handoff
-does not substitute for several repositories, assignment limits or client
-parity, and a merged change does not imply a published or adopted release.
+Optional assignment work-item claims were proposed for assignments that use a
+shared task list; no complete task-list/claim service is provided by the current
+assignment ledger. It is distinct from commissioned membership and model-call
+reservation. Universal OS confinement, cross-host filesystem replication and
+cross-engine history continuation were explicitly outside this program's default
+scope. Request-only control inside an independent mixed conversation and safe
+tool-boundary notification remain declared adapter limitations; the fallback
+must preserve unrelated work rather than pretend those capabilities exist.
 
-## Collaborative-workspaces candidate
+No new ordinary correctness defect is implied merely by these capability
+limits. Conversely, a successful narrow provider handoff cannot close the full
+acceptance program. The current release policy, rather than this ledger, owns
+which checks block publication; publication, post-release qualification and
+installed adoption remain separate milestones.
 
-The approved same-host cooperation loop is **qualified for PR review**,
-not a completed release or deployed feature. Current adapters support typed reply
+## Historical collaborative-workspaces candidate — October 6
+
+The following is the earlier candidate's evidence, not the October 14 source
+inventory or final program verdict. At that checkpoint the approved same-host
+cooperation loop was **qualified for PR review**. Its adapters supported typed reply
 declarations sealed against exact checkpointed native terminal evidence,
 generation-anchored steering and one stable-ID saved dependency continuation.
 Host qualification establishes an attributable agent claim plus observed terminal
@@ -655,7 +703,8 @@ See [Task coordination implementation and evidence](../TASK-COORDINATION.md)
 for exact revisions, earlier failures and acceptance limits. Passing deterministic
 surface checks does not ratify replacement execution clauses or qualify later
 code from an earlier model run.
-Shared-folder operation remains cooperative, without enforced conflict prevention.
+Shared-folder operation was cooperative; the later supported file-tool checks
+do not turn it into a universal filesystem fence.
 Actual-model created-task/adjacent-round/steer checks and Fable delta review
 are recorded in the [final PR qualification](../TASK-COORDINATION.md#pr-qualification--2026-10-06),
 with the exact revisions, optional skips and pre-existing smoke-test limit.
@@ -686,7 +735,7 @@ replacement execution contract or remove the documented shared-folder limits.
 
 The accepted vision is the target, not a claim that every execution and integration promise is already implemented. This change implements placement, native-history addressing, and the simplified navigation and draft journey. Existing runtime, worktree and handoff mechanisms remain in use.
 
-## Implemented here
+## Historical placement implementation — September 22
 
 - Name-only placement under a per-host/account configurable default root; per-workspace parent override under More options.
 - Explicit existing-folder attachment and automatic native-history discovery, with files left in place.
@@ -698,7 +747,7 @@ The accepted vision is the target, not a claim that every execution and integrat
 
 The legacy explicit-path create action remains compatible for existing clients. It is not the name-only allocation path. Native-history catalogs are still derived indexes; this change does not migrate or delete legacy app data.
 
-## Evidence
+## Historical placement evidence
 
 `tests/test_workspace_experience.py` covers naming, root changes, explicit attachment, existing bytes, symlink substitution, concurrent collision, lost acknowledgment, interrupted allocation, private draft attachments/model/bundle, native ID discovery/read, ambiguous IDs and empty-workspace listing. Existing creation, managed-chat, native-history, ownership, worktree, handoff and agent-control suites provide compatibility coverage.
 
@@ -731,7 +780,7 @@ The following historical qualification was performed against canonical main `692
 
 The shipping owner retains the immutable release qualification, merge, publication and deployed-host acceptance. These local results do not cover private companion-runtime release gates or live Spark adoption.
 
-## Current-main integration refresh
+## Historical main integration refresh
 
 Refreshed onto `7d139997ce9cf77cddbc6de4622dfdc0158661a8` after the separate v0.20.8 performance release. Source merged without conflicts; generated frontend assets were rebuilt from the combined source. Published v0.20.8 release notes remain unchanged, and pending workspace notes are in `RELEASE-NOTES.md`.
 
@@ -744,15 +793,20 @@ Refreshed onto `7d139997ce9cf77cddbc6de4622dfdc0158661a8` after the separate v0.
 
 Managed Git worktrees use `amplifier_worktrees`, with original source manifests, exact revision checks, explicit dirty-copy support and preservation-aware cleanup. `amplifier_web/worktrees.py` keeps history home separate from execution directory and records pending/applied/unknown handoffs. Native session ownership is enforced by the shared Foundation session protocol. None of these actions run merely because a folder is attached.
 
-## Remaining contract work
+## Broader workspace contract limits
 
-- Workspace home with Files/Directions and repository bindings; attributed, versioned shared directions and instruction provenance.
-- Sources, helper reports and preview ownership in the retained Canvas details surface.
-- Universal folder-level conflicting-writer protection and isolation of arbitrary writing helpers. Native session ownership alone does not protect shared files; the supported file-tool source checks above are narrower than an OS or checkout-wide fence.
-- Multi-repository task environment/port bindings, combination validation, one integration/preview owner, and partial publish reconciliation.
-- Cross-host transfer remains the separate portability implementation's responsibility.
+The workspace vision also describes Files/Directions, attributed versioned
+shared directions and richer instruction provenance. Those surfaces are not
+completed by explicit repository selection. Retained helper artifacts and local
+preview ownership are now available through their named owners, but do not
+constitute every proposed Sources/Canvas workspace surface.
 
-Those are separate runtime/context conformance gates from the placement journey. Do not infer their completion from a green placement/browser suite. Existing terminal and editor edits remain visible at the chosen folder; no hidden checkout isolation was introduced.
+Universal protection from arbitrary writers is not implemented or inferred
+from native session ownership. Existing terminal/editor edits remain visible
+at the chosen folder. Multi-repository environment/integration work is tracked
+in the program gates above; cross-host transfer remains the separate portability
+implementation's responsibility. Historical placement/browser results do not
+close these broader contracts.
 
 ## Task resource owner projection — 2026-10-14
 
