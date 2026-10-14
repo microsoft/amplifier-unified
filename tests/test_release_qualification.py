@@ -231,7 +231,11 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     for lane in ('readiness', 'python', 'browser'):
         assert post['jobs'][lane]['needs'] == 'resolve'
         assert post['jobs'][lane]['with']['revision'] == '${{ needs.resolve.outputs.revision }}'
-        assert 'secrets' not in post['jobs'][lane]
+        if lane == 'python':
+            assert post['jobs'][lane]['secrets'] == {
+                'LOOP_LIVE_CI_READ_KEY': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}'}
+        else:
+            assert 'secrets' not in post['jobs'][lane]
     resolve = post['jobs']['resolve']
     assert "conclusion == 'success'" in resolve['if']
     assert 'head_repository.full_name == github.repository' in resolve['if']
