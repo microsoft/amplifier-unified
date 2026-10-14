@@ -201,8 +201,9 @@ at planning; this guard prevents accidental publication but does not exercise
 the downstream jobs. A new release still requires its own version and all required
 qualification lanes.
 
-An exact-candidate promotion system that reuses matching PR/merge qualification
-and shared prebuilt wheels remains a separate proposal.
+The narrow frontend proof reuse described above does not promote an entire
+previous release candidate. Reusing package/native qualification or shared
+prebuilt wheels remains a separate proposal.
 
 ## Published Core binaries
 
