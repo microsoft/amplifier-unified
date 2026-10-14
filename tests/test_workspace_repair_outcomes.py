@@ -1,4 +1,5 @@
 """Bounded regression checks for the reviewed multi-worker defects."""
+import asyncio
 import json
 from pathlib import Path
 
@@ -116,7 +117,9 @@ async def test_notify_bursts_are_bounded_without_waking_receiver(app, monkeypatc
 async def test_saved_wait_reserves_outcome_slot_and_old_stop_releases_reservation(app, monkeypatch):
     monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
     source, target = app.state['sessions']
-    await declared_result(app, outcome='failed')
+    # A successful declaration awaits terminal evidence. Negative reports now
+    # legitimately exchange this reservation for an immediate queued notice.
+    await declared_result(app)
     await agent_action(app, source, 'coordination.subscribe',
         {'sessionId': source['id'], 'requestId': 'result-request'}, 'wait')
     with pytest.raises(AppError, match='reserved replies'):
@@ -126,6 +129,37 @@ async def test_saved_wait_reserves_outcome_slot_and_old_stop_releases_reservatio
     await finish(app, target, 'result-request')
     continuation = app.collaboration.receipt(app.collaboration.receipt('result-request')['subscription']['continuationId'])
     assert app.collaboration.guard(continuation) is not None
+
+
+@pytest.mark.parametrize('assignment', [False, True])
+async def test_actual_stop_releases_queued_notice_before_worker_interrupt_returns(app, monkeypatch, assignment):
+    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+    source, target = app.state['sessions']
+    if assignment:
+        await app.dispatch('assignment.start', {'sessionId': source['id']})
+    await declared_result(app, outcome='failed')
+    wait = await agent_action(app, source, 'coordination.subscribe',
+        {'sessionId': source['id'], 'requestId': 'result-request'}, 'wait-negative')
+    identity = wait['result']['continuationId']
+    assert app.collaboration.receipt(identity)['delivery'] == 'queued'
+    with pytest.raises(AppError, match='reserved replies'):
+        app.collaboration.require_inbox_slot(source['id'])
+    released = asyncio.Event()
+    async def held_stop(_):
+        await released.wait()
+    monkeypatch.setattr(app.runtime, 'stop', held_stop)
+    try:
+        if assignment:
+            value = app.assignments.current(source)
+            await app.dispatch('assignment.stop', {'sessionId': source['id'], 'expectedRevision': value['revision']})
+        else:
+            await app.dispatch('conversation.stop', {'sessionId': source['id']})
+        await settled(app, identity, 'suppressed')
+        assert source['status'] == 'stopping'
+        app.collaboration.require_inbox_slot(source['id'])
+        assert len(app.runtime.inputs) == 1  # Only the recipient's original request.
+    finally:
+        released.set()
 
 
 @pytest.mark.parametrize('restart', [False, True])

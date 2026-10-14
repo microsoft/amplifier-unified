@@ -3,6 +3,7 @@ import asyncio
 from importlib import metadata
 import json
 import os
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -93,14 +94,21 @@ async def test_runtime_discovery_never_starts_an_absent_worker():
 
 async def test_existing_worker_inventory_round_trip_does_not_unpark(tmp_path):
     fixture = tmp_path / 'inventory_worker.py'
-    fixture.write_text('''import asyncio,json,sys
+    # A standalone fixture starts in a temporary directory. Use the package
+    # selected by this test run, including a separately installed wheel, rather
+    # than accidentally depending on pytest's in-process sys.path or checkout.
+    package_root = str(Path(inventory.__file__).resolve().parent.parent)
+    fixture.write_text(f'import sys\nsys.path.insert(0, {package_root!r})\n' + '''import asyncio,json,sys
+from amplifier_web import artifact_runtime
 from amplifier_web.artifact_runtime import discover
 for line in sys.stdin:
     data=json.loads(line)
     if data['op']=='start':
         print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
     elif data['op']=='dependencies':
-        print(json.dumps({'op':'reply','id':data['id'],'result':asyncio.run(discover('worker'))}),flush=True)
+        result=asyncio.run(discover('worker'))
+        result['fixtureModule']=str(artifact_runtime.__file__)
+        print(json.dumps({'op':'reply','id':data['id'],'result':result}),flush=True)
     elif data['op']=='stop':
         break
 ''')
@@ -113,6 +121,7 @@ for line in sys.stdin:
         result = await manager.dependencies('running')
         assert result['scope'] == 'worker'
         assert result['python']['path'] == sys.executable
+        assert Path(result['fixtureModule']).resolve() == Path(inventory.__file__).resolve()
         assert manager.workers['running']['parked'] is True
     finally:
         await manager.close()

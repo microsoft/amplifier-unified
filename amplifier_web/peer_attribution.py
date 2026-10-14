@@ -5,11 +5,13 @@ is read here. Call on the owning thread after selecting the display page.
 """
 from collections import Counter, defaultdict
 import json
+import uuid
 
 from amplifier_operations.coordination import fingerprint, peer_input
 
 AGENT_CAPTION = "Sent by Amplifier from another chat"
 CHAT_CAPTION = "From another chat"
+SYSTEM_CAPTION = "Amplifier update"
 DERIVED_FIELDS = {"attribution", "attributionCaption", "attributionOrigin", "origin"}
 
 
@@ -69,7 +71,7 @@ class PeerAttribution:
                 or receipt.get("accepted") is not True
                 or receipt.get("commandAction") != "coordination.send"
                 or not receipt.get("senderSessionId")
-                or receipt["senderSessionId"] == recipient
+                or receipt["senderSessionId"] == recipient and receipt.get("origin") != "system"
                 or receipt.get("target", {}).get("sessionId") != recipient
                 or receipt.get("messageId") != message.get("id")
                 or receipt.get("requestId") != receipt.get("inputId")
@@ -85,9 +87,42 @@ class PeerAttribution:
 
     @staticmethod
     def _continuation(receipt, request):
-        """A host-sealed wait, not a caller's host-looking prefix."""
+        """A committed host notification, not a caller's host-looking prefix.
+
+        Versioned waits retain their exact claim and outcome snapshot in the
+        notification command. Newer outcomes do not erase historical authorship.
+        This proves who produced the input, never dependency correctness.
+        """
         if not request:
             return False
+        wait = request.get('subscription') or {}
+        if wait.get('notificationVersion') == 2:
+            from .collaboration import PROTOCOL, MAX_RESPONSE_REVISIONS
+            revision = receipt.get('dependencyOutcomeRevision')
+            snapshot = receipt.get('outcomeSnapshot') or {}
+            if (type(revision) is not int or not 1 <= revision <= MAX_RESPONSE_REVISIONS
+                    or type(wait.get('lastClaimedRevision')) is not int
+                    or wait['lastClaimedRevision'] < revision
+                    or not isinstance(wait.get('continuationId'), str) or not wait['continuationId']
+                    or not isinstance(snapshot, dict)
+                    or type(snapshot.get('outcomeRevision')) is not int or snapshot['outcomeRevision'] != revision
+                    or not isinstance(snapshot.get('text'), str)
+                    or not isinstance(snapshot.get('outcome'), str)
+                    or type(snapshot.get('qualified')) is not bool
+                    or snapshot.get('status') not in {'staged', 'sealed', 'rejected', 'unknown', 'observed'}):
+                return False
+            identity = wait['continuationId'] if revision == 1 else str(uuid.uuid5(
+                uuid.NAMESPACE_URL, wait['continuationId'] + ':' + str(revision)))
+            return (request.get('accepted') is True
+                    and request.get('commandAction') in {'coordination.send', 'coordination.watch', 'coordination.create'}
+                    and request.get('protocol') == receipt.get('protocol') == PROTOCOL
+                    and request.get('requestId') == receipt.get('dependencyRequestId')
+                    and receipt.get('origin') == 'system' and receipt.get('mode') == 'queue'
+                    and receipt.get('requestId') == receipt.get('inputId') == identity
+                    and receipt.get('dependencySatisfied') is snapshot['qualified']
+                    and request.get('senderSessionId') == receipt.get('target', {}).get('sessionId')
+                    and (request.get('senderSessionId') if request.get('commandAction') == 'coordination.create'
+                         else (request.get('target') or {}).get('sessionId')) == receipt.get('senderSessionId'))
         response = request.get("response") or {}
         wait = request.get("subscription") or {}
         anchor = response.get("nativeTerminal") or {}
@@ -131,7 +166,7 @@ class PeerAttribution:
         page_ids = Counter(row["id"] for row in rows if isinstance(row.get("id"), str))
         dependencies = {value["dependencyRequestId"] for value in receipts.values()
                         if value.get("origin") == "system" and value.get("dependencyRequestId")}
-        # Continuations reverse the target, so their sealed requests are looked
+        # Continuations reverse the target, so their original requests are looked
         # up by exact command identity, not a source-chat or lineage scan.
         requests = {}
         if dependencies:
@@ -163,5 +198,5 @@ class PeerAttribution:
             actor = receipt.get("origin")
             if actor == "system" and not self._continuation(receipt, requests.get(receipt.get("dependencyRequestId"))):
                 continue
-            row["attribution"] = {"caption": AGENT_CAPTION if actor in {"agent", "system"} else CHAT_CAPTION}
+            row["attribution"] = {"caption": SYSTEM_CAPTION if actor == "system" else AGENT_CAPTION if actor == "agent" else CHAT_CAPTION}
         return result

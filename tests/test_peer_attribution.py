@@ -21,6 +21,7 @@ from test_collaborative_workspaces import (
 
 AGENT = "Sent by Amplifier from another chat"
 NEUTRAL = "From another chat"
+SYSTEM = "Amplifier update"
 TEXT = "## Exact α 🐈\n\n```python\nprint('unchanged')  \n```\n"
 
 
@@ -461,7 +462,7 @@ async def test_publication_invalidates_neutral_cache_and_revocation_keeps_proven
     assert set(projected["attribution"]) == {"caption"} and message["text"] == TEXT
 
 
-async def test_sealed_continuation_attribution_requires_exact_dependency_evidence(app):
+async def test_historical_continuation_attribution_uses_retained_claim_not_current_qualification(app):
     source, target = app.state["sessions"]
     source["status"] = "working"
     await declared_result(app)
@@ -471,11 +472,16 @@ async def test_sealed_continuation_attribution_requires_exact_dependency_evidenc
     identity = wait["result"]["continuationId"]
     receipt = app.collaboration.receipt(identity)
     assert receipt["origin"] == "system"
-    assert app.peer_attribution.resolve(source, source["messages"])[-1]["attribution"]["caption"] == AGENT
+    assert app.peer_attribution.resolve(source, source["messages"])[-1]["attribution"]["caption"] == SYSTEM
     request = app.collaboration.receipt("result-request")
     request["response"]["status"] = "staged"
     app.collaboration.save("result-request", request)
-    assert "attribution" not in app.peer_attribution.resolve(source, source["messages"])[-1]
+    # A later report/qualification change cannot turn a real saved host input
+    # into something the human authored. No success claim comes from the caption.
+    assert app.peer_attribution.resolve(source, source["messages"])[-1]["attribution"]["caption"] == SYSTEM
+    request['subscription']['lastClaimedRevision'] = 0
+    app.collaboration.save('result-request', request)
+    assert 'attribution' not in app.peer_attribution.resolve(source, source['messages'])[-1]
 
 
 class NoModel:
@@ -626,3 +632,81 @@ async def test_nonhuman_input_cannot_be_edited_into_a_user_message(tmp_path, ori
         assert session['messages'] == before
     finally:
         await service.close()
+
+
+@pytest.mark.parametrize('kind,outcome', [('question','question'),('defer','deferred'),('result','failed'),('decline','declined'),('conflict','conflict')])
+async def test_negative_report_notifications_are_host_attributed_before_and_after_sealing(app, kind, outcome):
+    source, peer = app.state['sessions']
+    source['status'] = 'working'
+    await declared_result(app, kind=kind, outcome=outcome)
+    await agent_action(app, source, 'coordination.subscribe', {'sessionId':source['id'],'requestId':'result-request'}, 'negative-wait')
+    row = source['messages'][-1]
+    assert app_caption(app.db, source, row) == SYSTEM
+    await finish(app, peer, 'result-request')
+    assert app_caption(app.db, source, row) == SYSTEM
+    assert row['inputOrigin'] == 'peer' and row['role'] == 'user'
+
+
+async def test_later_reply_and_old_success_keep_exact_independent_display_claims(app):
+    source, peer = app.state['sessions']
+    source['status'] = 'working'
+    await declared_result(app)
+    await agent_action(app, source, 'coordination.subscribe', {'sessionId':source['id'],'requestId':'result-request'}, 'revision-wait')
+    await finish(app, peer, 'result-request')
+    first = source['messages'][-1]
+    await generation(app, peer, 'later-generation', ['follow-up'])
+    await agent_action(app, peer, 'coordination.reply', {'requestId':'result-request', 'expectedResponseRevision':1,
+        'kind':'conflict','outcome':'conflict','text':'Later independent report'}, 'later-report')
+    second = source['messages'][-1]
+    assert first['inputId'] != second['inputId']
+    assert [row.get('attribution', {}).get('caption') for row in app.peer_attribution.resolve(source, [first,second])] == [SYSTEM,SYSTEM]
+    # Read only the older message, with no scan/open of the peer history.
+    assert app_caption(app.db, source, first) == SYSTEM
+
+
+@pytest.mark.parametrize('outcome', ['idle','expired','creation_failure'])
+async def test_watch_and_same_root_preparation_failures_have_verified_system_attribution(app, monkeypatch, outcome):
+    source, peer = app.state['sessions']
+    source['status'] = 'working'
+    if outcome == 'creation_failure':
+        from test_peer_creation_operation import plan
+        plan(app, source)
+        async def unavailable(*args):
+            raise RuntimeError('Fixture preparation failure')
+        monkeypatch.setattr(app.collaboration, '_finish_create', unavailable)
+        saved = await agent_action(app, source, 'coordination.create', {'title':'Unavailable helper','text':'Inspect dependency'}, 'host-notice')
+        from test_collaborative_workspaces import until
+        await until(lambda: app.collaboration.receipt('host-notice')['subscription']['status'] == 'claimed')
+    else:
+        saved = await agent_action(app, source, 'coordination.watch', {'sessionId':source['id'],'targetSessionId':peer['id'],
+            'condition':'idle' if outcome=='idle' else 'status_changed','expiresInSeconds':60}, 'host-notice')
+        if outcome == 'expired':
+            saved['watch']['expiresAt'] = 0
+            app.collaboration.save('host-notice', saved)
+            await app.collaboration.watches.expire('host-notice')
+    row = source['messages'][-1]
+    assert row['inputOrigin'] == 'peer'
+    assert app_caption(app.db, source, row) == SYSTEM
+    if outcome == 'creation_failure':
+        assert row['peerEnvelope']['senderSessionId'] == source['id']
+
+
+@pytest.mark.parametrize('change', ['claim','revision','snapshot','dependency','producer','request','satisfied'])
+async def test_versioned_notification_cannot_get_caption_without_exact_retained_claim(app, change):
+    source, peer = app.state['sessions']
+    source['status'] = 'working'
+    observed = await agent_action(app, source, 'coordination.watch', {'sessionId':source['id'],'targetSessionId':peer['id'],
+        'condition':'idle','expiresInSeconds':60}, 'exact-watch')
+    row = source['messages'][-1]
+    notice = app.collaboration.receipt(row['inputId'])
+    assert app_caption(app.db, source, row) == SYSTEM
+    if change == 'claim': observed['subscription']['lastClaimedRevision'] = 0
+    elif change == 'revision': notice['dependencyOutcomeRevision'] = 2
+    elif change == 'snapshot': notice['outcomeSnapshot'].pop('outcomeRevision')
+    elif change == 'dependency': notice['dependencyRequestId'] = 'missing'
+    elif change == 'producer': observed['target']['sessionId'] = 'unrelated'
+    elif change == 'request': observed['requestId'] = 'unrelated'
+    else: notice['dependencySatisfied'] = True
+    app.collaboration.save('exact-watch', observed)
+    app.collaboration.save(row['inputId'], notice)
+    assert app_caption(app.db, source, row) is None

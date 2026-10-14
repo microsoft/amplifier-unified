@@ -168,7 +168,7 @@ class Worker:
             ids = self.context_inputs if assigned is None else assigned
             # Neither approval nor generation identity is model-supplied.
             args = {key: value for key, value in args.items()
-                    if key not in {"_coordinationApproval", "_generationId"}}
+                    if key not in {"_coordinationApproval", "_generationId", "_configurationWait"}}
             if assigned is None:
                 runtime = getattr(self, "runtime", None)
                 generation = getattr(runtime, "generation", None) or {}
@@ -186,6 +186,38 @@ class Worker:
                         bindings = [{'clientId': 'detached-worker', 'targets': []}]
                 args = {**args, '_contextInputs': ids,
                         '_contextBindings': bindings}
+            if assigned is None and operation == 'dispatch' and args.get('action') == 'capability.request':
+                # Register before publishing the host-owned card: an immediate
+                # human decision must not race a yet-unregistered native wait.
+                command = args.get('id') or str(uuid.uuid4())
+                identity = 'capability:' + str(uuid.uuid5(uuid.NAMESPACE_URL, command))
+                if identity in self.approvals:
+                    raise ValueError('This configuration request is already waiting for a decision.')
+                future = asyncio.get_running_loop().create_future()
+                self.approvals[identity] = (future, ['allow', 'deny'])
+                try:
+                    result = await self.bridge(operation, {**args, 'id': command, '_configurationWait': True})
+                    grant = result.get('result', {})
+                    if grant.get('status') == 'pending':
+                        expiry = grant.get('expiresAt')
+                        try:
+                            if expiry is None:
+                                await future
+                            else:
+                                await asyncio.wait_for(future, max(0, expiry-time.time()))
+                        except TimeoutError:
+                            pass
+                        # A decision is a wakeup, not authority. Revocation can
+                        # overtake it; return the current canonical record.
+                        current = await self.bridge('dispatch', {**args, 'action': 'capability.read',
+                            'args': {'sessionId': grant['sessionId']}})
+                        selected = next((row for row in current.get('result', {}).get('grants', []) if row['id'] == identity), None)
+                        return {**result, 'result': selected or {**grant, 'usable': False}, 'waitCompleted': True}
+                    return result
+                finally:
+                    self.approvals.pop(identity, None)
+                    if not future.done():
+                        future.cancel()
             return await self.bridge(operation, args)
         register = getattr(coordinator, "register_capability", None)
         if callable(register):
@@ -359,6 +391,9 @@ class Worker:
         async def admit_questions(question_ids):
             return await self.bridge("questions.admit", {"questionIds": question_ids})
         coordinator.register_capability("questions.admit", admit_questions)
+        async def admit_integration(identity, command):
+            return await self.bridge('integration.admit', {'id': identity, 'command': command})
+        coordinator.register_capability('integration.admit', admit_integration)
         def public_stream():
             from amplifier_web.execution_events import CALL_PURPOSE
             return not CALL_PURPOSE.get()
@@ -565,6 +600,8 @@ class Worker:
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
+            from amplifier_web.loaded_provenance import observe as observe_loaded
+            self.provenance_mount = await observe_loaded(self.session)
             await self.ownership.register()
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
@@ -945,11 +982,26 @@ class Worker:
                     self.shutdown.set()
                 return
             elif op == "dependencies":
-                if __package__:
+                if data.get('resourceAccess') is True:
+                    from amplifier_web.resource_access import observe
+                    inspected_session = self.session
+                    result = await observe(inspected_session, data.get('paths', []))
+                    if self.session is not inspected_session:
+                        result = {'status': 'unknown', 'paths': {}}
+                elif data.get('integrationValidation') is True:
+                    result = {'integrationValidation': 'admission-v1' if self.controls is not None else None}
+                elif data.get('provenance') is True:
+                    from amplifier_web.loaded_provenance import observe
+                    inspected_session = self.session
+                    result = await observe(inspected_session, data.get('modules', []), mounted=getattr(self, 'provenance_mount', None))
+                    if self.session is not inspected_session:
+                        result.update(status='unknown', identityStable=False)
+                elif __package__:
                     from .artifact_runtime import discover
                 else:
                     from artifact_runtime import discover
-                result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
+                if data.get('provenance') is not True and data.get('resourceAccess') is not True and data.get('integrationValidation') is not True:
+                    result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif op == "desktop.readiness":
                 if not self.controls:
                     result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}

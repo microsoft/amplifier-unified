@@ -10,6 +10,7 @@ from amplifier_web.management import Management
 from amplifier_web.preferences import SettingsStore
 from amplifier_web.service import AppService, AppError
 from amplifier_web.setup import SetupManager
+from configuration_admin import authorized_admin
 
 
 class Runtime:
@@ -83,9 +84,10 @@ async def test_provider_save_is_bounded_for_twenty_unmounted_chats(app,monkeypat
 @pytest.mark.parametrize('origin',['ui','agent'])
 async def test_receipt_precedes_retirement_and_retries_do_not_repeat_save(app,monkeypatch,origin):
     sid=app.state['selectedSessionId'];app.runtime.workers[sid]=object()
+    admin=await authorized_admin(app,sid,effects=['connections'],scopes=['global']) if origin=='agent' else None
     values=snapshots(app,monkeypatch)
     if origin=='agent':
-        dispatch=lambda:app.app_bridge('dispatch',{'action':'providers.save','args':provider_args(),'id':'save'},sid)
+        dispatch=lambda:admin('dispatch',{'action':'providers.save','args':provider_args(),'id':'save'})
     else:
         dispatch=lambda:app.dispatch('providers.save',provider_args(),command_id='save',include_state=False)
     await dispatch()

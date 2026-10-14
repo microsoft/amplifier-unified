@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from configuration_admin import authorized_admin
 
 from amplifier_web.builtin_behaviors import (
     IMAGEGEN_BEHAVIOR_URI, SHELL_BEHAVIOR_URI, app_behaviors, resolve_builtin_behavior, resource_root,
@@ -155,7 +156,8 @@ async def test_default_toggle_uses_shared_action_path(tmp_path, origin, uri, oth
         row = next(row for row in BundleManager.entries({}) if row["uri"] == uri)
         args = {"id": row["id"], "enabled": False}
         if origin == "agent":
-            result = await app.app_bridge("dispatch", {"action": "bundles.toggle", "args": args, "id": "toggle-shell"}, app.state["selectedSessionId"])
+            admin = await authorized_admin(app,app.state['selectedSessionId'],effects=['bundles'],scopes=['global'])
+            result = await admin("dispatch", {"action": "bundles.toggle", "args": args, "id": "toggle-shell"})
         else:
             result = await app.dispatch("bundles.toggle", args, command_id="toggle-shell")
         assert result["accepted"]

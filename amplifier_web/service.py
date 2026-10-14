@@ -87,7 +87,7 @@ ACTION_DEFINITIONS = {
     "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
     "canvas.openAttachment": ("Open a sent text attachment from the currently displayed conversation in Canvas; never submits or replays work.", schema({"sessionId":string(200),"id":string(32),"clientId":string(200)}, ["sessionId","id"])),
     "canvas.openGif": ("Open an exact retained assistant GIF in the originating browser client's Canvas, only on an explicit UI click. Does not send, generate, or attach anything.", schema({"sessionId":string(200),"messageId":string(200),"id":string(100),"version":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"clientId":string(200)}, ["sessionId","messageId","id","version","sha256"])),
-    "canvas.openFile": ("Open a local file in Canvas for the selected chat and its unchanged workspace. Exact artifact references verify reported bytes in the recorded execution folder. Optional showConversation opens the named chat from that workspace's Files page atomically with a successful preview; stale pages and unavailable files do not navigate. Never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200),"showConversation":{"type":"boolean"},"referenceRequestId":string(200),"expectedSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}, ["sessionId","workspace","path"])),
+    "canvas.openFile": ("Open a local file in Canvas for the selected chat and its unchanged workspace. Exact artifact references verify reported bytes in the recorded execution folder. Optional showConversation opens the named chat from that workspace's Files page atomically with a successful preview; stale pages and unavailable files do not navigate. Never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200),"showConversation":{"type":"boolean"},"referenceRequestId":string(200),"referenceResponseRevision":{"type":"integer","minimum":1},"expectedSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
     "canvas.select": ("Reopen Latest or an exact immutable saved version in the calling chat. Omit version for Latest; version views are read-only. Supply clientId when multiple clients display that chat.", schema({"id":string(100),"clientId":string(100),"sessionId":string(200),"version":{"type":"integer","minimum":1}}, ["id"])),
@@ -237,6 +237,8 @@ ACTION_DEFINITIONS.update(computation_definitions())
 
 from .capacity import definitions as capacity_definitions
 ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
+from .configuration_authority import definitions as configuration_authority_definitions
+ACTION_DEFINITIONS.update(configuration_authority_definitions(schema, string))
 
 
 class AppError(Exception):
@@ -311,6 +313,8 @@ from .task_continuity import definitions as task_definitions
 ACTION_DEFINITIONS.update(task_definitions(schema, string))
 from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
+from .integration_evidence import definitions as integration_definitions
+ACTION_DEFINITIONS.update(integration_definitions(schema, string))
 from .collaboration import definitions as collaboration_definitions
 ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
 from .assignments import definitions as assignment_definitions
@@ -322,6 +326,7 @@ for _peer_action in ("conversation.send", "coordination.followup"):
         "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
         "senderSessionId": string(200),
         "replyToRequestId": string(200),
+        "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
         "references": {"type": "array", "maxItems": 16, "items": string(2000)},
     })
 from .schedules import definitions as schedule_definitions
@@ -390,6 +395,7 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        *integration_definitions(schema, string),
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
         "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.openGif", "canvas.select", "canvas.reference",
         *MESSAGE_INTERACTIONS,
@@ -409,6 +415,19 @@ for _access, _actions in {
         }
 ACTION_POLICIES["session.create"] = {"access": "grant_creation", "target": None}
 ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
+from .configuration_authority import BUNDLE_GLOBAL
+from .owned_history import SESSION_READS, SCOPE as HISTORY_SCOPE, guard_action as guard_history_action
+for _action in SESSION_READS:
+    ACTION_DEFINITIONS[_action][1]['properties']['scope'] = HISTORY_SCOPE
+for _action in {'history.list', 'history.shared.list', 'history.shared.view'}:
+    _properties=ACTION_DEFINITIONS[_action][1]['properties']
+    _properties['scope']=HISTORY_SCOPE
+    _properties.setdefault('offset',{'type':'integer','minimum':0})
+    _properties.setdefault('limit',{'type':'integer','minimum':1,'maximum':50})
+for _action in BUNDLE_GLOBAL:
+    ACTION_POLICIES[_action] = {"access": "caller_controlled", "target": "sessionId"}
+    ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
+
 for _action in {"routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
                 "sources.save", "sources.remove", "sources.validate", "call.start"}:
     ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
@@ -443,6 +462,7 @@ class AppService:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS integration_receipts ON commands(json_extract(receipt,'$.commandAction'),json_extract(receipt,'$.result.sessionId'))")
         self.db.execute("CREATE TABLE IF NOT EXISTS state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         from .state_records import initialize as initialize_records
         initialize_records(self.db)
@@ -628,6 +648,8 @@ class AppService:
         self.coordination = Coordination(self)
         from .collaboration import Collaboration
         self.collaboration = Collaboration(self)
+        from .configuration_authority import ConfigurationAuthority
+        self.configuration_authority = ConfigurationAuthority(self)
         from .assignments import Assignments
         self.assignments = Assignments(self)
         from .peer_attribution import PeerAttribution
@@ -1481,11 +1503,29 @@ class AppService:
                 or args.get('clientId', client_id) != client_id
                 or self.clients.record().get('kind') != 'web'):
             raise AppError('Open in Canvas requires an explicit click in the originating browser client.', 403)
+        if action == "approval.respond" and args["id"].startswith("capability:"):
+            return await self.configuration_authority.decide(args, origin, command_id)
+        guard_history_action(self, action, args, origin, caller_session_id)
+        if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
+            reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
+            if not reader:
+                raise AppError('History reads require a registered calling conversation.', 403)
+            from .history_query import query_history
+            values = {'action':'read' if action.endswith('.view') else 'list',
+                'scope':args.get('scope','workspace'), 'offset':args.get('offset',0), 'limit':min(50,args.get('limit',20))}
+            if args.get('workspace'):
+                values['workspace'] = args['workspace']
+            if action.endswith('.view'):
+                values['session_id'] = args['id']
+            return {'accepted':True, 'result':await query_history(self,values,reader)}
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action.startswith("capability."):
+            return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
+        configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
         if action in resource_reservation_definitions(schema, string):
             from .workspace_resources import dispatch_reservation
             return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
@@ -1614,6 +1654,9 @@ class AppService:
         if action == 'desktop.readiness':
             from .desktop_readiness import dispatch as desktop_readiness
             return await desktop_readiness(self, args, origin, expected_revision, caller_session_id)
+        if action in integration_definitions(schema, string):
+            from .integration_evidence import dispatch as integration_dispatch
+            return await integration_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action == 'runtime.dependencies':
             from .artifact_runtime import discover
             async with self.lock:
@@ -1863,6 +1906,20 @@ class AppService:
                     resolver=self.peer_attribution.resolve, message_rows=rows))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
+        retained_file = None
+        if action == 'canvas.openFile' and args.get('referenceRequestId'):
+            from .result_artifacts import load as load_retained_file
+            async with self.lock:
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                response = self.collaboration.receipt(args['referenceRequestId']).get('response') or {}
+                has_retained_version = 'artifacts' in response or args.get('referenceResponseRevision') is not None
+            if has_retained_version:
+                retained_file = await load_retained_file(self.collaboration, args['sessionId'], args['referenceRequestId'],
+                    args['path'] + '@sha256:' + args.get('expectedSha256', ''), args.get('referenceResponseRevision'))
         gif_proof = gif_record = None
         if action == 'canvas.openGif':
             media = self.outputs.media
@@ -1926,6 +1983,8 @@ class AppService:
                     if action == 'question.answer':
                         saved_receipt['result'] = self.questions.read('question.read', args)
                     return {**saved_receipt, **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
+            self.configuration_authority.check(configuration_authority)
+            guard_history_action(self, action, args, origin, caller_session_id)
             if checked_session:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
@@ -2133,7 +2192,7 @@ class AppService:
                 from .workspace_canvas import canvas_command
                 if action == 'canvas.openFile':
                     from .canvas_files import open_file
-                    diagnostic_result = open_file(self, args, origin)
+                    diagnostic_result = open_file(self, args, origin, retained_file=retained_file)
                 elif action == 'canvas.openGif':
                     from .canvas_library import open_gif
                     diagnostic_result = open_gif(self, args, gif_proof)
@@ -2789,7 +2848,7 @@ class AppService:
                 self._refresh_shared_preferences()
             elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
-                pending.append((self.management.command,(action,copy.deepcopy(args),command_id)))
+                pending.append((self.management.command,(action,copy.deepcopy(args),command_id,configuration_authority)))
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
                 if action == 'updates.featureInstall':
@@ -3416,6 +3475,9 @@ class AppService:
             await self.set_voice_status({"status": "error", "error": str(exc)})
 
     async def _stop(self, sid):
+        # The Stop revision is already durable. Release invalidated inbox slots
+        # even while the actual worker interruption is slow or unavailable.
+        await self.collaboration.drain(sid)
         if self.runtime:
             await self.runtime.stop(sid)
         await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})
@@ -3931,6 +3993,9 @@ class AppService:
                 for question_id in values:
                     self.questions.answer_for_dependency(session_id, question_id)
                 return {"admitted": True, "questionIds": values}
+        if operation == 'integration.admit':
+            from .integration_validation import admit
+            return await admit(self, session_id, args.get('id'), args.get('command'))
         if operation == "operations.observe":
             return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
         if operation == "computer.visual.read":
@@ -4049,7 +4114,7 @@ class AppService:
                 action_args.setdefault('id', session_id)
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
-                action_args.setdefault('nativeProject', native_project(self._session(session_id)))
+                action_args.setdefault('nativeProject', native_project(self._session(session_id, hydrate=args['action'] not in {'workspace.resources.managed', 'workspace.resources.read', 'coordination.recap', 'coordination.diagnostics'})))
             if args['action'] == 'canvas.views.command' and action_args.get('action') == 'canvas.reference':
                 if action_args.get('args', {}).get('sessionId') != session_id:
                     raise AppError('References must target the calling conversation.', 409)
@@ -4058,7 +4123,7 @@ class AppService:
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('coordination.', 'worktree.', 'assignment.')) or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -4253,6 +4318,7 @@ class AppService:
         if self.closed:
             return
         self.closed = True
+        self.collaboration.close()
         await self.performance_diagnostics.close()
         if getattr(self, "profiling_host", None):
             await self.profiling_host.close()

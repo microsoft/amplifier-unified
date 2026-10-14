@@ -337,7 +337,7 @@ class Operations:
         except (TypeError, ValueError, RuntimeError) as exc:
             raise AppError(str(exc), 409) from exc
 
-    async def mutate(self, action, args, origin):
+    async def mutate(self, action, args, origin, *, integration_id=None):
         sid = args["sessionId"]
         session = self.service._session(sid)
         existing = self.requests.existing(sid, action, args, origin)
@@ -355,6 +355,8 @@ class Operations:
                 self.service.questions.answer_for_dependency(sid, question_id)
             payload = {"command": args["command"], "questionIds": args.get("questionIds", []),
                        **{key: args[key] for key in ("timeout", "pty") if key in args}}
+            if integration_id is not None:
+                payload['integrationId'] = integration_id
         else:
             value = self.status(sid, args["id"])
             if value["source"] != "process" or not value.get("controlAvailable") or value["state"] not in ACTIVE:
@@ -369,6 +371,11 @@ class Operations:
         try:
             if action == "operations.submit" and self.service.management is not None:
                 await self.service.management.ensure_runtime(session)
+            if integration_id is not None:
+                supports = getattr(runtime, 'integration_validation_supported', None)
+                if not callable(supports) or await supports(sid) is not True:
+                    return self.requests.finish(receipt, 'rejected', error={
+                        'message': 'This runtime cannot enforce integration admission. No validation command was submitted.'})
             response = await runtime.control(sid, action, {**payload, "actor": origin})
             result = response.get("result", response)
             if result.get("success") is False:
