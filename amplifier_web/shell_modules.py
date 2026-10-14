@@ -281,7 +281,7 @@ class ShellModules:
                     return {'status': 'deferred', 'instanceId': old['id'], 'reason': 'State schema migration is not supported; the current module remains active.'}
         return None
 
-    def inspect(self, identity, *, snapshots=False, recovery=False):
+    def inspect(self, identity, *, snapshots=False, recovery=False, navigation_resources=None):
         client = self.client(identity)
         composition = DEFAULT if recovery else client['preview']['composition'] if client['preview'] else client['composition']
         result = {'clientId': identity, 'apiVersion': API, **client, 'effectiveComposition': composition, 'resolvedInstances': components.resolved(composition),
@@ -297,14 +297,14 @@ class ShellModules:
             result['snapshots'] = {}
             for item in components.resolved(composition):
                 if not result['packages'][item['package']].get('error'):
-                    result['snapshots'][item['id']] = self.snapshot(client, item, identity=identity)
+                    result['snapshots'][item['id']] = self.snapshot(client, item, identity=identity, navigation_resources=navigation_resources)
         else:
             result['registry'] = {key: value for key, value in BUILTINS.items()}
             result['staged'] = [json.loads(row[0]) for row in self.db.execute("SELECT value FROM shell_records WHERE kind='package' ORDER BY rowid DESC LIMIT 100")]
         return result
 
-    def snapshot(self, client, instance, *, identity=None):
-        value = self.navigation(client, instance, identity=identity) if instance['slot'] == 'navigation' else components.snapshot(self, client, instance)
+    def snapshot(self, client, instance, *, identity=None, navigation_resources=None):
+        value = self.navigation(client, instance, identity=identity, navigation_resources=navigation_resources) if instance['slot'] == 'navigation' else components.snapshot(self, client, instance)
         return {**value, 'generation': client['views'].get(instance['id'], {}).get('generation', 0)}
 
     def recent_key(self, client, instance, identity=None):
@@ -339,7 +339,10 @@ class ShellModules:
             view['navChatScope'] = 'all'
         return {**state, 'selectedWorkspaceId': workspace_id, 'view': view}
 
-    def navigation(self, client, instance, *, identity=None):
+    def navigation(self, client, instance, *, identity=None, navigation_resources=None):
+        from .shell_navigation_demand import resources_for
+        requested = resources_for(instance, navigation_resources)
+        wants = lambda name: requested is None or name in requested
         from .conversation_library import projection as organization_projection
         from .chat_navigation import SIDEBAR_FILTER_KEYS
         from .workspace_navigation import workspace_pins
@@ -354,70 +357,82 @@ class ShellModules:
         saved_limit = view.get('navRecentLimit', 20)
         saved_limit = saved_limit if type(saved_limit) is int and saved_limit in RECENT_LIMITS else 20
         view['navRecentLimit'] = self.recent_limits.get(self.recent_key(client, instance, identity), saved_limit)
-        chat_page = projections.chats(scoped)
+        chat_page = projections.chats(scoped) if wants('chatNavigation') else None
         workspace = next((row for row in state.get('workspaces', []) if row['id'] == workspace_id and row.get('available') is True), None)
         from .workspace_placement import listing
         home_view = {**view, 'navChatScope': 'all', 'navArchive': 'active', 'navCollection': None,
                      'navFilter': '', 'navStatusFilter': 'all', 'navLocationFilter': 'all', 'navSort': 'activity'}
         home_view.pop('navChatPage', None)
         pinned_scope = instance.get('scope', {}).get('mode') == 'pinned'
-        home = chat_page if pinned_scope else projections.chats({**scoped, 'view': home_view})
+        home = None
+        if wants('homeNavigation'):
+            home = (chat_page if chat_page is not None else projections.chats(scoped)) if pinned_scope else projections.chats({**scoped, 'view': home_view})
         # These are views over the native history index, never another chat list.
         # Pins remain independent of either chat list's filters and pagination.
         sidebar_home = {**home_view, 'navChatScope': 'workspace' if pinned_scope else 'all'}
         recent_view = {**sidebar_home, **view.get('navRecentView', {})}
-        pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned')
-        recent = projections.chats({**scoped, 'view': recent_view}, section='recent')
-        search = projections.chats({**scoped, 'view': recent_view}, section='search')
-        workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace')
-        recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts')
-        recent_scope = {key: recent_navigation['scope'][key] for key in ('mode', 'workspaceId', 'filter')}
-        recent_scope.update(clientId=identity if identity is not None else self.service.clients.current.get(),
-                            instanceId=instance['id'],
-                            generation=client['views'].get(instance['id'], {}).get('generation', 0))
-        # Identity is not part of the shared projection cache. Copy its scope,
-        # so one client's fence cannot contaminate another's cached rows.
-        recent_navigation = {**recent_navigation, 'scope': {**recent_navigation['scope'], **recent_scope}}
-        recent_shortcuts = recent_navigation['items']
-        pinned_navigation = projections.pinned_navigation({**scoped, 'view': sidebar_home})
+        pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned') if wants('sidebarPinned') else None
+        recent = projections.chats({**scoped, 'view': recent_view}, section='recent') if wants('sidebarRecent') else None
+        search = projections.chats({**scoped, 'view': recent_view}, section='search') if wants('sidebarSearch') else None
+        workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace') if wants('sidebarWorkspace') else None
+        recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts') if wants('recentNavigation') else None
+        if recent_navigation is not None:
+            recent_scope = {key: recent_navigation['scope'][key] for key in ('mode', 'workspaceId', 'filter')}
+            recent_scope.update(clientId=identity if identity is not None else self.service.clients.current.get(),
+                                instanceId=instance['id'],
+                                generation=client['views'].get(instance['id'], {}).get('generation', 0))
+            # Identity is not part of the shared projection cache. Copy its scope,
+            # so one client's fence cannot contaminate another's cached rows.
+            recent_navigation = {**recent_navigation, 'scope': {**recent_navigation['scope'], **recent_scope}}
+            recent_shortcuts = recent_navigation['items']
+        pinned_navigation = projections.pinned_navigation({**scoped, 'view': sidebar_home}) if wants('pinnedNavigation') else None
         visible_ids = {row['id'] for page in (chat_page, home, pins, recent, search, workspace_chats)
-                       for row in page['items']} | {row['id'] for row in recent_shortcuts}
-        visible_ids.update(item['row']['id'] for item in pinned_navigation['items'] if item['kind'] == 'session')
+                       if page is not None for row in page['items']} | {row['id'] for row in (recent_navigation['items'] if recent_navigation is not None else [])}
+        visible_ids.update(item['row']['id'] for item in (pinned_navigation['items'] if pinned_navigation is not None else []) if item['kind'] == 'session')
         # Exact review receipts for these bounded rows; never error bodies or
         # unrelated settings/permission notices from the full attention inbox.
         error_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
                           for item in scoped['attention']['items']
                           if item.get('sessionId') in visible_ids
                           and item['id'] == 'session:' + item['sessionId']]
-        overview = {'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})
-        shortcuts = projections.workspaces({**scoped, 'view': {**view, 'navWorkspaceMode': 'recent', 'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}})
+        overview = ({'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})) if wants('workspaceOverview') else None
+        shortcuts = projections.workspaces({**scoped, 'view': {**view, 'navWorkspaceMode': 'recent', 'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}}) if wants('workspaceShortcuts') else None
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
-        return {'view': view, 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
+        result = {'view': view, 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
                 'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
                 'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
                 'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
                 'pinnedWorkspaceIds': workspace_pins(state),
                 'pinnedItemIds': ordered_ids(state),
-                'pinnedNavigation': pinned_navigation,
-                'homeNavigation': home, 'workspaceOverview': overview,
-                'workspaceShortcuts': [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
-                'unpinnedWorkspaceShortcuts': [row for row in projections.workspace_shortcuts(scoped) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
-                'recentShortcuts': recent_shortcuts,
-                'recentNavigation': recent_navigation,
-                'recentScope': recent_scope,
-                'sidebarNavigation': {'pinned': pins, 'recent': recent, 'search': search, 'workspace': workspace_chats,
-                                      'recentView': {key: recent_view[key] for key in recent_view
-                                                     if key in SIDEBAR_FILTER_KEYS}},
-                'chatNavigation': chat_page, 'workspaceExplorer': projections.workspaces(scoped),
-                'conversationOrganization': organization_projection(state, {row['id'] for row in chat_page['items']}, directory=projections.directory),
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error', 'issues', 'issueCount']},
                 'attention': {'sessions': {sid: scoped['attention'].get('sessions', {}).get(sid, 0) for sid in visible_ids},
                               'items': error_receipts},
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
                 'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
+
+        pages = {'chatNavigation': chat_page, 'homeNavigation': home,
+                 'pinnedNavigation': pinned_navigation, 'workspaceOverview': overview}
+        result.update({key: value for key, value in pages.items() if value is not None})
+        sidebar = {'recentView': {key: recent_view[key] for key in recent_view if key in SIDEBAR_FILTER_KEYS}}
+        sidebar.update({key: page for key, page in {'pinned': pins, 'recent': recent,
+                        'search': search, 'workspace': workspace_chats}.items() if page is not None})
+        result['sidebarNavigation'] = sidebar
+        if recent_navigation is not None:
+            result.update(recentShortcuts=recent_shortcuts, recentNavigation=recent_navigation, recentScope=recent_scope)
+        if wants('workspaceShortcuts'):
+            result['workspaceShortcuts'] = [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6]
+            result['unpinnedWorkspaceShortcuts'] = [row for row in projections.workspace_shortcuts(scoped) if not pinned_scope or row.get('workspaceId') == workspace_id][:6]
+        if wants('workspaceExplorer'):
+            result['workspaceExplorer'] = projections.workspaces(scoped)
+        result['conversationOrganization'] = organization_projection(state,
+            {row['id'] for row in chat_page['items']} if requested is None else visible_ids,
+            directory=projections.directory)
+        if requested is not None:
+            result['navigationResources'] = sorted(requested)
+        return result
 
     async def validate_package(self, digest):
         async with self.service.lock:
