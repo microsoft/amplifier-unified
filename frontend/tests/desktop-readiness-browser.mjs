@@ -23,7 +23,12 @@ try{
  await expect(page.getByRole('region',{name:'Conversation computer tools',exact:true})).toHaveCount(0);
  assert.equal((await inspect()).started.length,0);assert.deepEqual((await inspect()).runtimeCalls,[]);
  await action('session.create',{title:'Readiness caller'});const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
- await action('view.update',{patch:{draft:'Preserve this unsent draft'}});await setup();await check();
+ await action('view.update',{patch:{draft:'Preserve this unsent draft'}});await setup();
+ // A provider read finishing after navigation must not reopen first-use setup
+ // in this already-configured fixture or hide the readiness controls.
+ await action('providers.list',{sessionId:first});
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ await check();
  await page.getByRole('region',{name:'Conversation computer tools',exact:true}).locator('summary').filter({hasText:'Technical environment details'}).click();
  await expect(page.getByText('/synthetic/worker/bin/python',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Open computer target setup',exact:true})).toBeVisible();

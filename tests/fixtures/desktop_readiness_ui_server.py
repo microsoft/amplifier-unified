@@ -49,6 +49,10 @@ async def main(home):
                 })}}
             return {}
 
+    # A completed setup journey includes configured synthetic provider facts.
+    # The done marker alone cannot suppress a later empty-provider discovery.
+    from configured_browser import seed_connection
+    seed_connection(home/'shared')
     runtime = DesktopRuntime()
     app = await create_app(home/'app', workspace=str(home), runtime=runtime, voice=False, background_updates=False, preload_providers=False)
     service = app['service']; runtime.service = service
