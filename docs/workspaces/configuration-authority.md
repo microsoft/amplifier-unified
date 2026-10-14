@@ -61,6 +61,14 @@ A failed write or lost acknowledgment can conservatively retire the old mount,
 but cannot silently continue it with a missing fence. No-op reset adds no fence.
 No worker or provider turn is started by this control.
 
+The browser matches terminal action status to the accepted command ID. If
+another tab replaces that status, it reconciles once through the existing exact
+`/managementResults/<commandId>` JSON Pointer read, without fetching command
+history. Missing receipts, interrupted requests or unavailable reads become an
+explicit unconfirmed result after a bounded wait. Entries remain editable, but
+save/reset require **Reload preview** to refresh the current policy and revision;
+that recovery preserves entered values and never repeats the prior mutation.
+
 ## Effect and ownership mapping
 
 | Effect | Shared routes | Scope |

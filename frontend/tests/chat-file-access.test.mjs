@@ -4,7 +4,7 @@ import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {ChatFileAccess}=await server.ssrLoadModule('/src/chat-file-access.jsx');
+const {ChatFileAccess,readPermissionCompletion}=await server.ssrLoadModule('/src/chat-file-access.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 const report=(sessionId,commandId,extra={})=>({sessionId,commandId,scope:'session',revision:'preview-1',
@@ -89,6 +89,82 @@ test('queued and working phases or another command cannot settle the pending pre
  await renderAct(async()=>{state=completed('permissions.get','mine',null,'error','Preview unavailable.');root.update(render())});
  assert.equal(button(root,'permissions.get').props.disabled,false);
  assert.match(text(root),/Preview unavailable/);
+ assert.doesNotMatch(text(root),/Updating file settings/);
+ await renderAct(async()=>root.unmount());
+});
+
+test('exact receipt recovery reads only the accepted command through the existing pointer route',async()=>{
+ const calls=[];
+ const value=await readPermissionCompletion('own/id~one',{read:async(url)=>{
+  calls.push(url);return {path:'/managementResults/own~1id~0one',type:'object',nextOffset:null,
+   items:[{key:'phase',value:'ready'},{key:'error',value:null}]};
+ }});
+ assert.deepEqual(value,{phase:'ready',error:null});
+ assert.equal(calls.length,1);
+ const url=new URL(calls[0],'https://app.example');
+ assert.equal(url.pathname,'/api/state/detail');
+ assert.equal(url.searchParams.get('path'),'/managementResults/own~1id~0one');
+ assert.equal(url.searchParams.get('limit'),'2');
+ assert.equal(await readPermissionCompletion('mine',{read:async()=>({path:'/managementResults/peer',type:'object',nextOffset:null,items:[{key:'phase',value:'ready'}]})}),null);
+});
+
+for(const outcome of ['ready','error','unknown'])test(`two overlapping panes recover own ${outcome} after the peer replaces latest status`,async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const calls={owner:[],peer:[]},reads=[];
+ let state={},owner,peer;
+ const dispatch=id=>async(action,args)=>{calls[id].push({action,args});return {accepted:true,operationId:id+'-'+calls[id].length}};
+ const actions={owner:dispatch('owner'),peer:dispatch('peer')};
+ const readCompletion=async id=>{reads.push(id);if(outcome==='unknown')throw Error('Receipt expired');return {phase:outcome,error:outcome==='error'?'Own save rejected.':null}};
+ const render=id=>React.createElement(ChatFileAccess,{state,session:{id},act:actions[id],readCompletion});
+ const update=async next=>renderAct(async()=>{state=next;owner.update(render('owner'));peer?.update(render('peer'))});
+ await renderAct(async()=>{owner=create(render('owner'))});
+ await update(completed('permissions.get','owner-1',report('owner','owner-1')));
+ await renderAct(async()=>{peer=create(render('peer'))});
+ await update(completed('permissions.get','peer-1',report('peer','peer-1',{allowed:['/peer-private']})));
+ const field=()=>owner.root.findAllByType('textarea').find(node=>node.props.id==='chat-write-denied');
+ await renderAct(async()=>field().props.onChange({target:{value:'/edited-owner'}}));
+ await renderAct(async()=>button(owner,'permissions.save').props.onClick());
+ await renderAct(async()=>button(peer,'permissions.save').props.onClick());
+ // The owner's terminal frame can be coalesced away before the other save.
+ await update(completed('permissions.save','peer-2',report('peer','peer-2',{allowed:['/peer-private'],detail:'Peer saved.'})));
+ assert.match(text(owner),/Updating file settings/);
+ assert.match(text(peer),/Peer saved/);
+ await renderAct(async()=>t.mock.timers.tick(15000));
+ assert.deepEqual(reads,['owner-2']);
+ assert.doesNotMatch(text(owner),/Updating file settings|Peer saved|peer-private/);
+ assert.match(text(owner),outcome==='ready'?/Chat write overrides saved/:outcome==='error'?/Own save rejected/:/result is not confirmed/);
+ assert.equal(field().props.value,'/edited-owner');
+ assert.equal(button(owner,'permissions.get').props.disabled,false);
+ assert.equal(button(owner,'permissions.save').props.disabled,true);
+ assert.equal(button(owner,'permissions.reset').props.disabled,true);
+ assert.deepEqual(calls.owner.map(row=>row.action),['permissions.get','permissions.save']);
+ await renderAct(async()=>button(owner,'permissions.get').props.onClick());
+ await update(completed('permissions.get','owner-3',report('owner','owner-3',{revision:'recovered',denied:['/saved-owner']})));
+ assert.equal(field().props.value,'/edited-owner');
+ assert.match(text(owner),/Preview refreshed/);
+ assert.equal(button(owner,'permissions.save').props.disabled,false);
+ assert.deepEqual(calls.owner.map(row=>row.action),['permissions.get','permissions.save','permissions.get']);
+ await renderAct(async()=>{owner.unmount();peer.unmount()});
+});
+
+test('lost acknowledgement and a hanging exact read both end in recoverable unknown',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ let accept,root;
+ const act=()=>new Promise(resolve=>{accept=resolve});
+ await renderAct(async()=>{root=create(React.createElement(ChatFileAccess,{state:{},session:{id:'owner'},act}))});
+ await renderAct(async()=>t.mock.timers.tick(15000));
+ assert.match(text(root),/result is not confirmed/);
+ assert.equal(button(root,'permissions.get').props.disabled,false);
+ await renderAct(async()=>accept({accepted:true,operationId:'late'}));
+ assert.doesNotMatch(text(root),/Updating file settings/);
+ await renderAct(async()=>root.unmount());
+ let signal;
+ await renderAct(async()=>{root=create(React.createElement(ChatFileAccess,{state:{},session:{id:'owner'},act:async()=>({accepted:true,operationId:'accepted'}),readCompletion:(_,options)=>{signal=options.signal;return new Promise(()=>{})}}))});
+ await renderAct(async()=>t.mock.timers.tick(15000));
+ await renderAct(async()=>t.mock.timers.tick(5000));
+ assert.equal(signal.aborted,true);
+ assert.match(text(root),/result is not confirmed/);
+ assert.equal(button(root,'permissions.get').props.disabled,false);
  assert.doesNotMatch(text(root),/Updating file settings/);
  await renderAct(async()=>root.unmount());
 });

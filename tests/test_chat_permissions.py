@@ -113,6 +113,78 @@ async def test_browser_permission_completion_uses_streamed_action_status_not_ful
         assert 'Reload' in state['actionStatus']['permissions.reset']['error']
 
 
+@pytest.mark.parametrize('own_phase', ['ready', 'error'])
+async def test_two_http_clients_recover_exact_permission_receipt_after_status_superseded(
+        authenticated_client, tmp_path, monkeypatch, own_phase):
+    from amplifier_web.server import create_app
+    from test_configuration_authority import Runtime
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path/'native'))
+    host = await create_app(tmp_path/'app', workspace=tmp_path, runtime=Runtime(),
+        voice=False, background_updates=False, preload_providers=False)
+    service = host['service']
+    source, peer = [service._new_session({'title':name}) for name in ('Owner', 'Peer')]
+    service.state['sessions'] = [source, peer]
+    service.state['selectedSessionId'] = source['id']
+    service._publish()
+    client = await authenticated_client(host)
+    for identity in ('owner-browser', 'peer-browser'):
+        attached = await client.post('/api/clients/attach', json={'clientId':identity})
+        assert attached.status == 200
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = service.management.perform
+    calls = []
+    async def held(action, values, **kwargs):
+        calls.append((action, kwargs.get('command_id')))
+        if kwargs.get('command_id') == 'own-save':
+            entered.set()
+            await release.wait()
+        return await original(action, values, **kwargs)
+    monkeypatch.setattr(service.management, 'perform', held)
+    async def send(browser, identity, action, values):
+        response = await client.post('/api/actions', headers={
+            'X-Amplifier-Client':browser, 'X-Amplifier-State-Transport':'delta-v1'},
+            json={'id':identity, 'action':action, 'args':values})
+        assert response.status == 200
+        return await response.json()
+    def save_values(session):
+        return {'sessionId':session['id'], 'scope':'session',
+            'expectedRevision':snapshot(service.management, session)['revision'],
+            'allowed':[], 'denied':[session['id']]}
+    own = save_values(source)
+    if own_phase == 'error':
+        own['expectedRevision'] = 'stale'
+    receipt = await send('owner-browser', 'own-save', 'permissions.save', own)
+    await entered.wait()
+    await send('peer-browser', 'peer-save', 'permissions.save', save_values(peer))
+    await until(lambda: service.state['actionStatus']['permissions.save']['commandId'] == 'peer-save')
+    release.set()
+    assert (await finished(service, 'own-save'))['phase'] == own_phase
+    assert (await finished(service, 'peer-save'))['phase'] == 'ready'
+    headers = {'X-Amplifier-Client':'owner-browser'}
+    browser = await (await client.get('/api/state', headers=headers)).json()
+    assert 'managementResults' not in browser
+    assert browser['actionStatus']['permissions.save']['commandId'] == 'peer-save'
+    assert browser['permissions']['sessionId'] == peer['id']
+    # Existing JSON Pointer API reads one immutable completion, not history.
+    result = await client.get('/api/state/detail', headers=headers,
+        params={'path':'/managementResults/'+receipt['operationId'], 'limit':2})
+    assert result.status == 200
+    detail = await result.json()
+    assert detail['path'] == '/managementResults/own-save' and detail['nextOffset'] is None
+    exact = {row['key']:row['value'] for row in detail['items']}
+    assert exact['phase'] == own_phase
+    assert 'peer-save' not in json.dumps(detail)
+    # Recovery reads current policy through the same serialized owner; no write
+    # is repeated and no peer preview is accepted as this chat's settings.
+    await send('owner-browser', 'recover-read', 'permissions.get', {'sessionId':source['id'], 'scope':'session'})
+    assert (await finished(service, 'recover-read'))['phase'] == 'ready'
+    current = await (await client.get('/api/state', headers=headers)).json()
+    assert current['permissions']['sessionId'] == source['id']
+    assert current['permissions']['commandId'] == 'recover-read'
+    assert current['permissions']['denied'] == ([str(tmp_path/source['id'])] if own_phase == 'ready' else [])
+    assert calls == [('permissions.save','own-save'), ('permissions.save','peer-save'), ('permissions.get','recover-read')]
+
+
 async def test_reset_prunes_only_emptied_ancestors_and_session_native_alias(app):
     source = app.state['sessions'][0]
     source['nativeIdentity'] = 'native-settings-owner'
