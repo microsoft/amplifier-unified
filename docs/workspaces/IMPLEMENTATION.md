@@ -30,26 +30,30 @@ publication, deployment or fresh-worker adoption.
 ## Combined candidate qualification — 2026-10-14
 
 The combined Python source was frozen at `664eb0c3b716` for the broad run.
-The final application candidate `7efac9737edd` includes the recap client timing
-sample, rebuilt production assets and a final retry correction. An incomplete
-validation/collection save now obtains fresh source checks on retry; completed
-parent retries retain their exact results without rechecking or executing again.
-Four regressions reproduced the problem before the fix and pass afterward.
-Only `integration_validation.py` changed among the 325 Python files after the
-broad run began; that affected path has separate final installed/native checks.
-All 679 packaged application, static and mapped bundle files match final source,
-wheel and installation. The final wheel SHA-256 is
-`10d7f0ab40418e80d9e25e9580dc8143f243ea6d50ad079f0f7095129e62551d`.
-Subsequent documentation and test-fixture changes do not alter those application bytes.
+Final review corrected incomplete integration retries: each unsuccessful parent
+attempt now obtains fresh source checks, while completed retries retain exact
+results without another command. Four regressions reproduced the defect before
+the correction and pass afterward.
+
+Main then advanced to `2631f8b7ea1c` (0.20.134). Candidate `fbfba789a320`
+integrates its warmup/history admission and update-cleanup changes, with rebuilt
+assets. Six of the 325 Python files differ from the broad-run source: the
+integration retry helper and the five upstream version/warmup/update files.
+The upstream interactions received an independent source review and a fresh
+bounded installed qualification, described below. No second full suite is
+claimed for this refresh. All 679 packaged application, static and mapped bundle
+files match this final source, wheel and installation. The final wheel SHA-256 is
+`a315883bb1d9486ff62b68f2fc082ea0fd01e6baef7b45056ff597eef6f53589`.
+Later documentation changes do not alter those application bytes.
 
 | Evidence tier | Observed result and boundary |
 | --- | --- |
-| Affected installed checks | 1,333 passed in the first run. Two multiprocessing cases failed because pytest importlib mode hid their test modules from spawned children; both passed with the corrected runner. This establishes 1,335 unique passing affected cases across the runs, with no skips. Actual selected Core/Foundation and managed tools were enabled. After the final retry correction, all 144 affected installed integration/artifact/assignment/Operations checks passed with no skips, including the real native shell case. |
-| Frontend | 708 checks passed; production assets rebuilt from the combined source. |
-| Production browser | Resource allocation, return recaps/diagnostics, configuration grants and integration validation passed on desktop/mobile with exact served HTML/JS/CSS hashes. Conversation runtimes were scripted; integration used actual managed shell processes and synthetic approval hooks. An initial integration fixture lacked its Bash dependency; a subsequent attempt exceeded its five-second poll under load. The unchanged rerun passed; neither initial attempt is counted as a pass. After the retry fix, the integration journey passed on its first attempt using the final installed backend, with actual import origins and five served asset hashes verified. |
+| Affected installed checks | 1,333 passed in the first run. Two multiprocessing cases failed because pytest importlib mode hid their test modules from spawned children; both passed with the corrected runner. This establishes 1,335 unique passing affected cases across the runs, with no skips. Actual selected Core/Foundation and managed tools were enabled. After the final retry correction, all 144 affected installed integration/artifact/assignment/Operations checks passed with no skips, including the real native shell case. After integrating 0.20.134, the expanded 17-file installed set passed all 426 checks with no skips, covering warmup/history, update cleanup/lifecycle, authenticated worker reads and integration/retained artifacts. These counts overlap. |
+| Frontend | 708 checks passed again after integrating 0.20.134; production assets rebuilt from the combined source. |
+| Production browser | Resource allocation, return recaps/diagnostics, configuration grants and integration validation passed on desktop/mobile with exact served HTML/JS/CSS hashes. Conversation runtimes were scripted; integration used actual managed shell processes and synthetic approval hooks. An initial integration fixture lacked its Bash dependency; a subsequent attempt exceeded its five-second poll under load. The unchanged rerun passed; neither initial attempt is counted as a pass. After the retry fix, the installed integration journey passed on its first attempt. After integrating 0.20.134, all four journeys passed on their first attempt using the final installed backend, with actual import origins and five served asset hashes per journey verified. |
 | New-chat recovery | Passed with Vite and controlled HTTP/event-stream fixtures; separate from production-static and real-backend evidence. |
 | Native terminal clients | A separate corrected fixture passed two-client attachment, idle control/resume, duplicate-once admission, detach without stopping work, reconnect with retained history and explicit Stop cancelling the native provider. The original broad-suite fixture remains failed: its scripted provider selected the wrong user message; the qualification copy also waits for native idle before starting its deliberate Stop turn. This is native scripted-provider evidence, not a real-provider terminal run. |
-| Real provider and restart | Two fresh runs passed two collaboration rounds, exact retained results after source deletion, native Allow and grant reuse, commissioned Stop while an independent conversation continued, then disposable-app restart retaining results, decisions and stopped membership without starting workers or replaying work. Each run used four-worker capacity and a one-million-token assignment allowance. |
+| Real provider and restart | Two fresh runs on the final 0.20.134 candidate passed two collaboration rounds, exact retained results after source deletion, native Allow and grant reuse, commissioned Stop while an independent conversation continued, then disposable-app restart retaining results, decisions and stopped membership without starting workers or replaying work. Each run used four-worker capacity and a one-million-token assignment allowance. |
 
 The full local run at `664eb0c3b716` finished with **7,507 passed, 85 failed,
 36 skipped and six passing subtests** in 33 minutes. It is not a green full-suite
