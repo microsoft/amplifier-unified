@@ -26,21 +26,53 @@ export function publicationImageGeneration(item,messageId,sessionId){
 
 // A retained thumbnail is independent of a Canvas view. Scope and saved-body
 // identity invalidate derived pixels; they are not authority supplied to the host.
+export function legacyGenerationCandidate(item,messageId,state){
+ const {row,version,publication}=item;
+ if(row.kind!=='image'||version!==1||typeof row.imageRequestId!=='string'||!row.imageRequestId||
+  !publication||'outputId' in publication||'imageGeneration' in publication||
+  publication.messageId!==messageId||publication.version!==version||publicationMode(item)!=='inline'||
+  row.sessionId!==state.selectedSessionId||(row.workspaceId??null)!==(state.selectedWorkspaceId??null))return null;
+ const entries=row.versions||[],saved=entries.find(entry=>entry.version===version)||
+  (!entries.length&&version===(row.revision||1)?row:null);
+ if(!saved)return null;
+ const args={sessionId:row.sessionId,id:row.id,version,messageId,qualifyLegacyGeneration:true};
+ const identity=JSON.stringify([state.client?.hostInstanceId,state.client?.id??state.client?.clientId,
+  state.selectedWorkspaceId??null,args,publication,row.imageRequestId,saved.body??null,saved.contentResource??null,saved.outputBinding??null]);
+ return {identity,args,saved};
+}
+
+export function qualifiedLegacyGeneration(item,messageId,state){
+ const candidate=legacyGenerationCandidate(item,messageId,state),result=item.legacyGeneration;
+ if(!candidate||result?.identity!==candidate.identity)return null;
+ const value=result.value;
+ if(value?.status!=='generated'||value.sessionId!==item.row.sessionId||value.artifactId!==item.row.id||
+  value.messageId!==messageId||value.version!==item.version||
+  !Number.isSafeInteger(value.outputVersion)||value.outputVersion<1||!/^[a-f0-9]{64}$/.test(value.sha256)||
+  JSON.stringify(value.body??null)!==JSON.stringify(candidate.saved.body??null)||
+  JSON.stringify(value.contentResource??null)!==JSON.stringify(candidate.saved.contentResource??null))return null;
+ const binding=publicationImageGeneration({...item,publication:{...item.publication,
+  outputId:value.outputId,imageGeneration:value.imageGeneration}},messageId,item.row.sessionId);
+ return binding?value:null;
+}
+
 export function retainedThumbnailTuple(item,messageId,state){
  const {row,version,publication}=item;
- if(state.selectedSessionId!==row.sessionId||row.workspaceId!=null&&state.selectedWorkspaceId!==row.workspaceId||publicationMode(item)!=='inline'||
-  !publicationImageGeneration(item,messageId,row.sessionId))return null;
+ const legacy=qualifiedLegacyGeneration(item,messageId,state);
+ if(state.selectedSessionId!==row.sessionId||(state.selectedWorkspaceId??null)!==(row.workspaceId??null)||publicationMode(item)!=='inline'||
+  !legacy&&!publicationImageGeneration(item,messageId,row.sessionId))return null;
  const entries=row.versions||[];
  const saved=entries.find(entry=>entry.version===version)||
   (!entries.length&&version===(row.revision||1)?row:null);
  if(!saved)return null;
  const binding=saved.outputBinding;
- if(binding!==undefined&&(!binding||binding.outputId!==publication.outputId||binding.sessionId!==row.sessionId||
+ const outputId=legacy?.outputId??publication.outputId,sha256=legacy?.sha256??binding?.sha256;
+ if('outputBinding' in saved&&(!binding||binding.outputId!==outputId||binding.sessionId!==row.sessionId||
+  legacy&&binding.outputVersion!==legacy.outputVersion||legacy&&binding.sha256!==legacy.sha256||
   !Number.isSafeInteger(binding.outputVersion)||binding.outputVersion<1||!/^[a-f0-9]{64}$/.test(binding.sha256)))return null;
- const query={sessionId:row.sessionId,artifactId:row.id,version,messageId,...(binding?{sha256:binding.sha256}:{})};
+ const query={sessionId:row.sessionId,artifactId:row.id,version,messageId,...(sha256?{sha256}:{})};
  const identity=JSON.stringify([state.client?.hostInstanceId,state.client?.id??state.client?.clientId,
-  state.selectedWorkspaceId,query,publication,saved.body??null,saved.contentResource??null,binding??null]);
- return {identity,url:`/api/outputs/${encodeURIComponent(publication.outputId)}/image?`+new URLSearchParams(query),sha256:binding?.sha256};
+  state.selectedWorkspaceId??null,query,publication,saved.body??null,saved.contentResource??null,binding??null,legacy??null]);
+ return {identity,url:`/api/outputs/${encodeURIComponent(outputId)}/image?`+new URLSearchParams(query),sha256};
 }
 
 export function artifactPublications(rows,messageId){

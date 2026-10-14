@@ -199,3 +199,77 @@ async def test_surface_history_retention_and_historical_state_is_read_only(app):
     assert canvas(app).get('selectedVersion') is None
     assert row(app,identity)['app']['revision'] == 24
     assert row(app,identity)['app']['state'] == {'n':2}
+
+
+@pytest.mark.parametrize('case', ['valid', 'later', 'missing', 'ambiguous', 'scope',
+                                  'source', 'message', 'suppressed', 'null-marker', 'partial-id'])
+async def test_optional_legacy_inspection_is_metadata_only_exact_and_nonmutating(tmp_path, monkeypatch, case):
+    from amplifier_web import canvas_versions, artifact_presentation, state_storage
+    from test_retained_thumbnails import saved_host, make_true_legacy
+    host, sid, mid, records, _ = await saved_host(tmp_path)
+    service = host['service']
+    try:
+        service.clients.attach('metadata-tab')
+        record = records[0]
+        saved = make_true_legacy(service, record)
+        saved['versions'].append({'version': 2, 'title': 'Ordinary revision', 'kind': 'image',
+                                  'body': {'$resource': 'b' * 64}})
+        saved.update(revision=2, body={'$resource': 'b' * 64})
+        saved['publications'].append({'messageId': mid, 'version': 2})
+        args = {'sessionId': sid, 'id': saved['id'], 'version': 1,
+                'messageId': mid, 'qualifyLegacyGeneration': True}
+        if case == 'later':
+            args['version'] = 2
+        elif case == 'missing':
+            service.db.execute('DELETE FROM output_records WHERE id=?', (record['id'],))
+        elif case == 'ambiguous':
+            duplicate = {k: v for k, v in service.outputs.store.read(record['id']).items()
+                         if k not in {'id', 'sessionId', 'version', 'revision', 'createdAt'}}
+            service.outputs.store.create(sid, duplicate)
+        elif case == 'scope':
+            service.clients.records['metadata-tab']['selectedWorkspaceId'] = 'foreign'
+        elif case == 'source':
+            args['includeSource'] = True
+        elif case == 'message':
+            args['messageId'] = 'foreign'
+        elif case == 'suppressed':
+            saved['publications'][0]['chat'] = 'none'
+        elif case == 'null-marker':
+            saved['publications'][0]['imageGeneration'] = None
+        elif case == 'partial-id':
+            saved['publications'][0]['outputId'] = record['id']
+        before = deepcopy(saved)
+        original_session = service._session
+        calls = []
+
+        def metadata_session(identity=None, *, hydrate=True):
+            calls.append(hydrate)
+            assert hydrate is False
+            return original_session(identity, hydrate=False)
+
+        monkeypatch.setattr(service, '_session', metadata_session)
+        monkeypatch.setattr(service, 'state_resource', lambda *args: pytest.fail('Inspection opened resource bytes'))
+        monkeypatch.setattr(state_storage, 'resource', lambda *args: pytest.fail('Inspection opened source history/body'))
+        monkeypatch.setattr(artifact_presentation, 'output_bytes', lambda *args: pytest.fail('Inspection decoded output'))
+        monkeypatch.setattr(service.cold_display, 'hydrate', lambda *args: pytest.fail('Inspection hydrated history'))
+        with service.clients.bind('metadata-tab'):
+            if case in {'valid', 'later', 'missing'}:
+                result = canvas_versions.command(service, 'canvas.versions.inspect', args, 'ui')
+                qualified = result['legacyGeneration']
+                assert qualified['status'] == ('generated' if case == 'valid' else 'not-generated')
+                if case == 'valid':
+                    assert qualified['body'] == saved['versions'][0]['body']
+                    assert qualified['outputId'] == record['id']
+                    assert qualified['outputVersion'] == record['version']
+                    assert qualified['sha256'] == record['sha256']
+            else:
+                with pytest.raises((AppError, ValueError)):
+                    canvas_versions.command(service, 'canvas.versions.inspect', args, 'ui')
+            ordinary = canvas_versions.command(service, 'canvas.versions.inspect',
+                                               {'sessionId': sid, 'id': saved['id'], 'version': 1}, 'ui')
+            assert 'legacyGeneration' not in ordinary and 'source' not in ordinary
+        assert saved == before
+        assert calls and all(value is False for value in calls)
+    finally:
+        monkeypatch.undo()
+        await service.close()

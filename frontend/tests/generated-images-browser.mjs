@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 // Authored, unexecuted source-lane check. --retained-thumbnails uses a real host
 // with ten canonical saved receipts; not a stub that ignores the view limit.
-const retainedMode=process.argv.includes('--retained-thumbnails');
-const fixture=spawn(root+'.venv/bin/python',['-u',root+(retainedMode?'tests/test_retained_thumbnails.py':'tests/fixtures/generated_images_server.py'),...(retainedMode?['--browser-fixture']:[])],{stdio:['ignore','pipe','inherit']});
+const legacyMode=process.argv.includes('--legacy-thumbnails');
+const retainedMode=process.argv.includes('--retained-thumbnails')||legacyMode;
+const fixture=spawn(root+'.venv/bin/python',['-u',root+(retainedMode?'tests/test_retained_thumbnails.py':'tests/fixtures/generated_images_server.py'),...(retainedMode?['--browser-fixture',...(legacyMode?['--legacy-thumbnails']:[])]:[])],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  const boot=await new Promise((resolve,reject)=>{
@@ -215,21 +216,29 @@ async function retainedJourney(page,boot){
  await expect(rail.locator('img')).toHaveCount(10);
  assert.equal(reads.length,10,'Releasing an individual selected preview does not reauthorize thumbnails');
  await expect(ordinary.getByText('Independent ordinary renderer',{exact:true})).toBeVisible();
- // A cold page reauthorizes, and keyboard retry is the existing choice button,
- // not a nested button or a mount that consumes a Canvas slot.
+ // A persistent failure on an UNSELECTED thumbnail cannot consume selection.
+ // Retry is a sibling keyboard control, never a capture listener/nested button.
  let fail=true;
  await page.route('**/api/outputs/*/image?*',route=>{
   if(fail&&new URL(route.request().url()).pathname===`/api/outputs/${boot.records[0].id}/image`){
-   fail=false;return route.fulfill({status:503,contentType:'application/json',body:'{"error":"Temporary thumbnail failure"}'});
+   return route.fulfill({status:503,contentType:'application/json',body:'{"error":"Persistent thumbnail-only failure"}'});
   }
   return route.continue();
  });
  await page.reload();await gallery.scrollIntoViewIfNeeded();
  const retry=gallery.getByRole('button',{name:'Retry thumbnail for Image 1: Concept 1',exact:true});
  await expect(retry).toBeVisible();
+ await gallery.getByRole('button',{name:'Image 2: Concept 2',exact:true}).click();
+ await expect(gallery.locator('.a-inline-image img')).toBeVisible();
  const selection=await gallery.locator('.a-inline-artifact-heading strong').textContent();
- await retry.focus();await retry.press('Enter');await allThumbnails();
+ await retry.focus();await retry.press('Enter');await expect(retry).toBeVisible();
+ await retry.focus();await retry.press('Space');await expect(retry).toBeVisible();
  assert.equal(await gallery.locator('.a-inline-artifact-heading strong').textContent(),selection);
+ await gallery.getByRole('button',{name:'Image 1: Concept 1',exact:true}).click();
+ await expect(gallery.locator('.a-inline-artifact-heading strong')).toHaveText('Concept 1');
+ await expect(gallery.locator('.a-inline-image img')).toBeVisible();
+ await expect(retry).toBeVisible();
+ fail=false;await retry.click();await allThumbnails();
  assert.equal(await rail.locator('button button').count(),0);
  await page.unroute('**/api/outputs/*/image?*');
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveText('Unsent thumbnail review');
@@ -267,5 +276,5 @@ async function retainedJourney(page,boot){
  await action('session.select',{id:boot.sessionId});
  await gallery.scrollIntoViewIfNeeded();await allThumbnails(8);
  assert.ok(reads.length>=before+8);
- console.log('Retained thumbnail journey passed: real host, ten decoded <=80px thumbnails, selected and unrelated inline renderers with only two admissions, two decoder slots, explicit keyboard retry, reload reauthorization, independent selected-view release, late fetch/unlink and late decode/publication suppression, scope cleanup. Synthetic saved receipts; no image/model API calls.');
+ console.log('Retained thumbnail journey passed: real host, ten decoded <=80px thumbnails, selected and unrelated inline renderers with only two initial admissions, two decoder slots, persistent failed unselected thumbnail selection and independent keyboard retry, reload reauthorization, independent selected-view release, late fetch/unlink and late decode/publication suppression, scope cleanup. '+(boot.legacy?'True absent publication fields, empty jobs, cold host restart and exact canonical metadata IDs. ':'')+'Synthetic saved receipts; no image/model API calls.');
 }

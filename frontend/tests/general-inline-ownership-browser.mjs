@@ -35,6 +35,7 @@ const editorSource=`export default ({React})=>function Editor({host}){
 }`;
 let vite,browser,page,holdAround,aroundWaiting=false,rejectDirty=true;
 const calls=[],errors=[],thumbnailReads=[];
+const legacyFacts=new Map();let legacyInspectGate,legacyInspectEntered;
 const emit=async()=>{state={...state,revision:state.revision+1};await page.evaluate(value=>window.emitState(value),state)};
 const setMessages=messages=>{state={...state,sessions:state.sessions.map(row=>row.id==='chat'?{...row,messages,messageWindow:{offset:220,total:240,before:messages[0]?.id}}:row)}};
 try{
@@ -65,7 +66,8 @@ try{
    const id=path.split('/')[3],row=state.canvasArtifacts.find(row=>row.id===url.searchParams.get('artifactId'));
    assert.ok(row);assert.equal(url.searchParams.get('sessionId'),row.sessionId);
    assert.equal(url.searchParams.get('messageId'),'m210');assert.equal(url.searchParams.get('version'),'1');
-   assert.ok(row.publications.some(link=>link.outputId===id&&link.chat==='inline'));
+   assert.ok(row.publications.some(link=>link.chat==='inline'&&(link.outputId===id||
+    !('outputId' in link)&&!('imageGeneration' in link)&&legacyFacts.get(row.id)?.outputId===id)));
    assert.equal(url.searchParams.get('sha256'),thumbnailHash);
    return route.fulfill({contentType:'image/png',body:thumbnailBytes,headers:{
     'Content-Length':String(thumbnailBytes.length),'X-Amplifier-Image-SHA256':thumbnailHash,'Cache-Control':'no-store'}});
@@ -88,6 +90,14 @@ try{
   if(path==='/api/actions'&&request.method()==='POST'){
    const envelope=request.postDataJSON(),command=envelope.action==='shell.command'?envelope.args:envelope;
    calls.push(envelope);let result={};
+   if(command.action==='canvas.versions.inspect'){
+    assert.equal(command.args.qualifyLegacyGeneration,true);assert.equal(command.args.includeSource,undefined);
+    assert.equal(command.args.sessionId,'chat');assert.equal(command.args.messageId,'m210');assert.equal(command.args.version,1);
+    const value=structuredClone(legacyFacts.get(command.args.id));
+    assert.ok(value,'Only the fixture canonical metadata owner supplies qualification');
+    if(legacyInspectGate&&command.args.id==='legacy-a'){legacyInspectEntered?.();await legacyInspectGate}
+    result={legacyGeneration:value};
+   }
    if(command.action==='canvas.views.inline'){
     if(state.canvasWorkspace.views.filter(view=>view.viewId.startsWith('inline-')).length>=8)
      return route.fulfill({status:409,json:{error:'Close a preview to open another here, or open this artifact in Canvas.'}});
@@ -313,5 +323,44 @@ try{
  // rail later must read anew; no old Canvas view may restore cached pixels.
  state={...state,selectedSessionId:'other',canvasArtifacts:[],canvasWorkspace:{views:[]}};await emit();
  await expect(gallery).toHaveCount(0);
+ // Two true legacy variants retain separate gallery identity with empty jobs.
+ // This transport check is not a substitute for the real-host legacy restart journey.
+ const legacy=id=>{
+  const value=generated(id,'legacy-shared');value.imageRequestId='legacy-shared';
+  const binding=value.versions[0].outputBinding;
+  legacyFacts.set(id,{status:'generated',sessionId:'chat',artifactId:id,messageId:'m210',version:1,
+   outputId:binding.outputId,outputVersion:binding.outputVersion,sha256:binding.sha256,
+   body:value.versions[0].body,contentResource:null,imageGeneration:value.publications[0].imageGeneration});
+  delete value.versions[0].outputBinding;delete value.publications[0].outputId;delete value.publications[0].imageGeneration;
+  return value;
+ };
+ const legacyItems=[legacy('legacy-a'),legacy('legacy-b')],immutable=structuredClone(legacyItems);
+ state={...state,selectedSessionId:'chat',canvasArtifacts:legacyItems,canvasWorkspace:{views:[]}};await emit();
+ await expect(gallery).toHaveAttribute('aria-label','Image gallery, 2 images');
+ await gallery.getByRole('button',{name:'Image 2: Generated legacy-b',exact:true}).click();
+ await expect(gallery.locator('.a-inline-image img')).toBeVisible();
+ await expect(gallery.locator('.a-inline-artifact-heading strong')).toHaveText('Generated legacy-b');
+ const inspections=calls.filter(row=>row.action==='canvas.versions.inspect').length;
+ assert.equal(inspections,2);
+ for(let n=0;n<3;n++)await emit();
+ assert.equal(calls.filter(row=>row.action==='canvas.versions.inspect').length,inspections);
+ assert.deepEqual(state.canvasArtifacts,immutable,'Classification did not rewrite publication/body/version');
+ state={...state,canvasArtifacts:state.canvasArtifacts.map(row=>row.id==='legacy-a'?{
+  ...row,publications:row.publications.map(link=>({...link,chat:'none'}))}:row)};await emit();
+ await expect(gallery.locator('.a-inline-artifact-heading strong')).toHaveText('Generated legacy-b');
+ // A late metadata receipt may not revive a now-suppressed legacy publication.
+ state={...state,selectedSessionId:'other',canvasArtifacts:[],canvasWorkspace:{views:[]}};await emit();
+ await expect(gallery).toHaveCount(0);
+ let releaseInspection,enteredInspection;
+ legacyInspectGate=new Promise(resolve=>{releaseInspection=resolve});
+ const waitingInspection=new Promise(resolve=>{enteredInspection=resolve});legacyInspectEntered=enteredInspection;
+ state={...state,selectedSessionId:'chat',canvasArtifacts:structuredClone(immutable),canvasWorkspace:{views:[]}};await emit();
+ await waitingInspection;
+ state={...state,canvasArtifacts:state.canvasArtifacts.map(row=>row.id==='legacy-a'?{
+  ...row,publications:row.publications.map(link=>({...link,chat:'none'}))}:row)};await emit();
+ releaseInspection();legacyInspectGate=null;
+ await expect(gallery).toHaveAttribute('aria-label','Image gallery, 1 image');
+ await expect(gallery.locator('.a-inline-artifact-heading strong')).toHaveText('Generated legacy-b');
+ assert.equal(await page.locator('.a-general-artifact[data-artifact-id="legacy-a"]').count(),0);
  assert.deepEqual(errors,[]);
 }finally{await browser?.close();await vite?.close()}

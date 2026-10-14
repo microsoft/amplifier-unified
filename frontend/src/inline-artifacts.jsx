@@ -6,7 +6,7 @@ import {Renderer} from './canvas-workspace';
 import {ImageActions} from './image-actions';
 import {CanvasControlsHost} from './canvas-controls';
 import {imageGalleryEntries,imageGallerySelection,imageJobLabel} from './image-generation';
-import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,retainedThumbnailTuple} from './artifact-presentation';
+import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,retainedThumbnailTuple,legacyGenerationCandidate,qualifiedLegacyGeneration} from './artifact-presentation';
 import {mcpConnectionKey} from './mcp-app-lifecycle';
 import {createArtifactOverrides,inlineOwnership,inlineEditNotice} from './conversation-navigation';
 import './inline-artifacts.css';
@@ -135,30 +135,57 @@ function drainThumbnails(){
   Promise.resolve().then(job.work).then(job.resolve,job.reject).finally(()=>{thumbnailSlots--;drainThumbnails()});
  }
 }
+async function thumbnailResponseBytes(response,signal){
+ const max=8*1024*1024,header=response.headers.get('Content-Length');
+ let length=null;
+ if(header!=null){
+  if(!/^(0|[1-9][0-9]*)$/.test(header)||header.length>16)throw Error('Thumbnail length is invalid');
+  length=Number(header);
+  if(!Number.isSafeInteger(length)||length<45||length>max)throw Error('Thumbnail exceeds the saved PNG limit');
+ }
+ if(!response.body?.getReader)throw Error('Bounded thumbnail streaming is unavailable');
+ const reader=response.body.getReader(),chunks=[];let total=0,done=false;
+ const cancelled=()=>{void reader.cancel().catch(()=>{})};
+ signal.addEventListener('abort',cancelled,{once:true});
+ try{
+  while(true){
+   if(signal.aborted)throw new DOMException('Thumbnail cancelled','AbortError');
+   const part=await reader.read();
+   if(signal.aborted)throw new DOMException('Thumbnail cancelled','AbortError');
+   if(part.done){done=true;break}
+   total+=part.value.byteLength;
+   if(total>max||length!==null&&total>length)throw Error('Thumbnail exceeds its saved byte limit');
+   chunks.push(part.value);
+  }
+  if(total<45||length!==null&&total!==length)throw Error('Thumbnail bytes changed');
+  const bytes=new Uint8Array(total);let offset=0;
+  for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
+  return bytes.buffer;
+ }finally{
+  signal.removeEventListener('abort',cancelled);
+  if(!done)await reader.cancel().catch(()=>{});
+  reader.releaseLock();chunks.length=0;
+ }
+}
 async function thumbnailPixels(tuple,signal){
- let bytes,image,small;
+ let bytes,image,small,response;
  const check=()=>{if(signal.aborted)throw new DOMException('Thumbnail cancelled','AbortError')};
  try{
   check();
-  const response=await fetch(clientUrl(tuple.url),{signal,credentials:'same-origin',redirect:'error'});
+  response=await fetch(clientUrl(tuple.url),{signal,credentials:'same-origin',redirect:'error'});
   if(!response.ok)throw Error(`Thumbnail unavailable (${response.status})`);
   if(response.headers.get('Content-Type')?.split(';')[0]!=='image/png')throw Error('Thumbnail is not a saved PNG');
-  const length=Number(response.headers.get('Content-Length'));
-  if(!Number.isSafeInteger(length)||length<45||length>8*1024*1024)throw Error('Thumbnail exceeds the saved PNG limit');
-  bytes=await response.arrayBuffer();check();
-  if(bytes.byteLength!==length)throw Error('Thumbnail bytes changed');
+  const canonical=response.headers.get('X-Amplifier-Image-SHA256');
+  if(!/^[a-f0-9]{64}$/.test(canonical??'')||tuple.sha256&&canonical!==tuple.sha256)throw Error('Thumbnail binding changed');
+  bytes=await thumbnailResponseBytes(response,signal);check();
   const header=new Uint8Array(bytes),view=new DataView(bytes);
   if(![137,80,78,71,13,10,26,10].every((value,index)=>header[index]===value)||
    view.getUint32(8)!==13||view.getUint32(12)!==0x49484452)throw Error('Thumbnail PNG header is invalid');
   const width=view.getUint32(16),height=view.getUint32(20);
   if(width<1||height<1||width>4096||height>4096||header[24]!==8||![2,6].includes(header[25])||header[26]||header[27]||header[28])throw Error('Thumbnail PNG dimensions are invalid');
-  const canonical=response.headers.get('X-Amplifier-Image-SHA256');
-  if(canonical||tuple.sha256){
-   if(canonical&&!/^[a-f0-9]{64}$/.test(canonical)||canonical&&tuple.sha256&&canonical!==tuple.sha256)throw Error('Thumbnail binding changed');
-   const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
-   if(digest!==(canonical||tuple.sha256))throw Error('Thumbnail hash changed');
-   check();
-  }
+  const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
+  if(digest!==canonical)throw Error('Thumbnail hash changed');
+  check();
   if(globalThis.createImageBitmap)image=await createImageBitmap(new Blob([bytes],{type:'image/png'}));
   else{
    image=new Image();
@@ -179,13 +206,14 @@ async function thumbnailPixels(tuple,signal){
   small.getContext('2d').drawImage(image,0,0,small.width,small.height);
   const pixels=small.toDataURL('image/png');check();return pixels;
  }finally{
+  if(response?.body)void response.body.cancel().catch(()=>{});
   bytes=null;
   if(image?.close)image.close();else if(image){image.onload=image.onerror=null;image.src=''}
   if(small){small.width=0;small.height=0}
  }
 }
 
-function Thumbnail({item,index,messageId,state}){
+function Thumbnail({item,index,messageId,state,selected,onSelect}){
  const root=useRef(),current=useRef(null);
  const [near,setNear]=useState(false),[loaded,setLoaded]=useState(null),[attempt,setAttempt]=useState(0);
  const tuple=retainedThumbnailTuple(item,messageId,state),identity=tuple?.identity;
@@ -205,25 +233,20 @@ function Thumbnail({item,index,messageId,state}){
   return()=>{active=false;controller.abort()};
  },[near,identity,attempt]);
  const result=loaded?.identity===identity?loaded:null;
- // The rail already owns a button: retry is a labelled keyboard/click action
- // on that choice, never invalid nested button markup or a new selection.
- const retry=event=>{
+ // Retry and full-image selection are sibling buttons, never capture listeners.
+ const retry=()=>{
   if(!result?.error)return;
-  if(event.type==='keydown'&&!['Enter',' '].includes(event.key))return;
-  event.preventDefault();event.stopPropagation();setLoaded(null);setAttempt(value=>value+1);
+  setLoaded(null);setAttempt(value=>value+1);
  };
  const failed=!!result?.error;
- useLayoutEffect(()=>{
-  const button=root.current?.closest('button');if(!button)return;
-  const label=button.getAttribute('aria-label');
-  if(failed)button.setAttribute('aria-label',`Retry thumbnail for Image ${index+1}: ${titleOf(item)}`);
-  const action=event=>retry(event);
-  if(failed){button.addEventListener('keydown',action);button.addEventListener('click',action,true)}
-  return()=>{if(failed){button.setAttribute('aria-label',label);button.removeEventListener('keydown',action);button.removeEventListener('click',action,true)}};
- },[failed,identity,index]);
- return <span ref={root} className="a-gallery-thumbnail" title={failed?'Retry thumbnail':undefined}>
-  {result?.pixels?<img alt="" src={result.pixels} onError={()=>setLoaded({identity,error:true})}/>:<><ImageIcon/><span>{failed?'Retry':index+1}</span></>}
- </span>;
+ return <div ref={root} className="a-gallery-choice">
+  <button type="button" aria-label={`Image ${index+1}: ${titleOf(item)}`} aria-pressed={selected} onClick={onSelect}>
+   <span className="a-gallery-thumbnail">
+    {result?.pixels?<img alt="" src={result.pixels} onError={()=>setLoaded({identity,error:true})}/>:<><ImageIcon/><span>{index+1}</span></>}
+   </span>
+  </button>
+  {failed&&<button type="button" className="a-thumbnail-retry" aria-label={`Retry thumbnail for Image ${index+1}: ${titleOf(item)}`} onClick={retry}>Retry</button>}
+ </div>;
 }
 
 function ImageGallery({entries,...props}){
@@ -237,7 +260,9 @@ function ImageGallery({entries,...props}){
    <div className="a-gallery-image-frame"><Generation job={entry.job}/></div>
    <div className="a-gallery-image-footer"/>
   </section>}
-  {entries.length>1&&<div className="a-inline-gallery-choices" role="group" aria-label="Choose an image">{entries.map((choice,index)=><button type="button" key={choice.id} aria-label={`Image ${index+1}: ${title(choice)}`} aria-pressed={choice.id===entry.id} data-running={!choice.item&&choice.job.phase==='running'||undefined} onClick={()=>setSelected(choice.id)}>{choice.item?<Thumbnail key={choice.item.row.id+':'+choice.item.version} item={choice.item} index={index} messageId={props.messageId} state={props.state} dispatch={props.dispatch}/>:<><ImageIcon/><span>{index+1}</span></>}</button>)}</div>}
+  {entries.length>1&&<div className="a-inline-gallery-choices" role="group" aria-label="Choose an image">{entries.map((choice,index)=>choice.item?
+   <Thumbnail key={choice.id} item={choice.item} index={index} messageId={props.messageId} state={props.state} selected={choice.id===entry.id} onSelect={()=>setSelected(choice.id)}/>:
+   <button type="button" key={choice.id} aria-label={`Image ${index+1}: ${title(choice)}`} aria-pressed={choice.id===entry.id} data-running={choice.job.phase==='running'||undefined} onClick={()=>setSelected(choice.id)}><ImageIcon/><span>{index+1}</span></button>)}</div>}
  </div>;
 }
 
@@ -421,9 +446,54 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
  </section>;
 }
 
+function useLegacyGenerations(items,messageId,state,dispatch){
+ const records=useRef(new Map()),current=useRef(new Set()),run=useRef(dispatch);
+ const [,refresh]=useState(0),[attempt,setAttempt]=useState(0);
+ run.current=dispatch;
+ const candidates=items.map(item=>({item,candidate:legacyGenerationCandidate(item,messageId,state)}))
+  .filter(entry=>entry.candidate);
+ const identities=JSON.stringify(candidates.map(entry=>entry.candidate.identity));
+ current.current=new Set(candidates.map(entry=>entry.candidate.identity));
+ useEffect(()=>{
+  const active=new Set(candidates.map(entry=>entry.candidate.identity)),jobs=[];
+  for(const identity of records.current.keys())if(!active.has(identity))records.current.delete(identity);
+  for(const {item,candidate} of candidates){
+   if(records.current.has(candidate.identity))continue;
+   const controller=new AbortController(),record={controller,status:'pending'};
+   records.current.set(candidate.identity,record);jobs.push([candidate.identity,record]);
+   // Use the same two bounded local slots. Inspection cannot allocate a view,
+   // execute work, read bodies or become a reusable image-byte grant.
+   thumbnailWork(controller.signal,()=>run.current('canvas.versions.inspect',candidate.args)).then(receipt=>{
+    if(controller.signal.aborted||!current.current.has(candidate.identity)||records.current.get(candidate.identity)!==record)return;
+    if(receipt?.accepted===false)throw Error(receipt.error||'Legacy image qualification failed');
+    const value=receipt?.result?.legacyGeneration,qualified={...item,legacyGeneration:{identity:candidate.identity,value}};
+    if(value?.status!=='not-generated'&&!qualifiedLegacyGeneration(qualified,messageId,state))throw Error('Legacy image qualification did not match its saved source');
+    record.status='ready';record.value=value;refresh(value=>value+1);
+   }).catch(error=>{
+    if(controller.signal.aborted||!current.current.has(candidate.identity)||records.current.get(candidate.identity)!==record)return;
+    record.status='error';record.error=error.message;refresh(value=>value+1);
+   });
+  }
+  return()=>{for(const [identity,record] of jobs){
+   record.controller.abort();
+   if(record.status==='pending'&&records.current.get(identity)===record)records.current.delete(identity);
+  }};
+ },[identities,attempt]);
+ const pending=[],rows=items.map(item=>{
+  const candidate=candidates.find(entry=>entry.item===item)?.candidate;
+  if(!candidate)return item;
+  const record=records.current.get(candidate.identity);
+  if(record?.status==='ready')return {...item,legacyGeneration:{identity:candidate.identity,value:record.value}};
+  pending.push({item,identity:candidate.identity,error:record?.error});return item;
+ });
+ const retry=identity=>{records.current.delete(identity);setAttempt(value=>value+1)};
+ return {rows,pending,retry};
+}
+
 export function ArtifactLinks({state,message,act,dispatch}){
  const committed=useRef([]);
- const rows=artifactPublications(chatArtifacts(state),message.id);
+ const displayed=artifactPublications(chatArtifacts(state),message.id);
+ const {rows,pending,retry}=useLegacyGenerations(displayed,message.id,state,dispatch);
  let entries=imageGalleryEntries(state,message.id,rows);
  const generated=new Set(entries.filter(entry=>entry.item).map(entry=>entry.item));
  const same=(a,b)=>a.row.id===b.row.id&&a.version===b.version;
@@ -433,14 +503,18 @@ export function ArtifactLinks({state,message,act,dispatch}){
  const protectedItems=committed.current.filter(item=>inlineOwnership.protectsPublication({
   sessionId:item.row.sessionId,messageId:message.id,resourceId:item.row.id,version:item.version
  }));
- const general=rows.filter(item=>!generated.has(item)||protectedItems.some(previous=>same(previous,item)));
+ const general=rows.filter(item=>(!generated.has(item)&&!pending.some(entry=>same(entry.item,item)))||protectedItems.some(previous=>same(previous,item)));
  for(const item of protectedItems)if(!general.some(current=>same(current,item)))general.push(item);
  entries=entries.filter(entry=>!entry.item||!protectedItems.some(item=>same(item,entry.item)));
  useLayoutEffect(()=>{committed.current=general},[general]);
- if(!general.length&&!entries.length)return null;
+ if(!general.length&&!entries.length&&!pending.length)return null;
  const fullView=async({row,version})=>{const result=await act('canvas.select',{id:row.id,version});if(result?.accepted)await act('view.update',{patch:{canvasFocused:false}})};
  const props={state,messageId:message.id,dispatch,fullView};
  return <div className="a-chat-artifacts" aria-label="Saved artifacts for this turn">
+  {pending.map(({item,identity,error})=><div key={identity} className="a-inline-artifact-notice" role="status">
+   <p>{error?`Image qualification unavailable: ${error}`:`Qualifying saved image: ${titleOf(item)}…`}</p>
+   {error&&<button type="button" onClick={()=>retry(identity)} aria-label={`Retry image qualification for ${titleOf(item)}`}>Retry qualification</button>}
+  </div>)}
   {entries.length>0&&<ImageGallery entries={entries} {...props}/>}
   {general.map(item=><GeneralArtifact key={artifactOverrideKey(state,item,message.id)} item={item} {...props}/>)}
  </div>;
