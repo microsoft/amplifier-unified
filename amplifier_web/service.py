@@ -372,7 +372,7 @@ for _access, _actions in {
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
-        "worktree.create", "worktree.attach", "worktree.remove", "worktree.handoff", "worktree.reconcile",
+        "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile",
         "coordination.intent",
     },
     "presentation": {
@@ -1224,6 +1224,10 @@ class AppService:
     def _new_session(self, args):
         from .shared_settings import read_settings
         workspace = self._session_destination(args)
+        try:
+            self.worktrees.require_available_path(workspace)
+        except ValueError as exc:
+            raise AppError(str(exc), 409) from None
         self._require_workspace_scaffold(workspace)
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
@@ -1358,11 +1362,29 @@ class AppService:
         # Directory preparation yields outside the service lock. Keep concurrent
         # retries on the same creation command behind its durable receipt, so a
         # conflicting retry cannot create a second folder during that interval.
-        if action in {'session.create', 'coordination.create'} and command_id:
-            lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
-            async with lock:
-                return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
-        return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+        reservation = None
+        if action == 'session.create':
+            from .managed_chats import is_managed
+            if not (command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
+                try:
+                    paths = [] if is_managed(args) else [self._session_destination(args or {})]
+                    from .collaboration import CREATION
+                    creation = CREATION.get()
+                    if creation and creation[:2] == (caller_session_id, hashlib.sha256(
+                            json.dumps(args or {}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
+                        paths.append(creation[4]['workingDirectory'])
+                    if paths:
+                        reservation = self.worktrees.reserve_creation(*paths)
+                except (ValueError, OSError) as exc:
+                    raise AppError(str(exc), 409) from None
+        try:
+            if action in {'session.create', 'coordination.create'} and command_id:
+                lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
+                async with lock:
+                    return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+            return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+        finally:
+            self.worktrees.release_creation(reservation)
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
@@ -1773,7 +1795,7 @@ class AppService:
                 except (ValueError, OSError) as exc:
                     raise AppError(str(exc), 409) from None
             else:
-                prepared_workspace = str(await asyncio.to_thread(_create_workspace_folder, args['workspace']))
+                prepared_workspace = str(await self.worktrees.finish_thread(_create_workspace_folder, args['workspace']))
         prepared_health = None
         if action == 'session.inspect':
             from .session_health import inspect_session
@@ -2226,6 +2248,7 @@ class AppService:
                             apply(self, session, creation[3])
                             session["collaboration"] = copy.deepcopy(creation[4])
                             session['workingDirectory'] = creation[4]['workingDirectory']
+                        self.worktrees.require_available_path(session.get('workingDirectory') or session['workspace'])
                         from .new_chat import initial_model
                         initial = initial_model(self.state, args, session['workspace'], session['bundle'])
                         if initial:

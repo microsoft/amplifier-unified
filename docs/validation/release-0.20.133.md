@@ -1,6 +1,6 @@
 # Release 0.20.133 qualification
 
-Initial base: `6e7183a1c`; integrated main `121e214d2` (#640 and #641). Application instances and tests
+Initial base: `6e7183a1c`; integrated main `1071418cd` (#640, #641 and #642). Application instances and tests
 ran with synthetic data in the owned `dtu-unified-public-readiness-20261008`.
 No shared host was installed, updated or restarted.
 
@@ -101,7 +101,10 @@ summary construction. These check work avoided, not only elapsed time.
 - Final production browser: work-activity paging, delegate activity, new-chat
   controls/draft reload and workspace switching all passed. Chromium uses the
   existing DTU single-process flags. There are no provider calls in these fixtures.
-- Two production builds matched SHA256 file-for-file; build `2482c0ca53ebdcc1`.
+- After integrating #642: 49 affected checkout/publication tests and all 686
+  frontend tests passed again. Work-activity paging, new chat and workspace
+  switching passed against the rebuilt production assets.
+- Two final production builds matched SHA256 file-for-file; build `c71c1f1dc8b68439`.
 - Independent read-only review found no blocking defect in checkpoint retention,
   canonical validation, usage shortcuts or scoped publication.
 
@@ -116,6 +119,20 @@ Final-source benchmark repeat: app-owned tool updates 88–121 ms, summary reads
 on restore and 116 bytes on append (149/175 ms). Earlier baseline comparisons
 above use the initial matched workload; no live-server speedup is inferred.
 
+## Integrated checkout safeguard
+
+Review of newly merged #642 found its exact-path occupancy check missed nested
+folders and symlink aliases, and a new chat could enter a checkout during its
+asynchronous archive move. The integrated correction resolves occupied paths,
+reserves new-chat placement before directory preparation, and fences source and
+destination until the filesystem thread settles, including request cancellation.
+Unrelated chat creation remains available; no global lock is held through Git.
+All 128 affected archive/worktree, new-chat/managed-chat, workspace-creation,
+configuration-inheritance and peer-creation tests passed in the DTU after this
+correction. Independent review found no remaining blocking defect in this guard.
+Archive preservation/retry and new-chat browser scenarios passed again after the
+backend guard changed. All 1,356 application/test source hashes match the DTU.
+
 ## Remaining latency and verification
 
 Real clicks in the user's existing Mac window took approximately 15.2 seconds to
@@ -128,3 +145,9 @@ message was sent. Broader server latency remains open in #633.
 0.20.131's post-release installed-package and Python lanes passed, while browser
 and readiness lanes failed. The new release will receive its own exhaustive
 post-release run; publication alone does not establish those lanes are green.
+
+A focused working-set audit found remaining metadata-only map copies and
+navigation rebuilds on genuine status/attention changes. Saving an app-owned
+active chat still serializes its retained accounting and long-message bodies.
+These are separate from dormant transcript loading and need live timing evidence
+before choosing the next optimization; the new state/save diagnostics cover them.

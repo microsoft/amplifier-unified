@@ -11,6 +11,7 @@
         "Performance diagnostics now include bounded operation timings, lock waits, event-loop delays and history-cache counters. These are available to authenticated clients and copied chat diagnostics without recording message bodies or credentials.",
         "Recent model and tool work stays beside the latest messages when a long chat contains many older delegate reports. Work pages follow transcript position, and older details remain available through paging.",
         "Returned delegate reports no longer borrow an earlier turn\u2019s duration or failure. Reports with unknown timestamps do not display invented elapsed time.",
+        "Checkout archive, restore and removal refuse chats using a nested folder or path alias. New-chat creation and filesystem moves are fenced against each other, including cancellation, while unrelated chats remain available.",
         "Chat-switch latency remains under investigation. This release does not claim that every live-server delay is resolved."
       ],
       "notices": []

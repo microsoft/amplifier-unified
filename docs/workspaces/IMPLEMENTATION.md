@@ -1,5 +1,28 @@
 # Implementation and evidence
 
+## Preserving checkout archive — 2026-10-14
+
+Unused app-created checkouts now have separate archive and restore actions.
+Archive moves the complete Git worktree into private retained storage, keeping
+staged and unstaged changes, ignored and untracked files, symlinks and detached
+commits. Git registration retains the commit; no commit or archive is published.
+This retires the active checkout without treating unknown contents as disposable.
+It does not reclaim disk space or freeze external writers. Clean deletion remains
+a separate, stricter action after explicit restoration.
+
+The shared UI, agent and attached-session actions reject attached/active folders,
+unresolved handoffs, changed ownership, stale revisions and target collisions.
+Durable intent precedes a move; retry or inspection reconciles actual directory
+identity and Git registration without repeating an uncertain effect. Browser
+retry identity survives a lost response and reload, and restore does not start
+execution or alter conversation history. Native Git tests cover actual file/index
+preservation, detached history, lost receipts on both sides of the move and
+ambiguous replacement paths. All 98 affected installed-package checks pass. Browser checks cover archive, reload/retry, restore,
+independent repositories and narrow layouts; the 686 frontend checks pass after
+integrating the current new-chat loading change. Its discovery browser journey also passes.
+This qualification does not claim deployment, immutable backups or resource
+teardown for independently owned processes and services.
+
 ## Assignment admission and scoped Stop — 2026-10-14
 
 New commissioned roots now share their initiating root's assignment. Nested
