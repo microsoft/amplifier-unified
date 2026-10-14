@@ -147,6 +147,37 @@ test('transition holds veto late dirty/busy input and survive SSE before receipt
  assert.equal(edits.transition(initial),undefined);
 });
 
+test('receipt-before-React-render retains the newer confirmed successor but never ignores revocation',async()=>{
+ for(const change of ['old-render','newer-view','revoked','foreign','late-dirty']){
+  const edits=createInlineOwnership(),initial={...target,publishedVersion:2,selectedVersion:2,followLatest:false};
+  const shown={revision:10,client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'a',canvasWorkspace:{views:[initial]}};
+  let releases=0;
+  edits.register(shown,initial,owner);
+  edits.registerRenderer(initial,{prepare:async()=>({}),validate:()=>true,release:()=>releases++});
+  const hold=await edits.prepareTransition(initial,'render-lag',true,shown);hold.sent=true;
+  const next={...initial,generation:2,selectedVersion:null,followLatest:true};
+  const fresh={...shown,revision:11,canvasWorkspace:{views:[next]}};
+  await edits.completeTransition(hold,{accepted:true,result:next},fresh);
+  let rendered=shown,expected=next;
+  if(change==='newer-view'){
+   expected={...next,generation:3,resourceRevision:'newer'};
+   edits.reconcile({...fresh,revision:12,canvasWorkspace:{views:[expected]}});
+  }
+  if(change==='revoked')edits.reconcile({...fresh,revision:12,canvasWorkspace:{views:[]}});
+  if(change==='foreign')rendered={...shown,client:{id:'other',hostInstanceId:'host'}};
+  if(change==='late-dirty')edits.intent(initial,true);
+  if(change==='late-dirty'){
+   assert.throws(()=>edits.adoptTransition(initial,'render-lag',rendered),error=>error.unconfirmed===true);
+   assert.equal(releases,0);assert.equal(edits.transition(initial),hold);
+  }else if(['revoked','foreign'].includes(change)){
+   assert.equal(edits.adoptTransition(initial,'render-lag',rendered),undefined);
+  }else{
+   assert.deepEqual(edits.adoptTransition(initial,'render-lag',rendered),expected);
+   assert.equal(releases,1);
+  }
+ }
+});
+
 test('successful follow receipt cannot discard late dirty input or an invalidated preparation proof',async()=>{
  for(const change of ['dirty-intent','proof','host-dirty']){
   const edits=createInlineOwnership(),initial={...target,publishedVersion:2,selectedVersion:2,followLatest:false};

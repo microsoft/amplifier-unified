@@ -46,13 +46,18 @@ export function createInlineOwnership(){
   view.selectedVersion===(hold.followLatest?null:hold.version)&&
   Number.isSafeInteger(view.generation)&&view.generation>=hold.target.generation;
  const confirmCurrent=(hold,state)=>{
+  // The App consumes authoritative state before React paints its children.
+  // A provably older render in the same scope cannot erase a newer confirmed
+  // successor; scope changes and current/newer revocations still fail closed.
+  if(hold.reconciled&&!hold.closed&&hold.scope===scopeOf(state)&&hold.sessionId===state?.selectedSessionId&&
+   Number.isSafeInteger(state.revision)&&Number.isSafeInteger(hold.observedRevision)&&state.revision<hold.observedRevision)return true;
   hold.reconciled=false;delete hold.next;
   if(!hold.receipt||hold.closed||hold.scope!==scopeOf(state)||hold.sessionId!==state?.selectedSessionId)return false;
   const view=state?.canvasWorkspace?.views?.find(view=>successor(hold,view)&&
    view.generation>=hold.receipt.result.generation&&
    (view.generation!==hold.receipt.result.generation||sameTarget(view,hold.receipt.result)));
   if(!view)return false;
-  hold.next={...view};hold.reconciled=true;return true;
+  hold.next={...view};hold.observedRevision=state.revision;hold.reconciled=true;return true;
  };
  return {
   subscribe(listener){listeners.add(listener);return ()=>listeners.delete(listener)},
