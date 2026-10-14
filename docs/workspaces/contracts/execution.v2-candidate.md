@@ -238,6 +238,30 @@ retroactively labeled retained. Request-scoped artifact reads expose only the
 declared artifact to the request participants in the recorded workspace; they do
 not grant general access to the producing conversation's output library.
 
+### Observed dependency provenance and combined candidates — 2026-10-14
+
+An explicit passive worker inspection reports already-loaded module origins,
+actual mounted object types, and bounded current-file hashes. It never imports
+requested project code, installs dependencies, starts a dormant worker or
+claims checkout isolation from an editable dependency's origin. Loaded origin,
+file bytes observed at mount, and file bytes observed now are distinct facts;
+none retroactively proves exact imported bytecode or a successful test.
+
+An explicit combined candidate can name up to eight inspected repository
+snapshots and sixteen expected loaded project-module origins/file hashes.
+Existing command receipts retain capture/check results. The host validates
+repository scope against this task's workspace, execution folder and associated
+working copies, rechecks placement and managed associations after reads, and records mismatch or unknown
+rather than substituting another dependency. Later checks compare these exact
+identities and flag source/dependency drift. This is bounded evidence for the
+listed repositories/modules, not a hermetic environment, dependency installer,
+test runner, or blanket proof of integration or release readiness.
+Passive list/read and the advanced task-execution disclosure expose the same
+retained observations as agents and session commands. File/worker reports and
+the total inspection duration are bounded; deadline/cancellation cannot create
+a late candidate receipt. A replacement worker makes prior loaded-state
+continuity unknown even when current source still matches.
+
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.
 
 ### Configuration authority addition — 2026-10-14

@@ -312,6 +312,8 @@ from .task_continuity import definitions as task_definitions
 ACTION_DEFINITIONS.update(task_definitions(schema, string))
 from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
+from .integration_evidence import definitions as integration_definitions
+ACTION_DEFINITIONS.update(integration_definitions(schema, string))
 from .collaboration import definitions as collaboration_definitions
 ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
 from .assignments import definitions as assignment_definitions
@@ -392,6 +394,7 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        *integration_definitions(schema, string),
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
         "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.openGif", "canvas.select", "canvas.reference",
         *MESSAGE_INTERACTIONS,
@@ -458,6 +461,7 @@ class AppService:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS integration_receipts ON commands(json_extract(receipt,'$.commandAction'),json_extract(receipt,'$.result.sessionId'))")
         self.db.execute("CREATE TABLE IF NOT EXISTS state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         from .state_records import initialize as initialize_records
         initialize_records(self.db)
@@ -1618,6 +1622,9 @@ class AppService:
         if action == 'desktop.readiness':
             from .desktop_readiness import dispatch as desktop_readiness
             return await desktop_readiness(self, args, origin, expected_revision, caller_session_id)
+        if action in integration_definitions(schema, string):
+            from .integration_evidence import dispatch as integration_dispatch
+            return await integration_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action == 'runtime.dependencies':
             from .artifact_runtime import discover
             async with self.lock:
@@ -4075,7 +4082,7 @@ class AppService:
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.')) or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.

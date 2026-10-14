@@ -23,6 +23,64 @@ integrating the current new-chat loading change. Its discovery browser journey a
 This qualification does not claim deployment, immutable backups or resource
 teardown for independently owned processes and services.
 
+## Loaded-source provenance and combined candidates — 2026-10-14
+
+`runtime.provenance` inspects the actual ready worker through its existing
+passive dependencies protocol. Core/Foundation origins, mounted object types
+and up to sixteen explicitly named project modules come from already-loaded
+objects; inspection never imports requested code, installs packages, starts a
+dormant worker or unparks it. Bounded file reads run outside the event loop.
+Loaded origin, file bytes observed after mounting, and file bytes observed now
+are separate evidence. None claims the exact bytes previously imported.
+
+`integration.capture/check/read/list` reuse existing command receipts. A capture
+retains up to eight inspected repository source revisions, optional expected
+module origins/hashes and the exact execution binding. A check compares those
+same expectations and preserves the capture. Wrong sibling origins or source
+drift are mismatches; absent/unloaded modules, changed worker instances or
+changing observations remain unknown. Checks do not merge or rewrite either
+contributor's work. Repository snapshots bracket worker observation; final
+placement and managed-association checks precede the scoped receipt commit.
+The canonical worktree owner serializes the final association check against
+archive/remove. File/Git work remains outside the app lock.
+
+Stable command retries return retained evidence, including after restart or a
+lost acknowledgment. Failed/cancelled preparations create no candidate. Reads
+and bounded listing are scoped to the original conversation, shared through
+the agent bridge and session HTTP commands. An advanced disclosure in task
+execution controls supports the same inspection/capture/check/list/read path.
+
+Bounds are explicit: 64 observed modules, 2 MiB per file, 16 MiB total file
+content, a 512 KiB worker report and a 120-second overall inspection deadline.
+Git inspection retains the worktree owner's existing file/time limits. Read
+workers may finish after cancellation, but cannot write a late receipt. Current
+matching files do not prove a hermetic environment, complete transitive import
+closure, subprocess dependencies, test success, semantic integration or release
+readiness. No project module is auto-imported to make unknown evidence green.
+
+Qualification uses real temporary sibling Git repositories and a subprocess
+mounting real Core/Foundation, loop-live, context-simple and an explicit fixture
+tool. The native probe identifies its loaded sibling origin, rejects the wrong
+expected repository, records the correct candidate, then detects an edited
+dependency while preserving both contributor sources. It never calls a model.
+Route/restart/failure tests cover identity retries, retained reads after source
+deletion, cross-conversation refusal, changed execution/association, malformed
+worker output, time bounds and app-lock responsiveness. Production-service
+Chromium exercises repository-only capture, passive unknown-worker inspection,
+real source drift, immutable reads, reload/list and mobile layout. These are
+bounded local and package observations; combined-program qualification and
+provider/release/shared-host acceptance remain separate.
+
+Local checks: 274 affected installed-wheel tests and two subtests passed using
+the selected native runtime (one explicit optional control probe was skipped).
+Final review added private strong-reference comparisons for same-origin module
+or same-type mounted-object replacement during detached I/O. The rebuilt wheel
+passes all 38 provenance/artifact-runtime cases, including both new races and
+the native sibling-repository probe; this helper is the only application file
+changed after the broader installed check. All 627 packaged Python/static files
+match source. Frontend tests pass (681), and the production-service browser
+journey passes with no page errors.
+
 ## Retained reported results — 2026-10-14
 
 Fresh `coordination.reply` declarations capture supported local SHA-256 file
@@ -79,7 +137,7 @@ control. All 601 packaged application Python/static files match the candidate
 source. This is package and local-runtime evidence, not publication or installed
 shared-host adoption; broad combined-program qualification remains separate.
 
-Remaining scope: combined repository/dependency validation, retention-aware
+Remaining scope: semantic combined repository/dependency validation, retention-aware
 checkout cleanup, full repeated provider journeys and release/adoption.
 
 ## Consistent registered-history scope — 2026-10-14
@@ -574,7 +632,7 @@ competing stores.
 | Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
 | Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context, advisory overlap and supported file-tool source conflicts delivered above. Remaining: broader independent/commissioned/native-worker lifecycle and concurrency acceptance |
 | Assignment control | Existing task, capacity and interruption owners | Commissioned-root aggregate admission and scoped Stop delivered above. Request-only accounting/interruption inside an independent mixed conversation remains an explicit adapter limitation; no whole-chat control is substituted. |
-| Durable results and integration | Artifact/resource owner and worktree integration | Report-time exact file retention delivered above; validate combined repository/dependency candidates and preserve uncertain cleanup effects |
+| Durable results and integration | Artifact/resource owner and worktree integration | Exact reported bytes and explicit combined source/dependency observations delivered above; semantic combination/test acceptance and uncertain cleanup effects remain separate |
 | Complete supported user journeys | Shared action/API layer, browser and terminal clients | Repeated two-round real-provider work, failure and Stop variants, independent and commissioned peers, disconnect/restart, private client state and measured responsiveness |
 | Release and adoption | Existing package/release and instance owners | Qualify the combined package, migrate retained records, activate fresh workers in an owned candidate instance, and separately verify intended release adoption |
 

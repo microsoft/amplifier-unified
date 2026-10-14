@@ -597,6 +597,8 @@ class Worker:
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
+            from amplifier_web.loaded_provenance import observe as observe_loaded
+            self.provenance_mount = await observe_loaded(self.session)
             await self.ownership.register()
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
@@ -977,11 +979,18 @@ class Worker:
                     self.shutdown.set()
                 return
             elif op == "dependencies":
-                if __package__:
+                if data.get('provenance') is True:
+                    from amplifier_web.loaded_provenance import observe
+                    inspected_session = self.session
+                    result = await observe(inspected_session, data.get('modules', []), mounted=getattr(self, 'provenance_mount', None))
+                    if self.session is not inspected_session:
+                        result.update(status='unknown', identityStable=False)
+                elif __package__:
                     from .artifact_runtime import discover
                 else:
                     from artifact_runtime import discover
-                result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
+                if data.get('provenance') is not True:
+                    result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif op == "desktop.readiness":
                 if not self.controls:
                     result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}

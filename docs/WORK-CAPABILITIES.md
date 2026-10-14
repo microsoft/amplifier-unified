@@ -37,6 +37,7 @@ See [implementation and evidence](workspaces/IMPLEMENTATION.md) for qualificatio
 | Diagnose/recover a failed conversation | `session.inspect`, `session.recover`; recovery creates an idle copy and never replays tools |
 | Show and revisit artifacts | `canvas.show`, `canvas.select`, canvas application/view actions |
 | Inspect exact peer results after source changes | `coordination.reply` retains supported local `path@sha256:<digest>` references when reported; `coordination.artifact` reads bounded saved text/downloads within the exact request relationship. Related work opens the saved version. A snapshot is not independent correctness or integration evidence. |
+| Inspect loaded dependencies and detect candidate drift | `runtime.provenance` observes already-loaded worker modules without importing code or warming a worker. `integration.capture/check/read/list` retain explicit repository revisions and expected module origins/current hashes in existing command receipts. Advanced task execution controls use the same actions. Mismatch/unknown are explicit; matching files never certify tests, exact imported bytes or isolation. |
 | Discover connected tools/resources | `smartTools.*` actions and the mounted tool catalog; availability does not imply a connected account |
 | Discover/use skills | Mounted `load_skill` from the configured skills behavior |
 | Delegate and steer workers | Mounted `delegate` and `live_worker`; async opt-in and pending receipts remain distinct from completion |
