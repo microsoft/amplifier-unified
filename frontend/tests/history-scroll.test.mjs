@@ -17,21 +17,51 @@ const laterPane=()=>{
 };
 
 test('older pages load on upward scrolling, once per pending request',async()=>{
- const pane=new EventTarget();pane.scrollTop=300;let calls=0,release;
+ const {pane}=laterPane();pane.scrollTop=300;let calls=0,release;
  const cleanup=followEarlierHistory(pane,()=>true,()=>{calls++;return new Promise(resolve=>{release=resolve})});
  assert.equal(calls,0);
  pane.scrollTop=500;pane.dispatchEvent(new Event('scroll'));await Promise.resolve();assert.equal(calls,0);
- pane.scrollTop=90;pane.dispatchEvent(new Event('scroll'));await Promise.resolve();assert.equal(calls,1);
+ input(pane,'wheel',{deltaY:-100});pane.scrollTop=90;pane.dispatchEvent(new Event('scroll'));await Promise.resolve();assert.equal(calls,1);
  pane.scrollTop=30;pane.dispatchEvent(new Event('scroll'));await Promise.resolve();assert.equal(calls,1);
  release();await new Promise(resolve=>setTimeout(resolve,0));
  cleanup();pane.scrollTop=0;pane.dispatchEvent(new Event('scroll'));await Promise.resolve();assert.equal(calls,1);
 });
 
 test('unavailable earlier history does not start requests',async()=>{
- const pane=new EventTarget();pane.scrollTop=300;let calls=0;
+ const {pane}=laterPane();pane.scrollTop=300;let calls=0;
  const cleanup=followEarlierHistory(pane,()=>false,()=>calls++);
- pane.scrollTop=0;pane.dispatchEvent(new Event('scroll'));await Promise.resolve();
+ input(pane,'wheel',{deltaY:-100});pane.scrollTop=0;pane.dispatchEvent(new Event('scroll'));await Promise.resolve();
  assert.equal(calls,0);cleanup();
+});
+
+test('earlier history ignores restored positions, expired gestures and disposed requests',async()=>{
+ const {pane,document,window,nextFrame,frames}=laterPane();pane.scrollTop=500;let calls=0;
+ const cleanup=followEarlierHistory(pane,()=>true,()=>calls++);
+ const move=async top=>{pane.scrollTop=top;input(pane,'scroll');await Promise.resolve()};
+ await move(80);assert.equal(calls,0,'a restored reading position does not request history');
+ input(pane,'wheel',{deltaY:-100});input(window,'resize');await move(70);assert.equal(calls,0);
+ input(pane,'wheel',{deltaY:-100});input(document,'focusin');await move(60);assert.equal(calls,0);
+ input(pane,'wheel',{deltaY:-100});nextFrame();await move(50);assert.equal(calls,0);
+ input(pane,'wheel',{deltaY:100});await move(40);assert.equal(calls,0,'contrary input is not permission');
+ input(pane,'keydown',{key:'PageUp'});await move(30);assert.equal(calls,1);
+ await new Promise(resolve=>setImmediate(resolve));
+ input(pane,'wheel',{deltaY:-100});pane.scrollTop=20;input(pane,'scroll');cleanup();
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1,'switching chats cancels a scheduled read');
+ assert.equal(frames.size,0);
+});
+
+test('earlier touch and scrollbar gestures load in their actual direction',async()=>{
+ const {pane}=laterPane();pane.scrollTop=100;let calls=0;
+ const cleanup=followEarlierHistory(pane,()=>true,()=>calls++);
+ const move=async top=>{pane.scrollTop=top;input(pane,'scroll');await new Promise(resolve=>setImmediate(resolve))};
+ const touch=y=>({touches:[{identifier:1,clientY:y}]});
+ input(pane,'touchstart',touch(100));input(pane,'touchmove',touch(150));await move(90);assert.equal(calls,1);
+ input(pane,'touchmove',touch(120));await move(80);assert.equal(calls,1,'finger up is newer-history intent');
+ input(pane,'pointerdown',{pointerId:2,pointerType:'mouse',button:0,clientX:310,clientY:1});
+ await move(70);assert.equal(calls,2,'track above thumb loads earlier');
+ input(pane,'pointerdown',{pointerId:3,pointerType:'mouse',button:0,clientX:310,clientY:50});
+ input(pane,'pointermove',{pointerId:3,buttons:1,clientY:40});await move(60);assert.equal(calls,3);
+ cleanup();
 });
 
 test('downward Recent follows user input near 120px, never mount, resize or recursive append',async()=>{

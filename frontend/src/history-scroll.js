@@ -1,18 +1,15 @@
-// Load a page only when the user moves toward older history, never on mount.
+// Both directions require a current user gesture. Restoration, anchoring and
+// resizing can move the scroll offset without requesting any more history.
 export function followEarlierHistory(pane,canLoad,load){
- let previous=pane.scrollTop,busy=false,disposed=false;
- const scroll=()=>{
-  const top=pane.scrollTop,up=top<previous;previous=top;
-  if(disposed||busy||!up||top>120||!canLoad())return;
-  busy=true;Promise.resolve().then(load).finally(()=>{busy=false;previous=pane.scrollTop});
- };
- pane.addEventListener('scroll',scroll,{passive:true});
- return ()=>{disposed=true;pane.removeEventListener('scroll',scroll)};
+ return followHistory(pane,canLoad,load,-1).dispose;
 }
 
 // Recent grows downwards. A scroll event alone is not user intent: resize,
 // browser anchoring, focus and row restoration all generate the same event.
 export function followLaterHistory(pane,canLoad,load){
+ return followHistory(pane,canLoad,load,1);
+}
+function followHistory(pane,canLoad,load,direction){
  let previous=pane.scrollTop,busy=false,disposed=false,armed=false,frame=null,touch=null,pointer=null;
  const document=pane.ownerDocument,window=document?.defaultView;
  const disarm=()=>{
@@ -33,11 +30,13 @@ export function followLaterHistory(pane,canLoad,load){
  };
  const input=event=>{
   if(event.type==='wheel'){
-   if(!(event.deltaY>0)||event.ctrlKey||Math.abs(event.deltaX||0)>event.deltaY){reset();return}
+   if(!(event.deltaY*direction>0)||event.ctrlKey||Math.abs(event.deltaX||0)>Math.abs(event.deltaY)){reset();return}
   }
   if(event.type==='keydown'){
-   if(!['ArrowDown','PageDown','End',' '].includes(event.key)
-    ||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey
+   const keys=direction===1?['ArrowDown','PageDown','End']:['ArrowUp','PageUp','Home'];
+   const space=event.key===' '&&!!event.shiftKey===(direction===-1);
+   if(!(keys.includes(event.key)||space)
+    ||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey&&!space
     ||event.target?.closest?.('input,textarea,select,[contenteditable="true"]')
     ||event.key===' '&&event.target!==pane){reset();return}
   }
@@ -52,7 +51,7 @@ export function followLaterHistory(pane,canLoad,load){
    disarm();
    if(!next||!last||next.identifier!==last.id){touch=null;return}
    touch={id:next.identifier,y:next.clientY};
-   if(!(next.clientY<last.y))return;
+   if(!((last.y-next.clientY)*direction>0))return;
   }
   if(event.type==='pointerdown'){
    reset();
@@ -63,20 +62,21 @@ export function followLaterHistory(pane,canLoad,load){
    pointer={id:event.pointerId,y:event.clientY};
    const thumb=pane.clientHeight*pane.clientHeight/pane.scrollHeight;
    const thumbTop=pane.scrollTop*(pane.clientHeight-thumb)/(pane.scrollHeight-pane.clientHeight);
-   if(!(event.clientY-rect.top>thumbTop+thumb))return;
+   if(!(direction===1?event.clientY-rect.top>thumbTop+thumb:event.clientY-rect.top<thumbTop))return;
   }
   if(event.type==='pointermove'){
    const last=pointer;disarm();
    if(!last||event.pointerId!==last.id||!(event.buttons&1)){pointer=null;return}
    pointer={id:last.id,y:event.clientY};
-   if(!(event.clientY>last.y))return;
+   if(!((event.clientY-last.y)*direction>0))return;
   }
   arm();
  };
  const scroll=()=>{
-  const top=pane.scrollTop,down=top>previous;previous=top;
+  const top=pane.scrollTop,forward=(top-previous)*direction>0;previous=top;
   const intended=armed;disarm();
-  if(disposed||busy||!intended||!down||pane.scrollHeight-pane.clientHeight-top>120||!canLoad())return;
+  const distance=direction===1?pane.scrollHeight-pane.clientHeight-top:top;
+  if(disposed||busy||!intended||!forward||distance>120||!canLoad())return;
   busy=true;Promise.resolve().then(()=>{if(!disposed&&canLoad())return load()})
    .catch(()=>{}).finally(()=>{busy=false;reset()});
  };
