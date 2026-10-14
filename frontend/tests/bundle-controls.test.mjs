@@ -85,3 +85,15 @@ test('compact draft selector shows resolved default and applies a choice without
  assert.equal(state.view.newSessionDraft.bundle,'anchors');assert.equal(calls.some(c=>c.name==='session.create'),false);
  assert.equal(root.root.findAllByType('input').length,0);await renderAct(async()=>root.unmount());
 });
+
+test('loaded bundle choices are usable while the inherited default is unresolved',async()=>{
+ const calls=[],state={view:{composerBundle:{open:true,sessionId:null}},registeredBundles:[{value:'work',label:'Work'}]};let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement(BundleControl,{state,compact:true,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}})));
+  const picker=root.root.findByType('select');
+  assert.equal(picker.findAllByType('option')[0].children.join(''),'Choose a bundle');
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Loading bundle/);
+  await renderAct(async()=>picker.props.onChange({target:{value:'work'}}));
+  assert.equal(calls.find(c=>c.args?.patch?.newSessionDraft)?.args.patch.newSessionDraft.bundle,'work');
+ }finally{await renderAct(async()=>root?.unmount())}
+});

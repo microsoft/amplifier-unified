@@ -84,14 +84,12 @@ try{
   await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
   await expect(composer).toHaveDraft('Next draft while the first delivery is pending');
   await page.getByRole('button',{name:'Check delivery',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Send again',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Retry original submission',exact:true})).toBeVisible();
+  await expect(page.getByRole('region',{name:'New chat',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Summarize a file',exact:false})).toHaveCount(0);
   assert.equal(createAttempts,1,'Checking delivery must not retry conversation creation');
   assert.equal(sendAttempts,0,'Checking delivery must not send the message');
-  await page.getByRole('button',{name:'Send again',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Send this message again',exact:true})).toBeVisible();
-  assert.equal(createAttempts,1,'Opening confirmation must not retry conversation creation');
-  assert.equal(sendAttempts,0,'Opening confirmation must not send the message');
-  await page.getByRole('button',{name:'Send this message again',exact:true}).click();
+  await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
  }
  release();
  if(process.argv.includes('--lost-create')){

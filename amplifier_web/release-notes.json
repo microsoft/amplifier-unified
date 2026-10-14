@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.132",
+      "title": "Recover new-chat model settings without refreshing",
+      "changes": [
+        "New-chat model settings reload after missing results or a reconnect. Delayed and failed reads offer an in-place retry while preserving drafts and explicit choices.",
+        "Slow default reads no longer block later edits. Concurrent requests for the same draft settings share one server probe.",
+        "Available bundles show a selection prompt instead of a loading placeholder when only the inherited default is unresolved.",
+        "Unconfirmed new-chat submissions use an explicit retry of their original identity. Empty-chat suggestions no longer appear above recovery messages, and saved-work replay confirmations remain separate."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.131",
       "title": "Keep chat switching independent of navigation refreshes",
       "changes": [
