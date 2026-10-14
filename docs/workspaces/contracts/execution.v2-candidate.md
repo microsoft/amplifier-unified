@@ -248,3 +248,20 @@ pending assignment input without substituting a whole-conversation interruption.
 When a token or cost limit is enabled, new queue/steer requests to independent
 peers are refused with this limitation; commissioned helpers share the budget.
 Informational notices remain available and do not start independent work.
+
+## Preserving checkout archive addition — 2026-10-14
+
+An inactive app-created checkout may be archived by moving the entire registered
+Git worktree into its owner's private retained storage. Archiving is distinct
+from deletion: dirty/index state, ignored and unknown files, symlinks, nested
+content and detached commits remain in that checkout. No ignored pattern is
+interpreted as permission to discard data. Git may refuse unsupported layouts;
+the original is preserved. This does not claim an immutable snapshot against
+external writers or reclaim disk space.
+
+Archive and restore use stable operation identities, expected ownership revisions,
+and retained before/after directory identity. After interruption, inspect actual
+Git registration and directory identity to confirm a move or report uncertainty;
+never repeat an uncertain move. Only app-created, unused checkouts qualify.
+Active execution, pending/unknown handoff, attached folders and destination
+collisions are refused. Restore does not start work, replay input or change history.

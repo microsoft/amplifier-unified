@@ -371,7 +371,7 @@ for _access, _actions in {
         "providers.test", "providers.testMessage", "providers.models", "providers.imageModels",
         "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
         "sources.save", "sources.remove", "sources.validate",
-        "worktree.create", "worktree.attach", "worktree.remove", "worktree.handoff", "worktree.reconcile",
+        "worktree.create", "worktree.attach", "worktree.remove", "worktree.archive", "worktree.restore", "worktree.handoff", "worktree.reconcile",
         "coordination.intent",
     },
     "presentation": {
