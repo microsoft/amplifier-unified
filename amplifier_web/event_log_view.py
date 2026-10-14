@@ -672,13 +672,27 @@ class EventLogView:
         if previous is not None:
             self.retained_index_bytes -= previous[1]
 
-    def _retain_index(self, index):
+    @staticmethod
+    def _charge_signature(index):
+        # Source/association revisions own descriptor mutations. Checkpointing
+        # and per-read counters also change values traversed by the size walker.
+        return (index.revision, index.association_revision,
+                index._checkpoint_signature, index.read_bytes)
+
+    def _retain_index(self, index, *, receipt=None):
         key = str(index.path)
-        previous = self._index_sizes.get(key)
+        previous = self._index_sizes.get(key) if self.indexes.get(key) is index else None
         signature = (index.revision, index.association_revision)
+        charge_signature = self._charge_signature(index)
+        if (previous is None and receipt is not None and receipt[0] is index
+                and receipt[1][0] == charge_signature):
+            # A prior retention in this read may have evicted this exact object
+            # while the read still held it. Never transfer a charge to a newly
+            # restored object, even when its canonical revisions match.
+            previous = receipt[1]
         rejected = self._oversized.get(key)
         try:
-            if previous and previous[0] == signature:
+            if previous and previous[0] == charge_signature:
                 size = previous[1]
             elif rejected and rejected[0] == signature and self.MAX_INDEX_BYTES <= rejected[1]:
                 size = self.MAX_INDEX_BYTES + 1
@@ -702,7 +716,7 @@ class EventLogView:
             return
         self._oversized.pop(key, None)
         self.indexes[key] = index
-        self._index_sizes[key] = (signature, size)
+        self._index_sizes[key] = (charge_signature, size)
         self.retained_index_bytes += size
         while len(self.indexes) > self.MAX_INDEXES or self.retained_index_bytes > self.MAX_INDEX_BYTES:
             count(self.service, 'events.index.evicted')
@@ -1094,8 +1108,14 @@ class EventLogView:
         stage('events.usage')
         refresh_usage(tree)
         stage('events.retain')
+        # Charges live only for this retention pass. Entries earlier in this
+        # list can evict later entries from the bounded RAM cache before their
+        # turn; the read already owns those objects and their immutable receipt.
+        receipts = {str(index.path): (index, self._index_sizes[str(index.path)])
+                    for index in indexes if self.indexes.get(str(index.path)) is index
+                    and str(index.path) in self._index_sizes}
         for index in indexes:
-            self._retain_index(index)
+            self._retain_index(index, receipt=receipts.get(str(index.path)))
         stages.close()
         return tree
 
