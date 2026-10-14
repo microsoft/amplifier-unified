@@ -204,11 +204,8 @@ def root_count(directory, state):
 
 
 def children(directory, state, parent, query='', index=0):
-    sql, params = directory.effective(state)
-    aliases = list({parent.get(key) for key in ('id','nativeIdentity','runtimeSessionId')} - {None})
-    predicate = "session_kind!='root' AND id!=? AND (parent_id=? OR (native_parent_id IN (SELECT value FROM json_each(?)) AND CASE WHEN native_project IS NOT NULL AND ? IS NOT NULL THEN native_project=? ELSE workspace=? END))"
-    params = [*params,parent.get('id'),parent.get('id'),json.dumps(aliases),parent.get('nativeProject'),parent.get('nativeProject'),parent.get('workspace')]
-    sql += ', child_rows AS (SELECT * FROM directory_rows WHERE '+predicate+')'
+    sql, params = directory.effective(state, children_of=parent)
+    sql += ', child_rows AS (SELECT * FROM directory_rows)'
     unfiltered = directory.db.execute(sql+' SELECT COUNT(*) FROM child_rows',params).fetchone()[0]
     if query:
         directory.db.create_function('directory_child_match',5,lambda q,*fields:int(_matches(fields,q)),deterministic=True)

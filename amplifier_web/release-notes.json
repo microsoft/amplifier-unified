@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.140",
+      "title": "Keep chat and worker lookups scoped to the requested records",
+      "changes": [
+        "Fetching a few saved chat summaries now starts with their indexed identities instead of traversing the complete saved library.",
+        "Worker history pages use indexed parent relationships. Opening a chat no longer scans unrelated saved chats to find its child sessions.",
+        "Native aliases, local changes, renamed or moved worker sessions, hidden records and consistent read snapshots retain their existing ownership rules."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.139",
       "title": "Avoid repeated workspace scans in large chat libraries",
       "changes": [
