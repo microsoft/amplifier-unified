@@ -116,15 +116,24 @@ def definitions(schema, string):
 
 
 def restore_owner(session, host_instance):
-    """Retire prior-host authority on exact admission, never replay its work."""
+    """Retire prior-host authority and native waits without replaying work."""
     if session.get('_collaborationHostInstanceId') == host_instance:
         return
     active = session.get('collaborationGeneration')
     if active and not active.get('terminal'):
         active.update(terminal=True, detail='Host restarted; no live generation authority.')
     for approval in session.get('approvals', []):
-        if approval.get('id', '').startswith('collaboration:') and approval.get('status') == 'pending':
+        if approval.get('status', 'pending') not in {None, 'pending'}:
+            continue
+        identity = approval.get('id', '')
+        if identity.startswith('collaboration:'):
             approval['status'] = 'retired'
+        elif not identity.startswith('capability:'):
+            # Ordinary approvals resolve an in-memory native waiter. It cannot
+            # survive host replacement. Configuration grants instead retain a
+            # durable decision and their own authority checks across restarts.
+            approval.update(status='expired', resolutionReason='host_restarted',
+                detail='The app restarted before this permission was answered. Review the saved work and ask again if needed; nothing was replayed.')
     # The marker travels with this one durable owner, not a growing process-wide
     # set of every chat visited. Same-host eviction is not another restart.
     session['_collaborationHostInstanceId'] = host_instance
