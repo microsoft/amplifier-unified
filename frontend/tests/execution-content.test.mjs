@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {actionContent,diffRows,cleanSummary} from '../src/execution-content.js';
 const node=(label,input,output,phase='completed')=>({label,input:JSON.stringify(input),output:JSON.stringify(output),phase});
+test('stopped tool keeps retained output without presenting it as successful completion',()=>{
+ const action=actionContent(node('bash',{command:'bounded-effect'},{stdout:'partial result'},'stopped'));
+ assert.equal(action.failed,true);assert.equal(action.done,false);assert.equal(action.running,false);
+ assert.equal(action.phase,'stopped');assert.equal(action.out.stdout,'partial result');
+});
 test('bash keeps real command, stdout, stderr and exit status including failure',()=>{
  const a=actionContent(node('bash',{command:'python -m pytest -q'},{success:false,output:{stdout:'collected 2 items\n1 failed',stderr:'trace',returncode:1}}));
  assert.equal(a.kind,'command');assert.equal(a.title,'Run');assert.equal(a.target,'python -m pytest -q');assert.equal(a.exit,1);assert.equal(a.out.stderr,'trace');assert.match(a.preview,/1 failed · exit 1/);

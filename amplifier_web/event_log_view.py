@@ -629,7 +629,7 @@ def refresh_turn_lifecycle(tree, session, *, host_turns=None):
         # Call outcomes cannot overwrite a manager failure, or settle the
         # currently admitted input between calls. Logs enrich action rows;
         # the host lifecycle owns when its current turn has stopped.
-        if turn['id'] in host_turns and (turn.get('status') or turn.get('phase')) in {'error','failed','cancelled','interrupted'}:
+        if turn['id'] in host_turns and (turn.get('status') or turn.get('phase')) in {'error','failed','cancelled','interrupted','stopped'}:
             continue
         current_live = (turn['id'] in host_turns and turn['id'] == tree.get('currentTurnId')
                         and session.get('status') in {'working','starting','running','stopping'})
@@ -818,6 +818,12 @@ class EventLogView:
                                if key in row} for row in session.get('messages', [])]
         result['workers'] = [{key: row[key] for key in ('id', 'sessionId', 'status') if key in row}
                             for row in session.get('workers', [])]
+        # Retain only lifecycle identities needed to repair old display
+        # outcomes, never generation text or another provider payload.
+        result['generations'] = [{key: row[key] for key in
+            ('event', 'sessionId', 'rootSessionId', 'generation_id', 'initial_input_id', 'input_ids', 'at') if key in row}
+            for row in session.get('generations', [])
+            if row.get('event') in {'generation.started', 'generation.finished', 'generation.failed', 'generation.detached'}]
         return result
 
     def start(self):
@@ -987,7 +993,8 @@ class EventLogView:
             sid = row.get('sessionId')
             return (root if sid in aliases else sid, row.get('toolCallId'))
         tool_ids = {call_key(row): row for row in live_nodes if row.get('kind') == 'tool'}
-        turns = {row['id']: copy.deepcopy(row) for row in live.get('turns', [])}
+        from .execution import generation_turns
+        turns = {row['id']: copy.deepcopy(row) for row in generation_turns(session)}
         input_turns, message_turns, host_turns = {}, {}, set()
         for turn in turns.values():
             if turn.get('canonicalHistory') or turn.get('nativeHistory'):

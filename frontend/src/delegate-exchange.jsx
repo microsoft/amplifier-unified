@@ -36,7 +36,7 @@ function RawExchange({node}){
 
 function Followup({entry,expanded,toggle}){
  const detailsId=`exchange:${entry.id}:details`,details=expanded.has(detailsId);
- const failed=['error','failed','cancelled','interrupted'].includes(entry.phase);
+ const failed=['error','failed','cancelled','interrupted','stopped'].includes(entry.phase);
  return <><DelegateMessage node={entry} field="delegateRequest" label="Follow-up to delegate" direction="Parent → Delegate" expanded={expanded} toggle={toggle}/>
   <p className="a-caption">{failed?`Follow-up ${entry.phase}; delivery was not confirmed.`:['completed','complete','success'].includes(entry.phase)?'Request processed; application is not confirmed by this receipt.':'Follow-up attempted; awaiting receipt.'}</p>
   <button type="button" className="a-link" aria-expanded={details} onClick={()=>toggle(detailsId)}>Follow-up receipt</button>
@@ -48,7 +48,7 @@ export function DelegateExchange({node,expanded,toggle,activity,activityOpen,tog
  const exchange=node.exchange||{id:node.id},detailsId=`exchange:${exchange.id}:details`,details=expanded.has(detailsId);
  const response=exchange.delegateResponse!=null||!!exchange.delegateResponseDetail;
  const requestPresent=exchange.delegateRequest!=null||!!exchange.delegateRequestDetail;
- const failures=['error','failed','cancelled','interrupted'],workerPhase=node.workerPhase||node.phase;
+ const failures=['error','failed','cancelled','interrupted','stopped'],workerPhase=node.workerPhase||node.phase;
  const phase=[workerPhase,exchange.phase].find(value=>failures.includes(value))||workerPhase||exchange.phase;
  const failure=failures.includes(phase);
  return <div className="a-delegate-exchange">

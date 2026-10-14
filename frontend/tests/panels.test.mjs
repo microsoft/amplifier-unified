@@ -4,7 +4,7 @@ import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const [{ProviderSettings,RoutingSettings},{RuntimeSettings},{TurnTimeline},{RegistrySettings},{MaintenanceSettings}]=await Promise.all(['setup.jsx','runtime-settings.jsx','timeline.jsx','registry.jsx','maintenance.jsx'].map(file=>server.ssrLoadModule('/src/'+file)));
+const [{ProviderSettings,RoutingSettings},{RuntimeSettings},{TurnTimeline,WorkTimeline},{RegistrySettings},{MaintenanceSettings}]=await Promise.all(['setup.jsx','runtime-settings.jsx','timeline.jsx','registry.jsx','maintenance.jsx'].map(file=>server.ssrLoadModule('/src/'+file)));
 const {UpdateSettings}=await server.ssrLoadModule('/src/updates.jsx');
 const {ConversationDetails}=await server.ssrLoadModule('/src/conversation-controls.jsx');
 const act=()=>{};
@@ -29,6 +29,19 @@ test('expanded execution renders nested public summaries and genuine partial usa
  assert.match(html,/Recorded worker summary/);assert.match(html,/not evidence of the exact response/);
 });
 
+for(const [phase,label] of [['stopped','Stopped'],['cancelled','Cancelled'],['interrupted','Interrupted']])test(`${phase} work headers describe their terminal outcome`,()=>{
+ const data={turns:[{id:'t',phase,startedAt:1,endedAt:10},{id:'earlier',phase:'completed',startedAt:0,endedAt:1}],nodes:[
+  {id:'model',kind:'llm',turnId:'t',phase:'completed',startedAt:1,endedAt:5}]};
+ const state={view:{executionExpanded:['closed:turn:t','closed:work:earlier']}};
+ const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'t',state,act}));
+ assert.match(html,new RegExp(label+' · 9s'));
+ assert.match(html,new RegExp('data-view-label="'+label+' · 9s · expand work details"'));
+ assert.doesNotMatch(html,/Completed work|Worked for|aria-label="Completed"/);
+ const grouped=renderToStaticMarkup(React.createElement(WorkTimeline,{items:[{turnId:'earlier'},{turnId:'t'}],data,state,act}));
+ assert.match(grouped,new RegExp(label+' · 10s'));
+ assert.doesNotMatch(grouped,/Worked for|aria-label="Completed"/);
+});
+
 test('rejected follow-up is not labeled submitted and running worker is not completed',()=>{
  const worker={id:'w',kind:'worker',turnId:'t',sessionId:'child',label:'Review',phase:'running',exchange:{id:'d',phase:'running',delegateRequest:'Review'}};
  const data={turns:[{id:'t',phase:'running'}],nodes:[worker,
@@ -40,8 +53,8 @@ test('rejected follow-up is not labeled submitted and running worker is not comp
  assert.match(html,/aria-label="running"/);
 });
 
-test('persistent reports remain chronological and cannot hide terminal worker failure',()=>{
- const worker={id:'w',kind:'worker',turnId:'t',sessionId:'child',label:'Review',phase:'cancelled',exchange:{id:'d',phase:'running',delegateRequest:'Review',delivery:'separate'}};
+for(const phase of ['cancelled','stopped'])test(`persistent reports remain chronological and cannot hide worker ${phase}`,()=>{
+ const worker={id:'w',kind:'worker',turnId:'t',sessionId:'child',label:'Review',phase,exchange:{id:'d',phase:'running',delegateRequest:'Review',delivery:'separate'}};
  const data={turns:[{id:'t',phase:'completed'}],nodes:[worker,
   {id:'followup',kind:'tool',turnId:'t',delegate:worker,startedAt:21,exchange:{id:'followup',delegateRequest:'SECOND REQUEST',phase:'completed'}},
   {id:'report1',kind:'exchange',turnId:'t',delegate:worker,startedAt:20,exchange:{id:'report1',delegateResponse:'FIRST REPORT',report:true}},
@@ -49,7 +62,7 @@ test('persistent reports remain chronological and cannot hide terminal worker fa
  const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'t',state:{view:{executionExpanded:['turn:t','delegate:t:w']}},act}));
  assert.ok(html.indexOf('FIRST REPORT')<html.indexOf('SECOND REQUEST'));
  assert.ok(html.indexOf('SECOND REQUEST')<html.indexOf('SECOND REPORT'));
- assert.match(html,/Worker cancelled/);assert.doesNotMatch(html,/Waiting for response|delegate below/);
+ assert.match(html,new RegExp('Worker '+phase));assert.doesNotMatch(html,/Waiting for response|delegate below/);
 });
 
 test('advanced registries expose scoped source controls through the shared registry',()=>{
