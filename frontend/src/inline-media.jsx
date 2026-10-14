@@ -147,25 +147,31 @@ export function MediaFigure({item,messageId,reportMedia,dispatch,openInCanvas=fa
  </figure>;
 }
 
-export function InlineMedia({sessionId,messageId,mediaRevision=0,dispatch}){
- const anchor=useRef(null),[visible,setVisible]=useState(false),[result,setResult]=useState(null),[error,setError]=useState(''),[retry,setRetry]=useState(0);
+export function InlineMedia({sessionId,messageId,mediaRevision=0,linkedMediaAvailable,dispatch}){
+ const anchor=useRef(null),[visible,setVisible]=useState(false),[result,setResult]=useState(null),[error,setError]=useState(null),[retry,setRetry]=useState(0);
+ const owns=value=>value?.sessionId===sessionId&&value?.messageId===messageId;
+ const current=linkedMediaAvailable===true&&owns(result)?result.value:null;
+ const failure=linkedMediaAvailable===true&&owns(error)?error.message:'';
  useEffect(()=>{
   if(!globalThis.IntersectionObserver){setVisible(true);return}
   const observer=new IntersectionObserver(rows=>setVisible(rows.some(row=>row.isIntersecting)),{rootMargin:'200px'});
   if(anchor.current)observer.observe(anchor.current);return ()=>observer.disconnect();
  },[]);
  useEffect(()=>{
-  if(!visible)return;let disposed=false;const abort=new AbortController();
+  if(linkedMediaAvailable===false){setResult(null);setError(null)}
+  // Only the selected host projection can establish registry availability.
+  // Missing coverage is pending, never authority to scan a transcript.
+  if(!visible||linkedMediaAvailable!==true)return;let disposed=false;const abort=new AbortController();
   const query=new URLSearchParams({sessionId,messageId});
-  setError('');
+  setError(null);
   api.request(`/api/outputs/media?${query}`,{signal:abort.signal}).then(value=>{
-   if(!disposed)setResult(validateMediaMetadata(value,sessionId));
-  }).catch(error=>{if(!disposed&&error.name!=='AbortError')setError(error.message)});
+   if(!disposed)setResult({sessionId,messageId,value:validateMediaMetadata(value,sessionId)});
+  }).catch(error=>{if(!disposed&&error.name!=='AbortError')setError({sessionId,messageId,message:error.message})});
   return ()=>{disposed=true;abort.abort()};
- },[sessionId,messageId,mediaRevision,visible,retry]);
+ },[sessionId,messageId,mediaRevision,linkedMediaAvailable,visible,retry]);
  return <div ref={anchor} className="a-inline-media">
-  {result?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId} dispatch={dispatch} openInCanvas/>)}
-  {error&&<p role="alert">{error} <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry media metadata</button></p>}
-  {result?.overflow&&<p>Only the first 20 media attachments are displayed.</p>}
+  {current?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId} dispatch={dispatch} openInCanvas/>)}
+  {failure&&<p role="alert">{failure} <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry media metadata</button></p>}
+  {current?.overflow&&<p>Only the first 20 media attachments are displayed.</p>}
  </div>;
 }

@@ -1,5 +1,21 @@
 # Browser state transport and idle work
 
+## Selected media availability
+
+The selected session in a bound web frame carries `linkedMediaAvailable`, an
+indexed existence fact from the output registry. False means there are no linked
+media records for that session, so inline media performs no metadata request and
+releases any previous request or figures. Missing coverage remains pending.
+True allows the existing visible-message lookup; it does not validate the origin,
+grant access to bytes, or assert that every message has media.
+
+This fact is recomputed from committed registry ownership when the selected
+frame is projected, rather than inferred from `mediaRevision`. Forked and
+imported records can exist at revision zero. The same indexed predicate follows
+attach, unlink, relink, transfer, deletion and restart. Explicit media metadata,
+download, playback and observation requests retain their canonical identity and
+authorization checks. Images and other saved artifacts keep their own paths.
+
 ## Installed interface discovery
 
 Bound web state baselines include `client.build` with `serverVersion` and

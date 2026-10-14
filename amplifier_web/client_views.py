@@ -259,6 +259,8 @@ class ClientViews:
         for session in snapshot["sessions"]:
             session["draft"] = record.get("drafts", {}).get(session["id"], "")
             session["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get(session["id"], []))
+            if record['kind'] == 'web' and session['id'] == record.get('selectedSessionId'):
+                session['linkedMediaAvailable'] = self.service.outputs.store.has_linked_media(session['id'])
         return snapshot
 
     def remember_canvas(self, record=None):

@@ -212,6 +212,8 @@ async function newClient(options={}){
  const context=sharedContext;
  contexts.add(context);
  const page=await context.newPage();pages.add(page);
+ const metadataRequests=[];
+ page.on('request',request=>{if(new URL(request.url()).pathname==='/api/outputs/media')metadataRequests.push(request.url())});
  page.on('pageerror',error=>pageErrors.push(String(error.stack||error.message)));
  await page.addInitScript(installProbe,options);
  if(options.resumeClientId)await page.addInitScript(id=>sessionStorage.setItem('amplifier.clientId',id),options.resumeClientId);
@@ -240,14 +242,28 @@ async function newClient(options={}){
   await page.goto(boot.url+'/login');
   await page.getByLabel('Username').fill('media-fixture');
   await page.getByLabel('Password').fill('fixture-password');
-  // Register BEFORE login navigates into the app; no ready-DOM inference.
-  const empty=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/outputs/media'&&
-   new URL(response.url()).searchParams.get('messageId')===boot.messageId);
   await page.getByRole('button',{name:'Sign in',exact:true}).click();
-  const response=await empty;assert.equal(response.status(),200);
-  assert.equal(await response.finished(),null);assert.deepEqual((await response.json()).items,[]);
+  await expect(page.locator(`[data-message-id="${boot.messageId}"]`)).toBeVisible();
+  const selectedAvailability=()=>page.evaluate(()=>{
+   const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId)?.linkedMediaAvailable;
+  });
+  await expect.poll(selectedAvailability).toBe(false);
+  const settled=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await settled();assert.equal(metadataRequests.length,0,'short empty chat does not request metadata');
+  // Explicit readers still receive the original validated empty descriptor.
+  const clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
+  const response=await page.request.get(boot.url+'/api/outputs/media?'+new URLSearchParams({sessionId:boot.sessionId,messageId:boot.messageId}),
+   {headers:{'X-Amplifier-Client':clientId}});
+  assert.equal(response.status(),200);assert.deepEqual((await response.json()).items,[]);
+  await action(page,'session.select',{id:boot.emptyLongSessionId});
+  await expect(page.locator('article.a-assistant').filter({hasText:'Empty native assistant 999.'})).toBeVisible();
+  await expect.poll(selectedAvailability).toBe(false);await settled();
+  assert.equal(metadataRequests.length,0,'long native empty chat does not request metadata');
+  await restoreSession(page);await expect.poll(selectedAvailability).toBe(false);await settled();
+  assert.equal(metadataRequests.length,0,'returning to the empty chat does not request metadata');
   sharedStorage=await context.storageState();
-  await record('empty-descriptor-completed','PASS',{status:200,items:[],completed:true});
+  await record('empty-descriptor-completed','PASS',{status:200,items:[],completed:true,explicitRead:true,
+   automaticRequests:metadataRequests.length,emptyLongMessages:boot.emptyLongMessageCount});
  }else await page.goto(boot.url);
  await page.waitForSelector('#amp-one');
  const article=page.locator(`[data-message-id="${boot.messageId}"]`);
@@ -271,6 +287,9 @@ async function restoreSession(page){
 const figureFor=(page,id)=>page.locator(`[data-media-id="${id}"]`);
 async function readyFigure(page,id){
  const figure=figureFor(page,id);
+ // Restored reading positions can keep the assistant offscreen. Its visible
+ // article owns metadata demand; an unfetched figure cannot be scrolled yet.
+ if(await figure.count()===0)await page.locator(`[data-message-id="${boot.messageId}"]`).scrollIntoViewIfNeeded();
  await figure.scrollIntoViewIfNeeded();
  await expect(figure).toHaveAttribute('data-media-state','ready');
  return figure;
@@ -327,13 +346,8 @@ async function workerHistoryDescriptor(primary,peer,saved){
  const peerClientId=await peer.page.evaluate(()=>window.amplifier.getState().client.id);
  assert.ok(boot.workerSessionId);assert.notEqual(boot.workerSessionId,boot.sessionId);
  assert.notEqual(clientId,peerClientId);
- // Observe the application's own descriptor request, registered BEFORE normal
- // client-bound selection. A dispatch acknowledgement is not rendering proof.
- const pending=page.waitForResponse(response=>{
-  const url=new URL(response.url());
-  return url.pathname==='/api/outputs/media'&&url.searchParams.get('sessionId')===boot.workerSessionId&&
-   response.request().headers()['x-amplifier-client']===clientId;
- });
+ // Ordinary known-empty rendering elides discovery. The explicit endpoint
+ // still proves the original scoped worker exception below.
  let worker;
  try{
   await action(page,'session.select',{id:boot.workerSessionId});
@@ -341,12 +355,13 @@ async function workerHistoryDescriptor(primary,peer,saved){
   const article=page.locator('article.a-assistant[data-message-id]');
   await expect(article).toHaveCount(1);await article.scrollIntoViewIfNeeded();
   await expect(article).toBeVisible();await expect(article).toContainText('Synthetic child saved response.');
-  const response=await pending;
-  assert.equal(response.status(),200);assert.equal(await response.finished(),null);
+  const messageId=await article.getAttribute('data-message-id');
+  const response=await page.request.get(boot.url+'/api/outputs/media?'+new URLSearchParams({sessionId:boot.workerSessionId,messageId}),
+   {headers:{'X-Amplifier-Client':clientId}});
+  assert.equal(response.status(),200);
   const descriptor=await response.json();
   assert.deepEqual(descriptor.items,[]);assert.equal(descriptor.overflow,false);
   assert.ok(Number.isInteger(descriptor.mediaRevision));
-  const messageId=await article.getAttribute('data-message-id');
   assert.equal(new URL(response.url()).searchParams.get('messageId'),messageId);
   assert.equal(await page.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id).sessionKind,
    boot.workerSessionId),'worker');
