@@ -1,12 +1,12 @@
 import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {FileText,Globe,Code,Film,ChevronDown,ChevronUp,Maximize2,Image as ImageIcon,X} from 'lucide-react';
-import {request} from './api';
+import {request,clientUrl} from './api';
 import {chatArtifacts} from './canvas-library';
 import {Renderer} from './canvas-workspace';
 import {ImageActions} from './image-actions';
 import {CanvasControlsHost} from './canvas-controls';
 import {imageGalleryEntries,imageGallerySelection,imageJobLabel} from './image-generation';
-import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest} from './artifact-presentation';
+import {artifactPublications,artifactOverrideKey,publicationMode,presentationCapabilities,canvasOpenCommand,canvasOpenNotice,inlineViewAccess,artifactViewCanvas,requireArtifactBody,followsLatest,retainedThumbnailTuple} from './artifact-presentation';
 import {mcpConnectionKey} from './mcp-app-lifecycle';
 import {createArtifactOverrides,inlineOwnership,inlineEditNotice} from './conversation-navigation';
 import './inline-artifacts.css';
@@ -15,7 +15,7 @@ const overrides=createArtifactOverrides();
 const targetOf=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
 const titleOf=({row,version})=>(row.app?.versions||row.versions||[]).find(v=>v.version===version)?.title||row.title;
 
-// A gallery body/thumbnail keeps its exact admission until unmount. A revoked
+// A selected gallery body keeps its exact admission until unmount. A revoked
 // target never revives automatically, even if the same target reappears.
 function useImageView(item,messageId,state,dispatch,enabled,attempt=0){
  const {row,version}=item,identity=JSON.stringify([row.id,version,messageId]);
@@ -116,26 +116,114 @@ function Generation({job}){
  return <div className="a-image-generation" data-running={job.phase==='running'||undefined} role="status"><ImageIcon aria-hidden="true"/><span>{imageJobLabel(job)}</span></div>;
 }
 
-// Each visible rail item owns a short-lived view of its exact saved version.
-// Loading thumbnails must not require selecting (or replacing) the main preview.
-function Thumbnail({item,index,messageId,state,dispatch}){
- const root=useRef();
- const [near,setNear]=useState(false);
- const {canvas,error,setError,replaceImageContent}=useImageView(item,messageId,state,dispatch,near);
+// Two slots cover the entire fetch/decode lifetime, not just drawing. Queued
+// cancelled jobs are removed; no polling, automatic retries or Canvas views.
+const thumbnailQueue=[];let thumbnailSlots=0;
+function thumbnailWork(signal,work){
+ return new Promise((resolve,reject)=>{
+  const job={signal,work,resolve,reject};
+  job.cancel=()=>{const at=thumbnailQueue.indexOf(job);if(at>=0){thumbnailQueue.splice(at,1);reject(new DOMException('Thumbnail cancelled','AbortError'))}};
+  if(signal.aborted){reject(new DOMException('Thumbnail cancelled','AbortError'));return}
+  signal.addEventListener('abort',job.cancel,{once:true});thumbnailQueue.push(job);drainThumbnails();
+ });
+}
+function drainThumbnails(){
+ while(thumbnailSlots<2&&thumbnailQueue.length){
+  const job=thumbnailQueue.shift();job.signal.removeEventListener('abort',job.cancel);
+  if(job.signal.aborted){job.reject(new DOMException('Thumbnail cancelled','AbortError'));continue}
+  thumbnailSlots++;
+  Promise.resolve().then(job.work).then(job.resolve,job.reject).finally(()=>{thumbnailSlots--;drainThumbnails()});
+ }
+}
+async function thumbnailPixels(tuple,signal){
+ let bytes,image,small;
+ const check=()=>{if(signal.aborted)throw new DOMException('Thumbnail cancelled','AbortError')};
+ try{
+  check();
+  const response=await fetch(clientUrl(tuple.url),{signal,credentials:'same-origin',redirect:'error'});
+  if(!response.ok)throw Error(`Thumbnail unavailable (${response.status})`);
+  if(response.headers.get('Content-Type')?.split(';')[0]!=='image/png')throw Error('Thumbnail is not a saved PNG');
+  const length=Number(response.headers.get('Content-Length'));
+  if(!Number.isSafeInteger(length)||length<45||length>8*1024*1024)throw Error('Thumbnail exceeds the saved PNG limit');
+  bytes=await response.arrayBuffer();check();
+  if(bytes.byteLength!==length)throw Error('Thumbnail bytes changed');
+  const header=new Uint8Array(bytes),view=new DataView(bytes);
+  if(![137,80,78,71,13,10,26,10].every((value,index)=>header[index]===value)||
+   view.getUint32(8)!==13||view.getUint32(12)!==0x49484452)throw Error('Thumbnail PNG header is invalid');
+  const width=view.getUint32(16),height=view.getUint32(20);
+  if(width<1||height<1||width>4096||height>4096||header[24]!==8||![2,6].includes(header[25])||header[26]||header[27]||header[28])throw Error('Thumbnail PNG dimensions are invalid');
+  const canonical=response.headers.get('X-Amplifier-Image-SHA256');
+  if(canonical||tuple.sha256){
+   if(canonical&&!/^[a-f0-9]{64}$/.test(canonical)||canonical&&tuple.sha256&&canonical!==tuple.sha256)throw Error('Thumbnail binding changed');
+   const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
+   if(digest!==(canonical||tuple.sha256))throw Error('Thumbnail hash changed');
+   check();
+  }
+  if(globalThis.createImageBitmap)image=await createImageBitmap(new Blob([bytes],{type:'image/png'}));
+  else{
+   image=new Image();
+   await new Promise((resolve,reject)=>{
+    const clear=()=>{signal.removeEventListener('abort',cancel);image.onload=image.onerror=null};
+    const cancel=()=>{clear();image.src='';reject(new DOMException('Thumbnail cancelled','AbortError'))};
+    image.onload=()=>{clear();resolve()};image.onerror=()=>{clear();reject(Error('Thumbnail PNG could not be decoded'))};
+    signal.addEventListener('abort',cancel,{once:true});
+    let binary='';for(let at=0;at<header.length;at+=32768)binary+=String.fromCharCode(...header.subarray(at,at+32768));
+    image.src='data:image/png;base64,'+btoa(binary);
+    if(signal.aborted)cancel();
+   });
+  }
+  check();
+  if((image.naturalWidth??image.width)!==width||(image.naturalHeight??image.height)!==height)throw Error('Thumbnail decoded dimensions changed');
+  small=document.createElement('canvas');const scale=Math.min(1,80/Math.max(width,height));
+  small.width=Math.max(1,Math.round(width*scale));small.height=Math.max(1,Math.round(height*scale));
+  small.getContext('2d').drawImage(image,0,0,small.width,small.height);
+  const pixels=small.toDataURL('image/png');check();return pixels;
+ }finally{
+  bytes=null;
+  if(image?.close)image.close();else if(image){image.onload=image.onerror=null;image.src=''}
+  if(small){small.width=0;small.height=0}
+ }
+}
+
+function Thumbnail({item,index,messageId,state}){
+ const root=useRef(),current=useRef(null);
+ const [near,setNear]=useState(false),[loaded,setLoaded]=useState(null),[attempt,setAttempt]=useState(0);
+ const tuple=retainedThumbnailTuple(item,messageId,state),identity=tuple?.identity;
+ current.current=identity;
  useEffect(()=>{
+  if(!globalThis.IntersectionObserver){setNear(true);return}
   const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)){setNear(true);observer.disconnect()}},{rootMargin:'80px'});
   observer.observe(root.current);return()=>observer.disconnect();
  },[]);
- const shrink=event=>{
-  const image=event.currentTarget;if(image.dataset.small)return;
-  try{
-   const small=document.createElement('canvas'),scale=Math.min(1,80/Math.max(image.naturalWidth,image.naturalHeight));
-   small.width=Math.max(1,Math.round(image.naturalWidth*scale));small.height=Math.max(1,Math.round(image.naturalHeight*scale));
-   small.getContext('2d').drawImage(image,0,0,small.width,small.height);
-   image.dataset.small='true';replaceImageContent(small.toDataURL('image/png'));
-  }catch{setError('Thumbnail unavailable')}
+ useEffect(()=>{
+  setLoaded(null);
+  if(!near||!tuple)return;
+  const controller=new AbortController();let active=true;
+  thumbnailWork(controller.signal,()=>thumbnailPixels(tuple,controller.signal)).then(pixels=>{
+   if(active&&current.current===identity)setLoaded({identity,pixels});
+  }).catch(error=>{if(active&&current.current===identity&&error.name!=='AbortError')setLoaded({identity,error:true})});
+  return()=>{active=false;controller.abort()};
+ },[near,identity,attempt]);
+ const result=loaded?.identity===identity?loaded:null;
+ // The rail already owns a button: retry is a labelled keyboard/click action
+ // on that choice, never invalid nested button markup or a new selection.
+ const retry=event=>{
+  if(!result?.error)return;
+  if(event.type==='keydown'&&!['Enter',' '].includes(event.key))return;
+  event.preventDefault();event.stopPropagation();setLoaded(null);setAttempt(value=>value+1);
  };
- return <span ref={root} className="a-gallery-thumbnail">{canvas?.kind==='image'&&!error?<img alt="" src={canvas.content} onLoad={shrink} onError={()=>setError('Thumbnail unavailable')}/>:<><ImageIcon/><span>{index+1}</span></>}</span>;
+ const failed=!!result?.error;
+ useLayoutEffect(()=>{
+  const button=root.current?.closest('button');if(!button)return;
+  const label=button.getAttribute('aria-label');
+  if(failed)button.setAttribute('aria-label',`Retry thumbnail for Image ${index+1}: ${titleOf(item)}`);
+  const action=event=>retry(event);
+  if(failed){button.addEventListener('keydown',action);button.addEventListener('click',action,true)}
+  return()=>{if(failed){button.setAttribute('aria-label',label);button.removeEventListener('keydown',action);button.removeEventListener('click',action,true)}};
+ },[failed,identity,index]);
+ return <span ref={root} className="a-gallery-thumbnail" title={failed?'Retry thumbnail':undefined}>
+  {result?.pixels?<img alt="" src={result.pixels} onError={()=>setLoaded({identity,error:true})}/>:<><ImageIcon/><span>{failed?'Retry':index+1}</span></>}
+ </span>;
 }
 
 function ImageGallery({entries,...props}){

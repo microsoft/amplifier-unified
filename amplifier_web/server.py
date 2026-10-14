@@ -302,13 +302,31 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def output_image(request):
         import base64
-        record=service.outputs.store.read(request.match_info['identity'])
+        fields = ('sessionId', 'artifactId', 'version', 'messageId', 'sha256')
+        scoped = any(key in request.query for key in fields)
+        # Preserve the raw route's existing lookup/error behavior.
+        record = None if scoped else service.outputs.store.read(request.match_info['identity'])
         try:
-            value=service.outputs.image(record['sessionId'],record['id'],record.get('sha256'))
+            if scoped:
+                if any(len(request.query.getall(key, [])) != 1 for key in fields[:4]) or len(request.query.getall('sha256', [])) > 1:
+                    raise ValueError('Supply one complete saved thumbnail tuple; partial reads never fall back.')
+                async with service.lock:
+                    data, digest = service.outputs.retained_thumbnail(
+                        request.match_info['identity'], {key: request.query[key] for key in fields if key in request.query})
+                headers = {'X-Amplifier-Image-SHA256': digest}
+            else:
+                # Existing general outputs.image URLs keep their host-owner policy.
+                value=service.outputs.image(record['sessionId'],record['id'],record.get('sha256'))
+                data=base64.b64decode(value['_image'])
+                headers = {}
         except ValueError as exc:
             raise AppError(str(exc),409) from None
-        return web.Response(body=base64.b64decode(value['_image']),content_type='image/png',headers={
-            'Content-Security-Policy': "default-src 'none'; frame-ancestors 'self'; sandbox"})
+        except (KeyError, TypeError) as exc:
+            if not scoped:
+                raise
+            raise AppError(str(exc),409) from None
+        return web.Response(body=data,content_type='image/png',headers={
+            **headers, 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'self'; sandbox"})
 
     async def actions(request):
         if request.method == "GET":

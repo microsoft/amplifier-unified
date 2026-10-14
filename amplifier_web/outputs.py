@@ -93,7 +93,7 @@ class Outputs:
         return data
 
     def image(self,sid,identity,expected_hash):
-        self.app._session(sid)
+        self.app._session(sid, hydrate=False)
         record=self.record(sid,identity)
         if record.get('sha256')!=expected_hash or record.get('kind') not in {'file','dataset'}:
             raise ValueError('Choose the exact saved file snapshot and content hash.')
@@ -104,6 +104,67 @@ class Outputs:
         return {'id':identity,'sha256':expected_hash,'title':record['title'],'width':width,'height':height,
             'mimeType':'image/png','bytes':len(data),'evidence':'immutable-output-snapshot','untrustedData':True,
             'imageUrl':'/api/outputs/'+identity+'/image','_image':base64.b64encode(data).decode()}
+
+    def retained_thumbnail(self, identity, values):
+        """Exact published generation read; no view admission or history lookup."""
+        from .artifact_presentation import check_output, generation_binding, output_bytes
+        from .canvas_versions import definition
+        from .voice_visual_image import validate_png
+        sid, aid, mid = (values.get(key) for key in ('sessionId', 'artifactId', 'messageId'))
+        if any(not isinstance(value, str) or not value or len(value) > limit
+               for value, limit in ((sid, 200), (aid, 100), (mid, 200))):
+            raise ValueError('Supply the complete saved thumbnail tuple.')
+        raw_version = values.get('version', '')
+        if (not isinstance(raw_version, str) or not raw_version.isascii()
+                or not raw_version.isdecimal() or len(raw_version) > 15
+                or str(int(raw_version)) != raw_version or int(raw_version) < 1):
+            raise ValueError('Choose a positive integer exact saved thumbnail version.')
+        version = int(raw_version)
+        self.app._session(sid, hydrate=False)
+        client_id = self.app.clients.current.get()
+        if client_id is not None:
+            client = self.app.clients.records[client_id]
+            if client.get('selectedSessionId') != sid:
+                raise ValueError('Open the thumbnail owning conversation in this client.')
+        row = next((row for row in self.app._state.get('canvasArtifacts', [])
+                    if row['id'] == aid and row.get('sessionId') == sid), None)
+        if row is None:
+            raise ValueError('This thumbnail artifact is unavailable in its conversation.')
+        if client_id is not None and row.get('workspaceId') != client.get('selectedWorkspaceId'):
+            raise ValueError('Open the thumbnail owning workspace in this client.')
+        saved = definition(row, version)
+        links = [link for link in row.get('publications', [])
+                 if link.get('messageId') == mid and type(link.get('version')) is int
+                 and link['version'] == version]
+        if (len(links) != 1 or links[0].get('outputId') != identity
+                or links[0].get('chat', 'inline') != 'inline'):
+            raise ValueError('This exact output version is not published in the image gallery.')
+        record = self.record(sid, identity)
+        marker = generation_binding(record, row, version)
+        if (not record.get('linked') or record.get('kind') != 'file' or marker is None
+                or record.get('origin', {}).get('messageId') != mid
+                or ('imageGeneration' in links[0] and links[0]['imageGeneration'] != marker)):
+            raise ValueError('The canonical saved image-generation relationship is unavailable.')
+        if 'outputBinding' in saved:
+            check_output(saved['outputBinding'], record, sid)
+        else:
+            # Pre-adapter definitions have no outputBinding. Qualify the
+            # canonical join, including ambiguity, without reading other bodies.
+            candidates = self.app.db.execute(
+                "SELECT value FROM output_records WHERE session_id=? "
+                "AND json_extract(value,'$.canvasId')=? "
+                "AND json_extract(value,'$.bodyFormat')='canvas-image-v1'",
+                (sid, aid)).fetchall()
+            matched = [candidate for value, in candidates
+                       if generation_binding(candidate := json.loads(value), row, version)]
+            if len(matched) != 1 or matched[0]['id'] != identity:
+                raise ValueError('The canonical saved image relationship is ambiguous or unavailable.')
+        if 'sha256' in values and values['sha256'] != record.get('sha256'):
+            raise ValueError('The thumbnail hash differs from its exact saved output.')
+        # Only this requested byte boundary opens the existing canonical body.
+        data = output_bytes(self.app.db, record)
+        validate_png(data, max_bytes=MAX_FILE, max_dimension=4096)
+        return data, record['sha256']
 
     def images(self,sid,identities):
         if (not isinstance(identities,list) or len(identities)!=2 or

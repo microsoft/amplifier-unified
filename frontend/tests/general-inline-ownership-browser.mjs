@@ -5,9 +5,12 @@ import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {shellFor} from './shell-host.mjs';
 
 const pixel='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
+const thumbnailBytes=Buffer.from(pixel.split(',')[1],'base64');
+const thumbnailHash=createHash('sha256').update(thumbnailBytes).digest('hex');
 const full=Array.from({length:240},(_,n)=>({id:'m'+n,role:n%10===0?'user':'assistant',text:'Message '+n,createdAt:1000+n}));
 const baseSession={id:'chat',sessionKind:'root',title:'Long fixture chat',workspaceId:'project',workspace:'/fixture',status:'idle',historyLoaded:true,
  messages:full.slice(200),messageWindow:{offset:200,total:240,before:'m200'},execution:{nodes:[],turns:[],imageGeneration:[]}};
@@ -31,7 +34,7 @@ const editorSource=`export default ({React})=>function Editor({host}){
   React.createElement('button',{onClick:()=>{window.cleanSettlement=host.setDirty(false).catch(error=>{window.dirtyError=error.message})}},'Acknowledge clean'));
 }`;
 let vite,browser,page,holdAround,aroundWaiting=false,rejectDirty=true;
-const calls=[],errors=[];
+const calls=[],errors=[],thumbnailReads=[];
 const emit=async()=>{state={...state,revision:state.revision+1};await page.evaluate(value=>window.emitState(value),state)};
 const setMessages=messages=>{state={...state,sessions:state.sessions.map(row=>row.id==='chat'?{...row,messages,messageWindow:{offset:220,total:240,before:messages[0]?.id}}:row)}};
 try{
@@ -55,6 +58,18 @@ try{
   if(path==='/api/shell')return route.fulfill({json:shellFor(state,()=>{}).data});
   if(path==='/api/actions'&&request.method()==='GET')return route.fulfill({json:[{name:'canvas.present'}]});
   if(path==='/api/outputs/media')return route.fulfill({json:{items:[],overflow:false,mediaRevision:0}});
+  if(/^\/api\/outputs\/[^/]+\/image$/.test(path)){
+   // This is a synthetic transport, not evidence of server canonical authority.
+   // The real-host ten-image journey is generated-images-browser --retained-thumbnails.
+   thumbnailReads.push(url);
+   const id=path.split('/')[3],row=state.canvasArtifacts.find(row=>row.id===url.searchParams.get('artifactId'));
+   assert.ok(row);assert.equal(url.searchParams.get('sessionId'),row.sessionId);
+   assert.equal(url.searchParams.get('messageId'),'m210');assert.equal(url.searchParams.get('version'),'1');
+   assert.ok(row.publications.some(link=>link.outputId===id&&link.chat==='inline'));
+   assert.equal(url.searchParams.get('sha256'),thumbnailHash);
+   return route.fulfill({contentType:'image/png',body:thumbnailBytes,headers:{
+    'Content-Length':String(thumbnailBytes.length),'X-Amplifier-Image-SHA256':thumbnailHash,'Cache-Control':'no-store'}});
+  }
   if(path==='/api/conversation/navigation'){
    const id=url.searchParams.get('messageId');
    if(!id)return route.fulfill({json:{revision:'fixture-index',turns:full.filter(row=>row.role==='user').map(row=>({id:row.id,position:Number(row.id.slice(1))}))}});
@@ -74,6 +89,8 @@ try{
    const envelope=request.postDataJSON(),command=envelope.action==='shell.command'?envelope.args:envelope;
    calls.push(envelope);let result={};
    if(command.action==='canvas.views.inline'){
+    if(state.canvasWorkspace.views.filter(view=>view.viewId.startsWith('inline-')).length>=8)
+     return route.fulfill({status:409,json:{error:'Close a preview to open another here, or open this artifact in Canvas.'}});
     const id=command.args.resourceId,view={viewId:'inline-'+command.args.previewId,resourceId:id,resourceRevision:'revision-'+command.args.version,generation:1,
      renderer:id==='doc'?'fixture.editor':'builtin.canvas.image',available:true,view:{},dirty:false,
      choices:[{id:id==='doc'?'fixture.editor':'builtin.canvas.image',url:'/fixture-editor.js'}]};
@@ -244,8 +261,11 @@ try{
  assert.equal(calls.filter(row=>row.id?.startsWith('settings-open-')).length,0);
 
  // Retained generation slots, including explicit selection, do not follow job pruning.
+ const beforeGallery=calls.length;
  setMessages(full.slice(200));state={...state,view:{...state.view,panel:null},canvas:{open:false},canvasWorkspace:{views:[]}};
  const generated=(id,requestId)=>({id,workspaceId:'project',sessionId:'chat',kind:'image',title:'Generated '+id,revision:1,
+  versions:[{version:1,kind:'image',body:{$resource:'image-body-'+id},outputBinding:{
+   outputId:'out-'+id,outputVersion:1,sessionId:'chat',sha256:thumbnailHash}}],
   publications:[{messageId:'m210',version:1,chat:'inline',outputId:'out-'+id,imageGeneration:{verified:true,requestId,operation:'generate',parentId:null}}]});
  state={...state,canvasArtifacts:[generated('c','unrelated'),generated('a','shared'),generated('b','shared')],sessions:state.sessions.map(row=>row.id==='chat'?{...row,execution:{...row.execution,imageGeneration:[
   {id:'job-c',requestId:'unrelated',messageId:'m210',operation:'generate',phase:'completed'},
@@ -269,21 +289,29 @@ try{
  await expect(gallery.getByRole('button',{name:'Show preview',exact:true})).toBeVisible();
  await expect(gallery.getByText('Preview access was removed by the host.',{exact:true})).toHaveCount(0);
  await gallery.getByRole('button',{name:'Show preview',exact:true}).click();
- // Both the main body/actions and the visible thumbnail bytes must disappear
- // when their host admissions disappear. Restoring the old target is not a new
- // admission and may not revive the old pixels.
+ // The original selected-view revocation negative remains. Retained thumbnails
+ // are independently authorized by saved publications, not by those admissions.
  await expect(gallery.locator('.a-inline-image img')).toBeVisible();
  await expect(gallery.locator('.a-gallery-thumbnail img')).toHaveCount(2);
+ assert.ok(calls.slice(beforeGallery).filter(row=>row.action==='canvas.views.inline').every(row=>['b','c'].includes(row.args.resourceId)),
+  'The unselected a thumbnail did not obtain a Canvas admission');
  const oldViews=state.canvasWorkspace.views;
+ const readsBeforeRelease=thumbnailReads.length;
  state={...state,canvasWorkspace:{views:[]}};await emit();
  await expect(gallery.locator('.a-inline-image img')).toHaveCount(0);
- await expect(gallery.locator('.a-gallery-thumbnail img')).toHaveCount(0);
+ await expect(gallery.locator('.a-gallery-thumbnail img')).toHaveCount(2);
  await expect(gallery.getByRole('button',{name:'Use in a follow-up',exact:true})).toHaveCount(0);
  await expect(gallery.getByRole('button',{name:'Download image',exact:true})).toHaveCount(0);
  await expect(gallery.getByRole('status')).toContainText('access was removed');
  const admissions=calls.filter(row=>row.action==='canvas.views.inline').length;
  state={...state,canvasWorkspace:{views:oldViews}};await emit();
- await expect(gallery.locator('img')).toHaveCount(0);
+ await expect(gallery.locator('.a-inline-image img')).toHaveCount(0);
+ await expect(gallery.locator('.a-gallery-thumbnail img')).toHaveCount(2);
+ assert.equal(thumbnailReads.length,readsBeforeRelease,'Individual view release does not invalidate or refetch retained thumbnails');
  assert.equal(calls.filter(row=>row.action==='canvas.views.inline').length,admissions);
+ // Changing the publication's own scope does clear its thumbnail. Remounting a
+ // rail later must read anew; no old Canvas view may restore cached pixels.
+ state={...state,selectedSessionId:'other',canvasArtifacts:[],canvasWorkspace:{views:[]}};await emit();
+ await expect(gallery).toHaveCount(0);
  assert.deepEqual(errors,[]);
 }finally{await browser?.close();await vite?.close()}
