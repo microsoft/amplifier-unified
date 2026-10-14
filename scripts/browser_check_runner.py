@@ -30,7 +30,22 @@ def save(output, report):
 OWNER_ENV = 'AMPLIFIER_BROWSER_CHECK_OWNER'
 
 
-def owned_members(group, token, known):
+def process_identities():
+    """Snapshot only scalar process identities before a scenario can inherit its tag."""
+    result = {}
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+            if fields[0] != 'Z':
+                result[int(entry.name)] = fields[19]
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    return result
+
+
+def owned_members(group, token, known, preexisting=None):
     """Return PID/start-time identities, including tagged detached descendants."""
     members = {}
     marker = (OWNER_ENV + '=' + token).encode()
@@ -44,6 +59,12 @@ def owned_members(group, token, known):
             in_group = int(fields[2]) == group
             if in_group or known.get(int(entry.name)) == fields[19]:
                 members[int(entry.name)] = fields[19]
+                continue
+            # A process that predates this scenario cannot have inherited its
+            # fresh token. Hosted runners have unrelated same-user processes
+            # whose environ is deliberately unreadable. PID alone is unsafe:
+            # a reused PID must still go through ownership discovery.
+            if (preexisting or {}).get(int(entry.name)) == fields[19]:
                 continue
             if not in_group and entry.stat().st_uid != os.geteuid():
                 continue
@@ -65,10 +86,10 @@ def owned_members(group, token, known):
     return members
 
 
-def retire_group(group, token):
+def retire_group(group, token, preexisting=None):
     known = {}
     def inspect():
-        current = owned_members(group, token, known)
+        current = owned_members(group, token, known, preexisting)
         # Once ownership is proven, retain PID/start-time identity while the
         # process exits; Linux can revoke its environ before it becomes a zombie.
         known.update(current)
@@ -143,10 +164,12 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
             save(output, report)
             print('START ' + row['id'], flush=True)
             started, process, token = time.monotonic(), None, uuid.uuid4().hex
+            preexisting = None
             try:
                 env = {**os.environ, **{k: v.replace('{root}', str(root))
                                        for k, v in row.get('env', {}).items()}}
                 env[OWNER_ENV] = token
+                preexisting = process_identities()
                 with (output / row['log']).open('wb') as log:
                     process = subprocess.Popen(row['command'], cwd=root / 'frontend', env=env,
                                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -160,7 +183,7 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                 row['reason'] = type(exc).__name__
             finally:
                 try:
-                    cleanup = retire_group(process.pid, token) if process else {'remaining': [], 'terminated': 0}
+                    cleanup = retire_group(process.pid, token, preexisting) if process else {'remaining': [], 'terminated': 0}
                 except (OSError, RuntimeError) as exc:
                     cleanup = {'remaining': ['unknown'], 'terminated': 0, 'error': type(exc).__name__}
                 row['cleanup'] = cleanup
