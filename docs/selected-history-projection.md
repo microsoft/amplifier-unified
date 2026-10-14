@@ -115,7 +115,11 @@ before its recognition set expands.
 
 Sparse event checkpoint schema 2 adds committed-prefix proof. Old disposable
 checkpoints are ignored only when their session is requested; there is no global
-conversion. Prefix verification reads existing bytes of the changed log, but avoids
+cache migration. The reader checks the writer's format-first header within 64
+decoded bytes before expanding a checkpoint. Obsolete or malformed headers
+never allocate the saved graph. Allocation failure while loading an optional
+checkpoint resets its partial index and falls back to the canonical event log.
+Prefix verification reads existing bytes of the changed log, but avoids
 parsing unchanged events and restoring every descendant index.
 
 ## Bounded derived storage
