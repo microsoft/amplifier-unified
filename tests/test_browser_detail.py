@@ -9,6 +9,36 @@ def heavy(identity='chat'):
     return {'id':identity,'title':identity,'status':'working','sessionKind':'root','messages':[{'id':f'm{i}','role':'user' if i%2==0 else 'assistant','text':f'{i} '+('paragraph '*800)} for i in range(520)],'workers':[],'approvals':[],
       'execution':{'nodes':[{'id':f'n{i}','turnId':'turn','kind':'tool','label':'Tool','summary':f'{i} '+('result '*2000)} for i in range(400)],'turns':[{'id':'turn','aggregateUsage':{'totalTokens':10000,'costUsd':2}}],'aggregateUsage':{'totalTokens':10000,'costUsd':2}}}
 
+@pytest.mark.parametrize('with_worker', [False, True])
+def test_owned_nodes_releases_session_without_waiting_for_cyclic_gc(with_worker):
+    import gc
+    import weakref
+    from amplifier_web.browser_detail import owned_nodes
+
+    class Session(dict):
+        pass
+
+    enabled = gc.isenabled()
+    # Isolate immediate ownership release. Production retirement and its
+    # conservative reference-count guard remain unchanged.
+    gc.disable()
+    try:
+        nodes = [{'id': 'worker', 'kind': 'worker', 'sessionId': 'child'},
+                 {'id': 'call', 'kind': 'tool', 'sessionId': 'child', 'parentId': 'worker'}] if with_worker else []
+        session = Session(id='root', messages=[{'id': 'message', 'text': 'Retained'}],
+                          execution={'nodes': nodes})
+        reference = weakref.ref(session)
+        projected = owned_nodes(session)
+        del session
+        assert reference() is None, 'A recursive projection helper retained the original session'
+        if with_worker:
+            assert projected[1]['delegate']['id'] == 'worker'
+        else:
+            assert projected == []
+    finally:
+        if enabled:
+            gc.enable()
+
 
 @pytest.mark.parametrize('field', ['request', 'response'])
 def test_provider_capture_warnings_survive_bounded_browser_projection(field):
