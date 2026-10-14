@@ -55,6 +55,7 @@ class ClientViews:
         for identity, value in service.db.execute("SELECT id,value FROM client_views"):
             self.records[identity] = json.loads(value)
             self.records[identity]["canvasTabs"] = self.records[identity].get("canvasTabs") or {}
+            self.reset_mcp_mount(self.records[identity])
             self.saved[identity] = value
             self.startup_selections[identity] = (
                 self.records[identity].get('selectedSessionId'),
@@ -66,6 +67,27 @@ class ClientViews:
             from .service import AppError
             raise AppError("Choose a valid client ID.")
         return identity
+
+    @staticmethod
+    def reset_mcp_mount(record, *, fresh=False):
+        """Resume descriptions, never an old iframe's operation/activation lease."""
+        from .canvas_library import strip_mcp_transients
+        canvas = record.get('canvas', {})
+        if isinstance(canvas.get('mcp'), dict):
+            strip_mcp_transients(canvas['mcp'])
+        if fresh:
+            for local in (record.get('canvasTabs') or {}).values():
+                local.pop('mcpObservation', None)
+        views = record.get('canvasViews', {})
+        for key, preference in views.get('preferences', {}).items():
+            if (preference.get('renderer') == 'builtin.canvas.mcp-app'
+                    or 'mcp' in preference
+                    or canvas.get('kind') == 'mcp-app' and key == 'primary:' + canvas.get('id', '')):
+                preference['generation'] = preference.get('generation', 0) + 1
+                for field in ('mcp', 'mcpGeneration', 'mcpOperationState', 'activation', 'mediaObservation'):
+                    preference.pop(field, None)
+        if canvas.get('kind') == 'mcp-app':
+            views.pop('retained', None)
 
     def attach(self, identity, resume=None, kind="web"):
         from .service import AppError
@@ -85,6 +107,9 @@ class ClientViews:
                 record = {key: copy.deepcopy(shared.get(key)) for key in LOCAL_KEYS}
                 record["view"] = record.get("view") or {}
                 record["canvas"] = record.get("canvas") or {}
+                # Sanitize the detached copy before it is registered or visible.
+                # Root and already-attached owners keep their own observations.
+                self.reset_mcp_mount(record, fresh=True)
                 record["drafts"] = {}
                 record["attachments"] = {}
                 # Preserve pre-client drafts during the first migration only.
@@ -115,6 +140,7 @@ class ClientViews:
                 if shell:
                     shell.update(preview=None, reported=None)
                     self.service.shell.put("client", identity, shell)
+        self.reset_mcp_mount(self.records[identity])
         self.reconcile(identity)
         self.selection_revision(identity)
         return self.records[identity]
@@ -171,6 +197,27 @@ class ClientViews:
                 record['view']['canvasFocused'] = False
         from .canvas_library import restore_body
         restore_body(record.get("canvas", {}), self.service.db)
+        canvas = record.get('canvas', {})
+        if canvas.get('kind') == 'mcp-app' and isinstance(canvas.get('mcp'), dict):
+            from .canvas_library import primary_mcp, scope
+            from .canvas_versions import definition
+            from .state_storage import resource
+            state = ClientState(self.service._state, record)
+            row = next((row for row in self.service._state.get('canvasArtifacts', [])
+                        if row['id'] == canvas.get('id') and scope(state, row)), None)
+            if row is not None:
+                selected = definition(row, canvas.get('selectedVersion'), self.service.db)
+                try:
+                    binding = resource(self.service.db, selected['mcpState']['$resource'])
+                    canvas['mcp'] = primary_mcp(state, selected, binding)
+                    preference = record.get('canvasViews', {}).get('preferences', {}).get('primary:' + row['id'], {})
+                    if preference:
+                        canvas['mcp'].update(self.service.canvas_views.mcp_preference(
+                            selected, preference, primary=True))
+                except (KeyError, ValueError, OSError, TypeError):
+                    strip = canvas['mcp']
+                    from .canvas_library import strip_mcp_transients
+                    strip_mcp_transients(strip)
         # The empty key is the client's pre-conversation draft. Unlike None,
         # it keeps its identity through JSON persistence and reload.
         record["view"]["messageReply"] = copy.deepcopy(record.get("messageReplies", {}).get(record.get("selectedSessionId")))

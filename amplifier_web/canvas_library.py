@@ -46,6 +46,59 @@ def presentation(state, row):
         for key in ('view', 'tabOpen', 'lastViewedAt') if key in row})
 
 
+MCP_TRANSIENT_FIELDS = ('context', 'contextUpdatedAt', 'lastOperationId')
+
+
+def strip_mcp_transients(binding):
+    """Remove mount observations without changing any saved binding authority."""
+    for key in MCP_TRANSIENT_FIELDS:
+        binding.pop(key, None)
+
+
+def mcp_observation_binding(state, row):
+    """Latest descriptive data follows this source/binding, not title or mount."""
+    if (row.get('kind') != 'mcp-app' or row.get('selectedVersion') is not None
+            or not scope(state, row) or not row.get('mcpState')):
+        return None
+    return {key: copy.deepcopy(row.get(key))
+            for key in ('id', 'sessionId', 'workspaceId', 'body', 'mcpState')}
+
+
+def mcp_observation(state, row):
+    """Never fall back to a canonical row or another presentation owner."""
+    binding = mcp_observation_binding(state, row)
+    local = (state.get('canvasTabs') or {}).get(row['id'], {})
+    observed = local.get('mcpObservation', {})
+    if (binding is None or observed.get('binding') != binding
+            or not isinstance(observed.get('context'), dict)):
+        return {}
+    return {key: copy.deepcopy(observed[key])
+            for key in ('context', 'contextUpdatedAt') if key in observed}
+
+
+def remember_mcp_observation(state, row, update):
+    """Only an accepted context update may replace this bounded observation."""
+    binding = mcp_observation_binding(state, row)
+    if binding is None:
+        from .service import AppError
+        raise AppError('This primary tool description belongs to another saved binding.', 409)
+    # Legacy root state can lack tabs. Materialize only at this write boundary;
+    # presentation() still seeds the existing canonical controls unchanged.
+    if state.get('canvasTabs') is None:
+        state['canvasTabs'] = {}
+    presentation(state, row)['mcpObservation'] = {
+        'binding': binding,
+        **{key: copy.deepcopy(update[key]) for key in ('context', 'contextUpdatedAt')}}
+
+
+def primary_mcp(state, row, binding):
+    """Use canonical authority plus only this owner's qualified description."""
+    result = copy.deepcopy(binding)
+    strip_mcp_transients(result)
+    result.update(mcp_observation(state, row))
+    return result
+
+
 def remember(state, db, *, message=_CURRENT_MESSAGE):
     rows = state.setdefault('canvasArtifacts', [])
     canvas = state.get('canvas', {})
@@ -153,7 +206,7 @@ def load(state, db, identity, *, open_panel=True, version=None):
     mcp_state = canvas.pop('mcpState', None)
     if mcp_state:
         try:
-            canvas['mcp'] = resource(db,mcp_state['$resource'])
+            canvas['mcp'] = primary_mcp(state, selected, resource(db,mcp_state['$resource']))
         except (KeyError, ValueError, OSError, TypeError):
             canvas['renderReports']['stored-tool-state'] = {
                 'status': 'error', 'message': 'The saved tool state is unavailable. No tool work was replayed.'}

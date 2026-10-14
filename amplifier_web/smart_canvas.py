@@ -334,12 +334,26 @@ class SmartCanvas:
         context = args['context']
         if len(json.dumps(context).encode()) > 16000:
             raise api.AppError('App view context must be 16 KB or smaller.')
-        self.local_update(args, canvas, {'context': copy.deepcopy(context), 'contextUpdatedAt': time.time()})
+        update = {'context': copy.deepcopy(context), 'contextUpdatedAt': time.time()}
+        if args.get('viewId', 'primary') != 'primary':
+            self.local_update(args, canvas, update)
+            return
+        from .canvas_library import remember_mcp_observation
+        row = next(row for row in self.service.state['canvasArtifacts'] if row['id'] == canvas['id'])
+        # Targeted and legacy primary context have one owner and one precedence.
+        # Neither a mount preference nor a passive save becomes a second copy.
+        remember_mcp_observation(self.service.state, row, update)
+        self.service.state['canvas']['mcp'].update(copy.deepcopy(update))
 
     def local_update(self, args, canvas, update):
+        from .canvas_library import MCP_TRANSIENT_FIELDS
+        update = {key: copy.deepcopy(update[key]) for key in MCP_TRANSIENT_FIELDS if key in update}
         if 'viewId' in args:
-            _, preference = self.service.canvas_views.target(args)
+            row, preference = self.service.canvas_views.target(args)
             preference.setdefault('mcp', {}).update(copy.deepcopy(update))
+            preference['mcpGeneration'] = preference['generation']
+            if 'lastOperationId' in update:
+                preference['mcpOperationState'] = copy.deepcopy(row.get('mcpState'))
         else:
             # Keep only transient fields in the actual primary preference.
             # Canonical mcpState continues to own account/config/grant authority.
@@ -348,6 +362,9 @@ class SmartCanvas:
                 if row['id'] != canvas['id']:
                     raise api.AppError('This primary tool view changed.', 409)
                 preference.setdefault('mcp', {}).update(copy.deepcopy(update))
+                preference['mcpGeneration'] = preference['generation']
+                if 'lastOperationId' in update:
+                    preference['mcpOperationState'] = copy.deepcopy(row.get('mcpState'))
             canvas['mcp'].update(copy.deepcopy(update))
 
 

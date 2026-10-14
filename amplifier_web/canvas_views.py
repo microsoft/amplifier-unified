@@ -166,6 +166,18 @@ class CanvasViews:
                                 'view': copy.deepcopy(row.get('view', {})), 'dirty': False, 'renderReports': {}}
         return preferences[key]
 
+    @staticmethod
+    def mcp_preference(row, preference, *, primary=False):
+        """Only the current mount can project local context or operation IDs."""
+        if (row.get('selectedVersion') is not None
+                or preference.get('mcpGeneration') != preference['generation']):
+            return {}
+        fields = () if primary else ('context', 'contextUpdatedAt')
+        if preference.get('mcpOperationState') == row.get('mcpState'):
+            fields += ('lastOperationId',)
+        return {key: copy.deepcopy(preference['mcp'][key]) for key in fields
+                if key in preference.get('mcp', {})}
+
     def resolve(self, view_id):
         record = self.record()
         current = self.service.state.get('canvas', {})
@@ -195,6 +207,8 @@ class CanvasViews:
             preference.pop('activation', None)
             preference.pop('mediaObservation', None)
             preference.pop('mcp', None)
+            preference.pop('mcpGeneration', None)
+            preference.pop('mcpOperationState', None)
         return row, preference
 
     def target(self, args):
@@ -262,6 +276,10 @@ class CanvasViews:
         from .canvas_paths import paths
         from .canvas_reveal import status as reveal_status
         row, preference = self.resolve(view_id)
+        mcp_context = self.mcp_preference(row, preference, primary=view_id == 'primary')
+        if view_id == 'primary' and row['kind'] == 'mcp-app':
+            from .canvas_library import mcp_observation
+            mcp_context.update(mcp_observation(self.service.state, row))
         choices = self.choices(row['kind'])
         renderer = next((r for r in choices if r['id'] == preference['renderer']), None)
         if renderer is None:
@@ -291,7 +309,7 @@ class CanvasViews:
                 'latestVersion': row.get('latestVersion', row.get('app', {}).get('revision', row.get('revision', 1))),
                 'versions': [{k: item.get(k) for k in ('version', 'title', 'createdAt')} for item in row.get('app', {}).get('versions', row.get('versions', []))],
                 'activation': preference.get('activation'),
-                **({'mcpContext': copy.deepcopy(preference.get('mcp', {}))} if row['kind'] == 'mcp-app' else {}),
+                **({'mcpContext': mcp_context} if row['kind'] == 'mcp-app' else {}),
                 **({'app': copy.deepcopy(row['app'])} if row.get('app') else {}),
                 'view': copy.deepcopy(self.service.state['canvas'].get('view', {})) if view_id == 'primary' else copy.deepcopy(preference['view']),
                 'renderReports': copy.deepcopy(self.service.state['canvas'].get('renderReports', {})) if view_id == 'primary' else copy.deepcopy(preference['renderReports']),
@@ -423,13 +441,16 @@ class CanvasViews:
         if row.get('mcpState'):
             try:
                 canvas['mcp'] = resource(self.service.db, row['mcpState']['$resource'])
+                if view_id == 'primary':
+                    from .canvas_library import primary_mcp
+                    canvas['mcp'] = primary_mcp(self.service.state, row, canvas['mcp'])
             except (KeyError, ValueError, OSError, TypeError):
                 canvas.pop('mcp', None)
                 canvas.setdefault('renderReports', {})['stored-tool-state'] = {
                     'status': 'error', 'message': 'The saved tool state is unavailable. No tool work was replayed.'}
             if row.get('selectedVersion') is None:
                 if canvas.get('mcp'):
-                    canvas['mcp'].update(copy.deepcopy(preference.get('mcp', {})))
+                    canvas['mcp'].update(self.mcp_preference(row, preference, primary=view_id == 'primary'))
         if indirect:
             canvas.pop('content', None)
         else:
