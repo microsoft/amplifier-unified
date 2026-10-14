@@ -158,7 +158,38 @@ class Worktrees:
         if record.get('sessionId') != sid: raise ValueError('This checkout belongs to another task')
         return record
 
-    def placement_binding(self, session, path, checkout_id=None):
+    def inherited_binding(self, session, path, *, retained=None):
+        """Recognize only the exact placement committed by task creation."""
+        metadata = session.get('collaboration') or {}
+        if not metadata.get('requestId'):
+            raise ValueError('The folder is not this task’s canonical home or an associated checkout')
+        request = self.app.collaboration.receipt(metadata.get('requestId'))
+        if (request.get('commandAction') != 'coordination.create' or not request.get('accepted')
+                or request.get('creationVersion') != 1 or request.get('protocol') != 2
+                or request.get('sessionId') != session['id'] or request.get('workspace') != session['workspace']
+                or metadata != request.get('result')
+                or metadata.get('requestId') != request.get('requestId')
+                or metadata.get('creatorSessionId') != request.get('senderSessionId')
+                or metadata.get('workingDirectory') != path):
+            raise ValueError('The inherited execution placement has no matching creation receipt')
+        binding = {'kind': 'inherited', 'path': path, 'creationRequestId': request['requestId'],
+                   'creatorSessionId': request['senderSessionId']}
+        # The creator may itself have inherited this placement. The creation
+        # receipt grants the exact path; this lookup only retains Git identity,
+        # never grants ownership or a choice among another task's checkouts.
+        if retained is not None:
+            checkout = self.git.get(retained['checkoutId']) if retained.get('checkoutId') else None
+            if checkout and checkout['path'] != path:
+                raise ValueError('The inherited checkout folder changed; inspect it again')
+        else:
+            matches = [row for row in self.git.records() if row['path'] == path]
+            checkout = min(matches, key=lambda row: (row['status'] != 'ready', not row['owned'], row['id'])) if matches else None
+        if checkout:
+            self.check_host(checkout)
+            binding.update(checkoutId=checkout['id'], checkoutOwnerId=checkout['sessionId'], repository=checkout['repository'])
+        return binding
+
+    def placement_binding(self, session, path, checkout_id=None, *, inherited=False):
         """Bind an exact home or associated checkout, never an arbitrary folder."""
         if checkout_id is None and path == session['workspace']:
             return {'kind': 'home', 'path': path}
@@ -167,21 +198,30 @@ class Worktrees:
             # associated placement is recoverable; Git membership is not authority.
             checkout_id = next((row['id'] for row in session.get('worktrees', [])
                 if row['path'] == path and row['status'] == 'ready'), None)
-            if checkout_id is None: raise ValueError('The folder is not this task’s canonical home or an associated checkout')
+            if checkout_id is None:
+                if inherited: return self.inherited_binding(session, path)
+                raise ValueError('The folder is not this task’s canonical home or an associated checkout')
         checkout = self.record(session['id'], checkout_id)
         self.check_host(checkout)
         if checkout['status'] != 'ready': raise ValueError('The checkout is not ready; inspect its conflicts first')
         if checkout['path'] != path: raise ValueError('The checkout folder changed; inspect it again')
         return {'kind': 'checkout', 'path': path, 'checkoutId': checkout_id, 'repository': checkout['repository']}
 
+    def check_binding(self, record, session):
+        binding = record['targetBinding']
+        expected = (self.inherited_binding(session, record['target'], retained=binding) if binding['kind'] == 'inherited'
+                    else self.placement_binding(session, record['target'], binding.get('checkoutId')))
+        if binding != expected: raise ValueError('The target checkout binding changed; inspect it again')
+
     def preflight(self, record, session):
         binding = record['targetBinding']
-        expected = self.placement_binding(session, record['target'], binding.get('checkoutId'))
-        if binding != expected: raise ValueError('The target checkout binding changed; inspect it again')
         target = Path(record['target'])
         if not target.is_dir() or target.resolve(strict=True) != target:
             raise ValueError('The target folder is unavailable or no longer its recorded canonical path')
-        if binding['kind'] == 'checkout':
+        if binding.get('repository'):
+            if binding['kind'] == 'inherited':
+                checkout = self.git.get(binding['checkoutId'])
+                if checkout['status'] != 'ready': raise ValueError('The inherited checkout is not ready; inspect it first')
             checked = self.git.inspect(target)
             if checked['root'] != binding['path'] or checked['repository'] != binding['repository']:
                 raise ValueError('The target is no longer in the recorded repository')
@@ -391,14 +431,14 @@ class Worktrees:
                     if not source or source.get('createdAt', 0) < previous['createdAt']: raise ValueError('Cite the user’s actual finding after this handoff')
                 target = previous[args['destination']]
                 if previous['historyHome'] != session['workspace']: raise ValueError('The canonical home changed; inspect the handoff before reconciliation')
-                target_binding = copy.deepcopy(previous.get(args['destination'] + 'Binding') or self.placement_binding(session, target))
+                target_binding = copy.deepcopy(previous.get(args['destination'] + 'Binding') or self.placement_binding(session, target, inherited=True))
             else:
                 if session.get('configurationBusy'): raise ValueError('Another configuration change or handoff is unresolved')
                 if session.get('executionRevision', 0) != args['expectedExecutionRevision']: raise ValueError('The execution folder revision changed; inspect it again')
                 target = self.record(sid, args['id'])['path'] if args.get('id') else session['workspace']
                 target_binding = self.placement_binding(session, target, args.get('id'))
             record = {'id': identity, 'sessionId': sid, 'signature': signature, 'revision': 1, 'phase': 'pending', 'executionHost': local_host_identity(), 'source': session.get('workingDirectory') or session['workspace'], 'target': target, 'historyHome': session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'createdAt': time.time(), 'inputsReplayed': False, 'origin': origin, 'detail': 'Saving and releasing the old runtime before changing its execution folder.', 'preserved': {'messageIds': [m['id'] for m in session['messages']], 'taskId': session.get('task', {}).get('id') if session.get('task') else None}, 'reconciles': previous['id'] if previous else None, 'evidence': args.get('evidence')}
-            record['sourceBinding'] = self.placement_binding(session, record['source'])
+            record['sourceBinding'] = self.placement_binding(session, record['source'], inherited=True)
             record['targetBinding'] = target_binding
             record['step'] = 'preflight'
             self.save(record)
@@ -416,6 +456,7 @@ class Worktrees:
             # Quiescence never waits on a model-held command lock.
             await asyncio.sleep(0)
             self.check_host(record)
+            self.check_binding(record, session)
             await asyncio.to_thread(self.preflight, record, session)
             if not self.app.runtime or not hasattr(self.app.runtime, 'quiesce_for_handoff'): raise ValueError('This runtime cannot confirm safe handoff')
             # Persist before crossing the effect boundary. A lost release
@@ -423,6 +464,7 @@ class Worktrees:
             async with self.app.lock:
                 current = self.app._session(record['sessionId'])
                 self.check_host(current)
+                self.check_binding(record, current)
                 if (current.get('executionRevision', 0) != record['executionRevision']
                         or current['workspace'] != record['historyHome']
                         or (current.get('workingDirectory') or current['workspace']) != record['source']):

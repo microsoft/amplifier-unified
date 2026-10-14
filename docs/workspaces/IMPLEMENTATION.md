@@ -575,8 +575,16 @@ Handoff now retains exact home/associated-checkout bindings in its receipt and
 checks a destination against its recorded repository, rather than treating the
 canonical history home as a repository. Returning home checks the exact existing
 canonical directory. Reconciliation uses the retained binding; older receipts can
-resolve only an exact home or an associated ready checkout. Host, root authority,
-execution revisions, runtime release and uncertain-effect fences still apply.
+resolve only an exact home, an associated ready checkout, or a source proven by
+the task's creation receipt. Host, root authority, execution revisions, runtime
+release and uncertain-effect fences still apply.
+
+Commissioned roots also retain their exact inherited source: the captured folder
+must match the task's durable creation receipt and creator identity. That proof
+permits leaving the folder and recovering it after an uncertain move, including
+after restart or a nested commission. It does not associate the creator's checkout
+with the new root or authorize another peer-owned destination. When the source has
+a managed Git record, recovery also verifies its retained repository identity.
 
 Focused source tests cover both UI and agent moves between two child repositories
 and home, staged/unstaged/untracked preservation, unknown source/target recovery,

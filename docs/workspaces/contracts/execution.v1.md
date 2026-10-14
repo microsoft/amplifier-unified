@@ -34,6 +34,9 @@ An isolated working directory is not a security sandbox.
    An explicit move to an associated checkout verifies that checkout's recorded
    repository. Returning to the exact canonical home remains valid when that home
    is a non-Git folder containing several repositories.
+   A commissioned task can leave its captured inherited execution folder and
+   recover that exact source after an uncertain move. This does not transfer
+   checkout ownership or permit choosing another task's checkout as a new target.
 
 3. **One checkout has one writer.** Owner generations fence managed writes.
    Old processes must be quiesced or reconciled before reassignment. Stale writes
