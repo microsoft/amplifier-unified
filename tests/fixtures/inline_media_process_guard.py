@@ -1,4 +1,4 @@
-"""Fixture-only subprocess guard: one exact, owned display projector is allowed."""
+"""Fixture-only subprocess guard: exact, owned display readers is allowed."""
 import asyncio
 from contextvars import ContextVar
 from pathlib import Path
@@ -14,8 +14,9 @@ def install(cache_home, forbidden, observed):
     expected = ContextVar('inline_media_display_spawn', default=None)
 
     def valid(args, kwargs):
-        if len(args) != 9 or args[:3] != (
-                sys.executable, '-m', 'amplifier_web.history_projection_worker'):
+        if (len(args) != 9 or args[:2] != (sys.executable, '-m')
+                or args[2] not in {'amplifier_web.history_projection_worker',
+                                   'amplifier_web.shell_query_worker'}):
             return False
         if args[3] != '--spool' or args[5] != '--cache-home' or args[7:] != ('--memory-limit', '805306368'):
             return False
