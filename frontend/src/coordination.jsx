@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import './coordination.css';
 import {WorkspaceAwareness} from './workspace-awareness.jsx';
+import {AssignmentControls} from './assignment-controls.jsx';
 
 const keyOf=target=>JSON.stringify([target.sessionId,target.workerId||null]);
 const labels={idle:'Ready for follow-up',working:'Working',running:'Working',starting:'Starting',queued:'Queued',stopping:'Interruption requested',completed:'Completed',interrupted:'Outcome unknown',error:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
@@ -96,6 +97,7 @@ export function RelatedWork({dispatch,sessionId}){
  };
  return <section className="a-coordination-related" aria-label="Related work">
   <h3>Related work</h3>
+  <AssignmentControls key={sessionId} dispatch={dispatch} sessionId={sessionId}/>
   <p className="a-caption">Related tasks and exact results. Inspecting evidence keeps your current conversation and draft. A sealed result still needs independent artifact verification.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh related work</button>

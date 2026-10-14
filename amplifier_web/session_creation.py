@@ -89,6 +89,11 @@ def template(service, source):
 
 
 def prepare(service, args, origin, caller_session_id):
+    from .collaboration import CREATION
+    if creation := CREATION.get():
+        receipt = service.collaboration.receipt(creation[4]['requestId'])
+        if reason := service.collaboration.creation_guard(receipt):
+            raise ValueError(reason)
     identity = args.get('id')
     from .managed_deletion import removed
     if removed(service.db, identity, args.get('workspace')):
