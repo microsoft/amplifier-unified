@@ -13,7 +13,7 @@ def observe(owner):
     diagnostics = PerformanceDiagnostics()
     owner.shell.service.performance_diagnostics = diagnostics
     owner.shell.service.directory.observation_revision = {
-        'navigation': ('private-source', 1, 2, 'private-overlay', 'read', 'suppression'),
+        'root_navigation': ('private-source', 1, 2, 'private-overlay', 'read', 'suppression'),
         'attention': ('private-source', 1, 2, 'private-overlay', 'read', 'suppression')}
     register(owner, ('sidebarRecent',))
     owner.snapshot('one')
@@ -24,9 +24,9 @@ def observe(owner):
 def test_navigation_generations_report_the_changed_owner_only(owner, index, reason):
     diagnostics = observe(owner)
     revisions = owner.shell.service.directory.observation_revision
-    changed = list(revisions['navigation'])
+    changed = list(revisions['root_navigation'])
     changed[index] = 'changed-private-value'
-    revisions['navigation'] = tuple(changed)
+    revisions['root_navigation'] = tuple(changed)
     owner.snapshot('one')
     evidence = diagnostics.snapshot()['shellResourceRebuilds']
     assert evidence['total'] == 2
@@ -40,7 +40,12 @@ def test_attention_selection_query_and_bootstrap_have_distinct_evidence(owner):
     revisions = owner.shell.service.directory.observation_revision
     revisions['attention'] = ('private-changed-attention',)
     owner.snapshot('one')
-    assert diagnostics.snapshot()['shellResourceRebuilds']['recent'][-1]['reasons'] == ['attention']
+    assert diagnostics.snapshot()['shellResourceRebuilds']['total'] == 1
+    changed = list(revisions['root_navigation'])
+    changed[4] = 'private-root-read-receipt'
+    revisions['root_navigation'] = tuple(changed)
+    owner.snapshot('one')
+    assert diagnostics.snapshot()['shellResourceRebuilds']['recent'][-1]['reasons'] == ['navigation.read']
     owner.shell.service.state['selectedSessionId'] = 'private-other-chat'
     register(owner, ('sidebarRecent',), demand=2)
     owner.snapshot('one')

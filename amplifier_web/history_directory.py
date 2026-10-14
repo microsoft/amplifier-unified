@@ -241,6 +241,10 @@ class HistoryDirectory:
         return self.observation_revision['navigation']
 
     @property
+    def root_navigation_revision(self):
+        return self.observation_revision['root_navigation']
+
+    @property
     def workspace_revision(self):
         return self.observation_revision['workspace']
 
@@ -436,7 +440,7 @@ class HistoryDirectory:
         self._live_notices = [notice for row in state.get('sessions', ()) for notice in notices(row, state)]
         self._live_revision += 1
 
-    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None):
+    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None):
         """Return effective rows with optional alias, exact-ID or child scope."""
         if sum(value is not None for value in (identity, public_ids, children_of)) > 1:
             raise ValueError('Use one directory source scope per query.')
@@ -479,6 +483,8 @@ class HistoryDirectory:
         elif children_of is not None:
             prefix, scope_params, live_lookup, stored_lookup = _child_candidates(children_of, self._native_namespace)
         scoped = identity is not None or public_ids is not None or children_of is not None
+        if scoped and native_root_workspace is not None:
+            raise ValueError('Workspace candidates cannot replace an exact source scope.')
         local = prefix + f'''live_rows AS (SELECT {live_columns} FROM json_each(?)), stored_local_rows AS (
             SELECT {columns} FROM live_rows {'WHERE ' + live_lookup if scoped else ''} UNION ALL
             SELECT {columns} FROM history_local_rows l
@@ -569,6 +575,18 @@ class HistoryDirectory:
                     'SELECT rowid FROM history_native.native_rows WHERE namespace=? AND identity=? UNION '
                     'SELECT rowid FROM history_native.native_rows WHERE namespace=? AND public_id=?)')
                 parameters.extend((self._native_namespace, identity, self._native_namespace, identity))
+            elif native_root_workspace is not None:
+                # Prune only native candidates. All local owners still shadow
+                # native identities before final canonical workspace filtering.
+                # Registered IDs win over paths; only unknown IDs use a path.
+                workspace_id, fallback_paths = native_root_workspace
+                native = native.replace('FROM history_native.native_rows n WHERE n.namespace=?',
+                    "FROM history_native.native_rows n NOT INDEXED WHERE n.namespace=? AND n.rowid IN ("
+                    "SELECT rowid FROM history_native.native_rows WHERE namespace=? AND workspace_id=? AND kind='root' UNION "
+                    "SELECT rowid FROM history_native.native_rows WHERE namespace=? AND workspace_path IN "
+                    "(SELECT value FROM json_each(?)) AND kind='root' AND NOT directory_known_workspace(workspace_id))")
+                parameters.extend((self._native_namespace, workspace_id, self._native_namespace,
+                                   json.dumps(fallback_paths, separators=(',', ':'))))
             elif public_ids is not None or children_of is not None:
                 native = native.replace('FROM history_native.native_rows n WHERE n.namespace=?',
                     'FROM history_native.native_rows n NOT INDEXED WHERE n.namespace=? '

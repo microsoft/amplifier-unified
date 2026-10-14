@@ -16,7 +16,7 @@ class Shell:
             clients=SimpleNamespace(current=ContextVar('resource_client', default='one'),
                                     records={'one': {'kind': 'web'}}),
             state={'revision': 1, 'selectedSessionId': 'chat', 'selectedWorkspaceId': 'w', 'view': {}},
-            directory=SimpleNamespace(observation_revision={'navigation':1,'attention':1,'workspace':1}), queue_clients={}, queue_sessions={})
+            directory=SimpleNamespace(observation_revision={'navigation':1,'attention':1,'workspace':1,'root_navigation':1}), queue_clients={}, queue_sessions={})
         self.saved = {'composition': {'instances': [{'id':'nav','package':'builtin.chats','slot':'navigation'}],
                                       'presentation': {}}, 'preview': None, 'views': {}, 'baselineView': {}}
         self.recent_limits, self.calls = {}, []
@@ -115,7 +115,7 @@ def test_semantic_catalog_global_and_owner_changes_invalidate_without_bootstrap_
     assert owner.shell.calls[calls:] and 'sidebarPinned' in owner.shell.calls[calls]
     calls=len(owner.shell.calls);owner.invalidate({'locationListing'});owner.snapshot('one')
     assert owner.shell.calls[calls:]==[frozenset()]
-    calls=len(owner.shell.calls);owner.shell.service.directory.observation_revision['navigation']=2;owner.snapshot('one')
+    calls=len(owner.shell.calls);owner.shell.service.directory.observation_revision.update(navigation=2,root_navigation=2);owner.snapshot('one')
     assert owner.shell.calls[calls:]==[frozenset({'recentNavigation','sidebarPinned'}),frozenset()]
     owner.shell.saved['views']['nav']['generation']=1
     assert owner.bootstrap_key('one')!=bootstrap
