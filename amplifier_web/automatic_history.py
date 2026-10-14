@@ -115,9 +115,12 @@ def display_message(row, index, session, *, include_internal=False):
 
 
 @retry_indexed_read
-def read_transcript(session, *, before=None, limit=100):
+def read_transcript(session, *, before=None, limit=100, diagnostics=None):
     """Read a display page, or a full view for ordered web-history merging."""
+    from types import SimpleNamespace
     from .native_activity import activity_page
+    # The reader receives only the thread-safe metrics owner, never app state.
+    service = SimpleNamespace(performance_diagnostics=diagnostics)
     root = directory(session)
     native_id = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
     # Relocation is CI policy, independent of transcript storage. It also works
@@ -129,7 +132,8 @@ def read_transcript(session, *, before=None, limit=100):
               'context-intelligence' / 'events.jsonl') if event_root is not None and event_root.is_absolute() else None
     reader = SessionHistoryStore(root, events_path=events, session_id=native_id)
     start = revision(session)
-    messages = reader.indexed_messages()
+    with measure(service, 'history.transcript.index', synchronous=True, session_id=session['id']):
+        messages = reader.indexed_messages()
     diagnostics = list(reader.diagnostics)
     # A live runtime can append while someone is reading older pages. Verify
     # the loaded native anchors instead of requiring the whole file's stamp to
@@ -152,9 +156,10 @@ def read_transcript(session, *, before=None, limit=100):
         return (row['id'] if row else None, internal['id'] if internal else None,
                 value.get('role'), row.get('nativeInputId') if row else None)
 
-    facts = (messages.project('unified-display-v3:' + str(native_id), project)
-             if isinstance(messages, TranscriptIndex)
-             else [project(value, index) for index, value in enumerate(messages)])
+    with measure(service, 'history.transcript.facts', synchronous=True, session_id=session['id']):
+        facts = (messages.project('unified-display-v3:' + str(native_id), project)
+                 if isinstance(messages, TranscriptIndex)
+                 else [project(value, index) for index, value in enumerate(messages)])
     input_counts = Counter(fact[3] for fact in facts if fact[3])
     for index, (identity, internal_identity, role, _) in enumerate(facts):
         if check_anchors and index in anchors:
@@ -180,7 +185,8 @@ def read_transcript(session, *, before=None, limit=100):
     for row in visible:
         if input_counts[row.get('nativeInputId')] > 1:
             row['nativeInputAmbiguous'] = True
-    activity = activity_page(reader, messages, visible)
+    with measure(service, 'history.activity', synchronous=True, session_id=session['id']):
+        activity = activity_page(reader, messages, visible, service=service)
     activity['diagnostics'] = [dict(code=d.code, source=d.source, line=d.line, severity=d.severity)
                                for d in diagnostics] + activity['diagnostics']
     return {'messages': visible, 'offset': rows[0][0] if rows else 0,
@@ -898,7 +904,7 @@ class AutomaticHistory:
                 self.service._publish_changes(sessions={session_id}, detail_only=True)
             try:
                 with measure(self.service, 'history.reader.wait', session_id=session_id):
-                    result = await asyncio.to_thread(read_transcript, source, before=before, limit=window)
+                    result = await asyncio.to_thread(read_transcript, source, before=before, limit=window, diagnostics=getattr(self.service, 'performance_diagnostics', None))
                 async with self.service.lock:
                     session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                     if session is None:

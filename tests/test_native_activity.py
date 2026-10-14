@@ -163,3 +163,20 @@ def test_byte_scan_limit_does_not_parse_oversized_raw_payload(tmp_path, monkeypa
     result = read_transcript(session)
     assert result['activity']['scannedEvents'] == 0
     assert any(row['code'] == 'scan_limit' for row in result['activity']['diagnostics'])
+
+
+def test_transcript_and_activity_timings_preserve_reader_results_and_hide_contents(tmp_path, monkeypatch):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    expected = read_transcript(session)
+    before = snapshot(root)
+    diagnostics = PerformanceDiagnostics()
+    assert read_transcript(session, diagnostics=diagnostics) == expected
+    result = diagnostics.snapshot()
+    for name in ('history.transcript.index', 'history.transcript.facts', 'history.activity',
+                 'history.activity.scan', 'history.activity.associate'):
+        assert result['operations'][name]['count'] == 1
+    assert result['counters']['history.activity.events'] == 4
+    encoded = json.dumps(result)
+    assert str(capture) not in encoded and 'private tool result' not in encoded and 'inspect fixture' not in encoded
+    assert snapshot(root) == before

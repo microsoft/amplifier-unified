@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from bisect import bisect_left, bisect_right
 from collections import OrderedDict
+from contextlib import ExitStack
 import copy
 from datetime import datetime
 import hashlib
@@ -619,10 +620,10 @@ class EventLogView:
 
     @measured('events.read', session=True)
     def read(self, session):
-        with self._read_lock:
+        with self._read_lock, ExitStack() as stages:
             self._read_touched = set()
             try:
-                return self._read(session)
+                return self._read(session, stages)
             except BaseException:
                 # Discard potentially grown indexes from this read, without
                 # forcing every unrelated chat to reparse its whole history.
@@ -633,7 +634,12 @@ class EventLogView:
                 self._read_touched = set()
 
     @measured('events.project', session=True)
-    def _read(self, session):
+    def _read(self, session, stages):
+        def stage(name):
+            stages.close()
+            stages.enter_context(measure(self.service, name, synchronous=True, session_id=session['id']))
+
+        stage('events.scan')
         root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
         queue = [root, session['id']]
         queue.extend(row.get('sessionId') or row.get('id') for row in session.get('workers', []))
@@ -671,8 +677,12 @@ class EventLogView:
             queue.extend(index.children)
         self.read_paths[session['id']] = tuple(path for path, _ in inputs)
         self.read_revisions[session['id']] = tuple((str(path), stamp) for path, stamp in inputs)
+        count(self.service, 'events.project.indexes', len(indexes))
+        count(self.service, 'events.project.paths', len(inputs))
+        count(self.service, 'events.project.workers', len(workers))
         if not indexes:
             return None
+        stage('events.bindings')
         live = session.get('execution', {})
         from .session_projection import accounting_projection, ACCOUNTING_FIELDS
         accounting = accounting_projection(live)
@@ -689,9 +699,12 @@ class EventLogView:
         bound_sessions.update(row.get('sessionId') for row in session.get('workers', []) if row.get('sessionId'))
         bindings = {model_key(row): row for row in accounting
                     if row.get('rootSessionId') == session['id'] and row.get('sessionId') in bound_sessions}
+        stage('events.rows')
         for index in indexes:
             nodes.extend(index.rows(lambda row: bindings.get(model_key(row)), coalesce=False))
         nodes = merge_model_observations(nodes, aliases=aliases)
+        count(self.service, 'events.project.nodes', len(nodes))
+        stage('events.associate')
         def call_key(row):
             sid = row.get('sessionId')
             return (root if sid in aliases else sid, row.get('toolCallId'))
@@ -722,6 +735,7 @@ class EventLogView:
             self.read_paths[session['id']] += transcript_paths
             self.read_revisions[session['id']] += tuple(
                 (str(path), stamp) for path, stamp in zip(transcript_paths, root_index.association_revision[1]))
+        stage('events.join')
         native_messages = [row for row in messages if type(row.get('nativeIndex')) is int]
         native_by_index = {}
         for row in native_messages:
@@ -935,11 +949,15 @@ class EventLogView:
                 turn.update(endedAt=max(ends), phase='completed')
         tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl',
                 'retiredUsageNodes': accounting}
+        stage('events.plan')
         from .chat_plan import latest_plan
         tree['plan'] = latest_plan(nodes, aliases, read_field)
+        stage('events.usage')
         refresh_usage(tree)
+        stage('events.retain')
         for index in indexes:
             self._retain_index(index)
+        stages.close()
         return tree
 
     def read_plan(self, session, *, include_items=False):
@@ -993,10 +1011,21 @@ class EventLogView:
             # tree. External appends/replacements and live metadata still win.
             root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
             same_root = paths and paths[0] == event_path(session, root)
-            if cached and same_root and cached[0] == inputs and cached[1] == before:
+            same_inputs = bool(cached and same_root and cached[0] == inputs)
+            same_sources = bool(cached and same_root and cached[1] == before)
+            if same_inputs and same_sources:
                 count(self.service, 'events.projection.reused')
                 return
             count(self.service, 'events.projection.rebuilt')
+            if not cached:
+                count(self.service, 'events.rebuild.cold')
+            elif not same_root:
+                count(self.service, 'events.rebuild.root')
+            else:
+                if not same_inputs:
+                    count(self.service, 'events.rebuild.input')
+                if not same_sources:
+                    count(self.service, 'events.rebuild.source')
             previous = copy.deepcopy(inputs)
             tree = await asyncio.to_thread(self.read, previous)
             if self.service.closed:

@@ -8,6 +8,8 @@ from itertools import islice
 
 from amplifier_foundation.session.history import associate_events
 
+from .performance_diagnostics import measure, count
+
 MAX_SCAN_EVENTS = 5000
 MAX_SCAN_BYTES = 16 * 1024 * 1024
 MAX_ACTIVITY_EVENTS = 2000
@@ -22,67 +24,70 @@ def _time(value):
         return None
 
 
-def activity_page(reader, messages, visible):
+def activity_page(reader, messages, visible, *, service=None):
     """Scan only on page opening; bound rows and discard raw API payloads."""
     events = []
     scanned = 0
-    iterator = reader.iter_events(max_lines=MAX_SCAN_EVENTS, max_bytes=MAX_SCAN_BYTES)
-    try:
-        for event in islice(iterator, MAX_SCAN_EVENTS + 1):
-            scanned += 1
-            if scanned > MAX_SCAN_EVENTS:
-                break
-            if event['event'] not in {'prompt:submit', 'tool:pre', 'tool:post', 'tool:error',
-                                      'llm:request', 'llm:response', 'llm:error'}:
-                continue
-            if len(events) >= MAX_ACTIVITY_EVENTS:
-                break
-            data = event.get('data') or {}
-            events.append({**{key: event.get(key) for key in ('event', 'session_id', 'timestamp', 'line')},
-                           'data': {key: value for key, value in data.items() if key in _FIELDS}})
-    finally:
-        iterator.close()
+    with measure(service, 'history.activity.scan', synchronous=True, session_id=reader.session_id):
+        iterator = reader.iter_events(max_lines=MAX_SCAN_EVENTS, max_bytes=MAX_SCAN_BYTES)
+        try:
+            for event in islice(iterator, MAX_SCAN_EVENTS + 1):
+                scanned += 1
+                if scanned > MAX_SCAN_EVENTS:
+                    break
+                if event['event'] not in {'prompt:submit', 'tool:pre', 'tool:post', 'tool:error',
+                                          'llm:request', 'llm:response', 'llm:error'}:
+                    continue
+                if len(events) >= MAX_ACTIVITY_EVENTS:
+                    break
+                data = event.get('data') or {}
+                events.append({**{key: event.get(key) for key in ('event', 'session_id', 'timestamp', 'line')},
+                               'data': {key: value for key, value in data.items() if key in _FIELDS}})
+        finally:
+            iterator.close()
+    count(service, 'history.activity.events', scanned)
     diagnostics = [dict(code=d.code, source=d.source, line=d.line, severity=d.severity) for d in reader.diagnostics]
     if scanned > MAX_SCAN_EVENTS or len(events) >= MAX_ACTIVITY_EVENTS:
         diagnostics.append({'code': 'activity_scan_limit', 'source': 'events', 'severity': 'info', 'line': None})
     visible_by_index = {row['nativeIndex']: row for row in visible}
     nodes, turns = {}, {}
     unassociated = auxiliary = 0
-    for association in associate_events(messages, events):
-        event = events[association.event_index]
-        if association.auxiliary:
-            auxiliary += 1
-            continue
-        if association.turn_index is None:
-            unassociated += 1
-            continue
-        anchor = visible_by_index.get(association.turn_message_index)
-        if anchor is None or event['event'] == 'prompt:submit':
-            continue
-        data = event['data']
-        # Only tool lifecycle IDs are complete enough to combine observations.
-        # LLM rows without a stable call association remain observations instead
-        # of inventing calls, duration, usage or a running state from old logs.
-        call = data.get('tool_call_id') or data.get('call_id')
-        if not event['event'].startswith('tool:') or not isinstance(call, str):
-            unassociated += 1
-            continue
-        turn_id = 'native-turn:' + anchor['id']
-        turns.setdefault(turn_id, {'id': turn_id, 'inputId': turn_id, 'anchorMessageId': anchor['id'],
-                                  'phase': 'completed', 'nativeHistory': True, 'nativeIndex': anchor['nativeIndex'], 'label': 'Saved activity'})
-        identity = 'native-tool:' + anchor['id'] + ':' + call
-        node = nodes.setdefault(identity, {'id': identity, 'turnId': turn_id, 'kind': 'tool',
-            'sessionId': reader.session_id, 'nativeHistory': True, 'toolCallId': call,
-            'label': str(data.get('tool_name') or data.get('tool') or data.get('name') or 'Tool')[:160]})
-        at = _time(event.get('timestamp'))
-        if event['event'] == 'tool:pre':
-            node.setdefault('phase', 'recorded')
-            if at is not None:
-                node.setdefault('startedAt', at)
-        else:
-            node['phase'] = 'error' if event['event'] == 'tool:error' else 'completed'
-            if at is not None:
-                node['endedAt'] = at
+    with measure(service, 'history.activity.associate', synchronous=True, session_id=reader.session_id):
+        for association in associate_events(messages, events):
+            event = events[association.event_index]
+            if association.auxiliary:
+                auxiliary += 1
+                continue
+            if association.turn_index is None:
+                unassociated += 1
+                continue
+            anchor = visible_by_index.get(association.turn_message_index)
+            if anchor is None or event['event'] == 'prompt:submit':
+                continue
+            data = event['data']
+            # Only tool lifecycle IDs are complete enough to combine observations.
+            # LLM rows without a stable call association remain observations instead
+            # of inventing calls, duration, usage or a running state from old logs.
+            call = data.get('tool_call_id') or data.get('call_id')
+            if not event['event'].startswith('tool:') or not isinstance(call, str):
+                unassociated += 1
+                continue
+            turn_id = 'native-turn:' + anchor['id']
+            turns.setdefault(turn_id, {'id': turn_id, 'inputId': turn_id, 'anchorMessageId': anchor['id'],
+                                      'phase': 'completed', 'nativeHistory': True, 'nativeIndex': anchor['nativeIndex'], 'label': 'Saved activity'})
+            identity = 'native-tool:' + anchor['id'] + ':' + call
+            node = nodes.setdefault(identity, {'id': identity, 'turnId': turn_id, 'kind': 'tool',
+                'sessionId': reader.session_id, 'nativeHistory': True, 'toolCallId': call,
+                'label': str(data.get('tool_name') or data.get('tool') or data.get('name') or 'Tool')[:160]})
+            at = _time(event.get('timestamp'))
+            if event['event'] == 'tool:pre':
+                node.setdefault('phase', 'recorded')
+                if at is not None:
+                    node.setdefault('startedAt', at)
+            else:
+                node['phase'] = 'error' if event['event'] == 'tool:error' else 'completed'
+                if at is not None:
+                    node['endedAt'] = at
     return {'nodes': list(nodes.values()), 'turns': list(turns.values()), 'diagnostics': diagnostics,
             'unassociatedEvents': unassociated, 'auxiliaryEvents': auxiliary, 'scannedEvents': min(scanned, MAX_SCAN_EVENTS)}
 

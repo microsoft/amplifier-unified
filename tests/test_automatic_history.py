@@ -112,7 +112,9 @@ async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_pa
         else:
             assert all(set(message) <= {'nativeIndex', 'nativeMessageId', 'role', 'text'}
                        for message in source['messages'])
-        seen.append(kwargs)
+        assert set(kwargs) == {'before', 'limit', 'diagnostics'}
+        assert kwargs['diagnostics'] is app.performance_diagnostics
+        seen.append({key: value for key, value in kwargs.items() if key != 'diagnostics'})
         return original(source, **kwargs)
     monkeypatch.setattr(automatic_history, 'read_transcript', read)
     await app.history.load(row['id'], limit=100)
