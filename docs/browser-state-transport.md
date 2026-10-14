@@ -106,6 +106,17 @@ changes; committed registry, pin and organization epochs remain separate inputs.
 Old query generations are retired within the existing bounded projection cache.
 Child pages, custom snapshots and workspace overview keep their broader contracts.
 
+Ordinary selection changes reuse Recent shortcuts and pinned page rows. Their
+selection scope receipt is copied for the new owner; cached pages remain immutable.
+An exact directory lookup preserves the selected agent-created root exception.
+General and searched pages retain selection-dependent saved-page matching and
+workspace rank inference. Workspace-scoped queries first select native candidates
+by registered workspace ID or its canonical fallback path, then apply unchanged
+local-owner overrides, duplicate identity rules, suppression and final filters.
+Unrelated native workspaces do not participate in that candidate scan. Arbitrary
+global filtered counts and first-page ordering can still scan eligible root facts;
+the reuse and workspace indexes do not claim to eliminate that cold-query cost.
+
 The shared workspace cache retains only its current aggregate/registry generation
 within the existing bounded query cache. Old local public-fact rows derive the
 additional dependency on keyed access, without a full-library migration read.

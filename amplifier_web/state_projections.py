@@ -251,7 +251,7 @@ class StateProjections:
                       json.dumps({key: state.get(key) for key in sorted(fields)}, sort_keys=True))
         stamp = (self.directory.root_navigation_revision, globals_key)
         if getattr(self, '_root_navigation_dependencies', None) != stamp:
-            root_keys = {'directory-chats', 'pinned-navigation'}
+            root_keys = {'directory-chats', 'pinned-navigation', 'root-selection'}
             self.values = {key: value for key, value in self.values.items() if key[0] not in root_keys}
             if self.previous_navigation is not None:
                 previous, retained = self.previous_navigation
@@ -264,17 +264,44 @@ class StateProjections:
         directory = self.directory
         if directory is not None:
             dependencies = self.root_navigation_dependencies(state)
-            return self.get(('directory-chats', *dependencies, section, *self.chat_scope(state)),
+            scope = self.navigation_page_scope(state, section=section)
+            page = self.get(('directory-chats', *dependencies, section, *scope),
                             lambda: directory.chats(state, section=section))
+            if section in {'shortcuts', 'pinned'} and page['scope']['selectedSessionId'] != state.get('selectedSessionId'):
+                # Selection is a receipt, except for the selected agent-created
+                # root admitted by the Recent filter. Never mutate a shared page.
+                return {**page, 'scope': {**page['scope'], 'selectedSessionId': state.get('selectedSessionId')}}
+            return page
         from .chat_navigation import snapshot
         index = self.chat_catalog(state, section=section)
         return self.get(('chats', section, *self.chat_scope(state)), lambda: snapshot(state, indexed=index, section=section))
+
+    def navigation_page_scope(self, state, *, section):
+        selected, workspace, view = self.chat_scope(state)
+        if self.directory is None or section not in {'shortcuts', 'pinned'}:
+            return selected, workspace, view
+        if section == 'pinned' or state.get('view', {}).get('navShowAgentCreated') is True:
+            selected = None
+        elif selected:
+            def exception():
+                sql, params = self.directory.effective(state, public_ids=[selected])
+                row = self.directory.db.execute(sql +
+                    " SELECT id FROM directory_rows WHERE id=? AND session_kind='root' AND agent_created LIMIT 1",
+                    [*params, selected]).fetchone()
+                return row[0] if row else None
+            selected = self.get(('root-selection', self.directory.root_navigation_revision, selected), exception)
+        if state.get('view', {}).get('navChatScope') == 'all':
+            workspace = None
+        # General pages retain selection: their saved-page match and inferred
+        # workspace rank are selection-dependent. Shortcuts have no such page.
+        return selected, workspace, view
 
     def pinned_navigation(self, state):
         from .pinned_navigation import ordered_ids
         dependencies = ((*self.root_navigation_dependencies(state), *self.workspace_dependencies(state))
                         if self.directory is not None else ())
-        key = ('pinned-navigation', *dependencies, tuple(ordered_ids(state)), *self.chat_scope(state))
+        key = ('pinned-navigation', *dependencies, tuple(ordered_ids(state)),
+               *self.navigation_page_scope(state, section='pinned'))
         return self.get(key, lambda: self._pinned_navigation(state))
 
     def _pinned_navigation(self, state):
