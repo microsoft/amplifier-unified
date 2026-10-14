@@ -324,6 +324,33 @@ async def test_client_state_is_not_an_authentication_bypass(authenticated_client
     assert "not-authenticated" not in app["service"].clients.records
 
 
+async def test_session_commands_share_assignment_authority_and_retry_identity(authenticated_client, tmp_path):
+    app = await create_app(tmp_path/'app', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(app)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Owner'})
+    sid = service._session()['id']
+    await service.dispatch('session.create', {'title': 'Independent'})
+    selected = service._session()['id']
+    await client.post('/api/clients/attach', json={'clientId': 'assignment-terminal', 'kind': 'tui'})
+    headers = {'X-Amplifier-Client': 'assignment-terminal'}
+    endpoint = f'/api/sessions/{sid}/commands'
+    async def action(name, args, identity):
+        return await client.post(endpoint, json={'id': identity, 'action': name, 'args': args}, headers=headers)
+    started = await action('assignment.start', {}, 'start')
+    assert started.status == 200
+    assert (await started.json())['result']['assignment']['revision'] == 1
+    changed = await action('assignment.set', {'expectedRevision': 1, 'maxTotalTokens': 100}, 'set')
+    assert changed.status == 200
+    assert (await (await action('assignment.set', {'expectedRevision': 1, 'maxTotalTokens': 100}, 'set')).json())['duplicate']
+    assert (await action('assignment.stop', {'sessionId': selected, 'expectedRevision': 2}, 'wrong')).status == 400
+    stopped = await action('assignment.stop', {'expectedRevision': 2}, 'stop')
+    assert (await stopped.json())['result']['assignment']['status'] == 'stopped'
+    assert service.state['selectedSessionId'] == selected
+    assert service.assignments.current(service._session(selected)) is None
+
+
 async def test_tui_can_prepare_explicit_chat_without_changing_selection_or_submitting(authenticated_client, tmp_path):
     runtime = Runtime()
     warmed = []

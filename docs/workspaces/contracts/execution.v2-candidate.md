@@ -250,3 +250,33 @@ revocation does not undo external effects. Saving configuration is distinct from
 mounting it. User actions use the same domain checks and do not require an agent
 grant. No grant permits a peer mutation, grants user approval to an agent, or
 adds OS protection around arbitrary shell programs or external modules.
+
+## Assignment control addition — 2026-10-14
+
+New commissioned roots share an explicit host-owned assignment with their
+commissioning root. Existing peers and historical commissioning records are
+never enrolled retroactively. Native descendants share their root's admission.
+Membership, limits and Stop are retained in existing command receipts; model
+usage stays in existing execution receipts and is attributed at admission.
+
+Assignment limits cover aggregate supported model calls and open commissioned
+roots. Optional token/cost reservations are declared allowances per call, not
+provider-enforced maxima. Settled receipts replace their allowances; missing
+outcomes remain unknown. Limits cannot promise an exact spend cap. Already
+running effects may finish. Admission is serialized before provider effects.
+
+The commissioning owner may manage the assignment; members may inspect it.
+Membership does not confer control over existing independent peers. Assignment
+Stop closes admission durably before interrupting still-bound roots and their
+native children. A stopped assignment is not automatically resumed by a late
+reply, restart, schedule or another input. The user may explicitly detach a
+conversation after interruption settles; retained usage and late corrections
+remain attributable. Detaching never interrupts another conversation or erases
+accounting. No cleanup or external resource teardown is implied by Stop.
+
+The current adapter cannot interrupt or account for only one request inside an
+independent peer's mixed conversation. Stop reports that limitation and suppresses
+pending assignment input without substituting a whole-conversation interruption.
+When a token or cost limit is enabled, new queue/steer requests to independent
+peers are refused with this limitation; commissioned helpers share the budget.
+Informational notices remain available and do not start independent work.

@@ -384,6 +384,10 @@ class Collaboration:
             self.enqueue_continuation(receipt)
 
     def creation_guard(self, receipt):
+        if receipt.get('assignmentId'):
+            reason = self.service.assignments.blocked(identity=receipt['assignmentId'])
+            if reason:
+                return reason
         try:
             source = self.service._session(receipt['senderSessionId'])
         except Exception:
@@ -413,12 +417,18 @@ class Collaboration:
             if work_paused(self.service.state):
                 return "Host work is paused for an update; peer admission is suppressed."
             source = self.service._session(receipt["senderSessionId"])
+            reason = self.service.assignments.blocked(source, receipt.get('assignmentId'))
+            if reason:
+                return reason
             if receipt.get('creationOperationId'):
                 creation = self.receipt(receipt['creationOperationId'])
                 reason = self.creation_guard(creation)
                 if reason:
                     return reason
             target = self.authorize(source, {"sessionId": receipt["target"]["sessionId"]})
+            reason = self.service.assignments.blocked(target)
+            if reason:
+                return reason
             if source["workspace"] != receipt.get("workspace"):
                 return "The request workspace changed."
             if target.get("interruptionRevision", 0) != receipt["interruptionRevision"]:
@@ -713,6 +723,11 @@ class Collaboration:
         if self.service.db.execute("SELECT 1 FROM commands WHERE id=?", (identity,)).fetchone():
             return
         sender = self.service._session(request["senderSessionId"])
+        if self.service.assignments.blocked(sender, request.get('assignmentId')):
+            wait.update(status='suppressed', detail='The assignment was stopped; late evidence remains inspectable.')
+            self.save(request['requestId'], request)
+            self.service.db.commit()
+            return
         sender["historyManaged"] = False
         response = continuation_outcome(request)
         if response is None:
@@ -741,6 +756,7 @@ class Collaboration:
                    "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"],
                    "dependencySatisfied": response.get("qualified") is True, "continuationReason": response["outcome"],
                    "origin": "system", "displayBinding": fingerprint([envelope, text])}
+        receipt['assignmentId'] = request.get('assignmentId')
         wait["status"] = "claimed"
         self.insert(identity, fingerprint(["continuation", request["requestId"], wait]), receipt)
         self.save(request["requestId"], request)
@@ -976,7 +992,11 @@ class Collaboration:
                 receipt = None
             else:
                 target = self.authorize(source, args)
+                reason = self.service.assignments.blocked(source)
+                if reason:
+                    self.error(reason, 409)
                 mode = args.get("mode", "queue")
+                self.service.assignments.require_request(source, target, mode)
                 if mode == "steer":
                     active = target.get("collaborationGeneration") or {}
                     if not self.can_steer(target):
@@ -1023,6 +1043,7 @@ class Collaboration:
                     # claims from args, message prose, or the peer envelope.
                     "origin": origin if origin in {"agent", "ui", "user"} else None,
                     "displayBinding": fingerprint([envelope, args["text"]])}
+                receipt['assignmentId'] = (self.service.assignments.current(source) or {}).get('id')
                 if repair:
                     receipt['scheduleRepair'] = repair
                 if mode == "steer":
@@ -1067,7 +1088,7 @@ class Collaboration:
             "configurationHash": summary["configurationHash"], **lineage,
             "workingDirectory": source.get("workingDirectory") or source["workspace"],
             "outputNamespace": "working-files/tasks/" + new_id, "brief": args["text"], "references": args.get("references", [])}
-        async with self.service.lock:
+        async with self.service.lock, self.service.assignments.mutation(source, identity):
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 return duplicate
@@ -1104,6 +1125,8 @@ class Collaboration:
             notify = args.get('returnNotification', True)
             if notify:
                 self.require_inbox_slot(source['id'])
+            assignment_id = self.service.assignments.reserve_member(source, new_id, identity)
+            metadata['assignmentId'] = assignment_id
             task = source.get('task') or self.service.coordination.task(source['id'])
             receipt = {"accepted": True, "commandAction": "coordination.create",
                 "requestId": identity, "senderSessionId": source["id"], "workspace": source["workspace"], "protocol": PROTOCOL,
@@ -1112,16 +1135,22 @@ class Collaboration:
                 'sourceInterruptionRevision': lineage['sourceInterruptionRevision'],
                 'sourceTaskId': task.get('id'), 'sourceTaskRevision': task.get('revision'),
                 "initialInputId": identity + ":brief", "detail": "Creation committed; preparation is owned by the service."}
+            receipt['assignmentId'] = assignment_id
             if notify:
                 receipt['subscription'] = self.saved_wait(source, identity, status='reserved')
             self.service.db.execute('INSERT INTO collaboration_preparations(request_id,configuration) VALUES(?,?)',
                                     (identity, json.dumps(config)))
             self.insert(identity, digest, receipt)
-            self.service.db.commit()
+            self.service._save_changes(sessions={source['id']})
         self.service._task(self.finish_create(identity))
         return receipt
 
     def end_creation(self, receipt, delivery, detail, *, notify=False):
+        if receipt.get('assignmentId') and delivery == 'suppressed' and receipt.get('phase') == 'planned':
+            assignment = self.service.assignments.load(receipt['assignmentId'])
+            assignment['members'][receipt['sessionId']]['status'] = 'not_created'
+            assignment['revision'] += 1
+            self.service.assignments.save(assignment)
         receipt.update(delivery=delivery, detail=detail)
         wait = receipt.get('subscription')
         if wait and wait.get('status') == 'reserved':
@@ -1212,6 +1241,10 @@ class Collaboration:
                     self.error('The retained root configuration changed before initial input.', 409)
             receipt.update(delivery='created_initial_pending', phase='root_retained',
                            detail='Root retained. Initial input and return policy are being committed.')
+            if receipt.get('assignmentId'):
+                assignment = self.service.assignments.load(receipt['assignmentId'])
+                assignment['members'][new_id]['status'] = 'bound'
+                self.service.assignments.save(assignment)
             self.save(identity, receipt)
             self.publish_receipt(receipt)
         # The durable brief is ordinary attributed input, not copied history.
