@@ -294,7 +294,7 @@ class SelectedHistoryReadModel:
         except (ValueError, KeyError, TypeError, IndexError):
             return False
 
-    def _save(self, key, value, *, source_only=False, positions=None):
+    def _save_model(self, key, value, *, source_only=False, positions=None):
         if self.store is not None:
             try:
                 self.store.save(key, value, source_only=source_only, positions=positions)
@@ -440,7 +440,7 @@ class SelectedHistoryReadModel:
             current = [(path, source_stamp(path)) for path in value['paths']]
             positions = self._append(inputs, value, current, check_budget)
             if positions is not None and stable_sources(current):
-                self._save(key, value, source_only=not positions, positions=positions or None)
+                self._save_model(key, value, source_only=not positions, positions=positions or None)
                 if positions:
                     self._remember(key, value)
                 elif key in self.models:
@@ -463,7 +463,7 @@ class SelectedHistoryReadModel:
             {**inputs, **({'execution': tree} if tree is not None else {})})), 'tree': tree,
             'paths': list(map(str, self.reader.read_paths.get(key, ()))),
             'revisions': revisions, 'proofs': self.reader.read_proofs.get(key, {})}
-        self._save(key, value)
+        self._save_model(key, value)
         self._remember(key, value)
         return {**{name: value[name] for name in ('tree', 'paths', 'revisions', 'inputDigest')},
                 'status': 'complete', 'diagnostics': self.diagnostics.snapshot()}
