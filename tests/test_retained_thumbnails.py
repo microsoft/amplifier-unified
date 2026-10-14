@@ -287,7 +287,7 @@ async def test_http_legacy_qualification_is_read_only_with_unrelated_latest_open
         duplicate = {key: value for key, value in service.outputs.store.read(record['id']).items()
                      if key not in {'id', 'sessionId', 'version', 'revision', 'createdAt'}}
         service.outputs.store.create(sid, duplicate)
-    task = getattr(service, '_maintenance_task', None)
+    task = getattr(service, '_storage_maintenance_task', None)
     if task is not None:
         await task
     with service.clients.bind('thumbnail-client'):
@@ -299,7 +299,7 @@ async def test_http_legacy_qualification_is_read_only_with_unrelated_latest_open
     events = copy.deepcopy(service._state['events'])
     revision = service._state['revision']
     commands = service.db.execute('SELECT * FROM commands ORDER BY id').fetchall()
-    resources = service.db.execute('SELECT * FROM resources ORDER BY id').fetchall()
+    resources = service.db.execute('SELECT * FROM state_resources ORDER BY id').fetchall()
 
     def forbidden(*args, **kwargs):
         pytest.fail('Automatic qualification entered body or Canvas persistence')
@@ -332,7 +332,7 @@ async def test_http_legacy_qualification_is_read_only_with_unrelated_latest_open
         assert service._state['canvasArtifacts'] == before
         assert service._state['events'] == events
         assert service.db.execute('SELECT * FROM commands ORDER BY id').fetchall() == commands
-        assert service.db.execute('SELECT * FROM resources ORDER BY id').fetchall() == resources
+        assert service.db.execute('SELECT * FROM state_resources ORDER BY id').fetchall() == resources
     with service.clients.bind('thumbnail-client'):
         assert service.state['canvas'] == primary
 
