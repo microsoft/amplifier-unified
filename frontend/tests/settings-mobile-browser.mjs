@@ -1,4 +1,5 @@
-import {openSettingsDialog,openSettingsPage} from './browser-settings.mjs';
+import {openChatAdvancedPage} from './browser-chat-pages.mjs';
+import {openSettingsDialog,openSettingsPage,openPhoneNotificationSettings,settingsToolObservations} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -51,11 +52,11 @@ try{
  await page.locator('.a-routing-candidates [data-collection-id="5"]>button').click();await page.getByRole('button',{name:'Remove general candidate 6',exact:true}).click();await back();
  await page.getByRole('button',{name:'Preference order',exact:true}).click();await expect(page.locator('[data-order-id]')).toHaveCount(5);await expect(page.getByText('The choices changed. Review the current order before saving.',{exact:true})).toBeVisible();
  await footer.getByRole('button',{name:'Save order',exact:true}).click();await route('routing/role/general');assert.equal((await state()).view.routingEditor.matrix.roles.general.candidates.length,5);assert.equal((await state()).setup.matrix.roles.general.candidates.length,6);
- await openSettingsPage(page,'notifications');await page.getByText('Send notifications to another device',{exact:true}).click();await page.getByLabel(/^Topic/).fill('mobile-private-topic');await page.getByLabel(/^Access token/).fill('mobile-private-token');await back();await root.locator('[data-settings-section=appearance]').click();await back();await root.locator('[data-settings-section=notifications]').click();assert.equal(await page.getByLabel(/^Topic/).inputValue(),'mobile-private-topic');assert.equal(await page.getByLabel(/^Access token/).inputValue(),'mobile-private-token');
- await openSettingsPage(page,'tool-connections');await page.getByRole('button',{name:'Browse catalog',exact:true}).click();await route('tools/catalog');
+ await openSettingsPage(page,'notifications');await openPhoneNotificationSettings(page);await page.getByLabel(/^Topic/).fill('mobile-private-topic');await page.getByLabel(/^Access token/).fill('mobile-private-token');await back();await root.locator('[data-settings-section=appearance]').click();await back();await root.locator('[data-settings-section=notifications]').click();assert.equal(await page.getByLabel(/^Topic/).inputValue(),'mobile-private-topic');assert.equal(await page.getByLabel(/^Access token/).inputValue(),'mobile-private-token');
+ await openSettingsPage(page,'tool-connections');await page.getByRole('button',{name:'Tool catalog',exact:true}).click();await route('tools/catalog');
  await page.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();await page.getByRole('checkbox',{name:'Select Tool 02',exact:true}).check();await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByRole('checkbox',{name:'Select Tool 50',exact:true}).check();await page.locator('#filter-smart-tool-catalog').fill('Research');
- await expect(footer.getByRole('button',{name:'Install selected (3)',exact:true})).toBeVisible();await expect(footer.getByText('1 outside this view',{exact:true})).toBeVisible();
- await page.locator('[data-collection-id=tool-1]>button').click();await route('tools/catalog/detail');await expect(page.locator('#filter-smart-tool-catalog')).toBeHidden();await expect(footer.getByRole('button',{name:'Install selected (3)',exact:true})).toBeVisible();await back();await route('tools/catalog');assert.equal(await page.locator('#filter-smart-tool-catalog').inputValue(),'Research');
+ await expect(footer.getByRole('button',{name:'Review & install',exact:true})).toBeVisible();await expect(footer.getByText('1 outside this view',{exact:true})).toBeVisible();
+ await page.locator('[data-collection-id=tool-1]>button').click();await route('tools/catalog/detail');await expect(page.locator('#filter-smart-tool-catalog')).toBeHidden();await expect(footer.getByRole('button',{name:'Review & install',exact:true})).toBeVisible();await back();await route('tools/catalog');assert.equal(await page.locator('#filter-smart-tool-catalog').inputValue(),'Research');
 
  // Back must restore against the list, even when rendering spans browser frames.
  // A passive editor sync briefly left detail-sized content under the list route
@@ -77,7 +78,7 @@ try{
  await openSettingsPage(page,'tool-connections');await page.getByRole('button',{name:'Add MCP connection',exact:true}).click();await route('tools/connection');
  await page.getByLabel('Display name',{exact:true}).fill('Mobile fixture connection');await page.getByLabel('Executable',{exact:true}).fill('/fixture/bin/mcp');
  assert.equal(await footer.getByRole('button',{name:'Save connection',exact:true}).evaluate(el=>el.form?.id),'smart-connection-form');
- await footer.getByRole('button',{name:'Save connection',exact:true}).click();await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers.some(row=>row.name==='Mobile fixture connection'));
+ await footer.getByRole('button',{name:'Save connection',exact:true}).click();await expect.poll(async()=>(await settingsToolObservations(page)).servers.some(row=>row.name==='Mobile fixture connection')).toBe(true);
  // Exercise the visual viewport resize path used by soft keyboards.
  await page.getByLabel('Environment variable references (optional)',{exact:true}).focus();
  await page.evaluate(()=>{Object.defineProperty(visualViewport,'height',{configurable:true,value:480});visualViewport.dispatchEvent(new Event('resize'));});
@@ -92,7 +93,6 @@ try{
  await page.getByLabel('Name',{exact:true}).fill('Mobile diagnostics draft');await page.getByLabel('Server URL',{exact:true}).fill('https://fixture.invalid');
  await expect(footer.getByRole('button',{name:'Save destination',exact:true})).toBeVisible();await back();await route('diagnostics');
  await page.locator('.a-diagnostic-destinations button').filter({hasText:'Mobile diagnostics draft'}).click();await route('diagnostics/destination');assert.equal(await page.getByLabel('Server URL',{exact:true}).inputValue(),'https://fixture.invalid');
- await openSettingsPage(page,'loaded-modules');await expect(page.getByRole('button',{name:'Back to Advanced',exact:true})).toBeVisible();await page.screenshot({path:'/tmp/settings-mobile-modules.png'});
  // Every existing destination remains reachable through narrow navigation.
  for(const width of [320,390,736,960,1280]){
   await page.setViewportSize({width,height:844});await expect(root).toHaveAttribute('data-compact',String(width<960));
@@ -105,6 +105,10 @@ try{
  const historyLength=await page.evaluate(()=>history.length);page.once('dialog',dialog=>dialog.accept());await page.reload();await route('providers/detail');assert.equal(await page.evaluate(()=>history.length),historyLength);
  await back();await route('providers');await back();await route('advanced');await back();await route('index');
  await page.getByRole('button',{name:'Close settings',exact:true}).click();await page.getByRole('button',{name:'Discard changes',exact:true}).click();await expect(root).toHaveCount(0);assert.equal(await page.evaluate(()=>history.state?.amplifierSettings),undefined);await openSettingsDialog(page);await route('index');await page.evaluate(()=>history.back());await expect(root).toHaveCount(0);
+ // Conversation modules now belong to the selected chat's public Model & tools page.
+ const closeNavigation=page.getByRole('button',{name:'Close navigation',exact:true});
+ if(await closeNavigation.isVisible())await closeNavigation.click();
+ await openChatAdvancedPage(page,'Model & tools');await expect(page.getByRole('button',{name:'Back to Advanced',exact:true})).toBeVisible();await page.getByText('Conversation modules',{exact:true}).click();await expect(page.getByRole('searchbox',{name:'Filter loaded modules',exact:true})).toBeVisible();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeChecked();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeDisabled();await page.screenshot({path:'/tmp/settings-mobile-modules.png'});
  assert.deepEqual(errors,[]);console.log('Mobile Settings: index, browser Back/Forward, private drafts, nested routing, footer actions, ordering, catalog selection and all destinations at 5 widths passed.');
 }catch(error){if(page)await page.screenshot({path:'/tmp/settings-mobile-failure.png'});throw error;}
 finally{await browser?.close();fixture.kill('SIGTERM');}
