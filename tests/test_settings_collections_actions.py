@@ -6,6 +6,7 @@ from amplifier_web.management import Management
 from amplifier_web.setup import SetupManager
 from amplifier_web.smart_tools import SmartToolsManager
 from amplifier_web.smart_canvas import SmartCanvas
+from configuration_admin import authorized_admin
 
 async def settle(app):
     for _ in range(100):
@@ -23,10 +24,11 @@ async def test_agent_can_install_batch_and_reorder_saved_settings(tmp_path,monke
     monkeypatch.setattr(app.smart_tools,'install',install)
     try:
         await app.dispatch('session.create',{});sid=app.state['selectedSessionId']
+        admin=await authorized_admin(app,sid,effects=['connections'],scopes=['global'])
         for name in ['one','two']:
             await app.dispatch('providers.save',{'id':name,'module':'provider-test','config':{}})
             await settle(app)
-        await app.app_bridge('dispatch',{'action':'providers.reorder','args':{'ids':['two','one'],'expectedIds':['one','two']}},sid)
+        await admin('dispatch',{'action':'providers.reorder','args':{'ids':['two','one'],'expectedIds':['one','two'],'scope':'global'}})
         await settle(app)
         assert [row['id'] for row in app.state['setup']['providers']]==['two','one']
         app.state['smartTools']['catalog']=[{'id':'tool','name':'Tool','repository':'https://example.com/tool'}]
@@ -45,11 +47,12 @@ async def test_guided_provider_finish_has_correlated_user_and_agent_receipts(tmp
     app=AppService(tmp_path,workspace=tmp_path);app.management=Management(app)
     try:
         await app.dispatch('session.create',{});sid=app.state['selectedSessionId']
+        admin=await authorized_admin(app,sid,effects=['model_defaults'],scopes=['global'])
         saved=await app.dispatch('providers.save',{'id':'guided','module':'provider-test','config':{'opaque':'keep'},'apiKey':'private-guided-value'})
         await settle(app)
         assert saved['operationId']
         assert app.state['setup']['operations']['providers.save:guided']['commandId']==saved['operationId']
-        receipt=await app.app_bridge('dispatch',{'action':'providers.finishSetup','id':'agent-guided','args':{'id':'guided','model':'fixture-model','initializeRouting':True}},sid)
+        receipt=await admin('dispatch',{'action':'providers.finishSetup','id':'agent-guided','args':{'id':'guided','model':'fixture-model','initializeRouting':True,'scope':'global'}})
         await settle(app)
         assert receipt['operationId']=='agent-guided'
         assert app.state['setup']['operations']['providers.finishSetup:guided']['phase']=='ready'
