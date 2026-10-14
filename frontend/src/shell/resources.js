@@ -18,6 +18,12 @@ export function matchesResources(envelope,bootstrap,demand){
 }
 
 const navigation=new Set(['builtin.chats','builtin.workspaces']);
+function validEntry(entry){
+ return Number.isSafeInteger(entry.stateRevision)&&entry.stateRevision>=0
+  &&entry.pending&&typeof entry.pending==='object'&&!Array.isArray(entry.pending)
+  &&Object.values(entry.pending).every(row=>row&&['pending','retry'].includes(row.status)
+   &&(row.retryAfterMs===undefined||Number.isFinite(row.retryAfterMs)&&row.retryAfterMs>=0));
+}
 export function resourceSnapshots(bootstrap,envelope,demand,previous={}){
  if(!matchesResources(envelope,bootstrap,demand))return null;
  const snapshots={};
@@ -25,12 +31,16 @@ export function resourceSnapshots(bootstrap,envelope,demand,previous={}){
   const generation=bootstrap.instanceGenerations[instance.id];
   const entry=envelope.instances?.[instance.id];
   if(entry&&entry.generation!==generation)continue;
+  if(entry&&!validEntry(entry))return null;
   if(navigation.has(instance.package)){
    const resources=entry?.resources||{},context=resources.context?.value;
    // A hidden surface can keep its private edit owner, never its old pages.
    const retained=!demand.resources.length&&previous[instance.id]?.generation===generation
     ?{view:previous[instance.id].view}:{};
-   const snapshot={...retained,...context,generation,navigationResources:[]};
+   const pending=Object.fromEntries(demand.resources
+    .filter(name=>entry?.pending?.[name]).map(name=>[name,{...entry.pending[name]}]));
+   const snapshot={...retained,...context,generation,navigationResources:[],navigationResourcePending:pending,
+    navigationResourceScope:[envelope.hostInstanceId,envelope.bootstrapKey,envelope.demandId,generation,...envelope.scope]};
    for(const name of demand.resources){
     const resource=resources[name];if(!resource)continue;
     const {sidebarNavigation,...fields}=resource.value;
@@ -55,6 +65,11 @@ export function retainResourceVersions(previous,next){
  const instances={};
  for(const [id,entry] of Object.entries(next.instances||{})){
   const old=previous.instances?.[id],resources={};
+  // Every entry is a complete bounded snapshot, including pending state. A
+  // late HTTP response must not restore an older retry after stream completion,
+  // even when the completed page's value/revision did not change.
+  if(old?.generation===entry.generation&&Number.isSafeInteger(entry.stateRevision)
+   &&old.stateRevision>=entry.stateRevision){instances[id]=old;continue}
   for(const [name,record] of Object.entries(entry.resources||{})){
    const prior=old?.generation===entry.generation&&old.resources?.[name];
    resources[name]=prior?.revision>record.revision?prior:record;
