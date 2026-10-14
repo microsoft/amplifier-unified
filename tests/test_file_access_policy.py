@@ -85,9 +85,11 @@ def test_patch_denials_survive_shared_policy_and_symlinks_resolve(tmp_path):
         'denied_write_paths': [str(tmp_path / 'real/private'), str(tmp_path / 'real/secret')]}
 
 
-def test_absent_shared_policy_leaves_portable_patch_config_unchanged(tmp_path):
+def test_absent_shared_policy_resolves_patch_paths_at_execution_folder(tmp_path):
     patch = {'engine': 'function', 'allowed_write_paths': ['src']}
-    assert apply(tmp_path, patch, {}).tools[0]['config'] == patch
+    assert apply(tmp_path, patch, {}).tools[0]['config'] == {
+        'engine': 'function', 'allowed_write_paths': [str(tmp_path / 'src')]}
+    assert patch['allowed_write_paths'] == ['src']
 
 
 @pytest.mark.parametrize('invalid', [None, '/somewhere', [None]])

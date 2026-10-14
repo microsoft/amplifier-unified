@@ -132,7 +132,8 @@ async def test_selected_provider_keeps_typed_images_and_selection_on_every_bound
     hooks=HookRegistry()
     async def unchanged(event,data):return HookResult()
     hooks.register('tool:post',unchanged,name='pass-through')
-    coordinator=SimpleNamespace(get_capability=capabilities.get,register_capability=capabilities.__setitem__,mount=mount,hooks=hooks)
+    coordinator=SimpleNamespace(get=lambda kind: tools if kind == 'tools' else None,
+        get_capability=capabilities.get,register_capability=capabilities.__setitem__,mount=mount,hooks=hooks)
     async def bridge(operation,args):
         if operation=='context.manifest':return {'surfaces':[],'inputIds':['one']}
         result=await app.app_bridge(operation,args,sid)

@@ -822,10 +822,21 @@ class AutomaticHistory:
                 if not session or not session.get('nativeProject') or (not paging and session.get('status') in BUSY) or session.get('configurationBusy'):
                     return
                 session.update(historyLoading=True, historyError=None)
-                source = copy.deepcopy(session)
+                # The file reader needs identity and paging anchors, not the
+                # execution graph, configuration, or retained tool bodies.
+                # Copy only its inputs before crossing the worker boundary.
+                source = {key: copy.deepcopy(session[key]) for key in (
+                    'id', 'nativeProject', 'nativeIdentity', 'runtimeSessionId',
+                    'createdAt', 'historyManaged', 'nativeRevision',
+                    'sharedHistoryOffset', 'sharedHistoryUserTurnOffset') if key in session}
+                if paging:
+                    source['messages'] = [{key: message[key] for key in
+                        ('nativeIndex', 'nativeMessageId', 'role', 'text') if key in message}
+                        for message in session.get('messages', [])]
+                window = (max(limit, len(session.get('messages', [])))
+                          if session.get('historyManaged') else None) if not paging else limit
                 self.service._publish_changes(sessions={session_id}, detail_only=True)
             try:
-                window = (max(limit, len(source.get('messages', []))) if source.get('historyManaged') else None) if before is None else limit
                 result = await asyncio.to_thread(read_transcript, source, before=before, limit=window)
                 async with self.service.lock:
                     session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)

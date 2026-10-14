@@ -258,6 +258,15 @@ def _apply_settings(bundle, config):
         for row in bundle.tools
         if row.get("module") == "tool-filesystem"
     }
+    # Shared allowlists extend workspace access, whereas a bundle declaration
+    # may intentionally narrow it. Generic merging must not erase that origin
+    # before _apply_host_policy intersects the two policies.
+    filesystem_allowlists = {
+        row.get('id') or row.get('instance_id') or row['module']:
+            {key: copy.deepcopy(row.get('config', {})[key])
+             for key in ('allowed_write_paths', 'allowed_read_paths') if key in row.get('config', {})}
+        for row in bundle.tools if row.get('module') == 'tool-filesystem'
+    }
     bundle.providers = merge(bundle.providers, config.providers)
     bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
     for kind in ("tools", "hooks"):
@@ -285,6 +294,12 @@ def _apply_settings(bundle, config):
                 continue
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
             identity = row.get("id") or row.get("instance_id") or row.get("module")
+            if kind == 'tools' and row.get('module') == 'tool-filesystem':
+                original = filesystem_allowlists.get(identity, {})
+                for key in ('allowed_write_paths', 'allowed_read_paths'):
+                    row.setdefault('config', {}).pop(key, None)
+                    if key in original:
+                        row['config'][key] = original[key]
             if kind == "tools" and row.get("module") == "tool-filesystem" and identity in filesystem_denials:
                 for key, original in filesystem_denials[identity].items():
                     effective = row.get("config", {}).get(key, [])
@@ -439,9 +454,10 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
                     if policy:
                         current = restrict(current, policy)
                 row["config"] = current
-            if execution_root != history_root:
-                for key in policy_keys & row['config'].keys():
-                    row['config'][key] = list(dict.fromkeys(str(path) for path in paths(row['config'][key])))
+            # Modules resolve their allow/deny lists against process cwd, so
+            # relative policy paths must always become execution-relative here.
+            for key in policy_keys & row['config'].keys():
+                row['config'][key] = list(dict.fromkeys(str(path) for path in paths(row['config'][key])))
     def agents(values):
         for agent in values.values():
             if isinstance(agent, dict):
