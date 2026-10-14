@@ -32,7 +32,13 @@ The host coalesces reads per canonical identity, admits at most eight active roo
 and checks unrelated warm roots without awaiting a cold projection. Selected roots
 get admission first; other active roots rotate. Worker computation remains serial
 within that bounded queue. Loading/retry/ready status is visible while existing
-conversation and Work remain readable. Retries back off 3–30 seconds.
+conversation and Work remain readable. Transient retries back off 3–30 seconds.
+Deterministic input/output limits instead show an unavailable state. At most eight
+small negative receipts suppress repeated encoding/projection of that same rejected
+generation. Input changes, or a changed proven source generation for output limits,
+re-enable it. Bounded output receipts retain at most 2,048 paths / 256 KiB; if a
+receipt cannot be retained, a published owner invalidation re-enables the request.
+Refusal receipts contain only digests/source facts, never execution trees.
 
 The transport admits at most eight jobs, with 32 MiB encoded inputs, 64 MiB results
 and 256 MiB aggregate spool reservation. Shared exact-key/input jobs outlive an

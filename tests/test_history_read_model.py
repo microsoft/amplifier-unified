@@ -588,3 +588,92 @@ def test_malformed_disposable_receipt_rebuilds_requested_native_source(source, t
         assert len(session['execution']['nodes']) == 6
     finally:
         second.close()
+
+
+@pytest.mark.parametrize('reason', ['input_limit', 'output_limit'])
+async def test_deterministic_limit_waits_for_changed_generation_without_reencoding(source, model, monkeypatch, reason):
+    import asyncio
+    from types import SimpleNamespace
+    original, path = source
+    class Owner(dict):
+        pass
+    session = Owner(original)
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'}, 10)
+    notices, calls = [], []
+    service = SimpleNamespace(_session=lambda _: session, lock=asyncio.Lock(), closed=False)
+    view = EventLogView(service)
+    def publish(**kw):
+        notices.append(kw)
+        view.invalidate(kw.get('session_ids'))
+    service._publish = publish
+    class Projector:
+        async def project(self, inputs, *, key):
+            calls.append(key)
+            if len(calls) == 1:
+                result = {'status': 'retry', 'reason': reason}
+                if reason == 'output_limit':
+                    result['revisions'] = [(str(path), models.source_stamp(path))]
+                return result
+            return await asyncio.to_thread(model.project, inputs)
+    view.projector = Projector()
+    await view.refresh('app', passive=True)
+    assert session['workProjection'] == {'status': 'unavailable', 'reason': reason}
+    assert len(notices) == 2 and len(calls) == 1
+    projection_input = view.projection_input
+    monkeypatch.setattr(view, 'projection_input', lambda _: pytest.fail('same refused generation reconstructed inputs'))
+    for _ in range(12):
+        await view.refresh('app', passive=True)
+    assert len(calls) == 1 and len(notices) == 2
+    monkeypatch.setattr(view, 'projection_input', projection_input)
+    view.invalidate({'app'})  # An unrelated publication cannot replay an identical failed input.
+    await view.refresh('app', passive=True)
+    assert len(calls) == 1
+    if reason == 'input_limit':
+        session['messages'].append({'id': 'later', 'role': 'user', 'createdAt': 90})
+        view.invalidate({'app'})
+    else:
+        append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'complete'}, 90)
+    await view.refresh('app', passive=True)
+    assert len(calls) == 2 and session['workProjection'] == {'status': 'ready'}
+    assert not view._refused
+    assert session['execution'] == EventLogView(None).read(copy.deepcopy(EventLogView.projection_input(session)))
+
+
+async def test_output_limit_without_receipt_waits_for_published_invalidation(source):
+    import asyncio
+    from types import SimpleNamespace
+    session, _ = source
+    calls = []
+    service = SimpleNamespace(_session=lambda _: session, lock=asyncio.Lock(), closed=False, _publish=lambda **kw: None)
+    view = EventLogView(service)
+    class Projector:
+        async def project(self, inputs, *, key):
+            calls.append(key)
+            return {'status': 'retry', 'reason': 'output_limit'}
+    view.projector = Projector()
+    await view.refresh('app', passive=True)
+    for _ in range(3):
+        await view.refresh('app', passive=True)
+    assert len(calls) == 1
+    view.invalidate({'app'})
+    await view.refresh('app', passive=True)
+    assert len(calls) == 2 and session['workProjection']['status'] == 'unavailable'
+
+
+async def test_deterministic_refusals_retain_only_eight_small_receipts(source):
+    import asyncio
+    from types import SimpleNamespace
+    original, _ = source
+    sessions = {str(n): {**original, 'id': str(n)} for n in range(12)}
+    service = SimpleNamespace(_session=sessions.__getitem__, lock=asyncio.Lock(), closed=False, _publish=lambda **kw: None)
+    view = EventLogView(service)
+    class Projector:
+        async def project(self, inputs, *, key):
+            return {'status': 'retry', 'reason': 'input_limit'}
+    view.projector = Projector()
+    for identity in sessions:
+        await view.refresh(identity, passive=True)
+    assert len(view._refused) == 8
+    assert list(view._refused) == [str(n) for n in range(4, 12)]
+    assert all(set(receipt) == {'reason', 'digest', 'revisions'} and receipt['revisions'] == ()
+               for receipt in view._refused.values())

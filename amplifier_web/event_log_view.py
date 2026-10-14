@@ -678,12 +678,16 @@ class EventLogView:
         self._process_tasks = {}
         self._interest_cursor = 0
         self._retry_at = OrderedDict()
+        self._refused = OrderedDict()  # At most eight small deterministic-cap receipts.
 
     def invalidate(self, session_ids=None):
         """Invalidate before mutations are published, including deferred/failed saves."""
         for identity, fence in self._pending_inputs.items():
             if session_ids is None or identity in session_ids:
                 fence[0] = True
+        for identity in tuple(self._refused):
+            if (session_ids is None or identity in session_ids) and self._refused[identity]['revisions'] is None:
+                self._refused.pop(identity, None)
         if session_ids is None:
             self._clean_inputs.clear()
             self._retry_at.clear()
@@ -1352,7 +1356,7 @@ class EventLogView:
         from .history_read_model import input_digest, materialize_result, source_stamp, tuple_tree
         session = self.service._session(identity)
         identity = session['id']
-        if identity not in self.projected:
+        if identity not in self.projected and identity not in self._refused:
             async with self.service.lock:
                 if self.service.closed:
                     return
@@ -1365,7 +1369,8 @@ class EventLogView:
         try:
             cached = self.projected.get(identity)
             clean = self._clean_inputs.get(identity)
-            paths = self.read_paths.get(identity, ())
+            refused = self._refused.get(identity)
+            paths = tuple(row[0] for row in refused['revisions']) if refused and refused['revisions'] is not None else self.read_paths.get(identity, ())
             before = await asyncio.to_thread(lambda: tuple((str(path), source_stamp(path)) for path in paths))
             session = self.service._session(identity)
             if session is not owner or fence[0]:
@@ -1374,6 +1379,11 @@ class EventLogView:
             root = session.get('nativeIdentity') or session.get('runtimeSessionId') or identity
             same_root = bool(paths and paths[0] == event_path(session, root))
             same_sources = bool(cached and same_root and cached[1] == before)
+            same_refusal = bool(refused and (refused['revisions'] is None or refused['revisions'] == before))
+            if (same_refusal and clean is not None and self._clean_inputs.get(identity) is clean
+                    and clean[0]() is session and clean[1] == self._input_identity(session)):
+                count(self.service, 'events.process.refusal_reused')
+                return
             if (same_sources and clean is not None and self._clean_inputs.get(identity) is clean
                     and clean[0]() is session and clean[1] == self._input_identity(session)):
                 count(self.service, 'events.projection.passive_reused')
@@ -1386,6 +1396,11 @@ class EventLogView:
             if fence[0] or self.service._session(identity) is not owner:
                 count(self.service, 'events.projection.superseded')
                 return
+            if same_refusal and refused['digest'] == digest:
+                self._remember_clean(owner)
+                count(self.service, 'events.process.refusal_reused')
+                return
+            self._refused.pop(identity, None)
             if same_sources and cached[0] == digest:
                 self._remember_clean(owner)
                 count(self.service, 'events.projection.reused')
@@ -1399,12 +1414,34 @@ class EventLogView:
                 reason = result.get('reason')
                 reason = reason if reason in REASONS else 'worker_failed'
                 count(self.service, 'events.process.retry.' + reason)
+                refused_revisions = None
+                deterministic = reason in {'input_limit', 'output_limit'}
+                if reason == 'input_limit':
+                    refused_revisions = ()  # Encoded input size cannot change when its exact digest does not.
+                elif reason == 'output_limit' and 'revisions' in result:
+                    from .history_read_model import SelectedHistoryReadModel
+                    candidate = tuple((path, tuple_tree(stamp)) for path, stamp in result['revisions'])
+                    scoped = SelectedHistoryReadModel._valid_sources(inputs, {
+                        'paths': [path for path, _ in candidate], 'revisions': candidate})
+                    if scoped:
+                        current = await asyncio.to_thread(lambda: tuple((path, source_stamp(path)) for path, _ in candidate))
+                        if current != candidate:
+                            count(self.service, 'events.projection.superseded')
+                            return
+                        refused_revisions = candidate
                 async with self.service.lock:
                     if fence[0] or self.service.closed or self.service._session(identity) is not owner:
                         return
-                    if self._set_work_status(owner, 'retrying', reason):
+                    if self._set_work_status(owner, 'unavailable' if deterministic else 'retrying', reason):
                         self.service._publish(session_ids={identity}, record_only=True, detail_only=True)
-                self._retry_at[identity] = time.monotonic() + (30 if reason in {'input_limit', 'output_limit', 'memory_limit'} else 3)
+                    if deterministic:
+                        self._refused[identity] = {'reason': reason, 'digest': digest, 'revisions': refused_revisions}
+                        self._refused.move_to_end(identity)
+                        while len(self._refused) > 8:
+                            self._refused.popitem(last=False)
+                        self._remember_clean(owner)
+                        return  # Retry this refusal only when its inputs/sources change.
+                self._retry_at[identity] = time.monotonic() + (30 if reason == 'memory_limit' else 3)
                 self._retry_at.move_to_end(identity)
                 while len(self._retry_at) > 64:
                     self._retry_at.popitem(last=False)
