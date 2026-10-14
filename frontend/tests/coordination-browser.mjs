@@ -120,7 +120,9 @@ try{
   assert.equal(uiActions.filter(row=>row.action==='session.select').length,0);
  };
  const noForms=async()=>{
-  await expect(related.locator('form,input,textarea,select')).toHaveCount(0);
+  // File intent is an explicitly opened optional form. Ordinary related-work
+  // browsing still requires no commissioning or authorization paperwork.
+  await expect(related.locator('form,input,textarea,select').filter({visible:true})).toHaveCount(0);
   for(const text of ['Authorize collaboration','Commission durable task','Pending until a human decides']){
    await expect(related.getByText(text,{exact:true})).toHaveCount(0);
   }

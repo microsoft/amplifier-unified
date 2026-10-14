@@ -145,6 +145,34 @@ teardown or proves the underlying resource stopped. These cooperative claims
 do not fence external writers, resolve differently named aliases, or coordinate
 separate app installations. Inventory observations remain independent.
 
+## Active work and shared file plans
+
+Tasks and workers → Related work shows **Working in this workspace** for active
+chats in the same canonical workspace. It distinguishes independent and
+commissioned roots from observed child tasks, reports their execution folders,
+and indicates overlapping declared paths. Use Refresh related work to update
+that view or page through a larger active set. It never starts an idle worker.
+
+Expand **Declare files for this chat** to share up to 16 file/folder paths. Folder
+paths end in `/`; relative paths use the current execution folder. Saving an
+empty declaration clears it. Unsent text stays in this browser tab through
+navigation and reload. A stale save preserves that draft and the newer shared
+record. Deliberately discard the draft to load the latest record before editing
+again. A changed execution folder requires reviewing earlier declarations.
+
+Agents use the same `coordination.awareness`, `coordination.intent.read` and
+`coordination.intent` actions. Declarations require both observed intent and
+execution revisions plus a stable command ID. Only a root can replace its own
+declaration; a child cannot overwrite its root's plans. Ambient model context
+contains a bounded current observation rather than peer prompts or drafts.
+Exact shared declarations and additional active peers require explicit reads.
+
+These are advisory plans, not file locks, access grants or stale-write guards.
+Unobserved workers, idle declarations, external writers and unresolved filesystem
+aliases remain outside the active view. Overlap does not block independent work
+or impose a manager; coordinate, refresh the source or choose a separate copy
+when the actual task warrants it.
+
 ## Placement actions
 
 UI and agent callers use `workspace.list`, `workspace.prepare`, `workspace.create`, `workspace.add`, `workspace.select`, `workspace.rename` and `settings.update`. `prepare` returns a reviewed destination and a disposition: create, open, attach or blocked. `create` takes its `planId` and a stable transport command ID. A repeated plan cannot allocate a second folder, including after a lost acknowledgment. An interrupted allocation remains explicit and requires inspecting/attaching the existing destination.
