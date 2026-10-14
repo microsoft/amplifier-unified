@@ -1,0 +1,177 @@
+"""Request-scoped retained versions, owned by the existing output registry."""
+import asyncio
+import base64
+import copy
+import hashlib
+import json
+from pathlib import Path
+import re
+
+from .outputs import file_bytes, MAX_FILE
+
+MAX_DECLARATION = 2 * MAX_FILE
+EXACT = re.compile(r'([^@\n]+)@sha256:([a-f0-9]{64})\Z')
+
+
+def fence(source, request):
+    return [source['id'], source['workspace'], source.get('workingDirectory'),
+            source.get('executionRevision', 0), source.get('interruptionRevision', 0),
+            copy.deepcopy(source.get('collaborationGeneration')),
+            request.get('responseRevision', 0), copy.deepcopy(request.get('response'))]
+
+
+def prepare_files(root, references):
+    """No database or live session objects cross this worker boundary."""
+    items, total = [], 0
+    for reference in dict.fromkeys(references):
+        match = EXACT.fullmatch(reference)
+        if not match or '://' in match[1]:
+            continue  # Opaque references are not filesystem authority.
+        path, expected = match.groups()
+        item = {'reference': reference, 'sha256': expected}
+        try:
+            data, actual, name = file_bytes(root, path)
+            if hashlib.sha256(data).hexdigest() != expected:
+                item.update(status='changed', detail='Source bytes do not match the declared SHA-256.')
+            elif total + len(data) > MAX_DECLARATION:
+                item.update(status='unavailable', detail='This declaration exceeds the 16 MiB retained-file limit.')
+            else:
+                total += len(data)
+                item.update(status='retained', data=data, path=actual, filename=name)
+        except (OSError, ValueError):
+            # Do not expose details about a rejected external path or content.
+            item.update(status='unavailable', detail='Source unavailable or outside the supported workspace/file limits.')
+        items.append(item)
+    return items
+
+
+async def prepare(collaboration, source, args, origin, identity, digest):
+    async with collaboration.service.lock:
+        duplicate = collaboration.duplicate(identity, digest)
+        if duplicate:
+            return {'duplicate': duplicate}
+        if origin != 'agent':
+            collaboration.error('Response declarations require the actual recipient agent generation.')
+        binding, active = collaboration.active_binding(source)
+        request = collaboration.receipt(args['requestId'])
+        if (request.get('commandAction') != 'coordination.send'
+                or request.get('target', {}).get('sessionId') != source['id']
+                or args['requestId'] not in active.get('inputIds', [])
+                or args['requestId'] not in {row.get('inputId') for row in binding.get('_inputBindings', [])}
+                or request.get('delivery') not in {'accepted', 'applied', 'submitting'}):
+            collaboration.error('Declare only the exact delivered request in your current root generation.')
+        captured = fence(source, request)
+        root = source.get('workingDirectory') or source['workspace']
+    items = await asyncio.to_thread(prepare_files, root, list(args.get('references', [])))
+    return {'fence': captured, 'items': items}
+
+
+def store(collaboration, source, request, response, prepared, command_id):
+    """Caller owns the lock and the reply transaction. Never commits itself."""
+    if prepared['fence'] != fence(source, request):
+        collaboration.error('The task or response changed while retaining results; inspect and retry.', 409)
+    from .resource_files import put
+    app = collaboration.service
+    artifacts = []
+    available = max(0, 10000 - app.db.execute('SELECT count(*) FROM output_records').fetchone()[0])
+    for item in prepared['items']:
+        summary = {key: value for key, value in item.items() if key not in {'data', 'path', 'filename'}}
+        if item['status'] == 'retained' and not available:
+            summary.update(status='unavailable', detail='The retained output relationship limit is reached.')
+        elif item['status'] == 'retained':
+            data = item['data']
+            try:
+                body = {'encoding': 'utf-8', 'data': data.decode('utf-8')}
+            except UnicodeDecodeError:
+                body = {'encoding': 'base64', 'data': base64.b64encode(data).decode()}
+            record = app.outputs.store.create(source['id'], {
+                'kind': 'file', 'title': item['filename'], 'filename': item['filename'],
+                'sha256': item['sha256'], 'bytes': len(data), 'body': put(app.db, body),
+                'versionEvidence': 'snapshot', 'origin': {'source': 'agent'},
+                'collaborationResult': {'requestId': request['requestId'], 'commandId': command_id,
+                    'reference': item['reference'], 'generationId': response['generationId'],
+                    'executionDirectory': response['executionDirectory'],
+                    'executionRevision': source.get('executionRevision', 0),
+                    'workspace': source['workspace'],
+                    'worktree': copy.deepcopy(source.get('worktree'))},
+            })
+            summary.update(outputId=record['id'], bytes=record['bytes'])
+            available -= 1
+        artifacts.append(summary)
+    response['artifacts'] = artifacts
+    response['artifactVerification'] = ('incomplete' if any(row['status'] != 'retained' for row in artifacts)
+                                        else 'verified' if artifacts else 'not_requested')
+
+
+def resolve(collaboration, sid, request_id, reference, response_revision=None):
+    """Request authority does not grant general peer output-library access."""
+    app = collaboration.service
+    reader = app._session(sid, hydrate=False)
+    request = collaboration.receipt(request_id)
+    if (request.get('commandAction') != 'coordination.send'
+            or sid not in {request.get('senderSessionId'), request.get('target', {}).get('sessionId')}
+            or request.get('workspace') != reader.get('workspace')):
+        collaboration.error('This artifact is outside the conversation request and workspace scope.')
+    response = request.get('response') or {}
+    if response_revision is not None and response.get('responseRevision') != response_revision:
+        row = app.db.execute("""SELECT receipt FROM commands
+            WHERE json_extract(receipt,'$.commandAction')='coordination.reply'
+            AND json_extract(receipt,'$.result.requestId')=?
+            AND json_extract(receipt,'$.result.responseRevision')=? LIMIT 1""",
+            (request_id, response_revision)).fetchone()
+        response = json.loads(row[0]).get('result') if row else None
+        if not response or response.get('recipientSessionId') != request.get('target', {}).get('sessionId'):
+            collaboration.error('This exact response revision is unavailable.', 404)
+    if reference not in response.get('references', []):
+        collaboration.error('Choose an exact artifact reference from this workspace request.')
+    item = next((row for row in response.get('artifacts', []) if row['reference'] == reference), None)
+    if item is None:
+        return {'reference': reference, 'status': 'unavailable', 'detail': 'This older or opaque reference has no retained version.'}, None, response
+    if item['status'] != 'retained':
+        return copy.deepcopy(item), None, response
+    try:
+        record = app.outputs.record(request['target']['sessionId'], item['outputId'])
+        provenance = record.get('collaborationResult') or {}
+        if (provenance.get('requestId') != request_id or provenance.get('reference') != reference
+                or record.get('sha256') != item['sha256']):
+            raise ValueError('Retained artifact identity mismatch.')
+        data = app.outputs.content(record)
+        if data is None:
+            raise ValueError('Retained artifact bytes unavailable.')
+        return {**copy.deepcopy(item), 'filename': record['filename'],
+                'provenance': copy.deepcopy(provenance)}, data, response
+    except (OSError, ValueError, KeyError):
+        return {'reference': reference, 'status': 'unavailable',
+                'detail': 'The retained version is unavailable or failed its content hash. No mutable source was substituted.'}, None, response
+
+
+def read(collaboration, sid, args):
+    item, data, response = resolve(collaboration, sid, args['requestId'], args['reference'], args.get('responseRevision'))
+    result = {**item, 'responseStatus': response.get('status'), 'qualified': response.get('qualified', False),
+              'independentArtifactVerification': False}
+    if data is not None:
+        result['downloadUrl'] = '/api/outputs/' + item['outputId'] + '/content'
+        try:
+            content = data.decode('utf-8')
+            start, limit = args.get('offset', 0), args.get('limit', 4000)
+            result.update(text=content[start:start + limit], offset=start,
+                          nextOffset=start + limit if start + limit < len(content) else None)
+        except UnicodeDecodeError:
+            result['binary'] = True
+    return result
+
+
+def preview(state, item, data, origin):
+    from .workspace_canvas import canvas_command, EXTENSIONS, _pdf, _image, MAX_TEXT, MAX_HTML
+    kind = EXTENSIONS.get(Path(item['filename']).suffix.lower(), 'text')
+    if kind == 'pdf':
+        canvas_command(state, 'canvas.show', {'kind': 'text', 'content': '', 'title': item['filename']}, origin)
+        state['canvas'].update(kind='pdf', content=_pdf(data))
+    elif kind == 'image':
+        canvas_command(state, 'canvas.show', {'kind': kind, 'content': _image(data), 'title': item['filename']}, origin)
+    else:
+        if len(data) > (MAX_HTML if kind == 'html' else MAX_TEXT):
+            raise ValueError('Retained result exceeds the preview limit. Download the exact saved bytes.')
+        # canvas.show has the same text limit on inline HTML; retain the existing
+        # safe renderer, and expose exact downloads for larger retained files.
+        canvas_command(state, 'canvas.show', {'kind': kind, 'content': data.decode('utf-8'), 'title': item['filename']}, origin)

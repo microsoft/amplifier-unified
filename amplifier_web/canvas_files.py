@@ -24,19 +24,36 @@ def open_file(service, args, origin):
         return {'status': 'unavailable', 'message': 'The file browser changed. Open the file from its workspace Files page.'}
     scoped = {**service.state, 'selectedSessionId': sid, 'selectedWorkspaceId': workspace_id}
     file_root = None
+    retained = None
     if args.get('referenceRequestId'):
         receipt = service.collaboration.receipt(args['referenceRequestId'])
         response = receipt.get('response') or {}
         reference = args['path'] + '@sha256:' + args.get('expectedSha256', '')
-        if (receipt.get('workspace') != session['workspace'] or response.get('status') != 'sealed'
+        if args.get('referenceResponseRevision') is not None:
+            from .result_artifacts import resolve
+            item, data, response = resolve(service.collaboration, sid, args['referenceRequestId'], reference, args['referenceResponseRevision'])
+            if data is None:
+                return {'status': item['status'], 'message': item.get('detail', 'The retained version is unavailable.')}
+            retained = (item, data)
+        if (receipt.get('workspace') != session['workspace'] or (response.get('status') != 'sealed' and 'artifacts' not in response)
                 or reference not in response.get('references', [])):
             raise AppError('Choose an exact artifact reference from this workspace request.', 403)
+        if 'artifacts' in response and retained is None:
+            from .result_artifacts import resolve
+            item, data, _ = resolve(service.collaboration, sid, args['referenceRequestId'], reference)
+            if data is None:
+                return {'status': item['status'], 'message': item.get('detail', 'The retained version is unavailable.')}
+            retained = (item, data)
         file_root = response.get('executionDirectory')
-        if not file_root:
+        if not file_root and retained is None:
             return {'status': 'unavailable', 'message': 'This older result has no recorded execution folder. Its exact source cannot be established.'}
     try:
-        canvas_command(scoped, 'canvas.show', {'kind': 'auto', 'path': args['path'],
-            'expectedSha256': args.get('expectedSha256')}, origin, file_root=file_root)
+        if retained is not None:
+            from .result_artifacts import preview
+            preview(scoped, *retained, origin)
+        else:
+            canvas_command(scoped, 'canvas.show', {'kind': 'auto', 'path': args['path'],
+                'expectedSha256': args.get('expectedSha256')}, origin, file_root=file_root)
     except ReferencedFileChanged as exc:
         return {'status': 'changed', 'message': str(exc)}
     except (AppError, OSError, ValueError):
@@ -45,7 +62,9 @@ def open_file(service, args, origin):
         # Retain the checked bytes as a snapshot. A peer artifact preview must
         # not become a file editor pointed at a different task's working copy.
         scoped['canvas']['artifactReference'] = {'sha256': args['expectedSha256'],
-            'requestId': args.get('referenceRequestId'), 'path': args['path']}
+            'requestId': args.get('referenceRequestId'), 'responseRevision': args.get('referenceResponseRevision'), 'path': args['path']}
+        if retained:
+            scoped['canvas']['artifactReference']['outputId'] = retained[0]['outputId']
         scoped['canvas'].pop('path', None)
         scoped['canvas'].pop('workspacePath', None)
         scoped['canvas']['id'] = uuid.uuid4().hex

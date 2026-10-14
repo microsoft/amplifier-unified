@@ -218,4 +218,24 @@ not a claim that every v2 proposal or original v1 isolation promise is delivered
 
 No current universal checkout fence is known in this source baseline; this is not proof that all integrations are independent of the earlier promise. Existing explicit worktree handoffs, permission checks and preservation checks stay in place. Consumers must distinguish cooperative from genuinely protected bindings and report unsupported enforcement. The first collaboration increment should retain existing folder behavior, add honest context/coordination, and not claim newly enforced write isolation.
 
+### Retained exact results — 2026-10-14
+
+A fresh response declaration snapshots supported local `path@sha256:<digest>`
+references before the reply is acknowledged. The existing output/resource owner
+retains matching bytes, their producing execution binding and the request
+relationship. File reads are bounded to 8 MiB per file and 16 MiB per declaration,
+inside the producer's execution folder. Reads happen outside the host lock;
+generation, Stop, placement and response revision are rechecked before commit.
+Snapshot and reply records commit together. Exact command retries return the
+retained result without rereading mutable files, including after restart.
+
+Missing, changed, unsupported or over-limit sources remain explicit artifact
+states in the recorded report. An incomplete exact reference cannot satisfy a
+successful dependency. Retained bytes prove the referenced version, not semantic
+correctness, successful integration or independent review. Opaque references
+remain unverified. Older replies keep their checked-source fallback and are not
+retroactively labeled retained. Request-scoped artifact reads expose only the
+declared artifact to the request participants in the recorded workspace; they do
+not grant general access to the producing conversation's output library.
+
 Before publication: verify target revision and exact payload, decision coverage, affected consumers/checks and dated changelog through the supported publication guard; preserve this proposal. A refusal stops publication, not ordinary already-authorized implementation. DTU and Fable findings will be recorded against the exact implementation revision; none are claimed by this candidate.

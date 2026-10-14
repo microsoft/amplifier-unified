@@ -82,6 +82,9 @@ def definitions(schema, string):
             "textLimit": {"type": "integer", "minimum": 1, "maximum": 4000},
         }, ["sessionId"])),
         "coordination.result": ("Inspect admission and exact qualified final result links for one request. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200)}, ["requestId"])),
+        "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
+            "requestId": string(200), "reference": string(2000), "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
         "coordination.reply": ("Declare result, ack, defer or decline for one delivered request during your actual generation. The host seals only at matching successful root termination; an agent claim is not independently checked correctness.", schema({
             "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline"]},
             "outcome": {"enum": ["success", "failed", "deferred", "declined"]},
@@ -115,6 +118,8 @@ class Collaboration:
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.target.sessionId'))""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_sender ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.senderSessionId'))""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_replies ON commands(
+            json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.result.requestId'))""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_pair_window ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.senderSessionId'),
             json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.acceptedAt'))""")
@@ -673,6 +678,7 @@ class Collaboration:
                 # match or newly synthesized web assistant message.
                 response.update(status="sealed", terminalMessageId=anchor["messageId"], nativeTerminal=anchor, sealedAt=time.time(),
                     qualified=(response["kind"] == "result" and response["outcome"] == "success"
+                               and response.get('artifactVerification') != 'incomplete'
                                and bool(response.get("references") or response.get("messageIds"))),
                     independentArtifactVerification=False)
             else:
@@ -821,6 +827,12 @@ class Collaboration:
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
         source = self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None
+        if action == 'coordination.artifact':
+            if source['id'] != args['sessionId']:
+                self.error('Read a retained result from the calling conversation.')
+            from .result_artifacts import read
+            async with self.service.lock:
+                return {'accepted': True, 'result': read(self, source['id'], args)}
         if action in {'coordination.awareness', 'coordination.intent.read', 'coordination.intent'}:
             from .workspace_awareness import packet, intent_for, declare
             if action == 'coordination.intent':
@@ -911,6 +923,12 @@ class Collaboration:
             await self.service.history.ensure_loaded(args["sessionId"])
         identity = command_id or str(uuid.uuid4())
         digest = fingerprint([action, args, origin, source["id"]])
+        prepared_artifacts = None
+        if action == 'coordination.reply':
+            from .result_artifacts import prepare
+            prepared_artifacts = await prepare(self, source, args, origin, identity, digest)
+            if prepared_artifacts.get('duplicate'):
+                return prepared_artifacts['duplicate']
         async with self.service.lock:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
@@ -967,9 +985,26 @@ class Collaboration:
                 response = {**copy.deepcopy(args), "generationId": active["id"], "recipientSessionId": source["id"],
                             "executionDirectory": source.get("workingDirectory") or source["workspace"],
                             "status": "staged", "qualified": False, "declaredAt": time.time()}
-                request["response"] = response
-                self.save(args["requestId"], request)
-                receipt = {"accepted": True, "commandAction": action, "result": response}
+                from .result_artifacts import store
+                # Keep the reply, output relationships and resource roots in one
+                # owner transaction. Prior unrelated pending receipts survive a
+                # failed artifact save; a lost post-commit acknowledgment does
+                # not discard retained bytes or repeat their capture.
+                self.service.db.commit()
+                original = copy.deepcopy(request)
+                try:
+                    store(self, source, request, response, prepared_artifacts, identity)
+                    request['response'] = response
+                    self.save(args['requestId'], request)
+                    receipt = {'accepted': True, 'commandAction': action, 'result': response}
+                    self.insert(identity, digest, receipt)
+                    self.publish_receipt(receipt)
+                except BaseException:
+                    if self.service.db.in_transaction:
+                        self.service.db.rollback()
+                        self.refresh_reference(original)
+                    raise
+                return receipt
             elif action == "coordination.create":
                 # Creation is handled outside the service lock below.
                 self.require_continuation()

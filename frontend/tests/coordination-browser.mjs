@@ -1,7 +1,7 @@
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,unlink} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -219,6 +219,8 @@ try{
     requestId,kind:'result',outcome:'success',text:'Deterministic artifact retained; independently check the file.',references,
    },requestId+':reply');
    assert.equal(declaration.result.status,'staged');assert.equal(declaration.result.qualified,false);
+   assert.equal(declaration.result.artifactVerification,'verified');
+   assert.equal(declaration.result.artifacts[0].status,'retained');
    binding(await inspect(),requestId+':reply',task.id,context);
    const sourceContext=(await inspect()).contexts[current.selected];
    const wait=round===0
@@ -271,7 +273,7 @@ try{
    assert.equal(peerState.statuses[current.selected],'working');
    assert.equal(peerState.events.filter(row=>row.sessionId===current.selected&&row.event==='generation.started'&&row.generation_id===peerState.contexts[current.selected].generationId).length,1);
    assert.equal(peerState.events.filter(row=>row.sessionId===current.selected&&row.event==='input.delivered'&&row.inputId===continuation).length,1);
-   assert.deepEqual(await readCandidate(task.actor,requestId),candidate);
+   if(round!==0)assert.deepEqual(await readCandidate(task.actor,requestId),candidate);
    assert.deepEqual((await finish(task.actor)).terminal,terminal); // Duplicate observation, never another continuation.
    assert.equal((await inspect()).sent.filter(row=>row.inputId===continuation).length,1);
    await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
@@ -290,8 +292,11 @@ try{
    const read=uiActions.filter(call=>call.action==='coordination.read').at(-1);
    assert.equal(read.args.sessionId,task.id);assert.equal(read.args.messageId,anchor.messageId);
    await original.getByRole('button',{name:'Close original message',exact:true}).click();
+   // Source disappears after reporting but before its first artifact preview.
+   if(round===0)await unlink(candidate.path);
    await row.getByRole('button',{name:'Open referenced artifact',exact:true}).click();
    await page.waitForFunction(text=>window.amplifier.getState().canvas?.content===text,candidate.text);
+   if(round===0)await writeFile(candidate.path,candidate.text);
    const opened=uiActions.filter(call=>call.action==='canvas.openFile').at(-1);
    assert.equal(opened.args.sessionId,current.selected);assert.equal(opened.args.workspace,peerState.workspace);
    assert.equal(opened.args.path,candidate.path);
@@ -371,12 +376,19 @@ try{
  peerState=await inspect();
  await expect(related).toContainText('Other conversation');
  const changed=rounds[0];
- const previousCanvas=await page.evaluate(()=>window.amplifier.getState().canvas?.content);
  await writeFile(changed.candidate.path,'Changed after the result was reported');
  try{
   await related.locator('[data-request-id="'+changed.requestId+'"]').getByRole('button',{name:'Open referenced artifact',exact:true}).click();
-  await expect(related.getByRole('alert')).toContainText('not the reported artifact version');
-  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas?.content),previousCanvas);
+  await page.waitForFunction(text=>window.amplifier.getState().canvas?.content===text,changed.candidate.text);
+  const row=related.locator('[data-request-id="'+changed.requestId+'"]');
+  await expect(row).toContainText('Exact version saved');
+  const url=await row.getByRole('link',{name:'Download saved version',exact:true}).getAttribute('href');
+  assert.equal(await page.request.get(url).then(response=>response.text()),changed.candidate.text);
+  await unlink(changed.candidate.path);
+  const saved=await agent('source','coordination.artifact',{sessionId:current.selected,requestId:changed.requestId,reference:changed.qualified.result.results[0].declaration.references[0]},'deleted-source-read');
+  assert.equal(saved.result.text,changed.candidate.text);assert.equal(saved.result.status,'retained');
+  await row.getByRole('button',{name:'Open referenced artifact',exact:true}).click();
+  await page.waitForFunction(text=>window.amplifier.getState().canvas?.content===text,changed.candidate.text);
   await preserve();
  }finally{await writeFile(changed.candidate.path,changed.candidate.text)}
  for(const {requestId} of rounds)assert.equal(peerState.sent.filter(row=>row.inputId===requestId).length,1);
