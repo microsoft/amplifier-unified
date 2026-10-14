@@ -11,7 +11,6 @@
         "Performance diagnostics now include bounded operation timings, lock waits, event-loop delays and history-cache counters. These are available to authenticated clients and copied chat diagnostics without recording message bodies or credentials.",
         "Recent model and tool work stays beside the latest messages when a long chat contains many older delegate reports. Work pages follow transcript position, and older details remain available through paging.",
         "Returned delegate reports no longer borrow an earlier turn\u2019s duration or failure. Reports with unknown timestamps do not display invented elapsed time.",
-        "Shared filesystem and patch tools reject stale edits after another cooperating worker changes a file. Workers must reread before editing; project access remains available when permitted extra folders are configured. Stale-edit protection applies to the wrapped tools sharing one app data home; shell commands, external editors and other writers remain outside that protocol.",
         "Chat-switch latency remains under investigation. This release does not claim that every live-server delay is resolved."
       ],
       "notices": []
