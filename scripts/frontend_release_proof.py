@@ -25,6 +25,44 @@ QUALIFIERS = (WORKFLOW, 'scripts/frontend_release_proof.py')
 ARTIFACT = 'frontend-proof-'
 STEPS = ('Install frontend dependencies', 'Test frontend', 'Build frontend',
          'Verify committed frontend assets', 'Record frontend proof', 'Upload frontend proof')
+REJECTIONS = {
+    'Proof inputs or provenance changed': 'proof_identity',
+    'Qualifying workflow/helper differs from trusted release inputs': 'qualifying_source',
+    'Missing runner image identity': 'runner_identity',
+    'Not a trusted successful repository PR run': 'run_identity',
+    'Workflow run is not associated with the merged PR': 'pr_association',
+    'Tested PR merge tree is not the release tree': 'tested_merge',
+    'Missing exact successful frontend job attempt': 'job_attempt',
+    'Frontend proof steps did not all succeed': 'job_steps',
+}
+
+
+def association(run, pr, head_prs, selected, proof_base, repository):
+    """Use exact-head API facts only for GitHub's explicitly empty run list."""
+    linked = run.get('pull_requests')
+    if isinstance(linked, list) and any(
+            isinstance(item, dict) and item.get('number') == pr['number'] for item in linked):
+        return 'run'
+    # Missing/malformed/nonempty conflicting metadata is never repaired by this
+    # fallback. The extra API request shares the ordinary lookup's deadline.
+    if (linked != [] or not isinstance(head_prs, list) or len(head_prs) > 100
+            or not pr.get('merged_at') or pr.get('merge_commit_sha') != selected
+            or pr.get('base', {}).get('ref') != 'main'
+            or pr['base'].get('sha') != proof_base):
+        return None
+    matching = []
+    for item in head_prs:
+        if not isinstance(item, dict):
+            continue
+        if (item.get('number') == pr['number'] and item.get('merged_at')
+                and item.get('merge_commit_sha') == selected
+                and item.get('head', {}).get('sha') == run['head_sha'] == pr['head']['sha']
+                and item.get('head', {}).get('repo', {}).get('full_name') == repository
+                and item.get('base', {}).get('repo', {}).get('full_name') == repository
+                and item.get('base', {}).get('ref') == 'main'
+                and item.get('base', {}).get('sha') == pr['base']['sha']):
+            matching.append(item)
+    return 'head_commit' if len(matching) == 1 else None
 
 
 def command(*args, root=None):
@@ -109,7 +147,8 @@ class GitHub:
             return value
 
 
-def verify(proof, *, inputs, run, pr, jobs, commit, qualifiers, repository):
+def verify(proof, *, inputs, run, pr, jobs, commit, qualifiers, repository,
+           head_prs=None, selected=None):
     """Pure verifier; every identity is checked against independent API facts."""
     expected = {'schema': 1, 'eligible': True, 'inputs': inputs, 'repository': repository,
                 'runId': run['id'], 'attempt': run['run_attempt'], 'pr': pr['number'],
@@ -127,7 +166,8 @@ def verify(proof, *, inputs, run, pr, jobs, commit, qualifiers, repository):
             or pr.get('head', {}).get('repo', {}).get('full_name') != repository
             or pr.get('base', {}).get('repo', {}).get('full_name') != repository):
         raise ValueError('Not a trusted successful repository PR run')
-    if not any(item.get('number') == pr['number'] for item in run.get('pull_requests', [])):
+    associated = association(run, pr, head_prs, selected, proof.get('base'), repository)
+    if associated is None:
         raise ValueError('Workflow run is not associated with the merged PR')
     # The PR workflow checks out GitHub's synthetic merge commit. Prove the
     # tested tree/parents from GitHub, not from the uploaded receipt alone.
@@ -144,6 +184,7 @@ def verify(proof, *, inputs, run, pr, jobs, commit, qualifiers, repository):
                  if step.get('status') == 'completed' and step.get('conclusion') == 'success'}
     if not set(STEPS) <= completed:
         raise ValueError('Frontend proof steps did not all succeed')
+    return associated
 
 
 def find(root, env, api):
@@ -154,6 +195,10 @@ def find(root, env, api):
         return {'reused': False, 'reason': 'historical or non-main selection'}
     inputs = identity(root)
     repository = env['GITHUB_REPOSITORY']
+    rejected = {}
+    def reject(reason):
+        # Fixed labels only: no raw API/exception text or unbounded identities.
+        rejected[reason] = min(300, rejected.get(reason, 0) + 1)
     prs = api.get(f'commits/{selected}/pulls?per_page=100')
     for pr in prs:
         if not pr.get('merged_at') or pr.get('merge_commit_sha') != selected:
@@ -168,9 +213,11 @@ def find(root, env, api):
                 artifacts = api.get(f"actions/runs/{run['id']}/artifacts?per_page=100")['artifacts']
                 candidates = [item for item in artifacts if item.get('name') == ARTIFACT + str(attempt)]
                 if len(candidates) != 1:
+                    reject('artifact_count')
                     continue
                 artifact = candidates[0]
                 if artifact.get('workflow_run', {}).get('id') != run['id']:
+                    reject('artifact_run')
                     continue
                 proof = api.archive(artifact)
                 if not re.fullmatch('[0-9a-f]{40}', str(proof.get('tested', ''))):
@@ -183,14 +230,21 @@ def find(root, env, api):
                         raise ValueError('Invalid qualifying source')
                     qualifiers[name] = hashlib.sha256(base64.b64decode(content['content'])).hexdigest()
                 jobs = api.get(f"actions/runs/{run['id']}/attempts/{attempt}/jobs?per_page=100")['jobs']
-                verify(proof, inputs=inputs, run=run, pr=pr, jobs=jobs, commit=commit,
-                       qualifiers=qualifiers, repository=repository)
+                head_prs = None
+                if run.get('pull_requests') == []:
+                    if run.get('head_sha') != pr['head']['sha'] or not re.fullmatch('[0-9a-f]{40}', run['head_sha']):
+                        raise ValueError('Not a trusted successful repository PR run')
+                    head_prs = api.get(f"commits/{run['head_sha']}/pulls?per_page=100")
+                associated = verify(proof, inputs=inputs, run=run, pr=pr, jobs=jobs, commit=commit,
+                    qualifiers=qualifiers, repository=repository, head_prs=head_prs, selected=selected)
                 return {'reused': True, 'inputs': inputs, 'tested': proof['tested'],
                         'runId': run['id'], 'attempt': attempt, 'artifactId': artifact['id'],
-                        'artifactDigest': artifact['digest'], 'selected': selected}
-            except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError, zipfile.BadZipFile):
+                        'artifactDigest': artifact['digest'], 'selected': selected,
+                        'association': associated, 'rejections': rejected}
+            except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:
+                reject(REJECTIONS.get(str(exc), 'proof_lookup'))
                 continue
-    return {'reused': False, 'reason': 'no matching trusted proof'}
+    return {'reused': False, 'reason': 'no matching trusted proof', 'rejections': rejected}
 
 
 def main():
