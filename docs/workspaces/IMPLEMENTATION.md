@@ -1,5 +1,70 @@
 # Implementation and evidence
 
+## Supported file-tool source checks — 2026-10-14
+
+Unified now wraps the mounted reference filesystem tools and both reference
+patch engines at its existing app-access boundary. Existing files require a
+successful read in the invoking coordinator; writes compare the observed byte
+hash under short cross-process file locks. Successful edits advance that
+coordinator's observation. Independent roots, fresh/resumed children and
+remounted workers do not borrow another worker's reads. No whole-project lease,
+new history store, automatic merge or extra agent action is introduced.
+
+Creation and patch move destinations require absence. Function patches touch
+each resolved path once and preflight all source versions and permissions before
+calling the original engine. Stale preflight changes no files. Later engine/OS
+failure can still partially apply a multi-file patch: affected observations are
+invalidated and the result tells the caller to inspect before retrying. Locks
+release on cancellation, and concurrently queued calls cannot silently inherit
+the first call's new version. Memory holds at most 512 observations; 4,096 lock
+stripes bound lock-file storage without unsafe deletion of occupied locks.
+
+Mounting the actual optional modules also exposed 22 existing policy-composition
+failures on unchanged main. Generic settings merging had erased the distinction
+between shared extra folders and an explicit narrower bundle allowlist. Relative
+patch denials could also resolve against the host's working directory. Policy
+composition now preserves that distinction and normalizes paths at the actual
+execution folder. All 78 mounted policy configurations pass, including explicit
+read-only/narrow declarations. Image policy remains covered by adjacent native
+checks; image generation itself is outside the source-check adapter.
+
+The integrated candidate includes main's interim-reply and release fixes.
+Qualification against its installed wheel passes 397 native-runtime/file/policy/
+provider-adapter checks and four subtests, with the real filesystem module and
+both patch engines loaded. Separate OS processes race full writes against full
+writes and both patch/string-edit paths, including hard-link aliases. A separate
+creation race reproduced a lost update through Unicode-equivalent filenames on
+macOS. Normalizing only the lock identity fixes it without renaming either input;
+same-name, case-alias and Unicode-alias creation races now admit one winner.
+Native
+Core/Foundation tests cover finite, resumed, persistent and nested child mounts.
+All 681 frontend tests pass. Source/package byte verification includes application
+Python and shipped frontend assets.
+
+The full local integrated run completed with 6,975 passes, six passing subtests,
+140 skips and 25 failures. Twenty-four failures reproduce on unchanged main
+`a513a177`, including an artifact-cleanup assertion that passes alone but fails
+on repeated service lifecycles. The remaining assertion expected a relative
+image read path; it now checks the intentionally normalized execution path and
+passes. The final Unicode correction and affected assertion are included in the
+397 installed-wheel checks above. This is not a green broad-suite claim.
+
+A three-round Chromium journey through the actual composer, real provider and
+fresh worker passes against the integrated wheel: read a file, introduce a
+scripted peer edit, reject a stale overwrite, reread and preserve that peer edit,
+then use the provider's native patch route. Native history retains the actual
+conflict result; desktop/mobile rendering and browser errors were checked. The
+peer edit is scripted, not a second concurrently reasoning model. An earlier
+browser fixture authenticated only HTTP and missed the live connection; its
+timeout is retained as failed harness evidence. The corrected journey uses the
+app's origin-scoped signed session cookie and no simulated provider responses.
+
+This protects these mounted tools within one app data home. Arbitrary shell,
+external editors, custom tools, image writers, other installations and external
+alias changes remain outside the lock protocol. Byte hashes do not detect a
+change followed by restoration. Multi-file patch atomicity, broad concurrent
+model efficacy, release publication and installed-host adoption are not claimed.
+
 ## Active-work awareness and advisory file intent — 2026-10-13
 
 Independent and commissioned roots now receive the same bounded view of active
@@ -266,7 +331,7 @@ competing stores.
 | Equivalent authority across supported routes | Host, runtime adapters, configuration controls | Explicit capability grants and revocation across schedules, recipes and background admission; preserve authorized configuration changes |
 | Revision-aware requests and observations | Collaboration receipts and runtime input adapters | Later correlated replies, question/deferral revisions, expiring one-shot watches and fair bounded delivery; no duplicate continuation or false dependency success |
 | Several repositories and shared resources | Worktree/execution bindings and workspace resource lifecycle | Cooperative resource reservations and explicit per-repository working copies delivered above. Remaining: integrate runtime dependency mapping and managed resource provisioning; verify automatic command, import and preview provenance against bindings |
-| Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context and advisory overlap delivered above. Remaining: supported stale-write conflicts, plus broader independent/commissioned/native-worker lifecycle acceptance |
+| Useful coexistence awareness | Demand-scoped task projection and client navigation | Bounded host context, advisory overlap and supported file-tool source conflicts delivered above. Remaining: broader independent/commissioned/native-worker lifecycle and concurrency acceptance |
 | Assignment control | Existing task, capacity and interruption owners | Aggregate reservations and scoped Stop across commissioned roots and nested work, while unrelated project chats keep running |
 | Durable results and integration | Artifact/resource owner and worktree integration | Retain exact versions before mutable sources disappear; validate the combined candidate and preserve uncertain cleanup effects |
 | Complete supported user journeys | Shared action/API layer, browser and terminal clients | Repeated two-round real-provider work, failure and Stop variants, independent and commissioned peers, disconnect/restart, private client state and measured responsiveness |
@@ -384,7 +449,7 @@ Managed Git worktrees use `amplifier_worktrees`, with original source manifests,
 
 - Workspace home with Files/Directions and repository bindings; attributed, versioned shared directions and instruction provenance.
 - Sources, helper reports and preview ownership in the retained Canvas details surface.
-- Folder-level conflicting-writer coordination across different sessions and isolation of writing helpers. Native session ownership alone does not prevent two different sessions from editing the same file. The app does not yet claim that guarantee.
+- Universal folder-level conflicting-writer protection and isolation of arbitrary writing helpers. Native session ownership alone does not protect shared files; the supported file-tool source checks above are narrower than an OS or checkout-wide fence.
 - Multi-repository task environment/port bindings, combination validation, one integration/preview owner, and partial publish reconciliation.
 - Cross-host transfer remains the separate portability implementation's responsibility.
 

@@ -68,6 +68,41 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Supported file-tool source checks — 2026-10-14
+
+Unified wraps the mounted reference filesystem tools and both reference patch
+engines at the existing root/child app-access boundary. Successful file reads
+record an in-memory content version for that native coordinator. Updating or
+deleting an existing file requires that version; a stale or missing observation
+requires a fresh read. Successful writes advance only the invoking coordinator's
+observation. Restart, remount and native children begin without inherited file
+observations. Directory listings and failed reads do not authorize replacement.
+Creation requires absence; patch moves require an absent destination.
+Function patches touch each resolved path once; combine changes within one
+file operation instead of relying on sequential duplicate path operations.
+
+Short per-file locks in one app data home serialize the comparison and supported
+operation across worker processes. Patch calls preflight every source and move
+destination before invoking their engine. This prevents stale-source rejection
+after earlier patch operations have already run; it does not make a multi-file
+patch an atomic transaction against engine, OS or process failure. On an uncertain
+or failed mutation, invalidate affected observations and require fresh reads.
+Cancellation releases locks and does not replay a mutation.
+
+The lock/observation domain is bounded to these wrapped tools in one installation.
+Existing path policies remain authoritative. Unknown tools, image generation,
+shell commands, external editors, separate app homes, network-filesystem lock
+semantics and externally changed path aliases are outside this guarantee.
+Content versions detect changed bytes, not edit history or change-then-restore.
+Reads may be paginated; observing a version does not assert that every line was
+shown. Observations are bounded and evicted entries require another read.
+No new transcript store, mandatory workspace lease or automatic merge is added.
+
+Qualification must mount the real reference tools, exercise both patch engines,
+race separate worker processes, cover child/remount separation and preserve the
+existing read/write path restrictions. Source-only doubles do not establish
+native-runtime coverage or installed-worker adoption.
+
 ### Active-work awareness and declared file intent — 2026-10-13
 
 The host supplies a bounded, fresh projection of its observed active work in the

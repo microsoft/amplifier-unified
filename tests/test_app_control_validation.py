@@ -15,6 +15,7 @@ async def mounted_tool(bridge):
         tools[name] = tool
 
     coordinator = SimpleNamespace(
+        get=lambda kind: tools if kind == 'tools' else None,
         get_capability=capabilities.get, register_capability=capabilities.__setitem__,
         mount=mount, hooks=SimpleNamespace(register=lambda *args, **kwargs: None))
     await install_app_access(coordinator, bridge)

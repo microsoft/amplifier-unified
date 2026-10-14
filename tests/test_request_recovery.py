@@ -22,6 +22,7 @@ def host(monkeypatch):
     runtime = SimpleNamespace(generation={'id': 'accepted-turn'}, closed=False)
     capabilities = {'live.runtime': runtime}
     coordinator = SimpleNamespace(hooks=Hooks(), get_capability=capabilities.get,
+                                  get=lambda kind: {} if kind == 'tools' else None,
                                   register_capability=capabilities.__setitem__)
     install(coordinator)
     monkeypatch.setattr('amplifier_web.request_recovery.asyncio.sleep', AsyncMock())
