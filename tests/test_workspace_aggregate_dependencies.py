@@ -47,11 +47,12 @@ async def test_title_only_native_change_reuses_workspace_aggregates(service, tmp
         following = owner.snapshot('proof-client')
         evidence = service.performance_diagnostics.snapshot()['shellResourceRebuilds']
         attempts = evidence['total'] - evidence_before
-        assert attempts > 0
+        assert attempts == (2 if kind == 'root' else 0)
         assert len(aggregates) == aggregate_before
         assert all(row == aggregates[0] for row in aggregates), 'aggregate facts did not change'
-        assert all(row['reasons'] == ['navigation.native'] for row in evidence['recent'][-attempts:])
-        assert {row['resource'] for row in evidence['recent'][-attempts:]} == {'sidebarRecent'}
+        if attempts:
+            assert all(row['reasons'] == ['navigation.native'] for row in evidence['recent'][-attempts:])
+            assert {row['resource'] for row in evidence['recent'][-attempts:]} == {'sidebarRecent'}
         for name, instance in first['instances'].items():
             before = instance['resources']
             after = following['instances'][name]['resources']

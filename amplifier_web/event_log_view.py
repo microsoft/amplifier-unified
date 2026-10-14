@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import time
 import weakref
 
 from .history_read_retry import retry_indexed_read
@@ -266,6 +267,7 @@ class EventIndex:
 
     def reset(self):
         self.read_bytes = 0
+        self.prefix_digest = hashlib.sha256(b'').hexdigest()
         self._checkpoint_signature = None
         self.offset = 0
         self.file_id = None
@@ -294,23 +296,40 @@ class EventIndex:
         if revision == self.revision:
             return True
         reset = self.file_id != identity or stat.st_size <= self.offset
-        if not reset and self.last:
+        prefix = hashlib.sha256()
+        if not reset and self.offset:
             with self.path.open('rb') as stream:
-                stream.seek(self.last['offset'])
-                reset = hashlib.sha256(stream.read(self.last['bytes'])).hexdigest() != self.last['sha256']
+                remaining = self.offset
+                while remaining:
+                    if guard := getattr(self, '_budget_guard', None):
+                        guard()
+                    raw = stream.read(min(remaining, 65536))
+                    if not raw:
+                        break
+                    prefix.update(raw)
+                    remaining -= len(raw)
+            # File identity and an unchanged last line do not prove that an
+            # external writer left earlier bytes untouched before appending.
+            reset = bool(remaining) or prefix.hexdigest() != self.prefix_digest
         if reset:
             self.reset()
+            prefix = hashlib.sha256()
         self.file_id = identity
         with self.path.open('rb') as stream:
             stream.seek(self.offset)
             # Parsing runs off the app's event loop. A partial final line is
             # retried on the next append, never committed to the index.
+            lines = 0
             while raw := stream.readline():
+                lines += 1
+                if lines % 128 == 0 and (guard := getattr(self, '_budget_guard', None)):
+                    guard()
                 self.read_bytes += len(raw)
                 offset = self.offset
                 if not raw.endswith(b'\n'):
                     break
                 self.offset = stream.tell()
+                prefix.update(raw)
                 reference = {'path': str(self.path), 'offset': offset, 'bytes': len(raw),
                              'sha256': hashlib.sha256(raw).hexdigest()}
                 self.last = reference
@@ -321,6 +340,7 @@ class EventIndex:
                 except (ValueError, TypeError, KeyError):
                     if len(self.diagnostics) < 20:
                         self.diagnostics.append({'code': 'invalid_event', 'offset': offset})
+        self.prefix_digest = prefix.hexdigest()
         self.revision = revision
         return True
 
@@ -590,6 +610,38 @@ def retained_index_size(index, *, limit=None):
     return total
 
 
+def refresh_turn_lifecycle(tree, session, *, host_turns=None):
+    """Recompute display timing without taking manager lifecycle authority."""
+    if host_turns is None:
+        host_turns = {row['id'] for row in session.get('execution', {}).get('turns', ())
+                      if not row.get('canonicalHistory') and not row.get('nativeHistory')}
+    foreground_by_turn = {}
+    for row in tree.get('nodes', ()):
+        if row.get('lifecycle') != 'background':
+            foreground_by_turn.setdefault(row.get('turnId'), []).append(row)
+    for turn in tree.get('turns', ()):
+        # Naming and other auxiliary calls retain their own lifecycle and
+        # usage, but cannot reopen or extend a completed foreground turn.
+        members = foreground_by_turn.get(turn['id'], [])
+        starts = [row['startedAt'] for row in members if isinstance(row.get('startedAt'), (int, float))]
+        ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
+        if starts:turn['startedAt'] = min(starts)
+        # Call outcomes cannot overwrite a manager failure, or settle the
+        # currently admitted input between calls. Logs enrich action rows;
+        # the host lifecycle owns when its current turn has stopped.
+        if turn['id'] in host_turns and (turn.get('status') or turn.get('phase')) in {'error','failed','cancelled','interrupted'}:
+            continue
+        current_live = (turn['id'] in host_turns and turn['id'] == tree.get('currentTurnId')
+                        and session.get('status') in {'working','starting','running','stopping'})
+        if current_live or any(row.get('phase') in LIVE_PHASES and not row.get('endedAt') for row in members):
+            # A later observed call can continue this input after an earlier
+            # projection saw only completed members. Discard that old end.
+            turn['phase'] = 'running'
+            turn.pop('endedAt', None)
+        elif ends:
+            turn.update(endedAt=max(ends), phase='completed')
+
+
 class EventLogView:
     # Shared recent working set, not a pin for every conversation ever visited.
     # Either limit can retire an index; canonical files remain authoritative.
@@ -620,14 +672,29 @@ class EventLogView:
         self._clean_inputs = OrderedDict()
         self.read_paths = {}
         self.read_revisions = {}
+        self.read_proofs = {}
+        self.projector = None
+        self._pending_inputs = {}
+        self._process_tasks = {}
+        self._interest_cursor = 0
+        self._retry_at = OrderedDict()
+        self._refused = OrderedDict()  # At most eight small deterministic-cap receipts.
 
     def invalidate(self, session_ids=None):
         """Invalidate before mutations are published, including deferred/failed saves."""
+        for identity, fence in self._pending_inputs.items():
+            if session_ids is None or identity in session_ids:
+                fence[0] = True
+        for identity in tuple(self._refused):
+            if (session_ids is None or identity in session_ids) and self._refused[identity]['revisions'] is None:
+                self._refused.pop(identity, None)
         if session_ids is None:
             self._clean_inputs.clear()
+            self._retry_at.clear()
         else:
             for identity in session_ids:
                 self._clean_inputs.pop(identity, None)
+                self._retry_at.pop(identity, None)
 
     @staticmethod
     def _input_identity(session):
@@ -754,23 +821,71 @@ class EventLogView:
         return result
 
     def start(self):
+        # Qualify each platform's process-memory policy before enabling it.
+        # Other supported hosts retain the exact existing threaded reader.
+        if sys.platform.startswith('linux') and getattr(self.service, 'data_dir', None) is not None:
+            from .history_projection_process import ProcessProjector
+            self.projector = ProcessProjector(self.service.data_dir)
         self.task = asyncio.create_task(self.loop())
 
     async def close(self):
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        tasks = tuple(self._process_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self.projector is not None:
+            await self.projector.close()
+
+    def _process_refresh_task(self, identity):
+        if self.service.closed:
+            return None
+        identity = self.service._session(identity)['id']
+        if self._retry_at.get(identity, 0) > time.monotonic():
+            return None
+        task = self._process_tasks.get(identity)
+        if task is not None:
+            return task
+        if len(self._process_tasks) >= 8:
+            count(self.service, 'events.process.admission_deferred')
+            return None
+        task = asyncio.create_task(self._refresh_process(identity))
+        self._process_tasks[identity] = task
+        def completed(value):
+            if self._process_tasks.get(identity) is value:
+                self._process_tasks.pop(identity, None)
+            if not value.cancelled() and value.exception() is not None:
+                error = value.exception()
+                logger.error('History display projection failed', exc_info=(type(error), error, error.__traceback__))
+        task.add_done_callback(completed)
+        return task
 
     async def loop(self):
         while not self.service.closed:
-            from .history_demand import event_sessions
-            for identity in event_sessions(self.service):
-                try:
-                    await self.refresh(identity, passive=True)
-                except (OSError, ValueError):
-                    pass  # Keep the last readable view while a log is replaced.
-                except Exception:
-                    logger.exception('Could not refresh the event-log view for %s', identity)
+            from .history_demand import event_sessions, subscribed_sessions
+            interests = event_sessions(self.service)
+            if self.projector is not None:
+                # Selection gets admission first; rotating other active roots
+                # prevents one fixed prefix from monopolizing the bounded queue.
+                selected = subscribed_sessions(self.service)
+                waiting = [identity for identity in interests if identity not in selected]
+                if waiting:
+                    offset = self._interest_cursor % len(waiting)
+                    waiting = waiting[offset:] + waiting[:offset]
+                    self._interest_cursor += 1
+                for identity in [identity for identity in interests if identity in selected] + waiting:
+                    self._process_refresh_task(identity)
+            else:
+                for identity in interests:
+                    try:
+                        await self.refresh(identity, passive=True)
+                    except (OSError, ValueError):
+                        pass  # Keep the last readable view while a log is replaced.
+                    except Exception:
+                        logger.exception('Could not refresh the event-log view for %s', identity)
             await asyncio.sleep(1)
 
     @measured('events.read', session=True)
@@ -791,6 +906,8 @@ class EventLogView:
     @measured('events.project', session=True)
     def _read(self, session, stages):
         def stage(name):
+            if guard := getattr(self, '_budget_guard', None):
+                guard()
             stages.close()
             stages.enter_context(measure(self.service, name, synchronous=True, session_id=session['id']))
 
@@ -815,6 +932,7 @@ class EventLogView:
             if index is None:
                 index = self._new_index(path, sid)
             self._read_touched.add(str(path))
+            index._budget_guard = getattr(self, '_budget_guard', None)
             try:
                 available = index.refresh()
                 count(self.service, 'events.canonical.bytes_read', index.read_bytes)
@@ -832,6 +950,9 @@ class EventLogView:
             queue.extend(index.children)
         self.read_paths[session['id']] = tuple(path for path, _ in inputs)
         self.read_revisions[session['id']] = tuple((str(path), stamp) for path, stamp in inputs)
+        self.read_proofs[session['id']] = {str(index.path): {
+            'identity': index.identity, 'offset': index.offset, 'last': index.last,
+            'sha256': index.prefix_digest} for index in indexes}
         count(self.service, 'events.project.indexes', len(indexes))
         count(self.service, 'events.project.paths', len(inputs))
         count(self.service, 'events.project.workers', len(workers))
@@ -1075,33 +1196,9 @@ class EventLogView:
                     nodes.append(copy.deepcopy(row))
                 completed_calls.add(nodes[-1])
         nodes.sort(key=lambda row: (row.get('startedAt') or 0, row.get('eventOrder', 0)))
-        foreground_by_turn = {}
-        for row in nodes:
-            if row.get('lifecycle') != 'background':
-                foreground_by_turn.setdefault(row.get('turnId'), []).append(row)
-        for turn in turns.values():
-            # Naming and other auxiliary calls retain their own lifecycle and
-            # usage, but cannot reopen or extend a completed foreground turn.
-            members = foreground_by_turn.get(turn['id'], [])
-            starts = [row['startedAt'] for row in members if isinstance(row.get('startedAt'), (int, float))]
-            ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
-            if starts:turn['startedAt'] = min(starts)
-            # Call outcomes cannot overwrite a manager failure, or settle the
-            # currently admitted input between calls. Logs enrich action rows;
-            # the host lifecycle owns when its current turn has stopped.
-            if turn['id'] in host_turns and (turn.get('status') or turn.get('phase')) in {'error','failed','cancelled','interrupted'}:
-                continue
-            current_live = (turn['id'] in host_turns and turn['id'] == live.get('currentTurnId')
-                            and session.get('status') in {'working','starting','running','stopping'})
-            if current_live or any(row.get('phase') in LIVE_PHASES and not row.get('endedAt') for row in members):
-                # A later observed call can continue this input after an earlier
-                # projection saw only completed members. Discard that old end.
-                turn['phase'] = 'running'
-                turn.pop('endedAt', None)
-            elif ends:
-                turn.update(endedAt=max(ends), phase='completed')
         tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl',
                 'retiredUsageNodes': accounting}
+        refresh_turn_lifecycle(tree, session, host_turns=host_turns)
         stage('events.plan')
         from .chat_plan import latest_plan
         tree['plan'] = latest_plan(nodes, aliases, read_field)
@@ -1156,6 +1253,9 @@ class EventLogView:
         Code mutating issued aliases without publishing must use the default
         explicit refresh (or invalidate); passive=True belongs to the host loop.
         """
+        if self.projector is not None and passive:
+            task = self._process_refresh_task(identity)
+            return await asyncio.shield(task) if task is not None else None
         async with self.lock:
             session = self.service._session(identity)
             identity = session['id']
@@ -1232,3 +1332,153 @@ class EventLogView:
                     self._clean_inputs.pop(expired, None)
                     self.read_paths.pop(expired, None)
                     self.read_revisions.pop(expired, None)
+                    self.read_proofs.pop(expired, None)
+
+    @staticmethod
+    def _set_work_status(session, status, reason=None):
+        value = {'status': status}
+        if reason is not None:
+            value['reason'] = reason
+        if session.get('workProjection') == value:
+            return False
+        session['workProjection'] = value
+        return True
+
+    async def _refresh_process(self, identity):
+        """Publish only an exact, still-owned display read from the subprocess.
+
+        The service lock protects only admission/publication. Input construction,
+        source checks, hashing, delta materialization and comparisons run off-loop.
+        The bounded in-flight fence catches published mutations across awaits.
+        This path is internal/passive: explicit reads retain the exact reference
+        path, including its unpublished-alias comparison under the service lock.
+        """
+        from .history_read_model import input_digest, materialize_result, source_stamp, tuple_tree
+        session = self.service._session(identity)
+        identity = session['id']
+        if identity not in self.projected and identity not in self._refused:
+            async with self.service.lock:
+                if self.service.closed:
+                    return
+                session = self.service._session(identity)
+                if self._set_work_status(session, 'loading'):
+                    self.service._publish(session_ids={identity}, record_only=True, detail_only=True)
+        owner = session
+        fence = [False]
+        self._pending_inputs[identity] = fence
+        try:
+            cached = self.projected.get(identity)
+            clean = self._clean_inputs.get(identity)
+            refused = self._refused.get(identity)
+            paths = tuple(row[0] for row in refused['revisions']) if refused and refused['revisions'] is not None else self.read_paths.get(identity, ())
+            before = await asyncio.to_thread(lambda: tuple((str(path), source_stamp(path)) for path in paths))
+            session = self.service._session(identity)
+            if session is not owner or fence[0]:
+                count(self.service, 'events.projection.superseded')
+                return
+            root = session.get('nativeIdentity') or session.get('runtimeSessionId') or identity
+            same_root = bool(paths and paths[0] == event_path(session, root))
+            same_sources = bool(cached and same_root and cached[1] == before)
+            same_refusal = bool(refused and (refused['revisions'] is None or refused['revisions'] == before))
+            if (same_refusal and clean is not None and self._clean_inputs.get(identity) is clean
+                    and clean[0]() is session and clean[1] == self._input_identity(session)):
+                count(self.service, 'events.process.refusal_reused')
+                return
+            if (same_sources and clean is not None and self._clean_inputs.get(identity) is clean
+                    and clean[0]() is session and clean[1] == self._input_identity(session)):
+                count(self.service, 'events.projection.passive_reused')
+                return
+            self._clean_inputs.pop(identity, None)
+            def prepare():
+                value = copy.deepcopy(self.projection_input(owner))
+                return value, input_digest(value)
+            inputs, digest = await asyncio.to_thread(prepare)
+            if fence[0] or self.service._session(identity) is not owner:
+                count(self.service, 'events.projection.superseded')
+                return
+            if same_refusal and refused['digest'] == digest:
+                self._remember_clean(owner)
+                count(self.service, 'events.process.refusal_reused')
+                return
+            self._refused.pop(identity, None)
+            if same_sources and cached[0] == digest:
+                self._remember_clean(owner)
+                count(self.service, 'events.projection.reused')
+                return
+            result = await self.projector.project(inputs, key=identity)
+            if self.service.closed or fence[0] or self.service._session(identity) is not owner:
+                count(self.service, 'events.projection.superseded')
+                return
+            if result.get('status') != 'complete':
+                from .history_projection_process import REASONS
+                reason = result.get('reason')
+                reason = reason if reason in REASONS else 'worker_failed'
+                count(self.service, 'events.process.retry.' + reason)
+                refused_revisions = None
+                deterministic = reason in {'input_limit', 'output_limit'}
+                if reason == 'input_limit':
+                    refused_revisions = ()  # Encoded input size cannot change when its exact digest does not.
+                elif reason == 'output_limit' and 'revisions' in result:
+                    from .history_read_model import SelectedHistoryReadModel
+                    candidate = tuple((path, tuple_tree(stamp)) for path, stamp in result['revisions'])
+                    scoped = SelectedHistoryReadModel._valid_sources(inputs, {
+                        'paths': [path for path, _ in candidate], 'revisions': candidate})
+                    if scoped:
+                        current = await asyncio.to_thread(lambda: tuple((path, source_stamp(path)) for path, _ in candidate))
+                        if current != candidate:
+                            count(self.service, 'events.projection.superseded')
+                            return
+                        refused_revisions = candidate
+                async with self.service.lock:
+                    if fence[0] or self.service.closed or self.service._session(identity) is not owner:
+                        return
+                    if self._set_work_status(owner, 'unavailable' if deterministic else 'retrying', reason):
+                        self.service._publish(session_ids={identity}, record_only=True, detail_only=True)
+                    if deterministic:
+                        self._refused[identity] = {'reason': reason, 'digest': digest, 'revisions': refused_revisions}
+                        self._refused.move_to_end(identity)
+                        while len(self._refused) > 8:
+                            self._refused.popitem(last=False)
+                        self._remember_clean(owner)
+                        return  # Retry this refusal only when its inputs/sources change.
+                self._retry_at[identity] = time.monotonic() + (30 if reason == 'memory_limit' else 3)
+                self._retry_at.move_to_end(identity)
+                while len(self._retry_at) > 64:
+                    self._retry_at.popitem(last=False)
+                return  # Keep selection and its last readable Work; the interest loop retries.
+            revisions = tuple((path, tuple_tree(stamp)) for path, stamp in result['revisions'])
+            def validate():
+                if input_digest(self.projection_input(owner)) != digest:
+                    return False, None, False
+                if any(source_stamp(path) != stamp for path, stamp in revisions):
+                    return False, None, False
+                tree = materialize_result(owner, result)
+                return True, tree, tree is not None and owner.get('execution') != tree
+            valid, tree, changed = await asyncio.to_thread(validate)
+            async with self.service.lock:
+                if (not valid or fence[0] or self.service.closed
+                        or self.service._session(identity) is not owner):
+                    count(self.service, 'events.projection.superseded')
+                    return
+                if changed:
+                    owner['execution'] = tree
+                status_changed = self._set_work_status(owner, 'ready')
+                if changed or status_changed:
+                    self.service._publish(session_ids={identity}, record_only=True, detail_only=True)
+                self._retry_at.pop(identity, None)
+                self.projected[identity] = (result['inputDigest'], revisions)
+                self.read_paths[identity] = tuple(Path(path) for path in result['paths'])
+                self.read_revisions[identity] = revisions
+                self._remember_clean(owner)
+                self.projected.move_to_end(identity)
+                while len(self.projected) > 64:
+                    retired, _ = self.projected.popitem(last=False)
+                    self._clean_inputs.pop(retired, None)
+                    self.read_paths.pop(retired, None)
+                    self.read_revisions.pop(retired, None)
+                for name, amount in result.get('diagnostics', {}).get('counters', {}).items():
+                    if name.startswith('events.') and type(amount) is int:
+                        count(self.service, name, amount)
+                count(self.service, 'events.process.completed')
+        finally:
+            self._pending_inputs.pop(identity, None)

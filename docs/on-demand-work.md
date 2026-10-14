@@ -54,3 +54,8 @@ protected. Existing cold-display retirement already protects active/subscribed
 chats and eight recent chats; measure eager startup view hydration and navigation
 accesses before adding another cache or lowering that bound. Test at 24,000
 sessions and 4,000 projects, measuring loaded body counts, RSS, CPU and latency.
+
+Selected canonical Work reconstruction now has a bounded process/read-model owner.
+See [selected history projection](selected-history-projection.md) for exact source
+fences, conservative append recognition, cache and process limits, and the remaining
+cold-tree materialization boundary.
