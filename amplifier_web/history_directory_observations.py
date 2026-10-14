@@ -98,6 +98,18 @@ def digest(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
 
 
+def visible_ids(directory, state, identities, *, notices=False):
+    """Resolve only requested public owners, retaining canonical suppression."""
+    from .history_directory import PUBLIC_ID_BATCH
+    identities = sorted(set(identities))
+    result = set()
+    for start in range(0, len(identities), PUBLIC_ID_BATCH):
+        sql, params = directory.effective(state, public_ids=identities[start:start + PUBLIC_ID_BATCH])
+        result.update(row[0] for row in directory.db.execute(sql +
+            " SELECT id FROM directory_rows" + (" WHERE session_kind!='internal'" if notices else ''), params))
+    return result
+
+
 def revision(directory,state):
     # effective freezes each admitted row once; a snapshot uses its already
     # frozen overlay and pinned DB views, never mutable service state.
@@ -145,13 +157,16 @@ def revision(directory,state):
             if previous is None or current[index]!=previous[index]:
                 overlays[key].append((row['id'],current[index]))
     directory._observation_parts = retained
-    pins = [] if not state.get('pinnedSessionIds') else [row[0] for row in directory.db.execute(sql+
-        ' SELECT id FROM directory_rows WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id',
-        [*params,json.dumps(state.get('pinnedSessionIds',[]))])]
+    pins = sorted(visible_ids(directory, state, state.get('pinnedSessionIds', ())))
+    # First match existing notice fingerprints, without expanding the history
+    # directory. Only those owners need the canonical visibility/role lookup.
     read = [] if not state.get('attentionRead') else [tuple(row) for row in directory.db.execute(sql+
         " SELECT n.owner,n.key,n.fingerprint FROM directory_notices n JOIN json_each(?) r ON r.key=n.key AND r.value=n.fingerprint "
-        "WHERE EXISTS(SELECT 1 FROM directory_rows d WHERE d.id=n.owner AND d.session_kind!='internal') ORDER BY n.owner,n.key,n.fingerprint",
+        "ORDER BY n.owner,n.key,n.fingerprint",
         [*params,json.dumps(state.get('attentionRead',{}))])]
+    if read:
+        owners = visible_ids(directory, state, (row[0] for row in read), notices=True)
+        read = [row for row in read if row[0] in owners]
     from .managed_deletion import tombstones
     suppression = digest([sorted(set(state.get('hiddenNativeSessions',[]))),
                           sorted(set(state.get('hiddenNativeWorkspaces',[]))),

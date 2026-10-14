@@ -71,9 +71,11 @@ class DirectoryFacts:
         self.owner, self.directory, self.state = owner, directory, state
         self.where, self.params = where, tuple(params)
         self.sql, self.base = directory.effective(state)
-        self.length = directory.db.execute(self.sql+' SELECT COUNT(*) FROM directory_rows WHERE '+where,
-                                          [*self.base,*params]).fetchone()[0]
+        self.length = None
+        self.end = None
         self.block_start, self.block = -1, []
+        self.raw_block = None
+        self.block_length = 0
         self.query_view = None
         self.cursor = None
         self.cursor_position = -1
@@ -81,11 +83,15 @@ class DirectoryFacts:
         self.read = state.get('attentionRead', {})
 
     def __len__(self):
+        if self.length is None:
+            self.length = self.directory.db.execute(self.sql+' SELECT COUNT(*) FROM directory_rows WHERE '+self.where,
+                                                   [*self.base,*self.params]).fetchone()[0]
         return self.length
 
-    def __getitem__(self, index):
-        if not 0 <= index < self.length:
-            raise IndexError(index)
+    def has(self, index):
+        """Bounded lookahead; paging does not require counting the directory."""
+        if index < 0 or self.end is not None and index >= self.end:
+            return False
         start = index // self.BLOCK * self.BLOCK
         if start != self.block_start:
             from .history_directory import COLUMNS
@@ -97,8 +103,20 @@ class DirectoryFacts:
                     [*self.base,*self.params,start])
             selected = self.cursor.fetchmany(self.BLOCK)
             self.cursor_position = start + len(selected)
-            self.block = [self.owner.row_facts(self.directory.decode(row), self.read, self.pins) for row in selected]
+            self.raw_block, self.block = selected, []
+            self.block_length = len(selected)
             self.block_start = start
+            if len(selected) < self.BLOCK:
+                self.end = start + len(selected)
+        return index - start < self.block_length
+
+    def __getitem__(self, index):
+        if not self.has(index):
+            raise IndexError(index)
+        if self.raw_block is not None:
+            self.block = [self.owner.row_facts(self.directory.decode(row), self.read, self.pins) for row in self.raw_block]
+            self.raw_block = None
+        start = self.block_start
         return self.block[index-start]
 
     def for_query(self, query):
@@ -137,7 +155,7 @@ class DirectoryFacts:
     def activity_counts(self):
         result = {role:dict(executionCount=0,preparingCount=0,loadingCount=0,
                             attentionCount=0,requiresActionCount=0) for role in ('roots','delegates')}
-        rows = self.directory.db.execute(self.sql+" SELECT session_kind,SUM(execution),SUM(preparing),SUM(loading) FROM directory_rows WHERE session_kind!='internal' GROUP BY session_kind",self.base)
+        rows = self.directory.db.execute(self.sql+" SELECT session_kind,SUM(execution),SUM(preparing),SUM(loading) FROM directory_rows WHERE session_kind!='internal' AND (execution OR preparing OR loading) GROUP BY session_kind",self.base)
         for kind,execution,preparing,loading in rows:
             count = result['roots' if kind=='root' else 'delegates']
             for key,value in zip(('executionCount','preparingCount','loadingCount'),(execution,preparing,loading)):
@@ -149,6 +167,8 @@ class DirectoryFacts:
             self.cursor.close()
             self.cursor = None
         self.block.clear()
+        self.raw_block = None
+        self.block_length = 0
         self.block_start = self.cursor_position = -1
 
     def close(self):
@@ -458,8 +478,9 @@ class Observations:
         rows = snapshot['rows']
         if isinstance(rows, DirectoryFacts):
             rows = rows.for_query(query)
+        has_row = rows.has if isinstance(rows, DirectoryFacts) else lambda position: position < len(rows)
         items, inspected = [], 0
-        while position < len(rows) and inspected < SCAN_BUDGET and len(items) < query['limit']:
+        while inspected < SCAN_BUDGET and len(items) < query['limit'] and has_row(position):
             session, workspace, notices = rows[position]
             inspected += 1
             if not self.in_scope(session, query['scope']):
@@ -486,7 +507,7 @@ class Observations:
                 if slot >= len(notices):
                     position, slot = position + 1, 0
         value = {'revision': snapshot['revision'], 'items': items,
-                 'nextCursor': self.cursor(query, [position, slot], snapshot['revision'], lease_id) if position < len(rows) else None}
+                 'nextCursor': self.cursor(query, [position, slot], snapshot['revision'], lease_id) if has_row(position) else None}
         return value if value['nextCursor'] else self.finish(query, token, lease_id, value)
 
     @staticmethod
@@ -512,16 +533,17 @@ class Observations:
         directory_rows = snapshot['rows'] if isinstance(snapshot['rows'], DirectoryFacts) else None
         if snapshot['counts'] is None:
             snapshot['counts'] = {'position': 0, 'slot': -1,
-                'counts': directory_rows.activity_counts() if directory_rows else
+                'counts': directory_rows.activity_counts() if directory_rows is not None else
                     {role: dict(executionCount=0, preparingCount=0, loadingCount=0,
                                 attentionCount=0, requiresActionCount=0) for role in ('roots', 'delegates')}}
         cache = self.counts_cache = snapshot['counts']
-        rows = directory_rows.for_query({'scope':'all','collection':'attention'}) if directory_rows else snapshot['rows']
+        rows = directory_rows.for_query({'scope':'all','collection':'attention'}) if directory_rows is not None else snapshot['rows']
+        has_row = rows.has if isinstance(rows, DirectoryFacts) else lambda position: position < len(rows)
         inspected = 0
         # Reserve room for decoding canonical notice slots and one lookahead
         # block; a directory page does not have a prebuilt whole-library tuple.
-        budget = COUNT_BUDGET // 2 if directory_rows else COUNT_BUDGET
-        while cache['position'] < len(rows) and inspected < budget:
+        budget = COUNT_BUDGET // 2 if directory_rows is not None else COUNT_BUDGET
+        while inspected < budget and has_row(cache['position']):
             session, _, notices = rows[cache['position']]
             inspected += 1
             if session['role'] == 'internal':
@@ -530,7 +552,7 @@ class Observations:
                 continue
             count = cache['counts']['roots' if session['role'] == 'root' else 'delegates']
             if cache['slot'] == -1:
-                if not directory_rows:
+                if directory_rows is None:
                     for flag, value in session['activity'].items():
                         count[flag + 'Count'] += int(value)
                 cache['slot'] = 0
@@ -544,7 +566,7 @@ class Observations:
             if cache['slot'] >= len(notices):
                 cache['position'] += 1
                 cache['slot'] = -1
-        if cache['position'] < len(rows):
+        if has_row(cache['position']):
             return {'revision': snapshot['revision'], 'status': 'collecting',
                     'nextCursor': self.cursor(query, [cache['position'], cache['slot'] + 1], snapshot['revision'], lease_id)}
         self.counts_revision = snapshot['revision']

@@ -23,7 +23,7 @@ The installed-wheel probe also loads worker-owned app packages in a fresh
 qualification: sibling app packages must be exposed by the explicit bootstrap
 without adding host site-packages or distribution metadata to the runtime.
 
-## Local-first, fast publication policy (October 13, 2026)
+## Local-first, fast publication policy (updated October 14, 2026)
 
 The development loop depends on published releases reaching local development
 installations quickly. Target roughly two minutes for a warm publication run;
@@ -33,10 +33,14 @@ or merge prerequisite again.
 
 Before requesting merge, run the affected backend and frontend tests locally,
 and exercise changed user flows in an owned DTU with synthetic state. Reuse owned
-dependencies where appropriate. Substantial integrations also warrant the full
-Python suite and relevant real-runtime/browser scenarios locally. Fix meaningful
-failures before publishing; record the exact source, commands, results, skips and
-limits in the PR. A green GitHub check is not a substitute for this work. Follow
+dependencies where appropriate. Aim for 1–3 minutes of focused local checks and
+about five minutes for the normal foreground budget. The full local suite is not
+a merge or release prerequisite, including for substantial integrations. Select
+specific pre-release checks for material risks such as destructive migrations or
+authorization changes. Fix failures attributable to the candidate's changed
+behavior before publishing; record the exact source, commands, results, skips and
+limits in the PR. Unrelated broad-suite findings remain visible follow-up work.
+A green GitHub check is not a substitute for focused qualification. Follow
 workspace DTU rules; never use a shared application installation as a test target.
 
 Typical local commands, inside the owned test environment:
@@ -48,9 +52,9 @@ npm ci --prefix frontend
 npm test --prefix frontend
 npm run build --prefix frontend
 git diff --exit-code -- amplifier_web/static
-# For substantial integrations, after the affected checks:
-uv run --no-sync pytest -q --tb=short
 # Select relevant browser scripts from frontend/package.json.
+# Optional broader local coverage runs separately in the background:
+# uv run --no-sync pytest -v --tb=short
 ```
 
 Replace the illustrative test filename with the actual affected suite. Real
@@ -74,6 +78,8 @@ main head or whichever release happens to be latest. The installed-package lane
 downloads both published distributions, verifies their checksums, and installs
 and probes the wheel outside the source checkout. The full Python, broad readiness
 and extended browser suites run in independent jobs after publication.
+The full Python lane has a 90-minute limit and prints each test's identity as it
+runs, so a timeout does not conceal failed or unfinished test identities.
 
 The reporting job writes a run summary and opens or updates one tracked issue per
 release when any expected lane fails, is cancelled, is skipped or is missing.
@@ -82,6 +88,16 @@ issue. Test jobs have read-only repository access; only the isolated reporting
 job can write issues. A failure does not withdraw the release, change its bytes,
 replay work or modify installed hosts. Investigate it and ship a corrective release
 when needed. Published and exhaustively verified remain distinct states.
+
+Publication completion is the foreground handoff. Delegate monitoring and triage
+of broad local and post-release verification, and continue the next task without
+waiting for those jobs. Notify on actionable findings, not unchanged polling.
+When a next release is already in progress, incorporate relevant corrections
+there; otherwise address findings directly while idle. Newly discovered urgent
+regressions still receive prompt attention. Reusing earlier qualification requires
+matching the exact tested inputs; affected checks run again when those inputs
+change. This policy does not itself claim that cross-workflow proof reuse is
+already implemented.
 
 The broad suites also remain manually runnable. Changing this policy requires an
 explicit decision and an update to this document, tests and repository rules.

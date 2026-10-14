@@ -255,8 +255,13 @@ def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
     manual = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(manual['on']) == {'workflow_dispatch', 'workflow_call'}
     assert manual['permissions'] == {'contents': 'read'}
-    assert any('pytest -q --tb=short' in step.get('run', '')
-               for step in manual['jobs']['python']['steps'])
+    python = manual['jobs']['python']
+    assert python['timeout-minutes'] == '90'
+    complete = next(step for step in python['steps']
+                    if step.get('name') == 'Run the complete Python suite')
+    # Keep the entire suite and immediate node identities: a timeout must not
+    # conceal which test failed or was still running behind quiet progress dots.
+    assert complete['run'] == 'uv run --no-sync pytest -v --tb=short'
     for filename in ('release.yml', 'work-workflows.yml'):
         jobs = yaml.load((workflows / filename).read_text(), Loader=yaml.BaseLoader)['jobs']
         for job in jobs.values():

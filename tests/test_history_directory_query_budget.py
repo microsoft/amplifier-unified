@@ -62,7 +62,8 @@ async def test_local_catalog_navigation_and_children_avoid_quadratic_live_overla
                       'navigationMs': elapsed, 'childrenVm': child_work, 'childrenMs': child_ms}))
 
 
-async def test_mixed_native_catalog_with_large_registry_uses_bounded_lookup_work(app_factory, tmp_path):
+@pytest.mark.parametrize('automatic_index', [True, False])
+async def test_mixed_native_catalog_with_large_registry_uses_bounded_lookup_work(app_factory, tmp_path, automatic_index):
     """Real-host shape: many workspaces plus native rows and local overrides.
 
     A six-owner/one-workspace scale fixture misses catalog×registry JSON joins.
@@ -102,6 +103,9 @@ async def test_mixed_native_catalog_with_large_registry_uses_bounded_lookup_work
         operations += 10000
         return operations > 30_000_000
     app.db.set_progress_handler(budget,10000)
+    # SQLite versions differ in whether they synthesize an index for CTE
+    # ownership lookups. Correct bounded work must not rely on that choice.
+    app.db.execute('PRAGMA automatic_index=' + ('ON' if automatic_index else 'OFF'))
     start = time.monotonic()
     try:
         page = app.directory.chats(state)
@@ -115,6 +119,7 @@ async def test_mixed_native_catalog_with_large_registry_uses_bounded_lookup_work
     assert len(app._state['sessions']) == 6
     assert not app.runtime.started and not app.runtime.sent
     print(json.dumps({'nativeRows':27000,'localOverrides':187,'workspaces':1750,
+                      'automaticIndex':automatic_index,
                       'pins':500,'archived':500,'vm':operations,
                       'ms':(time.monotonic()-start)*1000}))
 

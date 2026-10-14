@@ -226,6 +226,10 @@ requested group page or explicitly opened group/window. Older tool bodies are
 not examined to construct the newest hundred summaries. The current native
 reader still reconstructs loaded execution metadata; this change does not claim
 fully disk-paged execution reconstruction.
+The remaining legacy event-to-turn fallback indexes eligible message timestamps
+and saved turn anchors once per requested reconstruction. It preserves message
+presentation order (including unsorted timestamps) and the first saved matching
+turn; these indexes do not establish call identity or accounting authority.
 
 When a requested native index exceeds the 64 MiB RAM working-set budget or is
 evicted, a disposable checkpoint under `cache/event-index-v1` preserves parsed

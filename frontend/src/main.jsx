@@ -53,7 +53,7 @@ import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraftDefaultsRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
-import {createConversationNavigation} from './conversation-navigation';
+import {createConversationNavigation,isNavigationAction} from './conversation-navigation';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';
 import {VoiceClient} from './voice';
@@ -217,11 +217,13 @@ function App(){
    else await awaitState(result);
    return result;
   };
-  const navigation=['session.select','session.draft','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','session.draft','workspace.select'].includes(args.action));
+  // Browse and chat selections share intent order. A later optimistic browse
+  // stays pending until an earlier selection can no longer replace its scope.
+  const navigation=isNavigationAction(action,args);
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
   const defaultsRead=isDraftDefaultsRead(action,meta),catalogRead=isProviderCatalogRead(action,meta)||defaultsRead;
-  const queue=action.startsWith('coordination.')||meta.presentation||defaultsRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  const queue=navigation?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
   const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{

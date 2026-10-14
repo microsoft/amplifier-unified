@@ -21,7 +21,7 @@ jobs:
   python:
     if: ${{ !inputs.core_wheels }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +50,7 @@ jobs:
           'amplifier-module-loop-streaming @ git+https://github.com/microsoft/amplifier-module-loop-streaming@main'
           'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
       - name: Run the complete Python suite
-        run: uv run --no-sync pytest -q --tb=short
+        run: uv run --no-sync pytest -v --tb=short
   core-wheels:
     if: ${{ inputs.core_wheels }}
     uses: ./.github/workflows/core-wheels.yml
