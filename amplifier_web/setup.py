@@ -317,7 +317,8 @@ class SetupManager:
         while not probe_workspace.is_dir() and probe_workspace.parent!=probe_workspace:
             probe_workspace=probe_workspace.parent
         from .probe_diagnostics import communicate, stderr_tail, failure_detail
-        process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True,env=env,cwd=probe_workspace)
+        from .probe_process import spawn, stop
+        process=await spawn(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,cwd=probe_workspace)
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
         try:
             try:
@@ -346,11 +347,7 @@ class SetupManager:
             if action=='providers.test':response['test']={**result['test'],'providerId':args['id']}
             return response
         finally:
-            if process.returncode is None:
-                try:os.killpg(process.pid,signal.SIGKILL)
-                except ProcessLookupError:pass
-                await process.wait()
-            await asyncio.gather(stderr_task,return_exceptions=True)
+            await stop(process, stderr_task)
 
     def _keys(self,updates):
         from .configuration_authority import check_current

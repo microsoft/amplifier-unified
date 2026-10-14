@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import re
-import signal
 from .preferences import SettingsStore
 from .host.config import load_config,merge,expand_environment
 from .setup import SetupManager,redact,safe_name,public_source
@@ -160,7 +159,8 @@ class RegistryManager:
             from .runtime import RuntimeManager
             command=RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('module_validate.py'))]
             if args.get('behavioral'):command=command[:2]+['--with','pytest','--with','pytest-asyncio']+command[2:]
-        process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)})
+        from .probe_process import spawn, stop
+        process=await spawn(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)})
         try:
             # Structural validators do not need credentials from browser drafts.
             payload={k:row[k] for k in ('id','module','section','source') if k in row}
@@ -174,11 +174,4 @@ class RegistryManager:
             if result is None:raise ValueError('Module validation did not return a result. Check its source and dependencies.')
             return {'validation':{k:v for k,v in result.items() if k!='type'}}
         finally:
-            if process.returncode is None:
-                try:os.killpg(process.pid,signal.SIGTERM)
-                except ProcessLookupError:pass
-                try:await asyncio.wait_for(process.wait(),3)
-                except TimeoutError:
-                    try:os.killpg(process.pid,signal.SIGKILL)
-                    except ProcessLookupError:pass
-                    await process.wait()
+            await stop(process, grace=3)
