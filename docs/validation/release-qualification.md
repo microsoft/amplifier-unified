@@ -183,6 +183,14 @@ proof helper must match the release checkout. A green check name or a JSON claim
 of success alone is insufficient. The proof is emitted only after tests, build
 and committed-assets verification, then retained seven days.
 
+When GitHub explicitly returns an empty run PR-association list, the verifier may
+confirm the exact run-head commit's associated PR instead. That independently
+returned PR must match the merged PR, selected main merge commit, repository,
+head and base commits, and main branch. Missing, malformed, or conflicting run
+associations do not use this fallback. All other proof checks still apply; the
+additional request shares the same lookup budget. Rejection diagnostics contain
+only fixed reason codes and bounded counts, never raw API or exception text.
+
 Lookup has a 20-second network budget and small archive/JSON limits. Missing,
 expired, changed, fork, tampered or unrecognized proofs run the ordinary frontend
 installation, tests, build and assets comparison. Historical release selections

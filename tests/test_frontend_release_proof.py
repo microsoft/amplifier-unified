@@ -32,7 +32,7 @@ def facts():
            'head_repository': {'full_name': repository}, 'pull_requests': [{'number': 15}]}
     pr = {'number': 15, 'merged_at': '2026-10-14T00:00:00Z', 'merge_commit_sha': selected,
           'head': {'sha': head, 'repo': {'full_name': repository}},
-          'base': {'sha': base, 'repo': {'full_name': repository}}}
+          'base': {'sha': base, 'ref': 'main', 'repo': {'full_name': repository}}}
     jobs = [{'name': 'Fast release checks', 'run_id': 101, 'run_attempt': 2, 'conclusion': 'success',
              'steps': [{'name': name, 'status': 'completed', 'conclusion': 'success'} for name in module.STEPS]}]
     commit = {'sha': tested, 'tree': {'sha': inputs['tree']}, 'parents': [{'sha': base}, {'sha': head}]}
@@ -89,6 +89,8 @@ class FakeAPI:
     def get(self, path):
         self.calls.append(path)
         f = self.facts
+        if path == f"commits/{f['run']['head_sha']}/pulls?per_page=100":
+            return getattr(self, 'head_prs', [f['pr']])
         if path.startswith('commits/'): return [f['pr']]
         if path.startswith('actions/workflows/'): return {'workflow_runs': [f['run']]}
         if '/artifacts?' in path: return {'artifacts': [self.artifact]}
@@ -115,6 +117,79 @@ def test_success_receipt_records_release_and_artifact_identity(lookup):
     result = module.find(*lookup)
     assert result['reused'] and result['selected'] == 'd' * 40
     assert result['artifactId'] == 201 and result['runId'] == 101 and result['attempt'] == 2
+    assert result['association'] == 'run' and result['rejections'] == {}
+    assert not any(path.startswith('commits/' + 'a' * 40) for path in lookup[2].calls)
+
+
+def test_explicit_empty_run_association_uses_exact_merged_head_commit(lookup):
+    root, env, api = lookup
+    api.facts['run']['pull_requests'] = []
+    result = module.find(root, env, api)
+    assert result['reused'] and result['association'] == 'head_commit'
+    assert api.calls.count('commits/' + 'a' * 40 + '/pulls?per_page=100') == 1
+
+
+@pytest.mark.parametrize('linked', [None, {}, [{'number': 99}], 'missing'])
+def test_fallback_never_replaces_missing_malformed_or_conflicting_run_association(lookup, linked):
+    root, env, api = lookup
+    if linked == 'missing':
+        del api.facts['run']['pull_requests']
+    else:
+        api.facts['run']['pull_requests'] = linked
+    result = module.find(root, env, api)
+    assert not result['reused'] and result['rejections'] == {'pr_association': 1}
+    assert not any(path.startswith('commits/' + 'a' * 40) for path in api.calls)
+
+
+@pytest.mark.parametrize('change', ['number', 'unmerged', 'merge', 'head', 'fork',
+    'base-repo', 'base', 'branch', 'empty', 'duplicate', 'oversized', 'malformed'])
+def test_exact_head_fallback_refuses_any_association_mismatch(lookup, change):
+    root, env, api = lookup
+    api.facts['run']['pull_requests'] = []
+    item = copy.deepcopy(api.facts['pr'])
+    api.head_prs = [item]
+    if change == 'number': item['number'] += 1
+    elif change == 'unmerged': item['merged_at'] = None
+    elif change == 'merge': item['merge_commit_sha'] = 'f' * 40
+    elif change == 'head': item['head']['sha'] = 'f' * 40
+    elif change == 'fork': item['head']['repo']['full_name'] = 'other/fork'
+    elif change == 'base-repo': item['base']['repo']['full_name'] = 'other/app'
+    elif change == 'base': item['base']['sha'] = 'f' * 40
+    elif change == 'branch': item['base']['ref'] = 'release'
+    elif change == 'empty': api.head_prs = []
+    elif change == 'duplicate': api.head_prs.append(copy.deepcopy(item))
+    elif change == 'oversized': api.head_prs = [None] * 101
+    elif change == 'malformed': api.head_prs = None
+    result = module.find(root, env, api)
+    assert not result['reused'] and result['rejections'] == {'pr_association': 1}
+
+
+@pytest.mark.parametrize('change', ['canonical-branch', 'proof-base', 'tree', 'step',
+                                  'artifact', 'tool', 'helper', 'attempt'])
+def test_head_commit_fallback_keeps_every_other_qualification(lookup, change):
+    root, env, api = lookup
+    f = api.facts
+    f['run']['pull_requests'] = []
+    if change == 'canonical-branch': f['pr']['base']['ref'] = 'release'
+    elif change == 'proof-base':
+        f['proof']['base'] = f['commit']['parents'][0]['sha'] = 'f' * 40
+    elif change == 'tree': f['commit']['tree']['sha'] = 'f' * 40
+    elif change == 'step': f['jobs'][0]['steps'][0]['conclusion'] = 'skipped'
+    elif change == 'artifact': api.artifact['workflow_run']['id'] += 1
+    elif change == 'tool': f['proof']['inputs']['tools']['node'] = 'v99'
+    elif change == 'helper': f['inputs']['qualifiers'][module.QUALIFIERS[1]] = 'different'
+    elif change == 'attempt': f['jobs'][0]['run_attempt'] += 1
+    assert not module.find(root, env, api)['reused']
+
+
+def test_rejection_diagnostics_do_not_emit_exception_text_or_identity(lookup, monkeypatch):
+    root, env, api = lookup
+    def unavailable(artifact):
+        raise ValueError('private URL, token and arbitrary label')
+    monkeypatch.setattr(api, 'archive', unavailable)
+    result = module.find(root, env, api)
+    assert result == {'reused': False, 'reason': 'no matching trusted proof',
+                      'rejections': {'proof_lookup': 1}}
 
 
 @pytest.mark.parametrize('change', ['historical', 'unmerged', 'different-merge', 'fork',
