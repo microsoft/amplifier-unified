@@ -693,6 +693,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         app.router.add_static("/", static, show_index=False)
 
     async def shutdown(app):
+        service.begin_shutdown()
         waiting = list(streams | call_waiters)
         for task in waiting:
             task.cancel()

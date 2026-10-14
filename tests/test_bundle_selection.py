@@ -132,7 +132,7 @@ async def test_worker_switch_commits_only_after_mount_and_rolls_back_failure(tmp
 class Runtime:
     def __init__(self): self.calls=[];self.preview=None;self.fail=False
     async def start(self,session,emit): await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
-    async def stop(self,*args): pass
+    async def stop(self,*args,reason="stopped"): pass
     async def close(self): pass
     async def control(self,sid,operation,args):
         self.calls.append((sid,operation,args))

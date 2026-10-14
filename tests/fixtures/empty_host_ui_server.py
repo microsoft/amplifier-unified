@@ -40,7 +40,7 @@ class Runtime:
     async def control(self, *args):
         return {}
 
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         self.stopped.append(sid)
         await self.service.on_runtime_event("runtime.status", {"sessionId": sid, "status": "idle"})
 

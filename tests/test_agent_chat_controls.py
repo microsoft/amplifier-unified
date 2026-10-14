@@ -26,7 +26,7 @@ async def test_screen_awake_preference_uses_shared_call_action_without_starting_
         assert app.state['voice']['command']['args']=={'enabled':False}
     finally:await app.close()
 
-async def test_agent_can_rename_select_model_and_inspect_visible_draft(tmp_path):
+async def test_agent_can_rename_select_model_and_inspect_nonprivate_controls(tmp_path):
     runtime=Runtime();app=AppService(tmp_path,runtime,workspace=tmp_path);app.management=Management(app)
     try:
         await app.dispatch('session.create',{})
@@ -40,9 +40,10 @@ async def test_agent_can_rename_select_model_and_inspect_visible_draft(tmp_path)
         assert app.state['actionStatus']['runtime.control']['phase']=='ready'
         assert runtime.selection=={'instance':'fixture','model':'agent-model','effort':'high'}
         assert app.state['runtimeControl'][sid]['configuration.providers']['effective']==runtime.selection
-        await app.update_device({'clientId':'fixture','controls':[{'label':'New name for Agent named chat','value':'Visible draft'}]})
+        app.clients.attach('fixture')
+        await app.update_device({'clientId':'fixture','sessionId':sid,'controls':[{'label':'New name for Agent named chat','value':'Visible title edit'}]})
         observed=await app.app_bridge('get_state',{'path':'/devices/fixture/controls'},sid)
-        assert 'Visible draft' in str(observed)
+        assert 'Visible title edit' in str(observed)
     finally:await app.close()
 
 

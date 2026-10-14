@@ -168,7 +168,7 @@ async def test_transport_bound_protocol_returns_are_small_lossless_and_wake_once
     subscribed, _ = await compact_call(app, bridge_probe, source, "coordination.subscribe", {
         "sessionId": source["id"], "requestId": request,
     }, "subscribe")
-    reference = "candidate.txt@sha256:fixture"
+    reference = "urn:fixture:candidate"
     reply, _ = await compact_call(app, bridge_probe, target, "coordination.reply", {
         "requestId": request, "kind": "result", "outcome": "success",
         "text": "Checked candidate claim", "references": [reference],
@@ -340,7 +340,7 @@ async def test_terminal_failure_information_and_no_automatic_success_survive(
     assert not result["result"]["qualified"] and result["result"]["results"] == []
     response = result["result"]["receipt"]["response"]
     assert response["requestId"] == request and response["generationId"] == "recipient-" + request
-    assert response["references"] == ["candidate.txt@sha256:fixture"]
+    assert response["references"] == ["urn:fixture:candidate"]
     if failure == "generation":
         assert response["status"] == "rejected"
         assert response["detail"] == "Terminal evidence or exact linkage failed."
@@ -433,7 +433,11 @@ async def test_noncoordination_bridge_ui_and_explicit_state_keep_existing_contra
     assert response["state"] == explicit
     assert explicit["session"]["id"] == source["id"] and explicit["session"]["pinned"]
     assert "conversations" in explicit and "sections" in explicit["_stateAccess"]
-    pointer = await app.app_bridge("get_state", {"path": "/view/draft"}, source["id"])
+    assert "Private unsent draft" not in json.dumps(explicit)
+    with pytest.raises(ValueError, match="explicit clientId"):
+        await app.app_bridge("get_state", {"path": "/view/draft"}, source["id"])
+    app.clients.attach("draft-browser")
+    pointer = await app.app_bridge("get_state", {"path": "/view/draft", "clientId": "draft-browser"}, source["id"])
     assert pointer["value"] == "Private unsent draft"
     ui = await app.dispatch("session.pin", {"id": source["id"], "pinned": False},
                             origin="ui", command_id="ui-pin")

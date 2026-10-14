@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import hashlib
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -36,6 +37,75 @@ async def declare(app, peer, args):
 async def read(app, source, args, **patch):
     return (await agent_action(app, source, 'coordination.artifact', {
         'sessionId': source['id'], 'requestId': args['requestId'], 'reference': args['references'][0], **patch}, 'read-artifact'))['result']
+
+
+async def test_discovered_reply_and_shipped_skill_example_save_bytes_before_terminal(app, tmp_path):
+    from amplifier_web.builtin_behaviors import resource_root
+    source, peer, file, args = await setup(app, tmp_path, b'hello')
+    file.rename(file.with_name('report.txt'))
+    action, = await app.app_bridge('list_actions', {'prefix': 'coordination.reply'}, peer['id'])
+    description = action['inputSchema']['properties']['references']['description']
+    reference, = re.findall(r'report\.txt@sha256:[a-f0-9]{64}', description)
+    skill = (resource_root() / 'skills/coordinate-work/SKILL.md').read_text()
+    assert reference in skill and 'artifacts[].status:' in skill and 'before acknowledgement' in skill
+    args['references'] = [reference]
+    result = (await declare(app, peer, args))['result']
+    assert result['status'] == 'staged' and not result['qualified']
+    assert result['artifactVerification'] == 'verified'
+    assert result['artifacts'][0]['status'] == 'retained'
+    assert (await read(app, source, args))['text'] == 'hello'
+
+
+@pytest.mark.parametrize('reference', [
+    'file:report.md#sha256=' + 'a'*64,
+    'file://report.md@sha256:' + 'a'*64,
+    'FILE:report.md',
+    'report.md#sha256=' + 'a'*64,
+    'report.md@sha256=' + 'a'*64,
+    'report.md@SHA256:' + 'a'*64,
+    'report.md@sha256:' + 'A'*64,
+    'report.md@sha256:short',
+    'report.md@sha256:' + 'a'*64 + '\n',
+])
+async def test_malformed_local_reference_records_repair_without_read_or_success(app, tmp_path, monkeypatch, reference):
+    from amplifier_web import result_artifacts
+    source, peer, _, args = await setup(app, tmp_path)
+    def forbidden(*_):
+        pytest.fail('Malformed references must not acquire filesystem authority')
+    monkeypatch.setattr(result_artifacts, 'file_bytes', forbidden)
+    args['references'] = [reference]
+    result = (await declare(app, peer, args))['result']
+    assert result['artifactVerification'] == 'incomplete'
+    assert result['artifacts'][0]['status'] == 'unsupported'
+    assert 'path@sha256:' in result['artifacts'][0]['detail']
+    assert 'terminal sealing does not repair' in result['artifactDetail']
+    await finish(app, peer, args['requestId'])
+    value = await read(app, source, args)
+    assert not value['qualified'] and value['status'] == 'unsupported'
+    duplicate = await declare(app, peer, args)
+    assert duplicate['duplicate'] and duplicate['result']['artifacts'] == result['artifacts']
+    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('reference', [
+    'report.md', 'commit:abc123', 'message-42',
+    'https://example.test/report#sha256=' + 'a'*64,
+    'https://example.test/report@sha256:' + 'a'*64,
+    'urn:example:report#sha256=' + 'a'*64,
+    'urn:example:report@sha256:' + 'a'*64,
+])
+async def test_opaque_citations_remain_valid_but_explicitly_do_not_save_files(app, tmp_path, monkeypatch, reference):
+    from amplifier_web import result_artifacts
+    _, peer, _, args = await setup(app, tmp_path)
+    monkeypatch.setattr(result_artifacts, 'file_bytes', lambda *_: pytest.fail('Opaque citation read a file'))
+    args['references'] = [reference]
+    result = (await declare(app, peer, args))['result']
+    assert result['artifacts'] == [] and result['artifactVerification'] == 'not_requested'
+    assert 'No file versions were saved.' in result['artifactDetail']
+    assert 'path@sha256:' in result['artifactDetail']
+    await finish(app, peer, args['requestId'])
+    assert app.collaboration.receipt(args['requestId'])['response']['qualified']
+    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 0
 
 
 async def test_report_captures_before_first_open_and_survives_source_delete_and_restart(app, tmp_path):

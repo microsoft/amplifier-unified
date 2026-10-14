@@ -231,6 +231,21 @@ async def test_worker_capability_probe_is_passive_and_requires_current_mounted_w
         await manager._admit('current', 'control', {'operation': 'operations.submit', 'arguments': {'integrationId': 'one'}})
 
 
+async def test_malformed_collection_file_records_incomplete_repair_and_opaque_is_rejected(project):
+    app, sid, roots, _ = project
+    await validate(app, sid, roots[0])
+    result = await collect(app, sid, ['run'], 'malformed-file', [{
+        'repositoryPath': str(roots[0]), 'references': ['file:result.txt#sha256=' + '0'*64]}])
+    repository = result['repositories'][0]
+    assert repository['status'] == 'incomplete'
+    assert repository['artifacts'][0]['status'] == 'unsupported'
+    assert 'path@sha256:' in repository['artifacts'][0]['detail']
+    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 0
+    with pytest.raises(AppError, match='local path@sha256'):
+        await collect(app, sid, ['run'], 'opaque-file', [{
+            'repositoryPath': str(roots[0]), 'references': ['https://example.test/result']}])
+
+
 async def test_changed_artifact_stays_incomplete_and_precommit_failure_rolls_back_outputs(project, monkeypatch):
     app, sid, roots, calls = project
     await validate(app, sid, roots[0])

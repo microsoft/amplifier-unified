@@ -20,12 +20,15 @@ class Runtime:
         self.entered=asyncio.Event()
         self.finish=asyncio.Event()
         self.fail=False
-    async def stop(self,identity):
+    async def stop(self,identity,*,reason='stopped'):
         self.stops.append(identity)
         self.entered.set()
         await self.finish.wait()
         if self.fail:raise ValueError('Private runtime detail')
         self.workers.pop(identity,None)
+        if getattr(self, 'emit', None):
+            await self.emit('runtime.warmth' if reason == 'configuration' else 'runtime.status',
+                            {'sessionId': identity, 'status': 'cold' if reason == 'configuration' else 'stopped'})
     async def close(self):self.finish.set()
 
 
@@ -34,7 +37,7 @@ async def app(tmp_path,monkeypatch):
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
     service.management=Management(service)
     SettingsStore(service.data_dir).update(tmp_path,'global',lambda settings:settings.update(config={'providers':[
-        {'id':'fixture','module':'provider-fixture','config':{'default_model':'first'}}]}))
+        {'id':'fixture','module':'provider-fixture','config':{'default_model':'first'}}]}, routing={'matrix':'balanced'}))
     async def probe(self,action,args,workspace):
         return {'models':[{'id':'first'}],'modelsProviderId':args.get('id')}
     monkeypatch.setattr(SetupManager,'probe',probe)
@@ -166,6 +169,110 @@ async def test_unchanged_save_does_not_invalidate_and_key_rotation_does(app):
     assert app.state['configurationRevision']==revision+1
     assert 'private-key' not in str(app.browser_state())
     await settled(app)
+
+
+def routing_args(model='first', **values):
+    return {'name': 'fixture-routing', 'scope': 'global',
+            'matrix': {'description': 'A preset', 'roles': {
+                role: {'description': role, 'candidates': [
+                    {'provider': 'fixture', 'model': model}]} for role in ('general', 'fast')}}, **values}
+
+
+async def test_inactive_routing_save_does_not_retire_helpers(app):
+    sid = app.state['selectedSessionId']
+    app.runtime.workers[sid] = object()
+    await app.management.command('routing.save', routing_args(), 'inactive')
+    await settled(app)
+    assert app.state['setup']['configurationChanged'] is False
+    assert app.state.get('configurationRevision', 0) == 0
+    assert not app.runtime.stops and app._session(sid)['status'] == 'idle'
+
+
+async def test_global_routing_changes_only_workspaces_using_that_definition(app, tmp_path):
+    manager = SetupManager(app.data_dir)
+    workspace = str(tmp_path)
+    # The editor uses balanced, another workspace uses the global preset, and
+    # a third shadows that same name with a local definition.
+    await manager.perform('routing.save', {**routing_args(), 'workspace': workspace})
+    users = []
+    for name in ('uses-global', 'shadows-global'):
+        path = tmp_path / name; path.mkdir()
+        await manager.perform('routing.use', {'workspace': str(path), 'scope': 'project', 'name': 'fixture-routing'})
+        row = app._new_session({'workspace': str(path), 'title': name})
+        app.state['sessions'].append(row)
+        app.runtime.workers[row['id']] = object()
+        users.append(row)
+    await manager.perform('routing.save', {**routing_args('local', scope='local'), 'workspace': users[1]['workspace']})
+    app.runtime.workers[app.state['selectedSessionId']] = object()
+    app.runtime.finish.set()
+    await app.management.command('routing.save', routing_args('second'), 'change-active-elsewhere')
+    await settled(app)
+    assert app.runtime.stops == [users[0]['id']]
+    revision = app.state['configurationRevision']
+    await app.management.command('routing.save', routing_args('second'), 'unchanged')
+    await settled(app)
+    assert app.state['configurationRevision'] == revision
+    assert app.runtime.stops == [users[0]['id']]
+
+
+async def test_bundle_selected_matrix_is_refreshed_without_settings_default(app, tmp_path):
+    row = app._session()
+    manager = SetupManager(app.data_dir)
+    manager.store.update(tmp_path, 'global', lambda settings: settings.pop('routing', None))
+    await manager.perform('routing.save', {**routing_args(), 'workspace': str(tmp_path)})
+    plan = app.data_dir / 'sessions' / row['id'] / 'effective-configuration.json'
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(json.dumps({'hooks': [{'module': 'hooks-routing', 'config': {'default_matrix': 'fixture-routing'}}]}))
+    app.runtime.workers[row['id']] = object()
+    app.runtime.finish.set()
+    await app.management.command('routing.save', routing_args('second'), 'bundle-default')
+    await settled(app)
+    assert app.runtime.stops == [row['id']]
+
+
+async def test_saved_runtime_routing_override_is_not_mistaken_for_unused_matrix(app, tmp_path):
+    row = app._session()
+    plan = app.data_dir / 'sessions' / row['id'] / 'configuration.json'
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(json.dumps({'hooks': [{'module': 'hooks-routing', 'config': {'default_matrix': 'fixture-routing'}}]}))
+    app.runtime.workers[row['id']] = object()
+    app.runtime.finish.set()
+    await app.management.command('routing.save', routing_args(), 'saved-plan-default')
+    await settled(app)
+    assert app.runtime.stops == [row['id']]
+
+
+@pytest.mark.parametrize('problem', ['missing-workspace', 'broken-matrix'])
+async def test_unrelated_unavailable_routing_owner_does_not_block_save(app, tmp_path, problem):
+    other = tmp_path / 'unavailable'; other.mkdir()
+    row = app._new_session({'workspace': str(other), 'title': 'Unavailable'})
+    app.state['sessions'].append(row)
+    if problem == 'missing-workspace':
+        other.rmdir()
+    else:
+        matrix = other / '.amplifier' / 'routing' / 'balanced.yaml'
+        matrix.parent.mkdir(parents=True)
+        matrix.write_text('roles: [broken')
+    app.runtime.workers[row['id']] = object()
+    app.runtime.finish.set()
+    await app.management.command('routing.save', routing_args(), 'valid-save')
+    await settled(app)
+    assert app.state['managementResults']['valid-save']['phase'] == 'ready'
+    assert SetupManager(app.data_dir).matrix(str(tmp_path), 'fixture-routing')['roles']['general']['candidates'][0]['model'] == 'first'
+    assert app.runtime.stops == [row['id']]
+
+
+@pytest.mark.parametrize('status', ['idle', 'stopped', 'interrupted', 'error'])
+async def test_configuration_retirement_preserves_conversation_lifecycle(app, status):
+    row = app._session(); row['status'] = status
+    app.runtime.workers[row['id']] = object()
+    app.runtime.emit = app.on_runtime_event
+    app.runtime.finish.set()
+    await app.management.command('providers.save', provider_args(), 'save')
+    await settled(app)
+    assert row['status'] == status
+    assert row['preparation']['status'] == 'cold'
+    assert not row.get('configurationBusy') and not row.get('configurationPending')
 
 
 async def test_cancel_during_operation_has_terminal_receipt(app,monkeypatch):

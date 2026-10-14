@@ -94,7 +94,7 @@ class WorkerRetention:
             result = await self.manager._request_unlocked(sid, 'retire')
         except Exception:
             async with self.manager._locks.setdefault(sid, asyncio.Lock()):
-                if self.manager.workers.get(sid) is row and not row.get('stop_task'):
+                if not self.manager._closed and self.manager.workers.get(sid) is row and not row.get('stop_task'):
                     row['closing'] = False
                     row['parked'] = False
                     if row['process'].returncode is not None:
@@ -102,7 +102,7 @@ class WorkerRetention:
                             'error': 'The worker disconnected before idle retirement was confirmed. Work was not replayed.'})
             return
         async with self.manager._locks.setdefault(sid, asyncio.Lock()):
-            if self.manager.workers.get(sid) is not row or row.get('stop_task'):
+            if self.manager._closed or self.manager.workers.get(sid) is not row or row.get('stop_task'):
                 return
             if not result.get('retired'):
                 row['closing'] = False

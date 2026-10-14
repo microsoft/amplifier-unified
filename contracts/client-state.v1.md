@@ -32,6 +32,14 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
    conversation properties are shared; ordinary selection, drafts, unsaved edits and
    reading state persist on the client with no backend sync. Shared drafts or targeted
    nonsecret agent inspection are explicit capabilities using upstream semantics.
+   For the current web adapter, ordinary agent overviews, generic state pointers,
+   dispatch readback and browser observations exclude unsent composer text,
+   message edits and attachment drafts. User-requested inspection uses the exact
+   `/view/draft` pointer plus an explicit `clientId` displaying the calling conversation;
+   the exact `/view/messageEdit` pointer likewise inspects an unfinished message
+   edit belonging to that chat. Selecting a client on a broader read does not opt in.
+   Private UI persistence remains independent of this model projection; its client-local migration is
+   tracked separately.
    Broken: another window overwrites unfinished input or a secret becomes public view state. Affected: people and agents sharing a host.
 
 3. **CS3 — Publish by interest and dependency.** Detailed conversation updates go only

@@ -19,7 +19,7 @@ async def origin(tmp_path):
         app.clients.attach(client)
         with app.clients.bind(client):
             app.subscribe()
-            await app.update_device({'clientId': client, 'controls': [{'label': client}]})
+            await app.update_device({'clientId': client, 'sessionId': sid, 'controls': [{'label': client}]})
             visual = app.computer_visual.for_client(sid)
             await visual.grant_source({'sessionId': sid, 'source': {'kind': 'window', 'label': client}})
     worker = Worker()

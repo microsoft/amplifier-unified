@@ -200,7 +200,7 @@ class Runtime:
         await self.service.on_runtime_event("worker.updated", {"sessionId": sid, "id": wid, "status": "interrupted"})
         return {"accepted": True, "completed": False}
 
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         self.stops.append({"sessionId": sid})
 
     async def close(self):

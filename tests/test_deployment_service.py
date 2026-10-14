@@ -53,6 +53,8 @@ def test_generated_exec_start_uses_top_level_options_before_serve(tmp_path, monk
     monkeypatch.setattr(deployment_service.shutil, "which", lambda name: "/usr/bin/amplifier-unified" if name == "amplifier-unified" else None)
     data_dir, workspace = tmp_path / "data", tmp_path / "workspace"
     deployment_service.install(data_dir, workspace)
+    # SIGTERM reaches the host first; its final SIGKILL still covers the cgroup.
+    assert 'KillMode=mixed\n' in unit.read_text()
     exec_start = next(line.removeprefix("ExecStart=") for line in unit.read_text().splitlines()
                       if line.startswith("ExecStart="))
     command = shlex.split(exec_start)

@@ -14,7 +14,7 @@ PLAN={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations'
 class Runtime:
  def __init__(self):self.plan=copy.deepcopy(PLAN)
  async def start(self,session,emit,*,preserve_emit=False):await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
- async def stop(self,*args):pass
+ async def stop(self,*args,reason="stopped"):pass
  async def close(self):pass
  async def control(self,sid,operation,args):
   if operation=='configuration.apply':self.plan=copy.deepcopy(args['config']);return {'requiresRestart':True}

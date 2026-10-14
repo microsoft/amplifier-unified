@@ -500,6 +500,7 @@ class AppService:
         self._runtime_lifecycle_tasks = set()
         self._runtime_alias = None
         self.closed = False
+        self._close_started = False
         self.performance_diagnostics = PerformanceDiagnostics()
         from .history_directory import HistoryDirectory, ready as directory_ready
         self.directory = HistoryDirectory(self)
@@ -3396,7 +3397,7 @@ class AppService:
         try:
             await fn(*args, **(kwargs or {}))
         except Exception as exc:
-            from .runtime import RuntimeOperationPending
+            from .runtime import RuntimeOperationPending, RuntimeHostClosingError
             if isinstance(exc, RuntimeOperationPending) and exc.operation == 'send' and fn == self._send:
                 # _send already published this input's uncertain delivery. A
                 # missing acknowledgement does not terminate its live turn.
@@ -3411,6 +3412,8 @@ class AppService:
                                          error='No verified tool outcome was recorded. Work was not replayed.')
                         self.smart_tools.persist_operation(operation)
                         self._publish_smart_tool_update(defer_publish=True)
+            if isinstance(exc, RuntimeHostClosingError):
+                return  # Expected host retirement is not a failed conversation.
             sid = args[0].get("id") if args and isinstance(args[0], dict) else args[0] if args else None
             if isinstance(exc, AppError) and exc.code == 'session_busy':
                 return  # The rejected admission already published its ownership state.
@@ -3565,11 +3568,20 @@ class AppService:
             from .conversation_steering import send
             return await send(self, session, text, input_id, preserve_draft)
         previous_error_at = session.get('errorAt')
-        from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError
+        from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError, RuntimeHostClosingError
         try:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             sender = self.runtime.retry if retry else self.runtime.send
             send_result = await sender(session, text, input_id, self.on_runtime_event)
+        except RuntimeHostClosingError:
+            async with self.lock:
+                current = self._session(session['id'])
+                self._delivery(current, input_id, 'unknown')
+                interrupt_unfinished(current)
+                if current['status'] in {'working', 'starting', 'ready', 'stopping'}:
+                    current['status'] = 'interrupted'
+                self._publish_changes(sessions={session['id']}, globals={'view'})
+            raise
         except RuntimeOperationPending:
             async with self.lock:
                 self._delivery(self._session(session['id']), input_id, 'unknown')
@@ -3823,6 +3835,8 @@ class AppService:
                 if payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")} and not payload.get("backgroundOnly"):
                     settle_stream(session)
                     interrupt_unfinished(session)
+                    if payload.get('reason') == 'shutdown' and session['status'] in {'working', 'starting', 'ready', 'stopping'}:
+                        session['status'] = 'interrupted'
                 finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
@@ -4089,7 +4103,7 @@ class AppService:
     async def _refresh_claimed_configuration(self,identity,revision):
         succeeded=False
         try:
-            if self.runtime:await self.runtime.stop(identity)
+            if self.runtime:await self.runtime.stop(identity, reason='configuration')
             succeeded=True
         except asyncio.CancelledError:
             raise
@@ -4111,6 +4125,10 @@ class AppService:
                 self._publish_progress(session_ids={identity}, record_only=True)
                 if succeeded and session.get('configurationPending'):
                     self._task(self.refresh_configuration(identity))
+                elif succeeded:
+                    # Peer input held by the refresh reservation may now try
+                    # its existing durable guards. A real Stop still suppresses it.
+                    self._task(self.collaboration.drain(identity))
 
     async def refresh_configuration(self,identity):
         # Ordinary requests must keep their existing admission-lock order.
@@ -4540,10 +4558,18 @@ class AppService:
             self.state['diagnostics']['lastResult']={'action':'diagnostics.test',**result}
             self._publish_changes(globals={'diagnostics'})
 
-    async def close(self):
-        if self.closed:
-            return
+    def begin_shutdown(self):
+        """Fence lifecycle admission before the HTTP host yields during shutdown."""
         self.closed = True
+        begin = getattr(self.runtime, 'begin_shutdown', None)
+        if begin:
+            begin()
+
+    async def close(self):
+        if self._close_started:
+            return
+        self._close_started = True
+        self.begin_shutdown()
         self.collaboration.close()
         await self.performance_diagnostics.close()
         if getattr(self, "profiling_host", None):

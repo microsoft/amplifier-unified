@@ -65,6 +65,13 @@ Available lifecycle commands are `install`, `start`, `stop`, `restart`, `status`
 
 If the generated definition differs, rerun the same install command with `--replace` to save a timestamped private backup and restart with the new definition. The command reports the backup location. Custom service files are preserved unless `--replace` is explicit; review them before replacing. Expected service setup errors are reported without a Python traceback and do not undo a separately completed package installation.
 
+Generated systemd services use `KillMode=mixed`: shutdown signals the host first,
+allowing it to close its workers deliberately, while the service manager retains
+final cleanup of the entire control group. Custom instance generators should
+use the same policy. Older units using `control-group` can signal workers before
+the host begins cleanup and record a false worker failure during a restart;
+updating the package alone does not replace those unit definitions.
+
 The service installation captures the current shell's `PATH` so Unified can find `uv`. If the location of `uv` changes, rerun installation with `--replace` from a shell where `uv --version` works, preserving any original `--data-dir` and `--workspace` options.
 
 For WSL, enable systemd in `/etc/wsl.conf`, restart WSL with `wsl --shutdown`

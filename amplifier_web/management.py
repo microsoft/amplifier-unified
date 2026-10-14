@@ -498,7 +498,7 @@ class Management:
             self.service._publish_progress(session_ids={session['id']}, record_only=True)
         return True
 
-    async def invalidate_configuration(self,*,publish=True,warm=True):
+    async def invalidate_configuration(self,*,publish=True,warm=True,session_ids=None):
         from .setup import SetupManager
         workspace=self.service.state.get('setup',{}).get('providersWorkspace')
         if workspace and warm:self.background(self.warm_providers(SetupManager(self.service.data_dir,catalog=self.provider_catalog),workspace))
@@ -511,11 +511,12 @@ class Management:
             self.service.state['draftDefaults'] = {}
             self.service.state.setdefault('setup', {}).pop('providersRequestedWorkspace', None)
             for session in self.service.state['sessions']:
-                if not session.get('historyManaged'):
+                if not session.get('historyManaged') and (session_ids is None or session['id'] in session_ids):
                     changed.add(session['id'])
                     session['configurationPending']=True
                     session['configurationPendingRevision']=self.service.state['configurationRevision']
-                    session['configurationRefresh']={'phase':'pending','revision':self.service.state['configurationRevision']}
+                    if not session.get('configurationBusy'):
+                        session['configurationRefresh']={'phase':'pending','revision':self.service.state['configurationRevision']}
                     refresh=self.service._claim_configuration_refresh(session)
                     if refresh:claimed.append(refresh)
             if publish:self.service._publish_changes(sessions=changed, globals={'configurationRevision','draftDefaults','setup'})
@@ -641,7 +642,25 @@ class Management:
                 persistent.progress=progress
             manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'} else persistent
             probe_key=manager.catalog_key(args,session['workspace']) if action in {'providers.models','providers.imageModels','providers.schema'} else None
+            routing_before = None
+            if action in {'routing.save', 'routing.use'}:
+                # A global matrix may be active in another workspace, while a
+                # local matrix can shadow it. Compare resolved inputs for each
+                # loaded workspace, not just the settings editor's selection.
+                routing_manager = SetupManager(self.service.data_dir, allow_missing_workspace=True)
+                mounted = getattr(self.service.runtime, 'workers', {})
+                routing_contexts = {row['id']: (row['workspace'], row.get('runtimeSessionId') or row.get('nativeIdentity') or row['id'], row['id'] in mounted)
+                                    for row in self.service.state['sessions'] if not row.get('historyManaged')}
+                routing_contexts[None] = (session['workspace'], None)
+                routing_before = {identity: routing_manager.effective_routing(*context)
+                                  for identity, context in routing_contexts.items()}
             result=await manager.perform(action,{**args,'workspace':session['workspace']})
+            routing_sessions = None
+            if routing_before is not None:
+                routing_sessions = {identity for identity, before in routing_before.items()
+                                    if before is None or before != routing_manager.effective_routing(*routing_contexts[identity])}
+                result['configurationChanged'] = bool(routing_sessions)
+                routing_sessions.discard(None)
             result['configurationTarget']=args.get('configurationTarget')
             if action=='providers.list':
                 result['providersRequestedWorkspace']=args.get('workspace',session['workspace'])
@@ -678,7 +697,7 @@ class Management:
                     self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
                 self.background(self.warm_providers(manager,session['workspace']))
             if action in {'providers.save','providers.finishSetup','providers.configureImages','providers.remove','providers.move','providers.reorder','routing.save','routing.use'} and result.get('configurationChanged',True):
-                await self.invalidate_configuration(publish=False,warm=action not in {'providers.save','providers.finishSetup','providers.configureImages','providers.remove','providers.move','providers.reorder'})
+                await self.invalidate_configuration(publish=False,warm=action not in {'providers.save','providers.finishSetup','providers.configureImages','providers.remove','providers.move','providers.reorder','routing.save','routing.use'},session_ids=routing_sessions)
         elif action in {'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             from .bundle_actions import perform
             await perform(self, action, args)
@@ -710,7 +729,7 @@ class Management:
                 async with self.service.lock:
                     self.service._session(session['id'])['bundle']=saved['name']
                     self.service._publish_changes(sessions={session['id']})
-                await self.service.runtime.stop(session['id'])
+                await self.service.runtime.stop(session['id'], reason='configuration')
         elif action=='configuration.cancel':
             identity=self.session({'sessionId':args['id']})['id']
             task=self.pending_config_tasks.get(identity)
@@ -798,8 +817,11 @@ class Management:
                     result=await self.service.runtime.control(session['id'],args['operation'],args.get('args',{}))
                 if result.get('requiresRestart'):
                     check_current()
-                    await self.service.runtime.stop(session['id'])
+                    interruption_revision = session.get('interruptionRevision', 0)
+                    await self.service.runtime.stop(session['id'], reason='configuration')
                     check_current()
+                    if self.service._session(session['id']).get('interruptionRevision', 0) != interruption_revision:
+                        raise ValueError('The settings were saved, but the conversation was stopped before restart. It was not restarted.')
                     await self.service.runtime.start(session,self.service.on_runtime_event)
                     inspected=await self.service.runtime.control(session['id'],'configuration.inspect',{})
                     result['configuration']=inspected

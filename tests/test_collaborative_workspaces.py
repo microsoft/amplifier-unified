@@ -33,7 +33,7 @@ class Runtime:
         self.inputs.append((session["id"], input_id, text))
         return {"accepted": True}
 
-    async def stop(self, sid):
+    async def stop(self, sid, *, reason="stopped"):
         await self.app.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})
 
     async def close(self):
@@ -728,9 +728,10 @@ async def declared_result(app, request="result-request", kind="result", outcome=
     assert receipt["delivery"] == "queued"
     await settled(app, request, "accepted")
     await generation(app, target, "recipient-" + request, [request])
+    # Linkage-only cases use an opaque citation; retained-file cases pass real hashes.
     declaration = await agent_action(app, target, "coordination.reply", {
         "requestId": request, "kind": kind, "outcome": outcome, "text": "Checked candidate claim",
-        "references": ["candidate.txt@sha256:fixture"] if refs is None else refs,
+        "references": ["urn:fixture:candidate"] if refs is None else refs,
     }, "declare-" + request, [request])
     assert declaration["result"]["status"] == "staged"
     return receipt
@@ -1540,7 +1541,7 @@ async def staged_message_link(app, request, *, references_only=False, message_id
     declaration = await agent_action(app, target, "coordination.reply", {
         "requestId": request, "kind": "result", "outcome": "success", "text": "Checked evidence",
         "messageIds": [] if references_only else [message_id or canonical],
-        "references": ["candidate.txt@sha256:fixture"] if references_only else [],
+        "references": ["urn:fixture:candidate"] if references_only else [],
     }, "declare-" + request)
     assert declaration["result"]["status"] == "staged"
     wait = await agent_action(app, source, "coordination.subscribe",
@@ -1555,8 +1556,7 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     app.history.ensure_loaded = AsyncMock()
     source = app.state["sessions"][0]
     request = "invalid-link"
-    target, web, anchor, continuation, transcript = await staged_message_link(
-        app, request, message_id="missing-canonical-id" if conflict == "unknown-id" else None)
+    target, web, anchor, continuation, transcript = await staged_message_link(app, request)
     canonical = anchor["messageId"]
     if conflict == "text":
         web["text"] = "Conflicting retained text"
@@ -1568,8 +1568,14 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
         app._message(target, "assistant", web["text"], nativeIndex=web["nativeIndex"],
                      generationId=web["generationId"])
     else:
-        # A model may declare an unknown ID; no native lookup may fabricate it.
+        # Older persisted declarations could contain unavailable IDs. The new
+        # preflight refuses fresh ones; terminal handling still rejects these
+        # retained records without fabricating a canonical message.
         canonical = "missing-canonical-id"
+        legacy = app.collaboration.receipt(request)
+        legacy['response']['messageIds'] = [canonical]
+        app.collaboration.save_response(legacy)
+        app.collaboration.save(request, legacy)
     if conflict == "unknown-id":
         assert app.collaboration.resolve_message(target, canonical) is None
     else:

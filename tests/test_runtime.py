@@ -950,8 +950,9 @@ async def test_naming_reuses_worker_without_replacing_foreground_emitter(tmp_pat
     await runtime.close()
 
 
-async def test_unexpected_worker_exit_retains_type_and_exit_code():
-    manager = RuntimeManager(command=[sys.executable, '-c', "import json,sys;sys.stdin.readline();print(json.dumps({'type':'runtime.ready'}),flush=True);sys.stdin.readline();raise SystemExit(7)"])
+@pytest.mark.parametrize('exit_code', [7, 143])
+async def test_unexpected_worker_exit_retains_type_and_exit_code(exit_code):
+    manager = RuntimeManager(command=[sys.executable, '-c', f"import json,sys;sys.stdin.readline();print(json.dumps({{'type':'runtime.ready'}}),flush=True);sys.stdin.readline();raise SystemExit({exit_code})"])
     events = []
     async def emit(kind, data): events.append((kind, data))
     try:
@@ -964,7 +965,7 @@ async def test_unexpected_worker_exit_retains_type_and_exit_code():
         errors = [data for kind, data in events if kind == 'runtime.error']
         assert len(errors) == 1
         assert errors[0]['errorType'] == 'WorkerExitedError'
-        assert errors[0]['exitCode'] == 7
+        assert errors[0]['exitCode'] == exit_code
     finally:
         await manager.close()
 

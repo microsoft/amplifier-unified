@@ -1,10 +1,11 @@
-"""Explicit repository selection without relocating a multi-repository chat."""
+"""Explicit repository selection and safe handoff from multi-repository homes."""
 import copy
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ import pytest
 from amplifier_web.service import AppError, AppService
 from amplifier_worktrees.git import git
 from amplifier_worktrees import GitWorktrees
-from test_worktrees import repository
+from test_worktrees import repository, settle
 
 
 @pytest.mark.parametrize('action', ['create', 'attach'])
@@ -103,6 +104,176 @@ async def test_selected_repo_copy_is_revision_checked_independently(multi):
     copied = await create(app, sid, repos[0], 'carry', mode='carry_dirty')
     assert (Path(copied['path']) / 'a.txt').read_text() == 'Changed since inspection'
     assert (repos[1] / 'a.txt').read_text() == 'original\n'
+
+
+async def move(app, sid, checkout, command_id, *, agent=False):
+    args = {'sessionId': sid, 'id': checkout['id'] if checkout else None,
+        'expectedExecutionRevision': app._session(sid).get('executionRevision', 0)}
+    if agent:
+        pending = (await app.app_bridge('dispatch', {'action': 'worktree.handoff',
+            'id': command_id, 'args': args}, sid))['result']
+    else:
+        pending = (await app.dispatch('worktree.handoff', args, command_id=command_id))['result']
+    await settle(app)
+    return app.worktrees.read(sid, pending['id'])
+
+
+@pytest.mark.parametrize('agent', [False, True])
+async def test_non_git_home_moves_between_selected_repositories_and_back_without_changing_work(multi, agent):
+    app, sid, workspace, repos = multi
+    original = repos[0]
+    (original / 'a.txt').write_text('staged\n'); git(original, 'add', 'a.txt')
+    (original / 'a.txt').write_text('staged\nunstaged\n')
+    (original / 'untracked.txt').write_text('keep untracked')
+    (original / 'ignored.txt').write_text('keep ignored')
+    before = [app.worktrees.git.inspect(root)['sourceRevision'] for root in repos]
+    carried = await create(app, sid, original, 'dirty-copy', mode='carry_dirty')
+    other = await create(app, sid, repos[1], 'other-copy')
+    carried_path = Path(carried['path'])
+    carried_before = app.worktrees.git.inspect(carried_path)['sourceRevision']
+    retained = copy.deepcopy(app._session(sid))
+    for revision, checkout in enumerate((carried, other, None), 1):
+        receipt = await move(app, sid, checkout, f'move-{revision}', agent=agent)
+        expected = checkout['path'] if checkout else str(workspace)
+        assert receipt['phase'] == 'applied', receipt
+        assert receipt['target'] == app._session(sid)['workingDirectory'] == expected
+        assert app._session(sid)['executionRevision'] == revision
+        assert app._session(sid)['workspace'] == str(workspace)
+        assert app._session(sid)['messages'] == retained['messages']
+        assert receipt['inputsReplayed'] is False
+    assert not (workspace / '.git').exists()
+    assert app.runtime.quiesce_for_handoff.await_count == 3
+    assert [app.worktrees.git.inspect(root)['sourceRevision'] for root in repos] == before
+    assert app.worktrees.git.inspect(carried_path)['sourceRevision'] == carried_before
+    assert git(carried_path, 'show', ':a.txt') == b'staged\n'
+    assert (carried_path / 'a.txt').read_text() == 'staged\nunstaged\n'
+    assert (carried_path / 'untracked.txt').read_text() == 'keep untracked'
+    assert (original / 'ignored.txt').read_text() == 'keep ignored'
+
+
+@pytest.mark.parametrize('destination', ['source', 'target'])
+@pytest.mark.parametrize('returning', [False, True])
+@pytest.mark.parametrize('legacy', [False, True])
+async def test_non_git_home_unknown_handoff_reconciles_exact_home_or_checkout(multi, destination, returning, legacy):
+    app, sid, workspace, repos = multi
+    checkout = await create(app, sid, repos[0], 'selected-copy')
+    if returning:
+        assert (await move(app, sid, checkout, 'outbound'))['phase'] == 'applied'
+    app.runtime.quiesce_for_handoff.side_effect = RuntimeError('lost release acknowledgment')
+    unknown = await move(app, sid, None if returning else checkout, 'uncertain-move')
+    assert unknown['phase'] == 'unknown'
+    assert app._session(sid)['configurationBusy']
+    if legacy:
+        # Durable receipts from before destination bindings still recover only
+        # an exact canonical home or a currently associated checkout.
+        unknown.pop('sourceBinding'); unknown.pop('targetBinding')
+        app.worktrees.save(unknown)
+    calls = app.runtime.quiesce_for_handoff.await_count
+    app.runtime.quiesce_for_handoff.side_effect = None
+    args = {'sessionId': sid, 'id': unknown['id'], 'expectedRevision': unknown['revision'],
+        'destination': destination, 'evidence': 'Inspected the exact source and target; all writers released.'}
+    pending = (await app.dispatch('worktree.reconcile', args, command_id='reconcile'))['result']
+    await settle(app)
+    result = app.worktrees.read(sid, pending['id'])
+    assert result['phase'] == 'applied', result
+    assert app._session(sid)['workingDirectory'] == unknown[destination]
+    assert app._session(sid)['workspace'] == str(workspace)
+    assert not app._session(sid)['configurationBusy']
+    assert app.worktrees.read(sid, unknown['id'])['phase'] == 'reconciled'
+    assert app.runtime.quiesce_for_handoff.await_count == calls + 1
+    retry = (await app.dispatch('worktree.reconcile', args, command_id='reconcile'))['result']
+    assert retry['duplicate'] and retry['phase'] == 'applied'
+    assert app.runtime.quiesce_for_handoff.await_count == calls + 1
+
+
+@pytest.mark.parametrize('destination', ['source', 'target'])
+async def test_non_git_handoff_restart_preserves_bindings_and_agent_reconciliation(tmp_path, destination):
+    workspace = tmp_path / 'project'; workspace.mkdir()
+    repo = repository(workspace)
+    runtime = SimpleNamespace(close=AsyncMock(), quiesce_for_handoff=AsyncMock(
+        return_value={'quiesced': True, 'inputsReplayed': False}, side_effect=RuntimeError('lost release acknowledgment')))
+    app = AppService(tmp_path / 'app', runtime, workspace=workspace)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        checkout = await create(app, sid, repo, 'selected-copy')
+        unknown = await move(app, sid, checkout, 'uncertain-move')
+        assert unknown['phase'] == 'unknown'
+        bindings = {key: unknown[key] for key in ('sourceBinding', 'targetBinding')}
+    finally:
+        await app.close()
+    runtime.quiesce_for_handoff.side_effect = None
+    app = AppService(tmp_path / 'app', runtime, workspace=workspace)
+    try:
+        saved = app.worktrees.read(sid, unknown['id'])
+        assert {key: saved[key] for key in bindings} == bindings
+        assert saved['phase'] == 'unknown' and runtime.quiesce_for_handoff.await_count == 1
+        app._session(sid)['messages'].append({'id': 'human-finding', 'role': 'user', 'inputOrigin': 'ui',
+            'createdAt': time.time(), 'text': 'I inspected both folders and confirmed the writers have stopped.'})
+        pending = (await app.app_bridge('dispatch', {'action': 'worktree.reconcile', 'id': 'agent-reconcile',
+            'args': {'id': saved['id'], 'expectedRevision': saved['revision'], 'destination': destination,
+                'evidence': 'User inspected both folders and confirmed release.', 'sourceMessageId': 'human-finding'}}, sid))['result']
+        await settle(app)
+        assert app.worktrees.read(sid, pending['id'])['phase'] == 'applied'
+        assert app._session(sid)['workingDirectory'] == saved[destination]
+        assert runtime.quiesce_for_handoff.await_count == 2
+    finally:
+        await app.close()
+
+
+async def test_selected_checkout_replaced_by_unrelated_git_repository_rejects_before_release(multi):
+    app, sid, workspace, repos = multi
+    checkout = await create(app, sid, repos[0], 'selected-copy')
+    # Same checkout path, different Git identity: being under the workspace
+    # or a valid repository must not authorize this substituted destination.
+    marker = Path(checkout['path']) / '.git'
+    original = marker.read_bytes()
+    try:
+        marker.write_text(f'gitdir: {repos[1] / ".git"}\n')
+        receipt = await move(app, sid, checkout, 'wrong-repository')
+        assert receipt['phase'] == 'rejected' and receipt['step'] == 'preflight'
+        assert 'recorded repository' in receipt['detail']
+        assert not app.runtime.quiesce_for_handoff.called
+        assert (app._session(sid).get('workingDirectory') or app._session(sid)['workspace']) == str(workspace)
+        assert not app._session(sid)['configurationBusy']
+    finally:
+        marker.write_bytes(original)
+
+
+async def test_legacy_reconciliation_cannot_choose_an_unassociated_repository(multi):
+    app, sid, _, repos = multi
+    checkout = await create(app, sid, repos[0], 'selected-copy')
+    app.runtime.quiesce_for_handoff.side_effect = RuntimeError('lost release acknowledgment')
+    unknown = await move(app, sid, checkout, 'uncertain-move')
+    unknown.pop('sourceBinding'); unknown.pop('targetBinding')
+    unknown['target'] = str(repos[1])
+    app.worktrees.save(unknown)
+    app.runtime.quiesce_for_handoff.reset_mock()
+    with pytest.raises(AppError, match='canonical home or an associated checkout'):
+        await app.dispatch('worktree.reconcile', {'sessionId': sid, 'id': unknown['id'],
+            'expectedRevision': unknown['revision'], 'destination': 'target', 'evidence': 'Inspected destination'})
+    assert not app.runtime.quiesce_for_handoff.called
+    assert app._session(sid)['configurationBusy']
+
+
+async def test_return_home_refuses_replaced_canonical_path_before_release(multi, tmp_path):
+    app, sid, workspace, repos = multi
+    checkout = await create(app, sid, repos[0], 'selected-copy')
+    assert (await move(app, sid, checkout, 'outbound'))['phase'] == 'applied'
+    app.runtime.quiesce_for_handoff.reset_mock()
+    preserved = tmp_path / 'preserved-project'
+    substitute = tmp_path / 'unrelated'; substitute.mkdir()
+    workspace.rename(preserved)
+    workspace.symlink_to(substitute, target_is_directory=True)
+    try:
+        receipt = await move(app, sid, None, 'return-home')
+        assert receipt['phase'] == 'rejected' and receipt['step'] == 'preflight'
+        assert 'recorded canonical path' in receipt['detail']
+        assert app._session(sid)['workingDirectory'] == checkout['path']
+        assert app._session(sid)['executionRevision'] == 1
+        assert not app.runtime.quiesce_for_handoff.called
+    finally:
+        workspace.unlink(); preserved.rename(workspace)
 
 
 async def test_attach_rejects_different_repository_and_accepts_correct_source(multi):

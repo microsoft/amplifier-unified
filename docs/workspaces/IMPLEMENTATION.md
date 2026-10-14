@@ -2,6 +2,16 @@
 
 ## Current program coverage — 2026-10-14
 
+Real-provider acceptance found a recipient citing the incoming peer message ID
+as result evidence. Reply discovery and the coordination skill now distinguish
+current-generation assistant output IDs from request correlation. Invalid IDs
+fail before artifact preparation or revision allocation, with repair guidance;
+the same checks repeat before commit. Current checkpoint anchors remain usable
+outside the display window. Exact terminal resolution and previously rejected
+revisions are preserved. Focused source tests cover immediate repair, an
+off-lock preparation race, canonical anchors, retained failure and retry paths;
+live adoption of this correction is a separate acceptance step.
+
 The integrated source implements the bounded collaboration mechanisms below.
 Independent chats remain independent even when they share a folder. The host
 owns authority, durable admission and observations; agents choose collaborators,
@@ -467,6 +477,26 @@ including an acknowledgment lost after commit, retain the original outcome.
 The browser preserves unsent text and retry identity through navigation, stale
 saves and reload, with the optional form under progressive disclosure.
 
+Ordinary `app_control` state readback excludes private composer text, unfinished
+message edits and pending attachments, including parent/root pointers, resident
+and dormant session aliases, unrelated dispatch readback and rendered browser
+observations. Device observations require the selected caller client and its
+reported conversation to match. Only a user-requested, exact `/view/draft` or
+`/view/messageEdit` read with an explicit `clientId` displaying the calling chat
+opts into that editor; it does not expose untargeted clients or another chat's input. The latter editor must also belong to the calling chat. Browser report
+text, controls, labels and selected ranges exclude private subtrees, including
+the local state debugger. Public controls and selection remain inspectable.
+
+This is a model projection over the existing private UI owner; it does not move
+all draft storage to the browser, introduce a separate approval system, or change
+the established nonsecret Settings/feedback editor contracts. Explicit draft
+mutations such as `canvas.reference` retain their targeted results and revision
+checks. Focused service/directory tests cover client selection, pointer aliases,
+lazy owner preservation and positive explicit reads. The production browser
+journey verifies served asset bytes, independent same-chat drafts, private DOM
+and selection exclusion and reload preservation using a synthetic runtime;
+it does not claim real-provider or deployed acceptance.
+
 A real native-loop probe exposed accumulation of hook observations within one
 turn despite their ephemeral designation. Dynamic coordination references now
 use the existing fitted provider-delivery boundary. Both native reminder modes
@@ -547,6 +577,30 @@ match the candidate source. All 41 selected-repository, existing worktree and
 reservation checks pass against that wheel outside the source checkout.
 This qualifies explicit selection through the
 actual agent tool, not automatic dependency mapping or concurrent model efficacy.
+
+The later multi-repository acceptance journey exposed a gap in that evidence:
+creation under a non-Git home and handoff from a Git home had passed separately,
+but moving the existing non-Git-home conversation failed before runtime release.
+Handoff now retains exact home/associated-checkout bindings in its receipt and
+checks a destination against its recorded repository, rather than treating the
+canonical history home as a repository. Returning home checks the exact existing
+canonical directory. Reconciliation uses the retained binding; older receipts can
+resolve only an exact home, an associated ready checkout, or a source proven by
+the task's creation receipt. Host, root authority, execution revisions, runtime
+release and uncertain-effect fences still apply.
+
+Commissioned roots also retain their exact inherited source: the captured folder
+must match the task's durable creation receipt and creator identity. That proof
+permits leaving the folder and recovering it after an uncertain move, including
+after restart or a nested commission. It does not associate the creator's checkout
+with the new root or authorize another peer-owned destination. When the source has
+a managed Git record, recovery also verifies its retained repository identity.
+
+Focused source tests cover both UI and agent moves between two child repositories
+and home, staged/unstaged/untracked preservation, unknown source/target recovery,
+restart and retry, substituted-repository refusal, and rejection of an unassociated
+legacy destination or replaced home path before release. These are source tests
+with controlled runtime release; packaged and browser acceptance remain separate.
 
 ## Cooperative resource reservations — 2026-10-13
 

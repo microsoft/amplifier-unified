@@ -220,6 +220,15 @@ No current universal checkout fence is known in this source baseline; this is no
 
 ### Retained exact results — 2026-10-14
 
+Optional reply `messageIds` name the recipient's assistant output from the
+current generation, never the incoming request's message ID. The host checks
+retained messages and checkpoint anchors before artifact preparation and again
+before committing a declaration. Invalid or unavailable IDs return actionable
+repair without consuming a response revision; omit them when no current output
+ID is known, keeping the exact `requestId` and evidence references. This early
+check does not replace exact native-message resolution and terminal sealing.
+Previously recorded rejected revisions remain retained.
+
 A fresh response declaration snapshots supported local `path@sha256:<digest>`
 references before the reply is acknowledged. The existing output/resource owner
 retains matching bytes, their producing execution binding and the request
@@ -237,6 +246,17 @@ remain unverified. Older replies keep their checked-source fallback and are not
 retroactively labeled retained. Request-scoped artifact reads expose only the
 declared artifact to the request participants in the recorded workspace; they do
 not grant general access to the producing conversation's output library.
+
+The discovered reply schema and shipped coordination skill describe the exact
+syntax, an executable example and the acknowledgement's retention status. A
+local reference with an explicit but malformed `@sha256` or `#sha256` marker,
+or an unsupported `file:` prefix, records an `unsupported` artifact with repair
+guidance, without reading a file. Such a declaration is incomplete and cannot
+qualify as a successful dependency. Remote URLs and ordinary opaque citations
+remain references, without filesystem authority. A plain path alone does not
+request retention. Replies distinguish no saved files from incomplete retention
+and saved exact bytes; terminal sealing cannot change a retention failure into
+saved bytes. Correction uses a later response revision, preserving the original.
 
 ### Observed dependency provenance and combined candidates — 2026-10-14
 
@@ -395,6 +415,14 @@ reply, restart, schedule or another input. The user may explicitly detach a
 conversation after interruption settles; retained usage and late corrections
 remain attributable. Detaching never interrupts another conversation or erases
 accounting. No cleanup or external resource teardown is implied by Stop.
+
+Orderly host shutdown closes admission before asynchronous cleanup and marks its
+owned live workers as expected to exit. This maintenance boundary does not act
+as a conversation or assignment Stop: settled conversations retain their state,
+unfinished execution is interrupted, and no work is replayed. Unexpected worker
+exits and worker-reported failures remain errors. Generated systemd units signal
+the host first, retaining bounded final process-group cleanup; existing custom
+units require an explicit reviewed replacement to adopt that policy.
 
 The current adapter cannot interrupt or account for only one request inside an
 independent peer's mixed conversation. Stop reports that limitation and suppresses

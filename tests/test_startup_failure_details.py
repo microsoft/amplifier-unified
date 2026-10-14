@@ -177,7 +177,7 @@ async def test_setup_failure_never_orphans_an_unregistered_process(tmp_path, mon
         await app.close()
 
 
-async def test_failed_retry_without_new_worker_detail_does_not_reuse_old_error(tmp_path):
+async def test_failed_retry_without_new_worker_detail_does_not_reuse_old_error(tmp_path, monkeypatch):
     runtime = RuntimeManager(retention={'prewarm_on_select': False})
     app = AppService(tmp_path, runtime, workspace=tmp_path)
     try:
@@ -188,7 +188,9 @@ async def test_failed_retry_without_new_worker_detail_does_not_reuse_old_error(t
         await app.on_runtime_event('runtime.error', {
             'sessionId': session['id'], 'error': 'Old diagnostic: /old/worker.log',
         })
-        await runtime.close()
+        # Fail before a worker can emit a fresh diagnostic. Orderly host
+        # shutdown has its own lifecycle outcome and is not a startup failure.
+        monkeypatch.setattr(runtime, 'start', AsyncMock(side_effect=RuntimeError('Preparation unavailable.')))
         with pytest.raises(AppError) as rejected:
             await app._send(copy.deepcopy(session), 'Saved uncertain input', 'uncertain-input', retry=True)
         assert rejected.value.receipt['delivery'] == 'unknown'

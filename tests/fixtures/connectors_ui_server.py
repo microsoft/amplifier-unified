@@ -12,7 +12,7 @@ from mcp_oauth_server import Fixture
 
 class Runtime:
     async def close(self): pass
-    async def stop(self, *args): pass
+    async def stop(self, *args, reason="stopped"): pass
 
 
 async def main(home):

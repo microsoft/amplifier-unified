@@ -14,11 +14,14 @@ ACTIONS = {'integration.validate', 'integration.collect'}
 
 
 def definitions(schema, string):
+    from .result_artifacts import REFERENCE_HELP
     sid = {'sessionId': string(200)}
     publication = schema({'status': {'enum': ['unknown', 'not_published', 'published', 'partial', 'failed']},
                           'reference': string(2000)}, ['status'])
     result = schema({'repositoryPath': string(4000),
-                     'references': {'type': 'array', 'maxItems': 16, 'items': string(4500)},
+                     'references': {'type': 'array', 'maxItems': 16,
+                         'description': 'Only exact local file references are collected. ' + REFERENCE_HELP,
+                         'items': string(4500)},
                      'publication': publication}, ['repositoryPath'])
     return {
         'integration.validate': ('Explicitly run one exact validation command in a listed repository through existing shell policy and Operations. Checks the entire saved candidate before admission. Stable command retries never rerun uncertain work. Does not merge or publish.',

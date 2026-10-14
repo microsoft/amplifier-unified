@@ -150,7 +150,7 @@ async def test_bound_matching_client_is_preferred_and_visible_ui_matches_it(app)
     sid = caller(app)
     artifact = await publish(app, sid)
     app.clients.attach('second-caller', resume='caller')
-    await app.update_device({'clientId': 'caller', 'controls': [{'label': 'Caller control'}]})
+    await app.update_device({'clientId': 'caller', 'sessionId': sid, 'controls': [{'label': 'Caller control'}]})
     await app.update_device({'clientId': 'other', 'controls': [{'label': 'Foreign control'}]})
     with app.clients.bind('caller'):
         result = await agent(app, sid, 'canvas.select', {'id': artifact})

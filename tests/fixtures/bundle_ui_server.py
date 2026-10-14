@@ -14,7 +14,7 @@ class Runtime:
     async def start(self,session,emit):
         if session['bundle']=='broken':raise ValueError('The candidate failed to load; original configuration is preserved.')
         await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
-    async def stop(self,*args):pass
+    async def stop(self,*args,reason="stopped"):pass
     async def close(self):pass
     async def control(self,sid,op,args):
         if op=='bundle.preview':

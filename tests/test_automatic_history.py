@@ -23,7 +23,7 @@ class ObservedRuntime:
     async def send(self, session, text, input_id, emit):
         self.sent.append((session['id'], text))
 
-    async def stop(self, identity):
+    async def stop(self, identity, *, reason="stopped"):
         self.stopped.append(identity)
 
     async def close(self):
