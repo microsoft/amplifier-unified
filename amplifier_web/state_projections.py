@@ -80,7 +80,7 @@ class StateProjections:
         # inputs. A chat title or worker update cannot invalidate those facts.
         self.values = {key: value for key, value in self.values.items()
                        if self.directory is not None and key[0] in
-                       {'workspace-index', 'workspaces', 'workspace-shortcuts', 'directory-chats', 'pinned-navigation'}}
+                       {'workspace-index', 'workspace-counts', 'workspaces', 'workspace-shortcuts', 'directory-chats', 'pinned-navigation'}}
         if index is not None and session_ids is not None and index.patch(state, session_ids):
             self.values[('session-index',)] = index
 
@@ -136,6 +136,12 @@ class StateProjections:
                 self.values.clear()
             self.values[key] = build()
         return self.values[key]
+
+    def directory_read(self, key, operation, state, args, build):
+        owner = getattr(getattr(getattr(self.service, 'shell', None), 'resources', None), 'queries', None)
+        if key not in self.values and owner is not None and owner.enabled and owner.context is not None:
+            return owner.read(key, operation, state, args)
+        return self.get(key, build)
 
     def sessions(self, state):
         from .browser_state import SessionIndex
@@ -203,8 +209,11 @@ class StateProjections:
         archive = state.get('view', {}).get('navWorkspaceArchive', 'active')
         directory = self.directory
         key = ('workspace-index', archive, *self.workspace_dependencies(state)) if directory else ('workspace-index', archive)
-        return self.get(key,
-            lambda: _index(state, aggregates=directory.workspace_counts(state, archive=archive) if directory else None))
+        def build():
+            aggregates = self.directory_read(('workspace-counts', *key[1:]), 'workspace_counts', state,
+                {'archive': archive}, lambda: directory.workspace_counts(state, archive=archive)) if directory else None
+            return _index(state, aggregates=aggregates)
+        return self.get(key, build)
 
     def workspace_dependencies(self, state):
         resources = getattr(getattr(self.service, 'shell', None), 'resources', None)
@@ -214,7 +223,7 @@ class StateProjections:
                     json.dumps(state.get('workspaces', []), sort_keys=True, separators=(',', ':')))
         stamp = (self.directory.workspace_revision, registry)
         if getattr(self, '_workspace_dependencies', None) != stamp:
-            workspace_keys = {'workspace-index', 'workspaces', 'workspace-shortcuts', 'pinned-navigation'}
+            workspace_keys = {'workspace-index', 'workspace-counts', 'workspaces', 'workspace-shortcuts', 'pinned-navigation'}
             self.values = {key: value for key, value in self.values.items() if key[0] not in workspace_keys}
             if self.previous_navigation is not None:
                 previous, retained = self.previous_navigation
@@ -265,8 +274,8 @@ class StateProjections:
         if directory is not None:
             dependencies = self.root_navigation_dependencies(state)
             scope = self.navigation_page_scope(state, section=section)
-            page = self.get(('directory-chats', *dependencies, section, *scope),
-                            lambda: directory.chats(state, section=section))
+            page = self.directory_read(('directory-chats', *dependencies, section, *scope),
+                'chats', state, {'section': section}, lambda: directory.chats(state, section=section))
             if section in {'shortcuts', 'pinned'} and page['scope']['selectedSessionId'] != state.get('selectedSessionId'):
                 # Selection is a receipt, except for the selected agent-created
                 # root admitted by the Recent filter. Never mutate a shared page.
@@ -302,9 +311,9 @@ class StateProjections:
                         if self.directory is not None else ())
         key = ('pinned-navigation', *dependencies, tuple(ordered_ids(state)),
                *self.navigation_page_scope(state, section='pinned'))
-        return self.get(key, lambda: self._pinned_navigation(state))
+        return self.get(key, lambda: self._pinned_navigation(state, key=key))
 
-    def _pinned_navigation(self, state):
+    def _pinned_navigation(self, state, *, key=None):
         from .workspace_navigation import _index, snapshot as workspace_snapshot
         from .pinned_navigation import snapshot
         scoped = {**state, 'view': {**state.get('view', {}), 'navWorkspaceMode': 'recent',
@@ -318,7 +327,10 @@ class StateProjections:
             rows = [row for row in rows if row['workspaceId'] == workspace]
         if self.directory is not None:
             from .history_directory_query import pinned_navigation
-            return pinned_navigation(self.directory, state, rows)
+            if key is None:
+                return pinned_navigation(self.directory, state, rows)
+            return self.directory_read(key, 'pinned_navigation', state, {'workspaces': rows},
+                lambda: pinned_navigation(self.directory, state, rows))
         return snapshot(state, self.chat_catalog(state, section='pinned')[0], rows)
 
     def workspace_shortcuts(self, state):

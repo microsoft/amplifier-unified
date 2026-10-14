@@ -121,7 +121,10 @@ def source_receipt(value):
     return receipt
 
 
-def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
+def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT,
+        input_limit=None, output_limit=None):
+    input_limit = INPUT_LIMIT if input_limit is None else input_limit
+    output_limit = OUTPUT_LIMIT if output_limit is None else output_limit
     spool, cache_home = Path(spool).resolve(), Path(cache_home).resolve()
     work = queue.Queue(maxsize=1)
     stopped = threading.Event()
@@ -173,8 +176,8 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 stage = 'input_decode'
                 check_budget()
                 with source.open('rb') as stream:
-                    data = stream.read(INPUT_LIMIT + 1)
-                if len(data) > INPUT_LIMIT:
+                    data = stream.read(input_limit + 1)
+                if len(data) > input_limit:
                     raise OverflowError('input')
                 if hashlib.sha256(data).hexdigest() != descriptor['digest']:
                     raise ValueError('Changed input artifact')
@@ -187,12 +190,12 @@ def run(spool, cache_home, *, model_factory=None, memory_limit=MEMORY_LIMIT):
                 check_budget()
                 stage = 'output_encode'
                 try:
-                    size, digest = write_json(target, result, OUTPUT_LIMIT)
+                    size, digest = write_json(target, result, output_limit)
                 except OverflowError:
                     receipt = source_receipt(result) if result.get('status') == 'complete' else None
                     if receipt is None:
                         raise
-                    size, digest = write_json(target, receipt, min(OUTPUT_LIMIT, RECEIPT_LIMIT))
+                    size, digest = write_json(target, receipt, min(output_limit, RECEIPT_LIMIT))
                 del result
                 check_budget()
                 reply({'type': 'result', 'id': identity, 'bytes': size, 'digest': digest})

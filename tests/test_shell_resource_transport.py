@@ -7,6 +7,7 @@ from amplifier_web.server import create_app
 from amplifier_web.shell_resources import scope_for
 from amplifier_web.state_transport import delta
 from test_service import Runtime
+from test_shell_modules import settled_resources
 
 
 async def setup(authenticated_client, tmp_path):
@@ -40,6 +41,7 @@ async def test_bootstrap_has_no_unused_snapshots_and_view_updates_stream_with_re
     assert 'snapshots' not in body and 'registry' not in body
     assert set(body['shellResources']['instances']) == {'workspaces', 'chats'}
     assert len(body['instanceGenerations']) > 2
+    await settled_resources(service, 'resource-browser')
     with service.clients.bind('resource-browser'):
         queue = service.subscribe()
         before = service.browser_state()
@@ -67,6 +69,7 @@ async def test_scope_and_demand_fences_reject_stale_or_cross_client_reads_before
         authenticated_client, tmp_path, monkeypatch):
     client, service, scope = await setup(authenticated_client, tmp_path)
     assert (await bootstrap(client, scope, demand=2)).status == 200
+    await settled_resources(service, 'resource-browser')
     calls = []
     original = service.shell.navigation
     monkeypatch.setattr(service.shell, 'navigation', lambda *a, **kw: (calls.append(kw), original(*a, **kw))[1])
@@ -92,6 +95,7 @@ async def test_unrelated_committed_observations_never_rebuild_navigation(
         authenticated_client, tmp_path, monkeypatch):
     client, service, scope = await setup(authenticated_client, tmp_path)
     assert (await bootstrap(client, scope)).status == 200
+    await settled_resources(service, 'resource-browser')
     with service.clients.bind('resource-browser'):
         before = service.browser_state()['shellResources']
     def forbidden(*args, **kwargs):
@@ -166,3 +170,36 @@ async def test_unregistered_and_restarted_web_frames_advertise_exact_host_bootst
     assert envelope['clientId'] == 'resource-browser' and envelope['demandId'] == 1
     assert envelope['scope'] == current_scope
     assert 'context' in envelope['instances']['chats']['resources']
+
+
+async def test_explicit_retry_admits_current_new_demand_after_cooldown(authenticated_client, tmp_path):
+    import time
+    client, service, scope = await setup(authenticated_client, tmp_path)
+    class Failed:
+        calls = 0
+        def __init__(self, *args, **kwargs):
+            pass
+        async def project(self, *args, **kwargs):
+            Failed.calls += 1
+            return {'status': 'retry', 'reason': 'worker_failed'}
+        async def close(self):
+            pass
+    owner = service.shell.resources.queries
+    owner.factory = Failed
+    assert (await bootstrap(client, scope)).status == 200
+    if owner.runner is not None:
+        await owner.runner
+    payload = {'clientId': 'resource-browser', 'demandId': 1, 'resources': ['recentNavigation'],
+               'scope': scope, 'reason': 'retry'}
+    headers = {'X-Amplifier-Client': 'resource-browser'}
+    assert (await client.post('/api/shell/resources', headers=headers, json=payload)).status == 429
+    before = Failed.calls
+    for failure in owner.failures.values():
+        failure['until'] = time.monotonic() - 1
+    payload['demandId'] = 2
+    response = await client.post('/api/shell/resources', headers=headers, json=payload)
+    assert response.status == 200
+    if owner.runner is not None:
+        await owner.runner
+    assert Failed.calls > before
+    assert (await response.json())['demandId'] == 2

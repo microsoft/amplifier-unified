@@ -4579,6 +4579,7 @@ class AppService:
             return
         self._close_started = True
         self.begin_shutdown()
+        await self.shell.resources.close()
         self.collaboration.close()
         await self.performance_diagnostics.close()
         if getattr(self, "profiling_host", None):
