@@ -246,7 +246,12 @@ async def test_native_body_projection_and_text_source_kind_contract(authenticate
             result = await service.dispatch('canvas.show', {'kind': kind, 'path': str(path)})
         else:
             content = '<!doctype html><h1>Deferred source</h1>' + ' ' * 1_000_001 if kind in {'html', 'babylon'} else 'Native Markdown'
-            result = await service.dispatch('canvas.show', {'kind': kind, 'title': 'Native', 'content': content})
+            if kind in {'html', 'babylon'}:
+                path = tmp_path / ('native-' + kind + '.html')
+                path.write_text(content)
+                result = await service.dispatch('canvas.show', {'kind': kind, 'title': 'Native', 'path': str(path)})
+            else:
+                result = await service.dispatch('canvas.show', {'kind': kind, 'title': 'Native', 'content': content})
         identity = result['result']['id']
         view = service.canvas_views.summary('primary')
     params = {**view_target(view), 'clientId': 'source-client'}

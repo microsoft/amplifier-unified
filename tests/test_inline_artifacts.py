@@ -15,7 +15,8 @@ async def published(app, content='First version', kind='text'):
 
 async def inline(app, artifact, **extra):
     result = await command(app, 'canvas.views.inline', {
-        'resourceId': artifact['resourceId'], 'messageId': 'inline-message', 'version': 1, 'previewId': 'test-preview', **extra})
+        'resourceId': artifact['resourceId'], 'messageId': 'inline-message', 'version': 1,
+        'previewId': 'test-' + artifact['resourceId'], **extra})
     return result['result']
 
 
