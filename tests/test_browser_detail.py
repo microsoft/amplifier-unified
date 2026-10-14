@@ -177,7 +177,7 @@ def test_paged_failed_actions_do_not_fail_the_complete_segment_summary():
     assert earlier['segments'][0]['phase']=='completed'
 
 
-@pytest.mark.parametrize('phase', ['error', 'failed', 'cancelled', 'interrupted'])
+@pytest.mark.parametrize('phase', ['error', 'failed', 'cancelled', 'interrupted', 'stopped'])
 def test_manager_failure_after_successful_goal_check_marks_only_final_segment(phase):
     session={'id':'chat','messages':[{'id':'question','createdAt':1}, {'id':'answer','createdAt':10}],
              'execution':{'turns':[{'id':'turn','phase':phase,'endedAt':15}],

@@ -11,3 +11,8 @@
 .a-coordination-related article{padding-block:.5rem;border-top:1px solid var(--a-border,#8884)}
 .a-workspace-awareness{margin-block:1rem;min-width:0;overflow-wrap:anywhere}
 .a-workspace-awareness code{white-space:pre-wrap;overflow-wrap:anywhere}
+
+.a-workspace-review{min-width:0;overflow-wrap:anywhere}
+.a-workspace-review section{margin-block:1rem}
+.a-workspace-review code{white-space:pre-wrap;overflow-wrap:anywhere}
+.a-workspace-review .a-state-view{max-width:100%;max-height:20rem;overflow:auto}

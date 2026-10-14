@@ -176,7 +176,7 @@ def work_segments(session, nodes=None, *, select_groups=None):
         # that outcome to the last segment without rewriting earlier work or
         # the successful child call. Use the full tree, including paged nodes.
         turn_phase=turn.get('status') or turn.get('phase')
-        if last_group and turn_phase in {'error','failed','cancelled','interrupted'}:
+        if last_group and turn_phase in {'error','failed','cancelled','interrupted','stopped'}:
             failure=turn_phase
             running=False
             if isinstance(turn.get('endedAt'),(int,float)):ends.append(turn['endedAt'])

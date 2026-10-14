@@ -39,7 +39,7 @@ export function AssignmentControls({dispatch,sessionId,memberLabels={}}){
    save(null);await read();
   }catch(error){setError(error.message)}finally{setBusy(false)}
  };
- return <details className="a-assignment" onToggle={event=>{if(event.target!==event.currentTarget)return;invalidate();setExpanded(event.currentTarget.open);if(event.currentTarget.open&&!value)read()}}>
+ return <details data-review-target="assignment" className="a-assignment" onToggle={event=>{if(event.target!==event.currentTarget)return;invalidate();setExpanded(event.currentTarget.open);if(event.currentTarget.open&&!value)read()}}>
   <summary>Shared tasks and assignment</summary>
   <p>Manage this chat and its commissioned helpers together. Existing independent chats keep their own controls.</p>
   {error&&<p role="alert">{error}</p>}

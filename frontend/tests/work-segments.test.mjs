@@ -31,7 +31,7 @@ test('undated native transcript anchors take precedence over fallback timestamps
  const grouped=splitWork(messages.map(m=>({...m,createdAt:0,timestampKnown:false})),{...data,nodes:[{...data.nodes[0],anchorMessageId:'interim'}]});
  assert.equal(grouped.turns[0].anchorMessageId,'interim');
 });
-for(const phase of ['error','failed','cancelled','interrupted'])test(`manager ${phase} survives a successful final model call`,()=>{
+for(const phase of ['error','failed','cancelled','interrupted','stopped'])test(`manager ${phase} survives a successful final model call`,()=>{
  const source={...data,turns:[{...data.turns[0],phase,endedAt:22}],nodes:[...data.nodes].reverse()};
  const before=JSON.stringify(source),grouped=splitWork(messages,source);
  const byAnchor=new Map(grouped.turns.map(turn=>[turn.anchorMessageId,turn]));

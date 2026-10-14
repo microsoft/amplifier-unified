@@ -27,7 +27,7 @@ COLUMNS = ('id', 'native_id', 'native_project', 'parent_id', 'native_parent_id',
 FIELDS = {
     'id', 'title', 'titleSource', 'nativeNameSource', 'nativeNameRevision', 'nativeNamePolicyRevision', 'autoName', 'naming',
     'description', 'bundle', 'workspace', 'workspaceId', 'workspaceAvailable',
-    'workingDirectory', 'executionRevision', 'executionHost',
+    'workingDirectory', 'executionRevision', 'executionHost', 'assignmentId', 'interruptionRevision',
     'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt',
     'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
     'nativeRevision', 'turnCount', 'shared', 'historyManaged', 'historyLoaded',
@@ -89,6 +89,13 @@ def summary(row):
     value = copy.deepcopy({key: item for key, item in dict.items(row) if key in FIELDS})
     value['workingDirectory'] = dict.get(row, 'workingDirectory') or dict.get(row, 'workspace')
     value['executionRevision'] = dict.get(row, 'executionRevision', 0)
+    value['interruptionRevision'] = dict.get(row, 'interruptionRevision', 0)
+    moves = dict.get(row, 'worktreeHandoffs', ())
+    handoffs = [item for item in reversed(moves[-16:])
+                if item.get('phase') in {'pending', 'unknown'}][:5]
+    value['reviewHandoffs'] = {'items': [{key: item.get(key) for key in ('id', 'phase', 'updatedAt')}
+                                        for item in handoffs[:4]], 'truncated': len(handoffs) > 4,
+                              'historyLimited': len(moves) > 16}
     if dict.get(row, 'historyLoaded', True) is False:
         value['displayMessageCount'] = None
     elif dict.__contains__(row, '_coldMessageCount'):

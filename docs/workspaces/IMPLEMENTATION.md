@@ -26,9 +26,9 @@ worktree, resource and usage records remain authoritative.
 | D Placement and resources | Explicit per-repository copies, phase-aware handoff, cooperative reservations, owner observations and retained task-owned scratch folders, browser-profile directories and SQLite files | Explicit dependency mappings; no automatic environment inference, running browser confinement, database servers or arbitrary preview discovery |
 | E Awareness and cooperation | Bounded active-work packets, advisory file intent, supported file-tool source checks, replacement of volatile guidance and optional shared assignment tasks with atomic exclusive claims | Task claims assign responsibility, not file access; no universal external-writer detection or filesystem fence |
 | F Results and integration | Retained exact reported bytes, scoped artifact reads, loaded-origin observations, explicit integration responsibility, recorded candidates and native validation/collection per repository | Qualification covers the chosen commands and observed versions; semantic correctness, complete subprocess imports and publication are not inferred |
-| G Recovery and preservation | Durable decisions, cleanup-safe bridge waits, phase-aware recovery and complete managed-checkout archive/restore | Archive retains files without reclaiming space or stopping external resource owners; uncertain effects are never replayed |
+| G Recovery and preservation | Durable decisions, expired native approval waits after restart, cleanup-safe bridge waits, phase-aware recovery and complete managed-checkout archive/restore | Archive retains files without reclaiming space or stopping external resource owners; uncertain effects are never replayed |
 | H Assignment lifecycle | Explicit commissioned membership, model-call allowances/reservations, usage reconciliation and scoped Stop | An independent mixed conversation has no request-only accounting/interruption adapter; unrelated work is not stopped |
-| I Experience and evidence | Shared actions, Workspace work overview, shared task list, simpler exact-candidate integration controls, passive inspection, private drafts, per-tab return recaps and portable bounded timing/phase diagnostics | Missing samples stay unavailable; timings do not establish causation, physical paint or complete application latency |
+| I Experience and evidence | Shared actions, Workspace work overview, guided review before continuing, shared task list, simpler exact-candidate integration controls, passive inspection, private drafts, per-tab return recaps and portable bounded timing/phase diagnostics | Missing samples stay unavailable; timings do not establish causation, physical paint or complete application latency |
 
 The source mechanisms above implement the bounded October 13 program and the
 October 14 follow-up in [PR #706](https://github.com/microsoft/amplifier-unified/pull/706).
@@ -1128,3 +1128,75 @@ ceilings, alter shell policy or start a turn. A pending file-access fence is
 saved before the canonical file write. Existing work may settle; new root,
 worker and voice inputs cannot bypass it, peers wait, and schedule/observation
 guards recheck it. Confirmed retirement or an absent owned mount clears it.
+
+
+## Guided review before continuing — 2026-10-14
+
+Workspace work now offers a demand-loaded review of saved workspace chats and
+next actions before continuing. `coordination.review` uses the indexed history
+directory, existing assignment claim rule, and the source chat's integration
+receipts. It returns at most twenty root summaries, eight claims needing review,
+and four prior source observations. Stable directory keyset cursors stay bound
+to the originating chat and workspace. Each page is a fresh observation; no
+whole-workspace snapshot or readiness certificate is claimed.
+
+The review distinguishes observed activity from saved status, pending decisions,
+settings/file-permission fences, saved placement, bounded unresolved move observations, and
+response completion. Its existing directory projection retains claim identity
+and interruption generation for passive checks. Older unrefreshed summaries
+remain unavailable rather than acquiring a false current claim. The bounded
+move projection examines sixteen retained receipts, disclosing older history
+when present. Opening the review does not admit dormant peers, hydrate native
+history, inspect repositories, query GitHub, warm workers, send input, change
+claims or create a new canonical ledger. Existing Open chat, shared assignment,
+and integration controls own explicit resolutions. Worker provenance remains a
+separate explicit read, and installed app version does not prove worker adoption.
+
+Focused source qualification passes 57 backend checks across review, coordination,
+assignment tasks and directory query/preservation, and 43 frontend checks across
+review, workspace work and assignment task controls. These cover native tool/UI
+read parity, child authority, scope and cursor fencing, passive restart discovery,
+canonical stale claims, old unavailable summaries, private-draft preservation,
+late replies, bounded page replacement, and explicit-only worker inspection. The
+production frontend builds successfully. The integrated acceptance below records
+the separately installed package, browser and live-provider evidence.
+
+
+## Recovery and guided-review integration acceptance — 2026-10-14
+
+The combined candidate `4145b14764073a4fdeb3e2dada8b25dc30240ffe`, based on
+main `0925770e`, passed 190 focused backend checks against the built wheel and
+114 frontend checks. The package was installed in an owned isolated instance;
+all package files matched the wheel, and all eighteen saved chats, transcripts,
+drafts, fixture files, configuration and dependency metadata were preserved.
+The frontend identity was `9091c62d83762119` (candidate version 0.20.154).
+This is candidate qualification, not publication or production adoption.
+
+Computer-use acceptance opened the guided review of eighteen saved roots,
+inspected an absent worker without starting it, followed the existing shared-task
+and source-check controls, and opened another chat while preserving an unsent
+draft. Review-only operations left native history and fixture files unchanged
+and started no workers. The review fit 320- and 390-pixel viewports without
+horizontal overflow. A real provider used native `app_control` to dispatch the
+same `coordination.review` action successfully; its eighteen observations
+retained the source, PR, worker-adoption and replay limitations.
+
+Recovery acceptance exercised real provider work across browser disconnect and
+reconnect, a durable capability decision across an owned-service restart followed
+by Deny, and stopping one chat after a synthetic file effect while an independent
+chat completed. Observed effects were not replayed; retained conversations,
+existing drafts and configuration were preserved. The installed candidate showed
+an older misleading completion summary as Interrupted from its exact retained
+root receipt and showed a fresh stopped native turn as Stopped. Ordinary native
+approvals now expire after host replacement; focused checks verify that answering
+an old card cannot revive its worker. Later successful retries and explicit
+terminal outcomes retain precedence over earlier interruption receipts.
+
+Five isolated child-process update fixtures preserved pending replacement state
+and history, blocked new work, and avoided synthetic effect replay. Installation
+and service operations were stubbed; normal live updater interruption remains
+unverified. Browser reconnect did not prove exact command-acknowledgment loss.
+The live Stop case observed cancellation rather than a successful native reply
+arriving after Stop; that stronger case has source coverage only. Historical
+repair requires retained exact generation receipts and does not reconstruct
+aged-out outcomes. Production services and saved production chats were unchanged.

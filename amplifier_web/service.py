@@ -395,6 +395,7 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        "coordination.review",
         *integration_definitions(schema, string),
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
         "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.openGif", "canvas.select", "canvas.reference",
@@ -2928,8 +2929,10 @@ class AppService:
                 pending.append((method, call_args))
             elif action == "approval.respond":
                 session = self._session(args.get("sessionId"))
-                approval = next((a for a in session["approvals"] if a["id"] == args["id"] and a.get("status") == "pending"), None)
-                if not approval:
+                approval = next((a for a in session["approvals"] if a["id"] == args["id"]), None)
+                if approval and approval.get('resolutionReason') == 'host_restarted':
+                    raise AppError('This permission request expired when the app restarted. Review the saved work and ask again if needed; nothing was replayed.', 409)
+                if not approval or approval.get("status") != "pending":
                     raise AppError("This permission request is no longer pending.", 409)
                 if origin not in {"ui", "user"}:
                     raise AppError("This tool requested user approval. It must be answered by the user.", 403)

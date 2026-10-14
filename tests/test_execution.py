@@ -1,5 +1,25 @@
 from amplifier_web.execution import ensure_turn,ingest,finish
 
+def test_detached_receipts_only_repair_exact_root_inputs_without_replacing_terminal_outcomes():
+    import copy
+    from amplifier_web.execution import generation_turns
+    phases=['completed','error','failed','cancelled','interrupted','stopped','running']
+    session={'id':'root','status':'stopped','execution':{'turns':[
+        {'id':phase,'inputId':phase,'phase':phase,'endedAt':10} for phase in phases]+[
+        {'id':'child-only','phase':'completed'}, {'id':'foreign-root','phase':'completed'},
+        {'id':'missing-owner','phase':'completed'}, {'id':'untouched','phase':'completed'}]},
+        'generations':[
+            {'event':'generation.detached','sessionId':'root','rootSessionId':'root','input_ids':phases,'at':15},
+            {'event':'generation.detached','sessionId':'child','rootSessionId':'root','input_ids':['child-only'],'at':15},
+            {'event':'generation.detached','sessionId':'root','rootSessionId':'foreign','input_ids':['foreign-root'],'at':15},
+            {'event':'generation.detached','input_ids':['missing-owner'],'at':15}]}
+    original=copy.deepcopy(session)
+    turns=generation_turns(session)
+    assert turns[0]['phase']=='interrupted' and turns[0]['endedAt']==15
+    assert turns[1:]==session['execution']['turns'][1:]
+    assert session==original
+
+
 def test_nested_usage_rolls_up_once_and_repeated_completion_dedupes():
     session={};ensure_turn(session,'turn','request')
     nodes=[{'id':'tool','kind':'tool'},{'id':'worker','kind':'worker','parentId':'tool'},{'id':'nested-tool','kind':'tool','parentId':'worker'},{'id':'llm','kind':'llm','parentId':'nested-tool','usage':{'inputTokens':100,'outputTokens':20,'totalTokens':120,'costUsd':.003,'costType':'reported'}}]
