@@ -1,11 +1,14 @@
 """Latest app-state records, committed together; not a replay log.
 
-Full saves reconcile every record, while scoped saves visit only declared keys.
-Both leave unchanged values untouched. The base row contains only session order;
-load() is the authority for reads, retention and deletion, including older full
-snapshots with overlays. Canonical events and command receipts are separate.
+Routine working-set saves visit admitted keys without deleting dormant owners.
+Explicit checkpoints alone reconcile a complete legacy snapshot. Unchanged values
+stay untouched; load() remains the complete authority for retention/export, while
+load_working() and load_owner() serve bounded admission. Canonical events and
+command receipts are separate.
 """
 import json
+
+EMPTY_BASE = json.dumps({'revision': 0, 'sessions': [], 'runtimeControl': {}})
 
 
 UPSERT = '''INSERT INTO state_records VALUES(?,?,?)
@@ -112,3 +115,75 @@ def save(db, state, references, session_ids, global_keys=()):
         values.append(('global', key, {'present': key in state, 'value': state.get(key)}))
     db.executemany(UPSERT,
                    ((kind, identity, json.dumps(value)) for kind, identity, value in values))
+
+
+def load_working(db, identities=()):
+    """Load globals and explicitly admitted owners, never dormant records.
+
+    Only available after the directory migration has atomically converted the
+    legacy full base. Complete load() remains the durable retention/export owner.
+    """
+    from .history_directory import ready
+    if not ready(db):
+        return load(db)
+    state = {'revision': 0, 'sessions': [], 'runtimeControl': {}}
+    for kind, identity, raw in db.execute("SELECT kind,id,value FROM state_records WHERE kind IN ('revision','global')"):
+        value = json.loads(raw)
+        if kind == 'revision':
+            if identity != '' or type(value) is not int or value < 0:
+                raise ValueError('Invalid saved state revision; original records were preserved.')
+            state['revision'] = value
+        elif (identity in {'sessions', 'runtimeControl', 'revision'} or not isinstance(value, dict)
+              or set(value) != {'present', 'value'} or type(value['present']) is not bool):
+            raise ValueError('Invalid saved global record; original records were preserved.')
+        elif value['present']:
+            state[identity] = value['value']
+    requested = set(identities)
+    requested.update(identity for identity, in db.execute('SELECT id FROM history_local_rows WHERE startup=1'))
+    if state.get('selectedSessionId'):
+        requested.add(state['selectedSessionId'])
+    for identity in requested:
+        session, runtime = load_owner(db, identity)
+        if session is not None:
+            state['sessions'].append(session)
+        if runtime is not None:
+            state['runtimeControl'][identity] = runtime
+    return state
+
+
+def load_owner(db, identity):
+    """Exact durable presentation/runtime pointers; no other owner's JSON."""
+    session = runtime = None
+    for kind, raw in db.execute("SELECT kind,value FROM state_records WHERE id=? AND kind IN ('session','runtime')", (identity,)):
+        value = json.loads(raw)
+        if value is not None and (not isinstance(value, dict) or kind == 'session' and value.get('id') != identity):
+            raise ValueError('Invalid saved owner record; original records were preserved.')
+        if kind == 'session':
+            session = value
+        else:
+            runtime = value
+    return session, runtime
+
+
+def save_working(db, state, references, identities, *, global_keys=None, deleted=()):
+    """Save the working set without inferring deletion from non-residency.
+
+    Explicit owner deletion is the only operation which clears an absent durable
+    record. This transaction also contains the scalar directory projection and
+    private client pointers; eviction itself never writes a tombstone.
+    """
+    identities = set(identities)
+    deleted = set(deleted)
+    if global_keys is None:
+        global_keys = set(state) - {'sessions', 'runtimeControl', 'revision'}
+        old = {key for key, in db.execute("SELECT id FROM state_records WHERE kind='global'")}
+        global_keys.update(old)
+    if deleted:
+        references = {identity: value for identity, value in references.items() if identity not in deleted}
+        state = {**state, 'runtimeControl': {identity: value for identity, value in state.get('runtimeControl', {}).items()
+                                            if identity not in deleted}}
+    save(db, state, references, identities | deleted, global_keys)
+    # Membership now lives in keyed records, not a complete ID array which must
+    # be decoded at every restart. Explicit load() already enumerates records.
+    db.execute('INSERT INTO state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value '
+               'WHERE state.value != excluded.value', (EMPTY_BASE,))

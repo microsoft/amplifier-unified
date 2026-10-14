@@ -17,6 +17,64 @@ DECISION = 'We settled on PostgreSQL for the event store because transactional w
 OUTCOME = 'The clean install fixed the build; using the public registry worked.'
 
 
+def retain_only(app, sid):
+    """Leave durable owners intact while modeling the idle working-set boundary."""
+    app._save()
+    app.state['sessions'] = [app._session(sid)]
+    app.state['runtimeControl'] = {key: value for key, value in app.state['runtimeControl'].items() if key == sid}
+    app.projections.invalidate()
+
+
+async def test_dormant_memory_evidence_is_verified_without_live_admission(memory_app, monkeypatch):
+    app, source = memory_app
+    await configure(app, source, contribute=True, use=True)
+    await consolidate(app, source)
+    caller = await make(app, text='Draft a status update.')
+    retain_only(app, caller)
+    original = app._session
+    def current_only(identity=None, *args, **kwargs):
+        assert identity in {None, caller}, 'memory verification admitted a dormant source'
+        return original(identity, *args, **kwargs)
+    monkeypatch.setattr(app, '_session', current_only)
+    result = await app.dispatch('memory.context', {'sessionId': caller})
+    note = result['result']['items'][0]
+    assert note['text'] == PREFERENCE
+    evidence = (await app.dispatch('memory.source', {'sessionId': caller, 'id': note['id']}))['result']
+    assert PREFERENCE in evidence['text'] and evidence['sessionId'] == source
+    assert [row['id'] for row in app.state['sessions']] == [caller]
+    # A genuinely missing saved owner remains unavailable; its old verified
+    # quote is never used just because the metadata directory still knows it.
+    app.db.execute("DELETE FROM state_records WHERE kind='session' AND id=?", (source,))
+    app.db.commit()
+    assert not (await app.dispatch('memory.context', {'sessionId': caller}))['result']['items']
+    with pytest.raises(AppError, match='unavailable or was removed'):
+        await app.dispatch('memory.source', {'sessionId': caller, 'id': note['id']})
+    assert len(app.runtime.calls) == 1 and not app.runtime.sent
+
+
+@pytest.mark.parametrize('explicit_source', [False, True])
+async def test_explicit_consolidation_finds_dormant_workspace_source(memory_app, monkeypatch, explicit_source):
+    app, source = memory_app
+    await configure(app, source, contribute=True)
+    caller = await make(app, text='Independent current work.')
+    app._session(caller)['status'] = 'working'
+    retain_only(app, caller)
+    original_control = app.runtime.control
+    async def checked_control(identity, operation, args):
+        assert identity == source
+        assert [row['id'] for row in app.state['sessions']] == [caller]
+        return await original_control(identity, operation, args)
+    monkeypatch.setattr(app.runtime, 'control', checked_control)
+    args = {'sessionId': caller, **({'sourceSessionId': source} if explicit_source else {})}
+    await app.dispatch('memory.consolidate', args)
+    await asyncio.gather(*list(app.recall.personalization.tasks.values()))
+    notes = app.recall.store.list_memories(None)['items']
+    assert len(notes) == 3 and {note['source']['sessionId'] for note in notes} == {source}
+    assert len(app.runtime.calls) == 1 and not app.runtime.sent
+    assert app.state['selectedSessionId'] == caller
+    assert 'Memory saved 3 workspace reference(s)' in app._session(source)['messages'][-1]['text']
+
+
 class MemoryRuntime(Runtime):
     def __init__(self):
         super().__init__()
@@ -371,6 +429,10 @@ async def test_withdrawn_source_is_not_sent_as_known_context_to_another_consolid
         await configure(app,other,excludedSessions=[sid])
     elif withdrawal=='remove':
         app.state['sessions']=[row for row in app.state['sessions'] if row['id']!=sid]
+        # Removal is explicit durable membership withdrawal; an idle owner
+        # leaving the working set alone must retain its verified memories.
+        app.directory.sync([], app.state, deleted=[sid])
+        app.db.commit()
     else:
         app._session(sid)['messages'][0]['text']='The original evidence changed.'
     async def observe(*args):

@@ -111,6 +111,21 @@ def definitions(schema, string):
     }
 
 
+def restore_owner(session, host_instance):
+    """Retire prior-host authority on exact admission, never replay its work."""
+    if session.get('_collaborationHostInstanceId') == host_instance:
+        return
+    active = session.get('collaborationGeneration')
+    if active and not active.get('terminal'):
+        active.update(terminal=True, detail='Host restarted; no live generation authority.')
+    for approval in session.get('approvals', []):
+        if approval.get('id', '').startswith('collaboration:') and approval.get('status') == 'pending':
+            approval['status'] = 'retired'
+    # The marker travels with this one durable owner, not a growing process-wide
+    # set of every chat visited. Same-host eviction is not another restart.
+    session['_collaborationHostInstanceId'] = host_instance
+
+
 class Collaboration:
     def __init__(self, service):
         self.service = service
@@ -122,12 +137,7 @@ class Collaboration:
         service.db.execute('''CREATE TABLE IF NOT EXISTS collaboration_preparations(
             request_id TEXT PRIMARY KEY, configuration TEXT NOT NULL)''')
         for session in service.state["sessions"]:
-            active = session.get("collaborationGeneration")
-            if active and not active.get("terminal"):
-                active.update(terminal=True, detail="Host restarted; no live generation authority.")
-            for approval in session.get("approvals", []):
-                if approval.get("id", "").startswith("collaboration:") and approval.get("status") == "pending":
-                    approval["status"] = "retired"
+            restore_owner(session, service.instance_id)
         # Index receipts, not conversations or transcripts.
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_target ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.target.sessionId'))""")
@@ -859,6 +869,7 @@ class Collaboration:
             return changed
         if payload.get("event") == "generation.started":
             session["collaborationGeneration"] = {"id": payload.get("generation_id"), "inputIds": [], "terminal": False}
+            session['_collaborationHostInstanceId'] = self.service.instance_id
             return changed
         active = session.get("collaborationGeneration") or {}
         if active.get("id") != payload.get("generation_id") or active.get("terminal"):
@@ -1456,11 +1467,19 @@ class Collaboration:
                         or row["id"] in getattr(self.service.runtime, "_preparations", {})
                         or task.get("id") and task.get("status") in {"active", "running", "working"}):
                     outstanding.add(row["id"])
-            pending_inputs = {row[0] for row in self.service.db.execute("""SELECT DISTINCT
-                json_extract(receipt,'$.target.sessionId') FROM commands
-                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
-                AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""").fetchall()}
-            outstanding.update(row["id"] for row in roots if row["id"] in pending_inputs)
+            # Idle presentation can be nonresident while a durable task or an
+            # unsubmitted input still occupies a slot. Count exact directory
+            # owners without admitting or reading unrelated saved bodies.
+            sql, bound = self.service.directory.effective()
+            outstanding.update(row[0] for row in self.service.db.execute(sql + """
+                SELECT d.id FROM directory_rows d
+                WHERE json_extract(d.summary,'$.collaboration.creatorSessionId')=?
+                AND (json_extract(d.summary,'$._coordinationTaskActive')=1 OR EXISTS(
+                    SELECT 1 FROM commands c
+                    WHERE json_extract(c.receipt,'$.commandAction')='coordination.send'
+                    AND json_extract(c.receipt,'$.target.sessionId')=d.id
+                    AND json_extract(c.receipt,'$.delivery') IN ('queued','submitting','pending_steer')))
+                LIMIT 8""", (*bound, source['id'])))
             pending = self.service.db.execute("""SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.create'
                 AND json_extract(receipt,'$.senderSessionId')=?

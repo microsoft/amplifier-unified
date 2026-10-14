@@ -56,6 +56,9 @@ async function record(name,status,evidence={},required=true){
  return row;
 }
 class CantCheck extends Error{}
+const errorEvidence=error=>({name:error.name||'Error',reason:String(error.message||error),
+ stack:typeof error.stack==='string'?error.stack:null,
+ ...(error.cleanupErrors?{cleanupErrors:error.cleanupErrors}:{})});
 async function phase(name,work,{required=true}={}){
  if(selectedPhases&&!selectedPhases.has(name)&&!['shared-setup','cleanup'].includes(name))
   return record(name,'NOT_RUN',{reason:'Explicit partial verification selection'},false);
@@ -69,7 +72,7 @@ async function phase(name,work,{required=true}={}){
    catch(capture){snapshots.push({filename,saved:false,reason:String(capture.message)})}
   }
   return await record(name,error instanceof CantCheck?(required?'CANT_CHECK':'NOT_QUALIFIED'):'FAIL',
-   {reason:String(error.message).replaceAll(root,'<source>/'),snapshots},required);
+   {...errorEvidence(error),snapshots},required);
  }
 }
 async function action(page,name,args={}){
@@ -980,7 +983,7 @@ try{
     if(body?.action!=='canvas.openGif')return route.continue();
     openCalls++;clickEnvelope=body;await openGate;await route.continue();
    };
-   let large,identity,reference,peerBefore;
+   let large,identity,reference,peerBefore,primaryError;
    try{
     large=await attach(page,'large');
     assert.equal(large.bytes,boot.samples.large.bytes);
@@ -992,6 +995,7 @@ try{
     await action(peer.page,'canvas.show',{kind:'text',title:'Peer selected artifact',content:'Keep this peer Canvas'});
     await peer.page.getByRole('textbox',{name:'Message Amplifier'}).fill('GIF peer unsent draft');
     await expect(peer.page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('GIF peer unsent draft');
+    await expect.poll(async()=>(await state(peer.page)).canvas.renderReports?.preview?.status).toBe('ready');
     peerBefore=await state(peer.page);
     await page.getByRole('textbox',{name:'Message Amplifier'}).fill('GIF clicker unsent draft');
     await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('GIF clicker unsent draft');
@@ -1136,14 +1140,30 @@ try{
       beforeMotionDraws,motionDraws,pausedMotionPixels:restoredPixels},
      inlineGeneration,inlineReadback: inlineAfter.result.browserObservation,sourceRemoved:true,
      reload:true,appCloseReopen:true,peerPreserved:true,versions:1,automaticRuntimeCalls,counters:evidence.counters};
+   }catch(error){
+    primaryError=error;
+    // Save the assertion before cleanup, which may itself wait for a receipt.
+    try{await writeEvidence(join(evidenceDir,'gif-canvas-primary-error.json'),errorEvidence(error))}
+    catch(writeError){error.cleanupErrors=[{step:'save primary error evidence',...errorEvidence(writeError)}]}
+    throw error;
    }finally{
+    const cleanupErrors=[...(primaryError?.cleanupErrors||[])];
+    const cleanup=async(label,work)=>{
+     try{await work()}catch(error){cleanupErrors.push({step:label,...errorEvidence(error)})}
+    };
     releaseOpen();
-    if(!page.isClosed())await page.unroute('**/api/actions',holdOpen);
-    if(!page.isClosed())await unmountAndClose(client);
+    if(!page.isClosed())await cleanup('release action route',()=>page.unroute('**/api/actions',holdOpen));
+    if(!page.isClosed())await cleanup('clicker unmount and close',()=>unmountAndClose(client));
     if(!peer.page.isClosed()){
      // Restore the peer through the normal action before disposing the test client.
-     if(originalPeer.canvas?.kind)await action(peer.page,'canvas.select',{id:originalPeer.canvas.id});
-     await unmountAndClose(peer);
+     if(originalPeer.canvas?.kind)await cleanup('restore peer Canvas',()=>action(peer.page,'canvas.select',{id:originalPeer.canvas.id}));
+     await cleanup('peer unmount and close',()=>unmountAndClose(peer));
+    }
+    if(cleanupErrors.length){
+     try{await writeEvidence(join(evidenceDir,'gif-canvas-cleanup-errors.json'),cleanupErrors)}
+     catch(writeError){cleanupErrors.push({step:'save cleanup error evidence',...errorEvidence(writeError)})}
+     if(primaryError)primaryError.cleanupErrors=cleanupErrors;
+     else throw Object.assign(new Error('GIF Canvas cleanup failed'),{cleanupErrors});
     }
    }
   });

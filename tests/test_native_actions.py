@@ -58,10 +58,12 @@ async def test_removed_unresolved_workspace_can_be_restored_by_explicit_chat_sel
     await select(app,row['id'])
     await app.dispatch('workspace.remove',{'id':row['workspaceId']}); await finish_actions(app)
     assert app.state['settings']['workspace']
+    assert app.directory.resolve(row['id']) is None
     await select(app,row['id'])
     assert app.state['selectedWorkspaceId']==row['workspaceId']
     assert app._session()['messages']
     assert row['workspaceId'] not in app.state.get('hiddenNativeWorkspaces',[])
+    assert not app.runtime.started and not app.runtime.sent
 
 
 async def test_history_export_reads_native_files_in_unresolved_project(tmp_path, app_factory):

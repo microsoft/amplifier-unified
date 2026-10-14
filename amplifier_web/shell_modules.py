@@ -411,7 +411,7 @@ class ShellModules:
                                       'recentView': {key: recent_view[key] for key in recent_view
                                                      if key in SIDEBAR_FILTER_KEYS}},
                 'chatNavigation': chat_page, 'workspaceExplorer': projections.workspaces(scoped),
-                'conversationOrganization': organization_projection(state, {row['id'] for row in chat_page['items']}),
+                'conversationOrganization': organization_projection(state, {row['id'] for row in chat_page['items']}, directory=projections.directory),
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error', 'issues', 'issueCount']},
                 'attention': {'sessions': {sid: scoped['attention'].get('sessions', {}).get(sid, 0) for sid in visible_ids},

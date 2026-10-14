@@ -19,7 +19,7 @@ from amplifier_foundation.session.history import SessionHistoryStore
 from .shared_state_probe import text_content
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
-INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'description', 'bundle', 'workspace',
+INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'nativeNameRevision', 'nativeNamePolicyRevision', 'autoName', 'naming', 'description', 'bundle', 'workspace',
                 'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt', 'navigationActivityPending',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
@@ -384,7 +384,7 @@ class AutomaticHistory:
         from .native_history import NativeHistory
         self.service = service
         self.naming = None
-        self.index = NativeHistory(watch=True, cache_path=(
+        self.index = NativeHistory(watch=True, directory=hasattr(service, 'directory'), cache_path=(
             service.data_dir / 'native-catalog.sqlite3' if hasattr(service, 'data_dir') else None))
         self.lock = asyncio.Lock()
         self.loads = {}
@@ -466,6 +466,8 @@ class AutomaticHistory:
                 availability_changed = availability_before != [row.get('available') for row in availability]
                 delta_mode = (hasattr(self.service, '_history_local_revision')
                           and 'scan_if_changed' not in self.index.__dict__)
+                directory_mode = bool(delta_mode and getattr(self.index, 'directory', False)
+                                      and getattr(self.service, 'directory', None) is not None)
                 if delta_mode:
                     revision_token, incoming = await asyncio.to_thread(self.index.scan_changes,
                         known_workspaces=known, force=force, since=self._native_revision)
@@ -474,15 +476,16 @@ class AutomaticHistory:
                         self._catalog_rows.clear()
                         self._catalog_workspaces.clear()
                         self._catalog_counts = Counter()
-                    for key in incoming['removed']:
-                        old = self._catalog_rows.pop(tuple(key), None)
-                        if old is not None:
-                            self._catalog_counts[old['nativeIdentity']] -= 1
-                    for row in incoming['sessions']:
-                        key = (row['nativeProject'], row['nativeIdentity'])
-                        if key not in self._catalog_rows:
-                            self._catalog_counts[row['nativeIdentity']] += 1
-                        self._catalog_rows[key] = row
+                    if not directory_mode:
+                        for key in incoming['removed']:
+                            old = self._catalog_rows.pop(tuple(key), None)
+                            if old is not None:
+                                self._catalog_counts[old['nativeIdentity']] -= 1
+                        for row in incoming['sessions']:
+                            key = (row['nativeProject'], row['nativeIdentity'])
+                            if key not in self._catalog_rows:
+                                self._catalog_counts[row['nativeIdentity']] += 1
+                            self._catalog_rows[key] = row
                     for row in incoming['workspaces']:
                         self._catalog_workspaces[row['nativeProject']] = row
                     for project in incoming['removedProjects']:
@@ -496,6 +499,39 @@ class AutomaticHistory:
                     if full_merge:
                         self._existing = None
                     snapshot = dict(self._native_snapshot if full_merge else incoming)
+                    if directory_mode:
+                        owner = self.service.directory
+                        owner.bind(self.index._catalog)
+                        owner.changed(self.index._catalog.generations() if self.index._catalog is not None else None)
+                        # Changed dormant metadata already lives in SQL. Admit
+                        # nothing merely because discovery observed its files.
+                        admitted = {(row.get('nativeProject') or (project_slug(row['workspace']) if row.get('workspace') else None),
+                                     row.get('nativeIdentity') or row.get('runtimeSessionId') or row['id'])
+                                    for row in self.service._state['sessions']}
+                        workspace_projects = {row['nativeProject'] for row in incoming['workspaces']}
+                        refresh_keys = admitted if full_merge else {
+                            key for key in admitted if key[0] in workspace_projects}
+                        if full_merge or refresh_keys:
+                            def selected_rows():
+                                return [row for project, identity in refresh_keys
+                                        if project and self.index._catalog is not None and (row := self.index._catalog.get(project, identity)) is not None]
+                            updates = await asyncio.to_thread(selected_rows)
+                            if not full_merge:
+                                # A workspace-only delta updates typed native
+                                # availability without rewriting dormant rows.
+                                # Reconcile its admitted owners, including their
+                                # read-only reason, through current point reads.
+                                other_keys = admitted - refresh_keys
+                                updates.extend(row for row in incoming['sessions']
+                                    if (row['nativeProject'], row['nativeIdentity']) in other_keys)
+                        else:
+                            updates = [row for row in incoming['sessions']
+                                       if (row['nativeProject'], row['nativeIdentity']) in admitted]
+                        self._catalog_counts = Counter(owner.native_counts(row['nativeIdentity'] for row in updates))
+                        snapshot = {**incoming, 'sessions': updates,
+                                    'workspaces': list(self._catalog_workspaces.values()) if full_merge else incoming['workspaces']}
+                        self._native_snapshot = snapshot
+                        self._existing = None  # bounded admitted ownership, not the dormant directory
                 else:
                     revision_token, incoming = await asyncio.to_thread(self.index.scan_if_changed,
                         known_workspaces=known, force=force, since=self._native_revision)
@@ -537,11 +573,25 @@ class AutomaticHistory:
                 # have independent invalidation. Filtering must not alter the
                 # retained unfiltered catalog.
                 managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
+                naming_proofs = {}
+                if directory_mode:
+                    # A reset can invalidate changed-row journals. Recheck only the
+                    # admitted snapshot plus bounded changed overlays, not the catalog.
+                    naming_rows = {(row['nativeProject'], row['nativeIdentity']): row
+                                   for row in [*incoming['sessions'], *snapshot['sessions']]}
+                    pending_names = self.service.directory.naming_conflicts(naming_rows.values(), self.service._state)
+                    if pending_names:
+                        naming_proofs = await asyncio.to_thread(self.service.directory.verify_naming_conflicts, pending_names)
                 if self.service.closed:
                     return
                 async with self.service.lock:
                     state = self.service.state
                     touched = set()
+                    locations_changed = False
+                    if directory_mode:
+                        locations_changed = self.service.directory.sync_locations(managed_paths,
+                            [row.get('path') for row in snapshot['workspaces']] + [row.get('workspace') for row in snapshot['sessions']])
+                        self.service.directory.refresh_native(incoming['sessions'], incoming['removed'], self.service._state, naming_proofs=naming_proofs)
                     if delta_mode and self._local_revision != self.service._history_local_revision and not full_merge:
                         # Local actions can commit during the detached marker
                         # read above. Do not acknowledge an epoch we did not merge.
@@ -556,7 +606,8 @@ class AutomaticHistory:
                     snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
                     snapshot['sessions'] = [row for row in snapshot['sessions'] if row.get('nativeProject') not in deleted_projects]
                     count(self.service, 'catalog.merge.rows', len(snapshot['sessions']))
-                    changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
+                    changed = bool(locations_changed or state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error')
+                                   or directory_mode and (incoming['reset'] or incoming['sessions'] or incoming['removed'] or incoming['removedProjects']))
                     workspace_pins_changed = False
                     worker_detail_only = (delta_mode and not full_merge
                         and not incoming['workspaces'] and not incoming['removed']
@@ -681,6 +732,8 @@ class AutomaticHistory:
                         if (hidden and identity(*key) in hidden) or row['workspaceId'] in hidden_workspaces:
                             continue
                         previous = existing.get(key)
+                        if previous is None and directory_mode:
+                            continue  # selection/action admission owns the working set
                         if previous is None:
                             public_id = row['nativeIdentity']
                             if native_counts[public_id] > 1 or public_id in catalog_ids:
@@ -710,8 +763,13 @@ class AutomaticHistory:
                                 previous['recentActivityAt'] = recent; changed = True
                                 if previous.get('historyManaged') and previous.get('status') not in BUSY:
                                     previous['navigationActivityAt'] = recent
+                            confirmed_name = (previous.get('nativeNameRevision', 0), previous.get('nativeNamePolicyRevision', 0), previous.get('title')) in naming_proofs.get((row['nativeProject'], row['nativeIdentity']), ())
+                            name_current = confirmed_name or row.get('nameRevision', 0) >= previous.get('nativeNameRevision', 0)
+                            policy_current = confirmed_name or name_current and row.get('namePolicyRevision', 0) >= previous.get('nativeNamePolicyRevision', 0)
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
-                                                    'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'workspaceId': row['workspaceId'],
+                                                    **({'nativeNameSource': row.get('nameSource'), 'nativeNameRevision': row.get('nameRevision', 0)} if name_current else {}),
+                                                    **({'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'nativeNamePolicyRevision': row.get('namePolicyRevision', 0)} if policy_current else {}),
+                                                    'workspaceId': row['workspaceId'],
                                                     # An app-declared internal job (e.g. terminal
                                                     # tool calls) is never promoted to a chat.
                                                     **({} if previous.get('sessionKind') == 'internal' and not previous.get('historyManaged')
@@ -719,7 +777,7 @@ class AutomaticHistory:
                                                     'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
                                     previous[key_name] = value; changed = True
-                            if row.get('name') or (previous.get('historyManaged') and previous.get('titleSource') != 'manual'):
+                            if name_current and (row.get('name') or (previous.get('historyManaged') and previous.get('titleSource') != 'manual')):
                                 title = row.get('name') or row.get('title') or previous['title']
                                 if title != previous['title']:
                                     previous['title'] = title; changed = True
@@ -732,10 +790,10 @@ class AutomaticHistory:
                             if previous.get('historyManaged') and previous.get('historyReadOnlyReason') != row.get('readOnlyReason'):
                                 previous['historyReadOnlyReason'] = row.get('readOnlyReason'); changed = True
                             if previous.get('historyManaged'):
-                                metadata = {'workspace': row.get('workspace'), 'description': row.get('description', ''),
+                                metadata = {'workspace': row.get('workspace'),
+                                            **({'description': row.get('description', ''), 'nativeNameSource': row.get('nameSource')} if name_current else {}),
                                             'createdAt': row.get('createdAt', 0), 'updatedAt': row.get('updatedAt', 0),
-                                            'turnCount': row.get('turnCount'), 'nativeParentId': row.get('parentId'),
-                                            'nativeNameSource': row.get('nameSource')}
+                                            'turnCount': row.get('turnCount'), 'nativeParentId': row.get('parentId')}
                                 if not row.get('parentId'):
                                     metadata['parentId'] = None
                                 if row.get('bundle'):
@@ -766,6 +824,8 @@ class AutomaticHistory:
                         if session is None or not row.get('parentId'):
                             continue
                         parent = existing.get((row['nativeProject'], row['parentId']))
+                        if parent is None and directory_mode:
+                            parent = self.service.directory.resolve(row['parentId'], row['nativeProject'])
                         parent_id = parent['id'] if parent else row['parentId']
                         for key_name, value in {'parentId': parent_id, 'nativeParentId': row['parentId']}.items():
                             if session.get(key_name) != value:
@@ -874,6 +934,15 @@ class AutomaticHistory:
     async def load(self, session_id, *, before=None, limit=100, only_if_changed=False):
         paging = before is not None
         async with self.loads.setdefault(session_id, TimedLock(self.service, 'history.lock.wait')):
+            if getattr(self.service, 'directory', None) is not None:
+                from .service import AppError
+                async with self.service.lock:
+                    try:
+                        session_id = self.service._session(session_id, hydrate=False)['id']
+                    except AppError as exc:
+                        if exc.status == 404:
+                            return
+                        raise
             if only_if_changed:
                 candidate = self.service.projections.sessions(self.service.state).by_id.get(session_id)
                 if candidate is None:

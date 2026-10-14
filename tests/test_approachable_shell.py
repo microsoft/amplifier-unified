@@ -117,6 +117,7 @@ async def test_row_draft_rejects_stale_destination_before_changing_view(app, tmp
 async def test_previews_are_bounded_and_independent_of_full_browser_filters(app, tmp_path):
     paths, ids = await make_work(app, tmp_path)
     exemplar=deepcopy(app.state['sessions'][0])
+    app.forget_session_records({row['id'] for row in app.directory.select(limit=-1)})
     app.state['sessions']=[dict(exemplar,id=f'chat-{i}',title=f'Chat {i}',recentActivityAt=i,createdAt=i) for i in range(70)]
     app.state['pinnedSessionIds']=['chat-0']
     app.state['selectedSessionId']=None
@@ -142,6 +143,7 @@ async def test_quiet_recent_preferences_survive_two_clients_two_modules_and_relo
     app.runtime = Runtime()
     paths, ids = await make_work(app, tmp_path)
     exemplar = deepcopy(app.state['sessions'][0])
+    app.forget_session_records({row['id'] for row in app.directory.select(limit=-1)})
     app.state['sessions'] = [dict(exemplar, id=f'quiet-{i}', title=f'Quiet {i}',
                                   recentActivityAt=140-i, navigationActivityAt=140-i) for i in range(140)]
     app.state['sessions'][0]['collaboration'] = {
@@ -197,6 +199,7 @@ async def test_quiet_recent_preferences_survive_two_clients_two_modules_and_relo
 async def test_recent_scope_and_count_bound_shrink_without_changing_other_views(app, tmp_path):
     paths, ids = await make_work(app, tmp_path)
     exemplar = deepcopy(app.state['sessions'][0])
+    app.forget_session_records({row['id'] for row in app.directory.select(limit=-1)})
     app.state['sessions'] = [dict(exemplar, id=f'prefix-{i}', title=f'Prefix {i}',
                                   recentActivityAt=200-i) for i in range(101)]
     app.state['selectedSessionId'] = None
@@ -210,7 +213,9 @@ async def test_recent_scope_and_count_bound_shrink_without_changing_other_views(
         for limit in (40, 60, 80, 100):
             await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
                                                    'patch': {'navRecentLimit': limit}})
-        app.state['sessions'] = app.state['sessions'][:6]
+        kept = list(app.state['sessions'][:6])
+        app.forget_session_records({row['id'] for row in app.directory.select(limit=-1)} - {row['id'] for row in kept})
+        app.state['sessions'] = kept
         app._publish()
         # A next-page write may arrive after a catalog shrink. Keep its requested
         # step, not an invalid 6/101 limit, while rows are bounded by live count.
@@ -237,6 +242,7 @@ async def test_recent_scope_and_count_bound_shrink_without_changing_other_views(
 async def recent_catalog(app, tmp_path):
     paths, ids = await make_work(app, tmp_path)
     exemplar = deepcopy(app.state['sessions'][0])
+    app.forget_session_records({row['id'] for row in app.directory.select(limit=-1)})
     app.state['sessions'] = [dict(exemplar, id=f'transient-{i}', title=f'Transient {i}',
                                   recentActivityAt=200-i) for i in range(160)]
     app.state['selectedSessionId'] = None

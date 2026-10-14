@@ -67,6 +67,7 @@ async def test_reconcile_observes_unsaved_catalog_changes_without_losing_other_c
     assert a['selectedSessionId'] == first and a['canvas']['content'] == 'Private canvas'
     index = service._state['sessions'].index(original)
     service._state['sessions'][index] = {**original, 'id': 'replacement'}
+    service.directory.sync([], service._state, deleted=[first])  # Explicit membership removal, not eviction.
     service.clients.reconcile('browser-a')
     assert a['selectedSessionId'] is None and a['canvas'] == {}
     assert a['view']['draft'] == 'Pre-chat draft'
@@ -145,6 +146,66 @@ async def test_restart_keeps_private_native_selection_until_catalog_is_loaded(tm
         restarted.clients.reconcile('private-browser')
         assert restored['selectedSessionId'] == selected['id']
         assert restored['view']['draft'] == 'Retained native draft'
+        assert not restarted.runtime.started and not restarted.runtime.sent
+    finally:
+        await restarted.close()
+
+
+@pytest.mark.parametrize('outcome', ['rediscovered', 'complete-absent', 'navigate', 'deleted'])
+async def test_cache_recovery_preserves_private_selection_across_partial_passes(tmp_path, outcome):
+    from test_automatic_history import native_session, ObservedRuntime
+    native_session(tmp_path/'native-project', 'saved-recovery')
+    service = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
+    await service.dispatch('session.create', {'title':'Other current chat'})
+    current = service.state['selectedSessionId']
+    await service.history.refresh()
+    selected = service.directory.resolve('saved-recovery')
+    record = service.clients.attach('private-browser')
+    record.update(selectedSessionId=selected['id'], selectedWorkspaceId=selected['workspaceId'],
+                  canvas={'id':'retained-canvas', 'kind':'markdown', 'content':'Saved preview', 'open':True})
+    record['drafts'][selected['id']] = 'Keep the private draft'
+    service.clients.dirty.add('private-browser')
+    service._publish()
+    await service.close()
+    # Simulate loss of the disposable native cache, not canonical history or
+    # saved client state. The selected owner has no local presentation record.
+    for suffix in ('', '-wal', '-shm'):
+        (tmp_path/'app'/('native-catalog.sqlite3'+suffix)).unlink(missing_ok=True)
+    restarted = AppService(tmp_path/'app', ObservedRuntime(), workspace=tmp_path)
+    try:
+        restored = restarted.clients.attach('private-browser')
+        assert restarted.directory.resolve(selected['id']) is None
+        for phase, issues in (('running', []), ('unavailable', []),
+                              ('complete', [{'reason':'A project could not be read'}]), ('running', [])):
+            restarted.state['sharedHistory'].update(loading=False, reconciliation={'phase':phase},
+                                                    issues=issues, issueCount=len(issues))
+            restarted.clients.reconcile('private-browser')
+            assert restored['selectedSessionId'] == selected['id']
+            assert restored['selectedWorkspaceId'] == selected['workspaceId']
+            assert restored['view']['draft'] == 'Keep the private draft'
+            assert restored['canvas']['content'] == 'Saved preview'
+            assert selected['id'] not in {row['id'] for row in restarted.state['sessions']}
+        if outcome == 'rediscovered':
+            await restarted.history.refresh(force=False)
+            restarted.clients.reconcile('private-browser')
+            assert restarted.directory.resolve(selected['id']) is not None
+            assert restored['selectedSessionId'] == selected['id']
+            assert restored['canvas']['content'] == 'Saved preview'
+        elif outcome == 'navigate':
+            await command(restarted, 'private-browser', 'session.select', {'id':current})
+            assert restored['selectedSessionId'] == current
+            await restarted.history.refresh(force=False)
+            restarted.clients.reconcile('private-browser')
+            assert restored['selectedSessionId'] == current
+        else:
+            if outcome == 'deleted':
+                restarted.forget_session_records([selected['id']])
+            else:
+                restarted.state['sharedHistory'].update(loading=False, reconciliation={'phase':'complete'})
+            restarted.clients.reconcile('private-browser')
+            assert restored['selectedSessionId'] is None and restored['canvas'] == {}
+        assert 'private-browser' not in restarted.clients.startup_selections
+        assert restored['drafts'][selected['id']] == 'Keep the private draft'
         assert not restarted.runtime.started and not restarted.runtime.sent
     finally:
         await restarted.close()

@@ -43,7 +43,7 @@ class Worktrees:
         self._uncertain_paths = ()
         for path in self.receipt_dir.glob('*.json'):
             record = json.loads(path.read_text())
-            session = next((s for s in service.state['sessions'] if s['id'] == record['sessionId']), {})
+            session = self.saved_owner(record['sessionId']) or {}
             inconsistent = record['phase'] == 'applied' and (session.get('executionRevision', 0) <= record['executionRevision'] or (session.get('executionRevision', 0) == record['executionRevision'] + 1 and session.get('workingDirectory') != record['target']))
             if record['phase'] == 'pending' and record.get('step') == 'preflight':
                 record.update(phase='rejected', revision=record['revision']+1,
@@ -55,6 +55,58 @@ class Worktrees:
                 self.save(record)
         self.sync()
         self.bind_runtime()
+
+    def saved_owner(self, sid):
+        """Read exact durable placement without admitting or hydrating its body."""
+        resident = next((s for s in self.app.state['sessions'] if s['id'] == sid), None)
+        if resident is not None:
+            return resident
+        from .state_records import load_owner
+        saved = load_owner(self.app.db, sid)[0]
+        indexed = self.app.db.execute('SELECT summary FROM history_local_rows WHERE id=?', (sid,)).fetchone()
+        if indexed is not None:
+            if saved is None:
+                raise ValueError('Saved task placement is unavailable; preserve the checkout and inspect its owner.')
+            metadata = json.loads(indexed[0])
+            if 'workingDirectory' in metadata and 'executionRevision' in metadata:
+                return metadata
+        if saved is not None:
+            # Older directory rows may lack placement facts. Detach only this
+            # owner's view; never admit it or materialize its lazy body fields.
+            from .session_projection import hydrate
+            context = {'sessions': [saved], 'runtimeControl': {}}
+            hydrate(self.app.data_dir, context, self.app.db)
+            return context['sessions'][0]
+        return None
+
+    def occupied_paths(self):
+        """Complete scalar placement proof for explicit checkout retirement."""
+        residents = {row['id']: row for row in self.app.state['sessions']}
+        paths = set()
+        missing = self.app.db.execute(
+            "SELECT l.id FROM history_local_rows l LEFT JOIN state_records r "
+            "ON r.kind='session' AND r.id=l.id WHERE (r.value IS NULL OR r.value='null') "
+            "AND l.id NOT IN (SELECT value FROM json_each(?)) LIMIT 1", (json.dumps(list(residents)),)).fetchone()
+        if missing is not None:
+            raise ValueError('Saved task placement is unavailable; preserve the checkout and inspect its owner.')
+        for identity, workspace, execution in self.app.db.execute(
+                "SELECT r.id,json_extract(r.value,'$.workspace'),json_extract(l.summary,'$.workingDirectory') "
+                "FROM state_records r LEFT JOIN history_local_rows l ON l.id=r.id "
+                "WHERE r.kind='session' AND r.value!='null'"):
+            if identity not in residents:
+                if execution is None:
+                    owner = self.saved_owner(identity)
+                    if owner is None:
+                        raise ValueError('Saved task placement is unavailable; preserve the checkout and inspect its owner.')
+                    execution = owner.get('workingDirectory') or owner.get('workspace')
+                paths.update(path for path in (workspace, execution) if path)
+        for row in residents.values():
+            paths.update(path for path in (row.get('workspace'), row.get('workingDirectory')) if path)
+        directory = self.app.directory
+        sql, params = directory.effective()
+        paths.update(path for path, in self.app.db.execute(
+            sql + ' SELECT DISTINCT workspace FROM directory_rows WHERE workspace IS NOT NULL', params))
+        return paths
 
     def execution_state(self, sid):
         session = self.app._session(sid)
@@ -90,7 +142,7 @@ class Worktrees:
 
     def receipts(self, sid):
         records = [json.loads(path.read_text()) for path in sorted(self.receipt_dir.glob('*.json'))]
-        return [record for record in records if record['sessionId'] == sid]
+        return [record for record in records if sid is None or record['sessionId'] == sid]
     def save(self, record): atomic(self.receipt_dir / (record['id'] + '.json'), record)
     def read(self, sid, identity):
         try: uuid.UUID(identity)
@@ -155,17 +207,16 @@ class Worktrees:
         roots = [Path(record['path']).resolve()]
         if action != 'worktree.remove':
             roots.append((self.git.directory / ('checkouts' if action == 'worktree.restore' else 'archives') / record['id']).resolve())
-        async with self.app.lock:
-            if any(path.is_relative_to(root) for paths in self._creation_paths.values() for path in paths for root in roots):
-                raise ValueError('A chat is being created in this checkout; wait for it to finish')
-            # Claim before yielding. Session creation claims its path before
-            # directory preparation and checks this fence again at admission.
-            self._moving_paths = tuple(roots)
-            sessions = self.app.state['sessions']
-            occupied = [path for s in sessions for path in (s.get('workingDirectory'), s.get('workspace')) if path]
-            handoffs = [path for s in sessions for r in s.get('worktreeHandoffs', [])
-                        if r['phase'] in {'pending', 'unknown'} for path in (r['source'], r['target'])]
         try:
+            async with self.app.lock:
+                if any(path.is_relative_to(root) for paths in self._creation_paths.values() for path in paths for root in roots):
+                    raise ValueError('A chat is being created in this checkout; wait for it to finish')
+                # Claim before yielding. Session creation claims its path before
+                # directory preparation and checks this fence again at admission.
+                self._moving_paths = tuple(roots)
+                occupied = self.occupied_paths()
+                handoffs = [path for r in self.receipts(None)
+                            if r['phase'] in {'pending', 'unknown'} for path in (r['source'], r['target'])]
             # Resolve aliases off the event loop; this examines only placement
             # metadata, never the sessions' messages or event logs.
             if await asyncio.to_thread(self._occupied, occupied, roots):

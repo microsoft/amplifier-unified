@@ -32,7 +32,7 @@ def _preview(value, path, budget=2500, depth=0, *, reference_key='$statePath'):
     return ref
 
 
-def overview(state, session_id):
+def overview(state, session_id, *, positions=None):
     from .session_navigation import is_top_level
     selected = session_id or state.get('selectedSessionId')
     index = next((i for i,s in enumerate(state.get('sessions', [])) if s['id']==selected), None)
@@ -44,7 +44,7 @@ def overview(state, session_id):
     core['smartTools'] = _preview(state.get('smartTools', {}), '/smartTools', 2000)
     core['session'] = None
     if index is not None:
-        session=state['sessions'][index];base=f'/sessions/{index}'
+        session=state['sessions'][index];base=f'/sessions/{(positions or {}).get(selected,index)}'
         core['session']={key:session.get(key) for key in ['id','title','status','bundle','workspace','workspaceId','sessionKind','sessionPurpose','nativeParentId','historyLoaded','historyReadOnlyReason','sharedHistoryOffset','sharedHistoryUserTurnOffset','sharedHistoryTotal','recentActivityAt']}
         core['session']['pinned'] = selected in state.get('pinnedSessionIds', [])
         core['session'].update({'$statePath':base,'activity':_preview(session.get('activity',{}),base+'/activity',1500),
@@ -79,13 +79,18 @@ def overview(state, session_id):
     return core
 
 
-def read_state(state, args, *, session_id=None, resolve=None, reference_key='$statePath'):
+def read_state(state, args, *, session_id=None, resolve=None, reference_key='$statePath', directory=None):
     if not isinstance(args,dict):
         raise ValueError('State arguments must be an object.')
     path=args.get('path')
     revision=args.get('revision')
     if revision is not None and revision != state.get('revision'):
         raise ValueError('App state changed. Read the current revision before continuing pages.')
+    if directory is not None:
+        from .directory_state import read
+        handled, result = read(directory, state, args, session_id=session_id, resolve=resolve, reference_key=reference_key)
+        if handled:
+            return result
     if path is None:
         return overview(state, session_id)
     if not isinstance(path,str) or (path and not path.startswith('/')):

@@ -126,25 +126,30 @@ re-authenticate; on 409 replace the observation. Reconnection never replays
 commands. Ordinary browser use adds no observation polling. A lightweight
 invalidation subscription is a future extension, not a requirement of v1.
 
-Page selection inspects at most 1024 candidate slots and materializes at most
-one page. Continuation seeks directly into a session/notice array, including
-within a chat with thousands of approvals. Arbitrary query keys are not cached.
+Page selection inspects at most 1024 candidate slots and returns at most one
+page. Shared directory predicates run before page decoding; a read of active or
+pinned chats does not decode every dormant summary. Continuation seeks into the
+same ordered SQLite read snapshot, including a slot within a chat with thousands
+of approvals. Arbitrary query keys are not cached.
 
-Coherent continuation has an explicit resource cost: the first observation builds
-one shared allowlisted public-facts index in O(sessions + notice slots) time and
-O(sessions + emitted notices) memory. This cold construction is **not** included
-in the 1024/4096 page/count budgets. Unknown/broad saves reconcile the same
-index; scoped saves reconcile only affected rows, while the existing verified
-transcript-only publication path does no reconciliation. Unchanged row facts are
-reused by identity. Pin/read-receipt changes currently require broad reconciliation.
-The current pin lookup/read receipts are shared, not copied per query. A snapshot
-retains one tuple of row references; revisions share unchanged row bodies. At
-most eight snapshots per collection (24 total), 64 active leases per collection,
-and 64 terminal response retries per collection are retained, plus the current
-index; never whole
-transcripts or private prompt/tool/error bodies. Expired leases are reclaimed on
-the next observation request, without a background timer. See the acceptance
-report for cold/reconciliation costs measured separately from warm continuation.
+Coherent continuation pins a separate WAL read connection and frozen bounded
+working-set overrides, pins, and read receipts. It does not hold the application's
+write transaction or construct a tuple of every historical fact. Decoded summary
+blocks contain at most 64 rows and are discarded as traversal advances. Activity
+flags are aggregated from scalar directory columns; only owners of actual notices
+are decoded for notice counts. SQL counts may inspect indexed metadata, but never
+hydrate transcripts, start runtimes, or admit sessions to the working set.
+
+Semantic generations remain independent for session rows, notices, and activity
+counts. Transcript-only publications do not invalidate them. At most eight
+snapshots per collection (24 total), 64 active leases per collection, and 64
+terminal response retries per collection are retained. Completion closes a reader
+once its last lease finishes; retry retains only the bounded terminal response.
+Expired leases/readers are reclaimed on the next observation request, without a
+background timer, and remaining readers close with the app. Snapshot metadata is
+limited to the admitted working set and canonical notice inputs; public fact
+blocks and responses omit private prompt, tool, and error bodies. No whole
+transcript or full-library public-facts tuple is retained by a snapshot.
 
 ## Notices, acknowledgement, and commands
 

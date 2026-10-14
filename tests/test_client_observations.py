@@ -26,12 +26,29 @@ async def observation_host(authenticated_client, tmp_path):
     app['service'].projections.invalidate()
 
 
+def replace_catalog(service, rows):
+    # Dropping residency is not deletion. This synthetic fixture explicitly
+    # replaces durable membership, then retains a small working set for large
+    # libraries just as the host now does.
+    directory = service.directory
+    identities = [row[0] for row in service.db.execute('SELECT id FROM history_local_rows')]
+    directory.sync([], service.state, deleted=identities)
+    for row in rows:
+        row.setdefault('workspace', service.default_workspace)
+    service.state['sessions'] = rows
+    if len(rows) > 1000:
+        directory.sync(rows, service.state)
+        service.state['sessions'] = rows[:6]
+    service.db.commit()
+    service.projections.invalidate()
+
+
 def catalog(service, count=230):
-    service.state['sessions'] = [dict(id=f's{i}', title=f'Chat {i}', status='idle', sessionKind='root',
+    rows = [dict(id=f's{i}', title=f'Chat {i}', status='idle', sessionKind='root', workspace=service.default_workspace,
         messages=[], workers=[], approvals=[{'id': f'a{i}', 'title': 'PRIVATE TOOL', 'status': 'pending', 'createdAt': i}],
         completion={'id': f'c{i}', 'at': i}) for i in range(count)]
     service.state['pinnedSessionIds'] = [f's{i}' for i in range(count)]
-    service.projections.invalidate()
+    replace_catalog(service, rows)
 
 
 async def traverse(client, endpoint, params):
@@ -197,7 +214,7 @@ async def test_pages_have_bounded_construction_and_no_query_cache_growth(tmp_pat
         for limit in range(1, MAX_TRAVERSALS + 1):
             page = observations.page('attention', {'limit': str(limit)})
             assert len(page['items']) == limit
-        assert calls == 0
+        assert calls <= (module.DirectoryFacts.BLOCK + 6) * 5  # One block plus six live metadata owners.
         assert len(observations.snapshots) == 1
         assert len(observations.leases) == MAX_TRAVERSALS
         with pytest.raises(AppError):
@@ -207,18 +224,21 @@ async def test_pages_have_bounded_construction_and_no_query_cache_growth(tmp_pat
         assert observations.counts_cache is None
         calls = 0
         # Resuming a dense single-session collection must seek, not rebuild its prefix.
-        service.state['sessions'] = [dict(id='large', title='Large', approvals=[{'id': str(i)} for i in range(10000)])]
+        replace_catalog(service, [dict(id='large', title='Large', approvals=[{'id': str(i)} for i in range(10000)])])
         service.projections.invalidate()
         first = observations.page('attention', {'limit': '200'})
         calls = 0
         second = observations.page('attention', {'limit': '200', 'cursor': first['nextCursor']})
         assert calls == 0 and second['items'][0]['id'] == 'approval:200'
-        # Sparse filters can return empty progress pages, still bounded and traversable.
+        # Indexed sparse filters seek directly to matching dormant metadata.
         catalog(service, 3000)
-        service.state['sessions'][-1]['status'] = 'working'
+        last = service.directory.resolve('s2999')
+        last['status'] = 'working'
+        service.directory.sync([last], service.state)
+        service.db.commit()
         page = observations.page('sessions', {'activity': 'execution'})
-        assert not page['items'] and page['nextCursor']
-        found = []
+        assert [row['id'] for row in page['items']] == ['s2999']
+        found = list(page['items'])
         while page['nextCursor']:
             page = observations.page('sessions', {'activity': 'execution', 'cursor': page['nextCursor']})
             found.extend(page['items'])
@@ -349,7 +369,7 @@ async def test_busy_host_keeps_semantic_revisions_and_finishes_large_reads(obser
         if activity['nextCursor']:
             activity = await (await client.get('/api/activity', params={'cursor': activity['nextCursor']})).json()
             assert activity['revision'] == revisions[2]
-        assert calls == 0
+        assert calls <= 4096  # Three bounded page/count blocks, never all 10k.
         if not any((page['nextCursor'], notices['nextCursor'], activity['nextCursor'])):
             break
     else:
@@ -448,11 +468,11 @@ async def test_large_count_finishes_original_totals_during_sustained_changes(obs
         if not counts['nextCursor']:
             break
         calls = 0
-        row = service._state['sessions'][step]
+        row = service._state['sessions'][step % 6]
         row.update(status='working', completion={'id': f'changed-{step}', 'at': step + 1})
         service.projections.invalidate(state=service._state, session_ids={row['id']})
         counts = observations.activity(cursor=counts['nextCursor'])
-        assert calls == 1  # Scoped changes never rescan the catalog.
+        assert calls <= 4096  # Scoped changes plus the bounded count page, never all 10k.
         assert counts['revision'] == original_revision
     else:
         pytest.fail('Real changes starved count continuation')
@@ -581,7 +601,7 @@ async def test_terminal_retry_cache_is_bounded_without_retaining_old_snapshots(o
         oldest = oldest or first['nextCursor']
         terminal = observations.page('sessions', {'limit': '2', 'cursor': first['nextCursor']})
         assert terminal['nextCursor'] is None
-        assert not observations.leases and len(observations.snapshots) == 1
+        assert not observations.leases and not observations.snapshots
         assert len(observations.completed) <= module.MAX_COMPLETED
     with pytest.raises(AppError) as error:
         observations.page('sessions', {'limit': '2', 'cursor': oldest})

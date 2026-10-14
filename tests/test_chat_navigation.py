@@ -542,9 +542,11 @@ async def test_http_ui_post_promotes_before_ack_and_preserves_other_client(authe
     await app.history.close()
     for index in range(24):
         await app.dispatch('session.create', {'title': f'Root {index:02}', 'select': False})
-    target = app.state['sessions'][0]
-    for index, root in enumerate(app.state['sessions']):
-        root.update(recentActivityAt=10 + index, navigationActivityAt=10 + index)
+    # All durable roots receive the fixture clock, including evicted owners.
+    roots = app.directory.select(limit=100, state=app.state)
+    for index, summary in enumerate(roots):
+        app._session(summary['id'], hydrate=False).update(recentActivityAt=10 + index, navigationActivityAt=10 + index)
+    target = app._session(roots[0]['id'], hydrate=False)
     app.state['view'].update(navChatScope='all')
     primary = app.clients.attach('primary-post')
     primary.update(selectedSessionId=target['id'], selectedWorkspaceId=app.state['selectedWorkspaceId'])
@@ -576,9 +578,11 @@ async def test_http_ui_post_promotes_before_ack_and_preserves_other_client(authe
         assert target['messages'][-1]['inputOrigin'] == 'ui'
         assert target['messages'][-1]['navigationPost']['disposition'] == 'pending'
         key = app.browser_state()['shellDataKey']
+        navigation_before = app.directory.navigation_revision
         duplicate = await client.post('/api/actions', json=payload,
                                       headers={'X-Amplifier-Client': 'primary-post'})
         assert (await duplicate.json())['duplicate']
+        assert app.directory.navigation_revision == navigation_before
         assert app.browser_state()['shellDataKey'] == key
         assert len(runtime.sent) == len(target['messages']) == 1
         assert {key: observer[key] for key in before_observer} == before_observer

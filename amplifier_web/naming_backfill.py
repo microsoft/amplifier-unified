@@ -81,16 +81,24 @@ class NamingBackfill:
         return None
 
     def select(self, ids=None, limit=DEFAULT_LIMIT):
-        sessions = self.service.state['sessions']
+        directory = self.service.directory
         if ids is not None:
             wanted = list(dict.fromkeys(ids))
-            by_id = {row['id']: row for row in sessions}
-            unknown = [identity for identity in wanted if identity not in by_id]
-            candidates = [by_id[identity] for identity in wanted if identity in by_id]
+            resolved = [(identity, directory.resolve(identity)) for identity in wanted]
+            unknown = [identity for identity, row in resolved if row is None]
+            candidates = list({row['id']: row for _, row in resolved if row is not None}.values())
         else:
             unknown = []
-            candidates = sorted((row for row in sessions if is_top_level(row)),
-                                key=lambda row: row.get('recentActivityAt') or row.get('createdAt') or 0, reverse=True)
+            def pages():
+                offset = 0
+                while True:
+                    rows = directory.select("session_kind='root'", limit=64, offset=offset,
+                        order='COALESCE(recent,created,0) DESC,ordinal,id')
+                    yield from rows
+                    if len(rows) < 64:
+                        return
+                    offset += len(rows)
+            candidates = pages()
         queued, skipped = [], [{'id': identity, 'reason': 'No chat has this ID.'} for identity in unknown]
         for session in candidates:
             reason = self.eligibility(session)
@@ -100,6 +108,8 @@ class NamingBackfill:
                     skipped.append({'id': session['id'], 'reason': reason})
             elif len(queued) < limit:
                 queued.append(session)
+                if ids is None and len(queued) == limit:
+                    break
         return queued, skipped
 
     def start(self, args, command_id=None):
@@ -108,6 +118,9 @@ class NamingBackfill:
             raise ValueError('Chat name backfill is already running. Wait for it to finish.')
         limit = max(1, min(int(args.get('limit') or DEFAULT_LIMIT), MAX_LIMIT))
         queued, skipped = self.select(args.get('ids'), limit)
+        # Metadata selection never restores dormant bodies. Only this bounded
+        # explicit work set needs mutable ownership for its naming status.
+        queued = [self.service._session(row['id'], hydrate=False) for row in queued]
         self.active = bool(queued)
         for session in queued:
             session['naming'] = {'status': 'working'}

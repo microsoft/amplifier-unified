@@ -74,3 +74,28 @@ execution index is not reconstructed by this endpoint.
 This is bounded navigation, not a full virtualized transcript: existing manual
 Load earlier paging still accumulates DOM rows, and the rail renders one mark
 per user turn. Those are separate scaling limits for very large histories.
+
+## Quiet event projection polling
+
+The host's passive event poll checks canonical event/transcript file signatures
+on every pass. It can avoid traversing an unchanged selected execution tree when
+a bounded clean-input receipt still belongs to the same resident conversation.
+Receipts use weak references and follow the existing 64-projection eviction
+limit; they neither retain dormant conversation bodies nor authorize work.
+
+The internal mutation boundary invalidates these receipts at the start of
+publication, durable saves, deferred progress publication, and runtime-event ingress. This
+happens before a save can fail or a progress batch waits for its durable revision.
+Unknown publication scopes invalidate all cached receipts. A changed canonical
+source or invalidated receipt takes the existing exact input/read path, including
+the full comparison under the service lock before accepting a threaded result.
+Completed joins, worker lifecycle and accounting receipts are not truncated.
+
+`EventLogView.refresh(id)` remains an exact comparison, including mutations made
+through previously issued mutable aliases without publication. Embeddings and
+diagnostic callers retain that behavior. Only the owned host loop requests
+`passive=True`; internal code that changes state without publishing must either
+call the exact refresh or invalidate the affected receipt. A passive receipt is
+a publication-boundary optimization, not proof that arbitrary Python aliases
+cannot mutate. Plain mapping owners that cannot be weakly referenced always
+use the exact path.

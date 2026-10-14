@@ -54,11 +54,17 @@ def scope(app, selection):
     if len(workspaces) != 1:
         raise ValueError('Several project paths share this history name. Review individual sessions instead.')
     workspace = workspaces.pop()
-    sessions = [row for row in app.state['sessions'] if {row['id'], row.get('nativeIdentity'), row.get('runtimeSessionId')} & native]
+    owner = getattr(app, 'directory', None)
+    sessions = ([app._admit_session(row) for row in owner.select(
+        '(id IN (SELECT value FROM json_each(?)) OR native_id IN (SELECT value FROM json_each(?)))',
+        (json.dumps(sorted(native)), json.dumps(sorted(native))), limit=-1)] if owner is not None else
+        [row for row in app.state['sessions'] if {row['id'], row.get('nativeIdentity'), row.get('runtimeSessionId')} & native])
     if any(row.get('workspace') != workspace for row in sessions):
         raise ValueError('Another project references these sessions. Its data was preserved.')
     ids = native | {row['id'] for row in sessions}
-    if any(row.get('parentId') in ids and row['id'] not in ids for row in app.state['sessions']):
+    children = (owner.select('parent_id IN (SELECT value FROM json_each(?))', (json.dumps(sorted(ids)),), limit=-1)
+                if owner is not None else app.state['sessions'])
+    if any(row.get('parentId') in ids and row['id'] not in ids for row in children):
         raise ValueError('A worker uses separate history. Review it before removing this session.')
     from amplifier_foundation.session.shared_state import SharedSessionStore
     paths = [directory / sid for sid in sorted(native)]

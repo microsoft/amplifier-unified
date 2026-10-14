@@ -60,10 +60,37 @@ async def _probe(operation, values, *, timeout):
             await proc.communicate()
 
 
+def workspace_paths(manager):
+    """Distinct known settings locations, including dormant and hidden owners.
+
+    Retention is explicit maintenance: it needs complete reference coverage,
+    but never needs conversation metadata JSON or presentation bodies.
+    """
+    service = manager.service
+    state = getattr(service, '_state', service.state)
+    paths = {row['workspace'] for row in state.get('sessions', []) if row.get('workspace')}
+    paths.update(row['path'] for row in state.get('workspaces', []) if row.get('path'))
+    if state.get('settings', {}).get('workspace'):
+        paths.add(state['settings']['workspace'])
+    directory = getattr(service, 'directory', None)
+    if directory is not None:
+        import sqlite3
+        try:
+            paths.update(row[0] for row in directory.db.execute(
+                "SELECT DISTINCT workspace FROM history_local_rows WHERE workspace IS NOT NULL AND workspace!=''"))
+            if directory._native_path:
+                paths.update(row[0] for row in directory.db.execute(
+                    "SELECT DISTINCT workspace_path FROM history_native.native_rows "
+                    "WHERE namespace=? AND workspace_path IS NOT NULL AND workspace_path!=''",
+                    (directory._native_namespace,)))
+        except sqlite3.Error as exc:
+            raise ValueError('Saved workspace references could not be verified') from exc
+    return sorted(paths)
+
+
 async def inspect_references(manager, *, timeout):
     # Copy only placement metadata; never load conversation bodies or events.
-    workspaces = sorted({row['workspace'] for row in manager.service.state.get('sessions', [])
-                         if row.get('workspace')})
+    workspaces = workspace_paths(manager)
     return await _probe('references', {'home': str(manager.home), 'workspaces': workspaces}, timeout=timeout)
 
 
@@ -105,13 +132,11 @@ def configuration_references(manager):
     paths = list((home / "config").rglob("*.yaml"))
     shared = amplifier_home()
     paths.append(shared / "settings.yaml")
-    for session in manager.service.state.get("sessions", []):
-        workspace = session.get("workspace")
-        if workspace:
-            paths.extend(
-                Path(workspace) / ".amplifier" / name
-                for name in ("settings.yaml", "settings.local.yaml")
-            )
+    for workspace in workspace_paths(manager):
+        paths.extend(
+            Path(workspace) / ".amplifier" / name
+            for name in ("settings.yaml", "settings.local.yaml")
+        )
     paths.extend((shared / "projects").glob("*/sessions/*/settings.yaml"))
     text = []
     for path in set(paths):

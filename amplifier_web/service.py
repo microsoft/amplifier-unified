@@ -501,12 +501,20 @@ class AppService:
         self._runtime_alias = None
         self.closed = False
         self.performance_diagnostics = PerformanceDiagnostics()
+        from .history_directory import HistoryDirectory, ready as directory_ready
+        self.directory = HistoryDirectory(self)
+        # Finish schema initialization before a legacy storage upgrade backs up
+        # this connection. SQLite backup waits indefinitely on its own writer;
+        # no application state has been loaded or changed at this boundary.
+        self.db.commit()
+        self._directory_migrated = directory_ready(self.db)
+        migrating_directory = not self._directory_migrated
         from .session_warmup import SessionWarmup
         self.warmup = SessionWarmup(self)
         row = self.db.execute("SELECT value FROM state WHERE id=1").fetchone()
-        from .state_records import load as load_records
+        from .state_records import load as load_records, load_working
         from . import __version__
-        self.state = load_records(self.db) if row else {
+        self.state = (load_working(self.db) if self._directory_migrated else load_records(self.db)) if row else {
             "schemaVersion": 1, "revision": 0, "sessions": [], "selectedSessionId": None,
             # Only genuinely new state starts here. Existing installations must
             # retain unread migration guidance, including skipped releases.
@@ -518,7 +526,16 @@ class AppService:
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
         from .managed_deletion import recover as recover_managed_deletions
+        # Confirmed deletion recovery is an explicit offline reconciliation of
+        # complete durable state. Ordinary warm starts admit only selected or
+        # pending owners, and must never feed that partial set to checkpoint().
+        recovering_deletion = bool(self.db.execute("SELECT 1 FROM sqlite_master WHERE name='managed_deletions'").fetchone()
+            and self.db.execute("SELECT 1 FROM managed_deletions WHERE phase='confirmed' LIMIT 1").fetchone())
+        if recovering_deletion and self._directory_migrated:
+            self.state = load_records(self.db)
         recover_managed_deletions(self.data_dir, self.db, self.state)
+        if recovering_deletion and self._directory_migrated:
+            self.state = load_working(self.db)
         from .managed_deletion import tombstones
         self._deleted_session_ids = {sid for row in tombstones(self.db) for sid in row['ids']}
         from .default_typography import upgrade_default
@@ -535,7 +552,7 @@ class AppService:
             SettingsStore(self.data_dir).update(self.default_workspace, "global", migrate_voice)
         self.state["sharedVoiceMigration"] = True
         self._view_cache = {}
-        self._session_projection_refs = {}
+        self._session_projection_refs = {item['id']: copy.deepcopy(item) for item in self.state['sessions']}
         self._history_local_revision = 0
         from .cold_display import ColdDisplay
         self.cold_display = ColdDisplay(self)
@@ -633,6 +650,13 @@ class AppService:
         recover_views(self)
         from .automatic_history import AutomaticHistory
         self.history = AutomaticHistory(self)
+        from .native_catalog import NativeCatalog
+        try:
+            self.directory.bind(NativeCatalog(self.data_dir / 'native-catalog.sqlite3', self.history.index.home))
+        except (OSError, ValueError, sqlite3.Error):
+            # Disposable native cache failure must not hide saved app owners or
+            # prevent startup. Discovery reports/rebuilds it independently.
+            logging.getLogger(__name__).warning('Native directory cache unavailable; saved app records retained.', exc_info=True)
         from .outputs import Outputs
         self.outputs = Outputs(self)
         from .event_log_view import EventLogView
@@ -669,6 +693,24 @@ class AppService:
         from .operations import Operations
         self.operations = Operations(self)
         self._save_full(reason='Startup reconciles persisted stores and interrupted operations')
+        if migrating_directory:
+            # The one-time legacy checkpoint has now indexed every owner. No
+            # application caller can yet hold a mutable owner alias, so retain
+            # only startup obligations before accepting the first request.
+            retained = {identity for identity, in self.db.execute('SELECT id FROM history_local_rows WHERE startup=1')}
+            retained.add(self._state.get('selectedSessionId'))
+            self._state['sessions'] = [item for item in self._state['sessions'] if item['id'] in retained]
+            self._state['runtimeControl'] = {identity: value for identity, value in self._state.get('runtimeControl', {}).items()
+                                            if identity in retained}
+            self._session_projection_refs = {identity: value for identity, value in self._session_projection_refs.items()
+                                             if identity in retained}
+            self._saved_detail_facts = {identity: value for identity, value in self._saved_detail_facts.items()
+                                       if identity in retained}
+            self._view_cache.clear()
+            for identity in tuple(self.cold_display.recent):
+                if identity not in retained:
+                    self.cold_display.recent.pop(identity, None)
+            self.projections.invalidate(state=self._state)
         self.cold_display.track_restored()
 
     def default_theme(self):
@@ -742,14 +784,28 @@ class AppService:
             self._projections = StateProjections(service=self)
         return self._projections
 
-    def state_context(self):
-        """Read-only full catalog with derived, bounded navigation projections."""
+    def state_context(self, *, complete=False):
+        """Read-only active context; complete legacy snapshots are explicit."""
         from .attention import snapshot
         from .workspace_navigation import snapshot as workspace_snapshot
         from .browser_state import navigation
         self._refresh_shared_preferences()
         result = dict(self.state)
-        result["attention"] = snapshot(self.state)
+        if not complete:
+            result.update(self.projections.browser(self.state))
+            result.pop('attentionRead', None)
+            return self.clients.project(result)
+        # This deliberately complete compatibility read is never used by the
+        # ordinary browser shell. Durable owners stay authoritative off-resident.
+        from .state_records import load as load_records
+        from .session_projection import hydrate
+        durable = load_records(self.db)
+        hydrate(self.data_dir, durable, self.db)
+        rows = {row['id']: row for row in durable.get('sessions', [])}
+        residents = {row['id']: row for row in self.state['sessions']}
+        result['sessions'] = [residents.get(metadata['id']) or {**rows.get(metadata['id'], {}), **metadata}
+                              for metadata in self.directory.select(limit=-1, order='ordinal,id')]
+        result["attention"] = snapshot(result)
         result.update(navigation(result))
         result["workspaceExplorer"] = workspace_snapshot(result)
         result.pop("attentionRead", None)
@@ -757,12 +813,19 @@ class AppService:
 
     def get_state(self):
         # Explicit full reads remain compatible; browser hot paths use pages.
-        return copy.deepcopy(self.state_context())
+        return copy.deepcopy(self.state_context(complete=True))
 
     @measured('browser.snapshot')
     def browser_state(self, session_id=None):
         self._refresh_shared_preferences()
         client_id = self.clients.current.get()
+        selected = session_id or self.state.get('selectedSessionId')
+        if selected is not None:
+            try:
+                self._session(selected, hydrate=False)
+            except AppError as exc:
+                if exc.status != 404:
+                    raise
         if client_id is not None:
             self.clients.reconcile(client_id)
             cached = self._client_snapshots.get(client_id)
@@ -774,7 +837,7 @@ class AppService:
                     self._session(session_id)
                 cached = self.clients.project(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state),
                     copies=self._snapshot_copies if session_id is None else None, client_id=client_id,
-                    detail_project=self.projections.detail, demand=self.clients.records[client_id]['kind'] == 'web'))
+                    detail_project=self.projections.detail, demand=self.clients.records[client_id]['kind'] == 'web', directory=self.directory))
                 cached['shellDataKey'] = self.projections.shell_key(self.state)
                 cached['shellChangeToken'] = self.shell.change_token(client_id)
                 if session_id is None:
@@ -786,22 +849,25 @@ class AppService:
             from .browser_state import snapshot
             derived = self.projections.browser(self.state)
             self._browser_snapshot = snapshot(self.state, derived, index=self.projections.sessions(self.state),
-                                              copies=self._snapshot_copies, detail_project=self.projections.detail)
+                                              copies=self._snapshot_copies, detail_project=self.projections.detail, directory=self.directory)
             self._browser_snapshot['shellDataKey'] = self.projections.shell_key(self.state)
         if session_id is not None:
             self._session(session_id)
             from .browser_state import snapshot
             derived = {key: self._browser_snapshot[key] for key in ('attention', 'workspaceExplorer',
                 'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
-            return snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state))
+            return snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state), directory=self.directory)
         return self._browser_snapshot
 
     def session_state(self, session_id):
         """Single-session transport projection, independent of browser navigation."""
-        index = self.projections.sessions(self.state)
-        row = index.by_id.get(session_id)
-        if row is None:
+        try:
+            row = self._session(session_id)
+        except AppError as exc:
+            if exc.status != 404:
+                raise
             return {'revision': self.state['revision'], 'sessions': []}
+        index = self.projections.sessions(self.state)
         session = copy.deepcopy(row)
         if session_id == self.state.get('selectedSessionId'):
             session['subagentCount'] = len(index.children(row))
@@ -816,10 +882,16 @@ class AppService:
     def get_actions(self):
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
 
+    def forget_session_records(self, identities):
+        """Stage explicit local record deletion; a missing resident is not deletion."""
+        self._forgotten_session_ids = getattr(self, '_forgotten_session_ids', set()) | set(identities)
+
     @measured('state.save')
     def _save(self, *, session_ids=None, record_only=False):
         if session_ids is None:
             session_ids = getattr(self, '_publish_save_scope', None)
+        if getattr(self, 'event_log_view', None) is not None:
+            self.event_log_view.invalidate(session_ids)
         if session_ids is None:
             self._history_local_revision += 1
         detail_only = getattr(self, '_publish_detail_only', False)
@@ -864,7 +936,15 @@ class AppService:
         pending_references = dict(self._session_projection_refs)
         normalization_undo, view_undo = [], []
         from .cold_display import saved as saved_cold
-        from .state_records import save as save_records, checkpoint
+        from .state_records import save_working
+        admitted_ids = ({row['id'] for row in self._state['sessions']}
+                        if session_ids is None else set(session_ids))
+        admitted_index = {row['id']: row for row in self._state['sessions']} if index is None else index.by_id
+        # A scoped publication may name an owner whose metadata is still cold.
+        # Absence from this working set is never permission to clear its record.
+        admitted_ids.intersection_update(admitted_index)
+        forgotten = set(getattr(self, '_forgotten_session_ids', ()))
+        deleted_ids = self._deleted_session_ids | forgotten
         # File replacement may precede SQLite commit; it is not rolled back.
         # Private client acknowledgements and SQLite overlays become current
         # only after commit. A failed transaction retains all retry scopes.
@@ -872,19 +952,25 @@ class AppService:
             with self.performance_diagnostics.measure('state.serialize', synchronous=True):
                 normalize_state(normalized, self.db, undo=normalization_undo)
                 saved = persist(self.data_dir, self._state, pending_views,
-                                session_ids=session_ids, by_id=index.by_id if index else None,
-                                references=pending_references, scoped_result=record_only,
-                                undo=view_undo, db=self.db)
+                                session_ids=admitted_ids, by_id=admitted_index,
+                                references=pending_references, scoped_result=True,
+                                undo=view_undo, db=self.db,
+                                retain_native=lambda row: not self.directory.native_backing(row))
             pending_clients = self.clients.save(defer_ack=True)
             if record_only:
                 # Persist sanitized global presentation just as full checkpoints
                 # do (not the live canvas body that persist() externalized).
                 record_state = {**self._state, **{key: saved[key] for key in global_keys if key in saved}}
-                save_records(self.db, record_state, pending_references, session_ids, global_keys)
+                save_working(self.db, record_state, pending_references, admitted_ids, global_keys=global_keys,
+                             deleted=deleted_ids)
             else:
                 saved['runtimeControl'] = {identity: saved_cold(record)
                                            for identity, record in saved.get('runtimeControl', {}).items()}
-                checkpoint(self.db, saved)
+                save_working(self.db, saved, pending_references, admitted_ids, deleted=deleted_ids)
+            self.directory.sync((row for row in self._state['sessions']
+                                 if row['id'] in admitted_ids and row['id'] in pending_references), self._state,
+                                deleted=(admitted_ids - pending_references.keys()) | deleted_ids)
+            self.directory.finish_migration()
             self.db.commit()
         except BaseException:
             self.db.rollback()
@@ -912,6 +998,10 @@ class AppService:
         self.clients.acknowledge(pending_clients)
         self._view_cache = pending_views
         self._session_projection_refs = pending_references
+        self._directory_migrated = True
+        self._forgotten_session_ids = getattr(self, '_forgotten_session_ids', set()) - forgotten
+        for identity in deleted_ids:
+            self._session_projection_refs.pop(identity, None)
         if session_ids is None:
             self._state.pop('_viewRecoveryPending', None)
         self._saved_revision = self._state['revision']
@@ -1026,6 +1116,8 @@ class AppService:
 
     @measured('state.publish')
     def _publish(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
+        if getattr(self, 'event_log_view', None) is not None:
+            self.event_log_view.invalidate(session_ids)
         # A mixed publication commits the union, never just the newer writer's
         # scope. Unknown writers retain the conservative complete-save path.
         if getattr(self, '_progress_dirty', False):
@@ -1115,9 +1207,16 @@ class AppService:
         self._progress_record_only = True
         self._progress_global_keys = set()
         self._progress_publish_error = None
+        from .history_residency import retire
+        try:
+            retire(self)
+        except (OSError, ValueError, sqlite3.Error):
+            logging.getLogger(__name__).warning('History owner retirement deferred; saved and resident state retained.', exc_info=True)
 
     def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
         """Batch stream/progress updates; final responses and approvals flush now."""
+        if getattr(self, 'event_log_view', None) is not None:
+            self.event_log_view.invalidate(session_ids)
         if not getattr(self, '_progress_dirty', False):
             self._progress_session_ids = set(session_ids) if session_ids is not None else None
             self._progress_detail_only = detail_only
@@ -1205,6 +1304,94 @@ class AppService:
             self.computer_visual.reconcile(client_id, disconnect=True)
         self.queue_sessions.pop(queue, None)
 
+    def _admit_session(self, metadata):
+        """Admit one exact owner; summaries and paging never call this method."""
+        identity = metadata['id']
+        existing = next((row for row in self._state['sessions'] if row['id'] == identity), None)
+        if existing is not None:
+            return existing
+        from .state_records import load_owner
+        saved, control = load_owner(self.db, identity)
+        compacted = False
+        try:
+            if saved is not None:
+                from .session_projection import hydrate
+                context = {'sessions': [copy.deepcopy(saved)], 'runtimeControl': {identity: control} if control is not None else {}}
+                hydrate(self.data_dir, context, self.db)
+                from .cold_display import compact_execution_references
+                reference = dict.get(context['sessions'][0], '_coldFields', {}).get('execution', {})
+                # Optional legacy compaction cannot commit a caller's in-flight
+                # command. When this admission owns the transaction, its new blob
+                # and exact owner pointer commit together before returning.
+                compacted = bool(reference and reference.get('executionProjection') != 1
+                                 and not self.db.in_transaction)
+                if compacted:
+                    compact_execution_references(context, self.db)
+                session = context['sessions'][0]
+                # Hydration owns whether a body is actually present. Directory
+                # metadata cannot turn an unloaded native view into a loaded one.
+                session.update({key: value for key, value in metadata.items()
+                                if key not in {'historyLoaded', 'historyLoading'}})
+                if control is not None:
+                    self._state.setdefault('runtimeControl', {})[identity] = context['runtimeControl'][identity]
+                self._session_projection_refs[identity] = saved
+                # Lifecycle recovery belongs to keyed admission as well as startup.
+                # A dormant owner must not retain a pre-restart executing state or
+                # gain permission to replay a command when it is first selected.
+                from .session_ownership import restore
+                from .capacity import restore_observation
+                restore_observation(session)
+                restore(session)
+                settle_stream(session)
+                interrupt_unfinished(session)
+                session['configurationBusy'] = False
+                if session.get('status') in {'working', 'starting', 'ready', 'stopping'}:
+                    session['status'] = 'interrupted'
+                    session['activity'] = {'phase': 'interrupted', 'label': 'Previous work was interrupted; it has not been replayed.',
+                                           'activeTools': [], 'updatedAt': time.time()}
+                if session.get('naming', {}).get('status') == 'working':
+                    session['naming'] = {'status': 'error', 'error': 'Name generation was interrupted. You can try again.'}
+                if session.get('bundleChange', {}).get('phase') == 'working':
+                    session['bundleChange'] = {'phase': 'error', 'error': 'The app restarted during a bundle change. Load the conversation and preview again; work was not replayed.'}
+                session.pop('bundlePreview', None)
+                for message in session.get('messages', []):
+                    if (message.get('steering') or {}).get('disposition') in {'sending', 'queued'}:
+                        from .conversation_steering import record as record_steering
+                        record_steering(self, session, message.get('inputId'), 'unknown',
+                            'The app restarted before steering application was confirmed. Nothing was resent.', preserve_pending_post=True)
+                    if message.get('delivery', {}).get('status') == 'sending':
+                        self._delivery(session, message.get('inputId'), 'unknown')
+                for worker in session.get('workers', []):
+                    if worker.get('status') in {'working', 'running', 'starting', 'queued', 'pending', 'stopping'} or worker.get('persistent') and worker.get('status') == 'idle':
+                        worker['status'] = 'interrupted'
+            else:
+                if self.db.execute('SELECT 1 FROM history_local_rows WHERE id=?', (identity,)).fetchone():
+                    raise ValueError('The saved conversation record is unavailable; its directory entry was retained.')
+                session = self.cold_display.record({**metadata, 'historyLoaded': False, 'historyLoading': False,
+                                                    'messages': [], 'workers': [], 'approvals': []})
+            from .collaboration import restore_owner
+            restore_owner(session, self.instance_id)
+            self._state['sessions'].append(session)
+            self.cold_display.touch(identity)
+            self.projections.invalidate(state=self._state, session_ids={identity})
+            # Durable stores remain authoritative when an owner was not resident at
+            # startup. Reapply their fences without starting a worker or schedule.
+            for name in ('questions', 'schedules', 'worktrees', 'portability'):
+                owner = getattr(self, name, None)
+                if owner is not None:
+                    owner.sync()
+            if compacted:
+                self._save(session_ids={identity}, record_only=True)
+            return session
+        except BaseException:
+            if compacted:
+                self.db.rollback()
+                self._state['sessions'][:] = [row for row in self._state['sessions'] if row['id'] != identity]
+                self._state.get('runtimeControl', {}).pop(identity, None)
+                self._session_projection_refs.pop(identity, None)
+                self.projections.invalidate(state=self._state, session_ids={identity})
+            raise
+
     def _session(self, sid=None, *, hydrate=True):
         sid = sid or self.state["selectedSessionId"]
         from .session_identity import resolve
@@ -1216,7 +1403,12 @@ class AppService:
             if (position is None or position >= len(self.state['sessions'])
                     or self.state['sessions'][position] is not session):
                 session = next((row for row in self.state['sessions'] if row['id'] == sid), None)
-            session = session or resolve(self.state['sessions'], sid)
+            # Exact app IDs are durable receipt identities. Alias lookup must
+            # inspect the complete directory, including dormant duplicate IDs.
+            if session is None:
+                metadata = self.directory.resolve(sid)
+                if metadata is not None:
+                    session = self._admit_session(metadata)
         except ValueError as exc:
             raise AppError(str(exc), 409) from None
         if session:
@@ -1261,17 +1453,24 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         now = time.time()
-        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], **({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose') else {})})
+        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], '_collaborationHostInstanceId': self.instance_id, **({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose') else {})})
 
     def _reusable_internal(self, candidate):
         """An idle internal session for the same purpose, folder and bundle."""
-        for row in self.state['sessions']:
-            if (row.get('sessionKind') == 'internal' and row.get('sessionPurpose') == candidate['sessionPurpose']
-                    and row.get('workspace') == candidate['workspace'] and row.get('bundle') == candidate['bundle']
-                    and row.get('status', 'idle') in {'idle', 'ready'} and not row.get('configurationBusy')
-                    and not any(a.get('status') == 'pending' for a in row.get('approvals', []))):
-                return row
-        return None
+        offset = 0
+        while True:
+            rows = self.directory.select(
+                "session_kind='internal' AND purpose=? AND workspace=? AND status IN ('idle','ready')",
+                (candidate['sessionPurpose'], candidate['workspace']), limit=16, offset=offset, state=self.state)
+            for row in rows:
+                if (row.get('bundle') == candidate['bundle'] and not row.get('configurationBusy')
+                        and not any(a.get('status') == 'pending' for a in row.get('approvals', []))):
+                    # Reuse is an explicit request for this one mutable owner;
+                    # unrelated dormant candidates remain metadata only.
+                    return self._session(row['id'], hydrate=False)
+            if len(rows) < 16:
+                return None
+            offset += len(rows)
 
     def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
@@ -1424,6 +1623,7 @@ class AppService:
         scope = args.pop('nativeProject', None)
         if scope is not None and (not isinstance(scope, str) or not scope or len(scope) > 4000):
             raise AppError('Choose a valid native project.')
+        resolved_target = None
         target_key = 'sessionId' if args.get('sessionId') else 'id' if action in SESSION_ID_ACTIONS else None
         if target_key and args.get(target_key):
             if scope is None and origin == 'ui':
@@ -1432,16 +1632,19 @@ class AppService:
                     from .session_identity import project as native_project
                     scope = native_project(exact)
             try:
-                target = resolve(self.state['sessions'], args[target_key], scope)
+                target = self.directory.resolve(args[target_key], scope,
+                                                include_hidden_workspaces=action == 'session.select')
                 if target is None:
                     await self.history.refresh()
-                    target = resolve(self.state['sessions'], args[target_key], scope)
+                    target = self.directory.resolve(args[target_key], scope,
+                                                    include_hidden_workspaces=action == 'session.select')
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             if scope and target is None:
                 raise AppError('Session is not in the requested native project.', 404)
             if target:
                 args[target_key] = target['id']
+                resolved_target = target
         elif scope:
             raise AppError('Supply a session ID with nativeProject.')
         if action == 'view.update' and origin == 'agent' and 'draft' in args.get('patch', {}):
@@ -1506,6 +1709,8 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
+        if resolved_target is not None:
+            self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
             if not reader:
@@ -2173,8 +2378,11 @@ class AppService:
                 if action in {'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}:
                     from .session_navigation import is_top_level
                     workspace = next(w for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId'])
-                    matches = [s for s in self.state['sessions'] if is_top_level(s) and (s.get('workspaceId') == workspace['id'] or (workspace.get('path') and s.get('workspace') == workspace['path']))]
-                    selected = next((s for s in matches if s['id'] == self.state.get('selectedSessionId')), matches[0] if matches else None)
+                    matches = self.directory.select(
+                        "session_kind='root' AND (workspace_id=? OR workspace=?)",
+                        (workspace['id'], workspace.get('path')), limit=1,
+                        order='(id=' + "'" + str(self.state.get('selectedSessionId', '')).replace("'", "''") + "') DESC,ordinal")
+                    selected = self._admit_session(matches[0]) if matches else None
                     if args.get('fromDraft'):
                         # Attaching a location is a property of this client's
                         # unsent chat. Keep text, attachments, model and bundle.
@@ -2411,7 +2619,7 @@ class AppService:
                 renamed = {**session, 'title':args['title'].strip(), 'titleSource':'manual','autoName':False}
                 set_automatic(self.data_dir, renamed, False)
                 persist(self.data_dir,renamed,shared_rename=True)
-                session.update({key:renamed[key] for key in ('title','titleSource','nativeNameSource','description','autoName') if key in renamed})
+                session.update({key:renamed[key] for key in ('title','titleSource','nativeNameSource','nativeNameRevision','nativeNamePolicyRevision','description','autoName') if key in renamed})
             elif action == 'session.takeover':
                 session = self._session(args['id'])
                 if not self.runtime:
@@ -2713,7 +2921,11 @@ class AppService:
                     pending.append((self.runtime.approval, (session["id"], args["id"], decision)))
             elif action == "attention.read":
                 from .attention import snapshot
-                current = {item['id']:item for item in snapshot(self.state)['items']}
+                # Acknowledge current owner facts, including globals changed
+                # since the last published projection. Only indexed notice
+                # owners supply session metadata; idle history stays dormant.
+                current = {item['id']:item for item in snapshot({
+                    **self.state, 'sessions': self.directory.attention_rows(self.state)})['items']}
                 if any(identity not in current for identity in args['ids']):
                     raise AppError('Attention items changed; refresh before marking them read.')
                 receipts = self.state.setdefault('attentionRead', {})
@@ -3547,6 +3759,7 @@ class AppService:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
             except AppError:
                 return
+            self.event_log_view.invalidate({session['id']})
             if kind == 'worker.updated' and payload.get('activityOnly'):
                 worker = next((w for w in session.get('workers', []) if w['id'] == payload.get('id')), None)
                 # Progress is not lifecycle authority. Delayed hooks cannot
@@ -4029,7 +4242,7 @@ class AppService:
         if operation in {"get_state", "state.get"}:
             await self._flush_pending_progress()
             from .agent_state import read_state
-            return read_state(agent_snapshot(args.get('clientId')), args, session_id=session_id, resolve=self.state_resource)
+            return read_state(agent_snapshot(args.get('clientId')), args, session_id=session_id, resolve=self.state_resource, directory=self.directory)
         if operation in {"list_actions", "actions.list"}:
             actions = self.get_actions()
             prefix = args.get('prefix', '')
@@ -4045,7 +4258,7 @@ class AppService:
             key = 'sessionId' if action_args.get('sessionId') else 'id' if args['action'] in SESSION_ID_ACTIONS else None
             if key and action_args.get(key):
                 try:
-                    row = resolve(self.state['sessions'], action_args[key], action_args.get('nativeProject'))
+                    row = self.directory.resolve(action_args[key], action_args.get('nativeProject'))
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
                 if row:
@@ -4193,9 +4406,9 @@ class AppService:
                     result['read'] = {'action': 'smartTools.readResult', 'args': {'operationId': result['operationId']}}
             elif args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
                 from .agent_state import surface_context
-                context = surface_context(self.state_context(), session_id, self.clients.records)
+                context = surface_context(self.state, session_id, self.clients.records)
             else:
-                context = read_state(agent_snapshot(canvas_client, allow_detached=True, connected_only=args['action'] == 'view.update' or args['action'].startswith('computer.visual.')), {}, session_id=session_id, resolve=self.state_resource)
+                context = read_state(agent_snapshot(canvas_client, allow_detached=True, connected_only=args['action'] == 'view.update' or args['action'].startswith('computer.visual.')), {}, session_id=session_id, resolve=self.state_resource, directory=self.directory)
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':context}
         raise AppError("Unknown app bridge operation.")
 

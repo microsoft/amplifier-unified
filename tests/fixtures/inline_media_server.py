@@ -163,7 +163,7 @@ async def serve(root, app):
             {'role': 'assistant', 'content': 'Synthetic child saved response.'},
         ], {'name': 'Synthetic native child', 'parent_session_id': sid})
         await service.history.refresh()
-        child = next(row for row in service.state['sessions'] if row.get('nativeIdentity') == child_native)
+        child = service._session(child_native, hydrate=False)
         if child.get('sessionKind') != 'worker':
             raise AssertionError('Native child was not classified by production history discovery')
         await service.dispatch('session.select', {'id': sid})

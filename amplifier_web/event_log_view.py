@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import weakref
 
 from .history_read_retry import retry_indexed_read
 from .performance_diagnostics import measured, measure, count, TimedLock
@@ -553,8 +554,40 @@ class EventLogView:
         self.task = None
         self.lock = TimedLock(service, 'events.lock.wait')
         self.projected = OrderedDict()
+        # Passive polling receipts are only publication-boundary hints. Explicit
+        # refreshes always compare the actual graph, including unpublished aliases.
+        # Weak owners must not keep retired conversations and their bodies alive.
+        self._clean_inputs = OrderedDict()
         self.read_paths = {}
         self.read_revisions = {}
+
+    def invalidate(self, session_ids=None):
+        """Invalidate before mutations are published, including deferred/failed saves."""
+        if session_ids is None:
+            self._clean_inputs.clear()
+        else:
+            for identity in session_ids:
+                self._clean_inputs.pop(identity, None)
+
+    @staticmethod
+    def _input_identity(session):
+        return tuple(session.get(key) for key in ('id', 'workspace', 'nativeProject',
+                     'nativeIdentity', 'runtimeSessionId', 'status'))
+
+    def _remember_clean(self, session):
+        try:
+            owner = weakref.ref(session)
+        except TypeError:
+            # Plain mappings supplied by embeddings retain exact comparisons;
+            # never substitute id(object), which can be reused after retirement.
+            self._clean_inputs.pop(session['id'], None)
+            return
+        self._clean_inputs[session['id']] = (owner, self._input_identity(session))
+        self._clean_inputs.move_to_end(session['id'])
+        # Residency/cold-field retirement can discard projected independently.
+        # Keep this metadata bound independent of that cache's eviction path.
+        while len(self._clean_inputs) > 64:
+            self._clean_inputs.popitem(last=False)
 
     def _new_index(self, path, identity):
         index = EventIndex(path, identity)
@@ -659,7 +692,7 @@ class EventLogView:
             from .history_demand import event_sessions
             for identity in event_sessions(self.service):
                 try:
-                    await self.refresh(identity)
+                    await self.refresh(identity, passive=True)
                 except (OSError, ValueError):
                     pass  # Keep the last readable view while a log is replaced.
                 except Exception:
@@ -1038,12 +1071,18 @@ class EventLogView:
                 raise
 
     @measured('events.refresh', session=True)
-    async def refresh(self, identity):
+    async def refresh(self, identity, *, passive=False):
+        """Refresh exact inputs, or reuse a publication-fenced passive receipt.
+
+        Internal writers invalidate at publication/progress and runtime ingress.
+        Code mutating issued aliases without publishing must use the default
+        explicit refresh (or invalidate); passive=True belongs to the host loop.
+        """
         async with self.lock:
             session = self.service._session(identity)
             identity = session['id']
-            inputs = self.projection_input(session)
             cached = self.projected.get(identity)
+            clean = self._clean_inputs.get(identity) if passive else None
             paths = self.read_paths.get(identity, ())
             def stamps():
                 result = []
@@ -1055,13 +1094,26 @@ class EventLogView:
                         result.append((str(path), None))
                 return tuple(result)
             before = await asyncio.to_thread(stamps)
+            # A writer or admission can run while stat waits. Re-resolve the
+            # owner and verify the same receipt after that boundary.
+            session = self.service._session(identity)
             # Compare detached inputs before copying or rebuilding the model
             # tree. External appends/replacements and live metadata still win.
             root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
             same_root = paths and paths[0] == event_path(session, root)
-            same_inputs = bool(cached and same_root and cached[0] == inputs)
             same_sources = bool(cached and same_root and cached[1] == before)
+            if (same_sources and clean is not None
+                    and self._clean_inputs.get(identity) is clean
+                    and clean[0]() is session
+                    and clean[1] == self._input_identity(session)):
+                count(self.service, 'events.projection.reused')
+                count(self.service, 'events.projection.passive_reused')
+                return
+            self._clean_inputs.pop(identity, None)
+            inputs = self.projection_input(session)
+            same_inputs = bool(cached and same_root and cached[0] == inputs)
             if same_inputs and same_sources:
+                self._remember_clean(session)
                 count(self.service, 'events.projection.reused')
                 return
             count(self.service, 'events.projection.rebuilt')
@@ -1095,8 +1147,10 @@ class EventLogView:
                 # Use the signatures actually read, not a later stat that may
                 # already describe bytes appended after the projection.
                 self.projected[identity] = (copy.deepcopy(self.projection_input(session)), self.read_revisions[identity])
+                self._remember_clean(session)
                 self.projected.move_to_end(identity)
                 while len(self.projected) > 64:
                     expired, _ = self.projected.popitem(last=False)
+                    self._clean_inputs.pop(expired, None)
                     self.read_paths.pop(expired, None)
                     self.read_revisions.pop(expired, None)
