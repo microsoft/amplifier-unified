@@ -195,7 +195,11 @@ def test_workflow_requires_parallel_lanes_before_write_permission():
     jobs = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
     for lane in qualification.LANES:
         assert jobs[lane]['needs'] == 'prepare'
-        assert 'permissions' not in jobs[lane]
+        # Proof lookup needs Actions artifact reads, never write permission.
+        if lane == 'frontend':
+            assert jobs[lane]['permissions'] == {'contents': 'read', 'actions': 'read'}
+        else:
+            assert 'permissions' not in jobs[lane]
     assert set(jobs['release']['needs']) == {'prepare', *qualification.LANES}
     assert jobs['release']['permissions'] == {'contents': 'write'}
     steps = jobs['release']['steps']
