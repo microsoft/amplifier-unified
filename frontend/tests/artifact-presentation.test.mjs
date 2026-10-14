@@ -305,6 +305,43 @@ test('actual confirmed follow conflict keeps input until explicit discard and ne
  detach();harness.dispose();await settle();
 });
 
+test('actual accepted follow whose state wait expired reconciles locally before explicit late-input discard',async()=>{
+ const saved=item('canvas-app','inline');saved.row.presentationCapabilities={compact:true,inline:true,canvas:true};
+ const initial={...inlineView,renderer:'builtin.canvas.canvas-app',publishedVersion:2,selectedVersion:2,followLatest:false};
+ const next={...initial,generation:2,followLatest:true,selectedVersion:null};
+ let view=initial,proofValid=true,followPosts=0,approved=false;
+ const harness=component({saved,confirm:()=>approved,
+  request:async()=>({id:saved.row.id,kind:'canvas-app',app:{revision:2,stateRevision:0,state:{},versions:[],requests:[]}}),
+  dispatch:async(action,args,meta)=>{
+   if(action==='canvas.views.inline')return {accepted:true,result:initial};
+   if(action==='canvas.views.follow'){
+    followPosts++;
+    const hold=await harness.edits.prepareTransition(args,meta.id,true,{...state,revision:1,canvasWorkspace:{views:[initial]}});
+    hold.sent=true;
+    const receipt={accepted:true,result:next};
+    // Real bounded waiter expires; the host receipt is already retained.
+    await harness.edits.completeTransition(hold,receipt,{...state,revision:1,canvasWorkspace:{views:[initial]}});
+    return receipt;
+   }
+   return {accepted:true};
+  }});
+ const render=()=>harness.render({state:{...state,revision:view.generation,canvasWorkspace:{views:[view]}}});
+ render();render();await settle();render();await settle();
+ const detach=harness.edits.registerRenderer(initial,{prepare:async()=>({}),validate:()=>proofValid,release(){}});
+ const original=render().loaded.canvas;
+ await render().follow(true);
+ assert.match(render().notice,/waiting for its exact view state/);
+ proofValid=false;harness.edits.intent(initial,true);view=next;
+ harness.edits.reconcile({...state,revision:2,canvasWorkspace:{views:[next]}});
+ await render().follow(true);
+ assert.equal(followPosts,1,'A received host receipt is reconciled without another POST');
+ assert.match(render().notice,/newer private input was retained/);
+ await render().discardFollowInput();assert.equal(render().loaded.canvas,original);
+ approved=true;await render().discardFollowInput();render();await settle();render();await settle();
+ assert.equal(render().view.generation,2);assert.equal(followPosts,1);
+ detach();harness.dispose();await settle();
+});
+
 test('actual live app consumes canonical view updates while primary and another client cannot retarget it',async()=>{
  const saved=item('canvas-app','inline');saved.row.presentationCapabilities={inline:true,canvas:true,compact:true};
  let view={...inlineView,resourceId:saved.row.id,followLatest:true,publishedVersion:2,selectedVersion:null,app:{revision:2,stateRevision:0,state:{value:'first'}}};

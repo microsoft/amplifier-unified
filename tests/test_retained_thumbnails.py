@@ -415,7 +415,7 @@ async def test_two_true_legacy_variants_restart_job_pruning_and_unchanged_eviden
     service = app['service']
     for record in records:
         make_true_legacy(service, record)
-    service._session(sid)['execution']['imageGeneration'] = []
+    service._session(sid).setdefault('execution', {})['imageGeneration'] = []
     original = copy.deepcopy(service._state['canvasArtifacts'])
     evidence = [service.outputs.store.read(record['id']) for record in records]
     service._save()
@@ -679,7 +679,7 @@ async def browser_fixture():
             service = app['service']
             for record in records:
                 make_true_legacy(service, record)
-            service._session(sid)['execution']['imageGeneration'] = []
+            service._session(sid).setdefault('execution', {})['imageGeneration'] = []
             service._save()
             await service.close()
             # Cold host restart before the browser sees either legacy variant.

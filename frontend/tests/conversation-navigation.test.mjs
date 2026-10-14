@@ -197,7 +197,7 @@ test('successful follow receipt cannot discard late dirty input or an invalidate
   assert.throws(()=>edits.adoptTransition(initial,'accepted-exact',current),error=>error.unconfirmed===true);
   assert.equal(frozen,true);assert.equal(releases,0);
   assert.equal(edits.transition(initial),hold);assert.equal(hold.receipt,receipt);
-  assert.equal(edits.protectsPublication(owner),true);
+  assert.equal(edits.protectsPublication({...owner,resourceId:initial.resourceId}),true);
  }
 });
 

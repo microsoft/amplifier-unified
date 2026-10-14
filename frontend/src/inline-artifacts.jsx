@@ -369,7 +369,10 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
    if(!followCommand.current&&(inlineOwnership.blocksTarget(view)||view.dirty))throw Error(inlineEditNotice);
    if(!followCommand.current)followCommand.current={action:'canvas.views.follow',args:{...targetOf(view),followLatest},id:crypto.randomUUID()};
    loaded.pendingFollow=true;
-   const command=followCommand.current,receipt=await run.current(command.action,command.args,{id:command.id});
+   const command=followCommand.current,hold=inlineOwnership.transition(command.args);
+   // Dispatch may already have received acceptance before its bounded state
+   // wait timed out. Reconcile that saved receipt locally, never POST it again.
+   const receipt=hold?.receipt??await run.current(command.action,command.args,{id:command.id});
    if(receipt?.accepted!==true)throw Error(receipt?.error||'The preview version change was not confirmed.');
    const confirmed=receipt.result;
    if(confirmed?.viewId!==view.viewId||confirmed.resourceId!==row.id||confirmed.publishedVersion!==version||confirmed.followLatest!==command.args.followLatest||
