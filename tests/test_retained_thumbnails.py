@@ -26,7 +26,7 @@ from test_output_images import png
 if __name__ == '__main__' and MODE == 'installed':
     import amplifier_web.server as _server
     _installed = Path(_server.__file__).resolve()
-    if (_installed.is_relative_to(Path(__file__).resolve().parents[1])
+    if (_installed.is_relative_to(Path(__file__).resolve().parents[1] / 'amplifier_web')
             or not _installed.is_relative_to(Path(sys.prefix).resolve())):
         raise RuntimeError('Retained-thumbnail fixture must use the installed package')
 

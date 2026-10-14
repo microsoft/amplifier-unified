@@ -17,7 +17,7 @@ try{
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}});
  });
  if(process.env.AMPLIFIER_EXPECTED_PACKAGE)assert.equal(boot.package,process.env.AMPLIFIER_EXPECTED_PACKAGE+'/server.py');
- if(retainedMode&&process.env.AMPLIFIER_BROWSER_TEST_MODE==='installed')assert.equal(boot.mode,'installed');
+ if(process.env.AMPLIFIER_BROWSER_TEST_MODE==='installed')assert.equal(boot.mode,'installed');
  browser=await chromium.launch({headless:true,chromiumSandbox:true});
  const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer '+(retainedMode?'fixture-retained-thumbnails':'fixture-generated-images')}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));

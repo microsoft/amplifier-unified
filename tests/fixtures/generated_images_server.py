@@ -10,7 +10,11 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
+MODE = os.environ.get('AMPLIFIER_BROWSER_TEST_MODE', 'source')
+if MODE not in {'source', 'installed'}:
+    raise ValueError('AMPLIFIER_BROWSER_TEST_MODE must be source or installed')
+if MODE == 'source':
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tests'))
 from aiohttp import web
 from amplifier_web import auth, execution
@@ -18,6 +22,12 @@ from amplifier_web.execution_events import ExecutionEvents
 from amplifier_web.runtime import normalize_event
 from amplifier_web.server import create_app
 from test_output_images import png
+
+if MODE == 'installed':
+    _package = Path(sys.modules['amplifier_web.server'].__file__).resolve()
+    if (_package.is_relative_to(ROOT / 'amplifier_web')
+            or not _package.is_relative_to(Path(sys.prefix).resolve())):
+        raise RuntimeError('Generated-image fixture must use the selected installed package')
 
 
 class NoModel:
@@ -119,7 +129,8 @@ async def main():
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
         app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
-        print(json.dumps({'url': f'http://127.0.0.1:{port}', 'package': str(Path(sys.modules['amplifier_web.server'].__file__).resolve())}), flush=True)
+        print(json.dumps({'url': f'http://127.0.0.1:{port}', 'mode': MODE,
+                          'package': str(Path(sys.modules['amplifier_web.server'].__file__).resolve())}), flush=True)
         stopped = asyncio.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):
             asyncio.get_running_loop().add_signal_handler(sig, stopped.set)
