@@ -39,3 +39,14 @@ def test_real_core_receives_fresh_notice_then_typed_surface_image():
     result = subprocess.run([python, str(Path(__file__).parent/'fixtures/surface_context_probe.py')], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout+result.stderr
     assert '"typed_image_before_answer": true' in result.stdout
+
+
+@pytest.mark.parametrize('mode', ['persist', 'tail'])
+def test_real_core_refreshes_workspace_awareness_without_history_accumulation(mode):
+    python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
+    if not python:
+        pytest.skip('Set UNIFIED_RUNTIME_PYTHON for the real Core awareness probe')
+    result = subprocess.run([python, str(Path(__file__).parent/'fixtures/workspace_awareness_runtime_probe.py'), mode], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"fresh_each_request": true' in result.stdout
+    assert '"history_clean": true' in result.stdout

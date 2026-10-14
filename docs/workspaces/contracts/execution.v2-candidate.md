@@ -68,6 +68,41 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Active-work awareness and declared file intent — 2026-10-13
+
+The host supplies a bounded, fresh projection of its observed active work in the
+calling conversation's canonical workspace at each supported provider request.
+User-created roots, commissioned roots and observed native children remain
+distinct. Include actual recorded execution folders and declared file intent,
+never peer drafts, prompts, transcripts or credentials. This projection uses
+existing catalog/lifecycle facts without loading dormant histories or runtimes.
+Historical metadata may require the existing catalog index to be rebuilt; a
+steady-state read visits active work rather than every saved conversation.
+
+A root may replace its own advisory file intent using the observed intent and
+execution revisions. The user may edit a selected root through the same action.
+Native children cannot replace their enclosing root's declaration. Declarations
+are explicit shared data, normalized to known task folders when submitted; they
+grant no filesystem access, block no operation, and imply no reservation or
+stale-write protection. Empty paths clear the declaration. Stable command retries
+retain their original outcome, and stale revisions preserve the newer record.
+Declaration bodies live in the existing command receipts; session metadata
+retains only the current reference and bounded summary. Historical declarations
+therefore do not put every saved path list into the resident chat catalog.
+
+Active peers with intersecting declared paths receive an overlap indication.
+Separate copies retain distinct locations. A changed execution placement marks
+an earlier declaration for review rather than silently translating its paths.
+Idle declarations remain retained but do not claim current activity. External
+writers, other app installations, unobserved workers and later filesystem alias
+changes remain outside this observation. Partial/truncated coverage is explicit.
+Client drafts remain private through refresh, conflict, navigation and reload.
+Live awareness is ephemeral reference data and must not accumulate in native
+conversation history or grant peer control. Dynamic observations are added at
+the existing fitted provider boundary, not retained as native reminders. Each
+request receives one current observation even when the loop retains reminder
+text within a turn. Bridge failure means unknown coverage, never no peers.
+
 ### Explicit repository selection — 2026-10-13
 
 A task may inspect, create or attach a working copy for an explicitly selected

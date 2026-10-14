@@ -9,3 +9,5 @@
 .a-coordination-related textarea{min-height:4rem}
 .a-coordination-related input[type=checkbox]{width:auto;margin-right:.5rem}
 .a-coordination-related article{padding-block:.5rem;border-top:1px solid var(--a-border,#8884)}
+.a-workspace-awareness{margin-block:1rem;min-width:0;overflow-wrap:anywhere}
+.a-workspace-awareness code{white-space:pre-wrap;overflow-wrap:anywhere}

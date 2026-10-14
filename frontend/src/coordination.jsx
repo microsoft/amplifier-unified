@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import './coordination.css';
+import {WorkspaceAwareness} from './workspace-awareness.jsx';
 
 const keyOf=target=>JSON.stringify([target.sessionId,target.workerId||null]);
 const labels={idle:'Ready for follow-up',working:'Working',running:'Working',starting:'Starting',queued:'Queued',stopping:'Interruption requested',completed:'Completed',interrupted:'Outcome unknown',error:'Needs attention',cancelled:'Cancelled',stopped:'Stopped'};
@@ -75,15 +76,18 @@ export function CoordinationPanel({dispatch,sessionId}){
 }
 
 export function RelatedWork({dispatch,sessionId}){
+ const visit=useRef(0);
  const [items,setItems]=useState([]),[context,setContext]=useState({requests:[]}),[error,setError]=useState(''),[inspected,setInspected]=useState({}),[original,setOriginal]=useState(null);
  const refresh=async()=>{
+  const current=++visit.current;
   const [state,list]=await Promise.all([dispatch('coordination.context',{sessionId},{feedback:false}),dispatch('coordination.list',{sessionId},{feedback:false})]);
-  setContext(state.result);
   const workspace=list.result.items.find(row=>row.target.sessionId===sessionId)?.workspace;
   const peers=await dispatch('coordination.list',{workspace,limit:50,includeWorkers:false},{feedback:false});
+  if(current!==visit.current)return;
+  setContext(state.result);
   setItems(peers.result.items.filter(row=>row.kind==='conversation'&&row.target.sessionId!==sessionId));
  };
- useEffect(()=>{setInspected({});setOriginal(null);refresh().catch(error=>setError(error.message))},[sessionId]);
+ useEffect(()=>{setInspected({});setOriginal(null);setContext({requests:[]});setItems([]);setError('');refresh().catch(error=>setError(error.message));return()=>{visit.current++}},[sessionId]);
  const inspectResult=async requestId=>{try{const value=await dispatch('coordination.result',{requestId},{feedback:false});setInspected(previous=>({...previous,[requestId]:value.result}))}catch(error){setError(error.message)}};
  const reveal=async(sid,messageId)=>{try{const response=await dispatch('coordination.read',{sessionId:sid,messageId,textLimit:4000},{feedback:false});setOriginal(response.result.message)}catch(error){setError(error.message)}};
  const openArtifact=async(requestId,reference)=>{
@@ -95,6 +99,7 @@ export function RelatedWork({dispatch,sessionId}){
   <p className="a-caption">Related tasks and exact results. Inspecting evidence keeps your current conversation and draft. A sealed result still needs independent artifact verification.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh related work</button>
+  <WorkspaceAwareness key={sessionId} dispatch={dispatch} sessionId={sessionId} context={context} refresh={refresh}/>
   {original&&<article aria-label="Original message"><strong>{original.role} · {original.sessionId}</strong><p style={{whiteSpace:'pre-wrap'}}>{original.text}</p>{original.truncated&&<small>Bounded excerpt; original retained.</small>}<button className="a-link" onClick={()=>setOriginal(null)}>Close original message</button></article>}
   {items.map(row=><div key={row.target.sessionId}>{row.title} · {labels[row.status]||row.status}{row.collaboration&&<> · created by {row.collaboration.creatorTitle||'Source conversation'}</>}<details><summary>Task identity</summary><code>{row.target.sessionId}{row.collaboration&&<> · creator {row.collaboration.creatorSessionId}</>}</code></details></div>)}
   {context.requests.map(row=>{const result=inspected[row.requestId],response=result?.receipt?.terminalOutcome||row.terminalOutcome||result?.receipt?.response||row.response;return <article key={row.requestId} data-request-id={row.requestId}>

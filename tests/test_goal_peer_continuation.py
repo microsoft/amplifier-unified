@@ -32,6 +32,13 @@ HUMAN = "ordering-human-input"
 REASON = "Continue the synthetic objective after checking the exact peer result."
 
 
+def last_input(request):
+    # Fresh workspace observations are provider reference data, not another
+    # admitted input. Keep the peer-versus-goal ordering oracle on that input.
+    return next(m for m in reversed(request.messages)
+                if m.role == "user" and not (m.metadata or {}).get("coordinationObservation"))
+
+
 class OrderingHost(DirectNativeHost):
     async def mount(self, row, provider, paths):
         # Use the actual worker activation fence. The direct transport does not
@@ -80,7 +87,7 @@ class Parent(ScriptedProvider):
             self.waiting.set()
             await asyncio.wait_for(self.release.wait(), 15)
             return self.final("First parent answer; the qualified peer result is queued.")
-        last_user = next(m for m in reversed(request.messages) if m.role == "user")
+        last_user = last_input(request)
         text = message_text(last_user)
         peer = next((e for e, t in peer_envelopes(request)
                      if e["inputId"] == self.continuation_id and t == text), None)
@@ -502,7 +509,7 @@ async def test_finite_generic_goal_without_peer_capability_is_unchanged():
     seen, evaluations = [], []
     class FiniteProvider(ScriptedProvider):
         async def complete(self, request, **kwargs):
-            seen.append(message_text(next(m for m in reversed(request.messages) if m.role == "user")))
+            seen.append(message_text(last_input(request)))
             return self.final("Synthetic finite answer")
     provider = FiniteProvider()
     await session.coordinator.mount("providers", provider, name=provider.name)
