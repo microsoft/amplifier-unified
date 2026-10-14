@@ -103,6 +103,7 @@ def manifest(value):
 
 
 def definitions(schema, string):
+    from .canvas_views import view_schema
     identity = {'id': string(100), 'sessionId': string(200), 'clientId': string(100)}
     cas = {**identity, 'expectedRevision': {'type': 'integer', 'minimum': 1},
            'expectedStateRevision': {'type': 'integer', 'minimum': 0}}
@@ -128,6 +129,9 @@ def definitions(schema, string):
         'resolve': ('Approve or reject a pending host request. Agents may resolve changes already authorized by the user on an explicit attached clientId. Only the sandbox cannot call this action.',
                     schema({**cas, 'requestId': string(100), 'approve': {'type': 'boolean'}}, [*required, 'requestId', 'approve'])),
     }
+    for name, (_, spec) in actions.items():
+        if name != 'create':
+            view_schema(spec, string)
     return {'canvas.apps.' + name: value for name, value in actions.items()}
 
 
@@ -216,30 +220,32 @@ def command(service, action, args, origin):
     row = next((r for r in state.get('canvasArtifacts', []) if r['id'] == args['id'] and r.get('app')), None)
     if not row or row['sessionId'] != sid:
         fail('This surface is unavailable in the calling conversation.', 404)
+    selected = row
+    if 'viewId' in args:
+        selected, _ = service.canvas_views.target(args)
+        if selected['id'] != row['id'] or not selected.get('app'):
+            fail('This view does not own the requested surface.', 409)
     if name == 'inspect':
-        result = snapshot(row, db, args.get('includeSource', False))
-        result['views'] = [{'clientId': identity, 'viewId': key.split(':', 1)[0],
-                            'dirty': bool(preference.get('dirty')), 'renderStatus': preference.get('activation')}
-                           for identity, client in service.clients.records.items()
-                           for key, preference in client.get('canvasViews', {}).get('preferences', {}).items()
-                           if key == 'primary:' + row['id']]
+        result = snapshot(selected, db, args.get('includeSource', False))
+        result['views'] = service.canvas_views.bindings(row['id'])
 
         if args.get('requestId'):
-            request = next((r for r in row['app']['requests'] if r['id'] == args['requestId']), None)
+            request = next((r for r in selected['app']['requests'] if r['id'] == args['requestId']), None)
             if not request:
                 fail('This host request is unavailable.', 404)
             result['requestInput'] = resource(db, request['input']['$resource'])
         return result
-    if state.get('canvas', {}).get('id') == row['id'] and state['canvas'].get('selectedVersion') is not None and name not in {'revise', 'restore'}:
+    if ('viewId' in args and selected.get('selectedVersion') is not None
+            or 'viewId' not in args and origin != 'agent'
+            and state.get('canvas', {}).get('id') == row['id']
+            and state['canvas'].get('selectedVersion') is not None and name not in {'revise', 'restore'}):
         fail('This saved version is read-only. Select Latest before changing the surface.', 409)
     app = copy.deepcopy(row['app'])
     if args['expectedRevision'] != app['revision'] or args['expectedStateRevision'] != app['stateRevision']:
         fail('The surface changed. Inspect it and retry with current revisions.', 409)
     if name in {'revise', 'restore'}:
-        for client in service.clients.records.values():
-            for key, preference in client.get('canvasViews', {}).get('preferences', {}).items():
-                if key == 'primary:' + row['id'] and preference.get('dirty'):
-                    fail('Finish or cancel the surface edit before refining it. Inspect this surface for dirty view client IDs; save its unfinished input before retrying.', 409)
+        if any(view['dirty'] for view in service.canvas_views.bindings(row['id'])):
+            fail('Finish or cancel the surface edit before refining it. Inspect this surface for dirty view client IDs; save its unfinished input before retrying.', 409)
         if name == 'restore':
             version = next((v for v in app['versions'] if v['version'] == args['version']), None)
             if not version:

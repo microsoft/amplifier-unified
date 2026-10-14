@@ -48,9 +48,10 @@ def _presentation_label(identity, rows, retained=None):
 
 
 def definitions(schema, string):
+    from .canvas_views import view_schema
     identity = {'id': string(100)}
     source = {'repository': string(2000), 'ref': string(500), 'path': string(1000)}
-    return {
+    actions = {
         'smartTools.catalog': ('Refresh the public Smart Tools catalog; listing does not install or run code.', schema()),
         'smartTools.inspect': ('Read a Git Smart Tool descriptor and manifest without running its code.', schema(source, ['repository'])),
         'smartTools.install': ('Install a Python Git Smart Tool in an isolated environment. Does not start it or configure models.', schema({**source, 'extras': {'type':'array','maxItems':20,'items':string(100)}}, ['repository'])),
@@ -79,15 +80,20 @@ def definitions(schema, string):
         'smartTools.appCall': ('Call an app-visible tool through the current canvas binding. Cannot select a different server. Results also appear in shared smartTools.operations.', schema({'canvasId':string(100),'expectedRevision':{'type':'integer','minimum':1},'name':string(200),'arguments':{'type':'object'}}, ['canvasId','name'])),
         'smartTools.context': ('Record the current MCP App view context as untrusted display data, visible to the agent on its next state read. Does not start a model turn.', schema({'canvasId':string(100),'expectedRevision':{'type':'integer','minimum':1},'context':{'type':'object'}}, ['canvasId','context'])),
     }
+    for name in ('viewStatus', 'reconnectView', 'appCall', 'context'):
+        spec = actions['smartTools.' + name][1]
+        spec['properties']['clientId'] = string(100)
+        view_schema(spec, string)
+    return actions
 
 
 class SmartCanvas:
     def __init__(self, service):
         self.service = service
 
-    def binding(self, identity, expected_revision=None):
+    def binding(self, identity, expected_revision=None, view_target=None):
         from .mcp_view_recovery import saved, account
-        canvas, _ = saved(self.service, identity)
+        canvas, _ = saved(self.service, identity, view_target=view_target)
         if expected_revision is not None and canvas.get('revision', 1) != expected_revision:
             raise api.AppError('This tool view changed. Reopen its current saved version before making a call.', 409)
         if canvas.get('readOnlyVersion'):
@@ -96,23 +102,30 @@ class SmartCanvas:
         server = next((s for s in self.service.state['smartTools']['servers'] if s['id'] == binding['serverId']), None)
         if not server or configuration_key(server) != binding['configuration'] or (binding.get('catalogRevision') and (binding['catalogRevision'] != server.get('catalogRevision') or server.get('catalogState') != 'current')):
             from .mcp_view_recovery import inspect
-            status = inspect(self.service, identity)
+            status = inspect(self.service, identity, view_target)
             raise api.AppError(status['message'], 409, code=status['status'])
         if 'accountIdentity' in binding and binding['accountIdentity'] != account(server):
             raise api.AppError('This tool view’s account changed. Review the account in Settings.', 409)
+        if server.get('account', {}).get('status') in {'changed', 'accepted', 'unconfirmed'}:
+            raise api.AppError('Review this tool view’s account in Settings before live access.', 409)
+        if binding.get('contractFingerprint'):
+            from .mcp_view_recovery import contract
+            current = contract(self.service, binding)
+            if not current or current['fingerprint'] != binding['contractFingerprint']:
+                raise api.AppError('This tool’s action schemas or grants changed. Review its saved view.', 409)
         return canvas, binding
 
-    async def resource(self, identity, kind, *, uri=None, cursor=None):
-        _, binding = self.binding(identity)
+    async def resource(self, identity, kind, *, uri=None, cursor=None, view_target=None):
+        _, binding = self.binding(identity, view_target=view_target)
         result = await self.service.smart_tools.resource_request(
             binding['serverId'], kind, uri=uri, cursor=cursor,
             expected_configuration=binding['configuration'])
         # Do not return bytes to a detached view or a replacement connection.
-        self.binding(identity)
+        self.binding(identity, view_target=view_target)
         return result
 
     def admit_call(self, args):
-        canvas, binding = self.binding(args['canvasId'], args.get('expectedRevision'))
+        canvas, binding = self.binding(args['canvasId'], args.get('expectedRevision'), args if 'viewId' in args else None)
         server = next(s for s in self.service.state['smartTools']['servers']
                       if s['id'] == binding['serverId'])
         if server.get('status') not in {None, 'connected'}:
@@ -148,7 +161,7 @@ class SmartCanvas:
             return
         if action == 'smartTools.appCall':
             try:
-                canvas, binding = self.binding(args['canvasId'], args.get('expectedRevision'))
+                canvas, binding = self.binding(args['canvasId'], args.get('expectedRevision'), args if 'viewId' in args else None)
                 if args['name'] not in binding['allowedTools']:
                     raise api.AppError('This tool was not granted to this canvas view.', 403)
             except Exception as exc:
@@ -170,10 +183,14 @@ class SmartCanvas:
             # this view; never replace its launch arguments with another tool's args.
             if result is not None:
                 async with self.service.lock:
-                    active = self.service.state.get('canvas', {})
-                    if active.get('id') == args['canvasId']:
-                        active['mcp']['lastOperationId'] = operation_id
-                        self.service._publish_smart_tool_update(defer_publish=defer_publish)
+                    try:
+                        active, _ = self.binding(args['canvasId'], args.get('expectedRevision'), args if 'viewId' in args else None)
+                    except api.AppError:
+                        # The accepted operation still owns its actual outcome.
+                        # Detachment never replays work or delivers to another view.
+                        return
+                    self.local_update(args, active, {'lastOperationId': operation_id})
+                    self.service._publish_smart_tool_update(defer_publish=defer_publish)
             return
         return await manager.command(action, args, operation_id, origin)
 
@@ -251,12 +268,18 @@ class SmartCanvas:
             return {'canvasId':canvas['id'],'resourceUri':uri,'revision':canvas.get('revision',1),'reference':reference(canvas)}
 
     def context(self, args):
-        canvas, _ = self.binding(args['canvasId'], args.get('expectedRevision'))
+        canvas, _ = self.binding(args['canvasId'], args.get('expectedRevision'), args if 'viewId' in args else None)
         context = args['context']
         if len(json.dumps(context).encode()) > 16000:
             raise api.AppError('App view context must be 16 KB or smaller.')
-        canvas['mcp']['context'] = copy.deepcopy(context)
-        canvas['mcp']['contextUpdatedAt'] = time.time()
+        self.local_update(args, canvas, {'context': copy.deepcopy(context), 'contextUpdatedAt': time.time()})
+
+    def local_update(self, args, canvas, update):
+        if 'viewId' in args:
+            _, preference = self.service.canvas_views.target(args)
+            preference.setdefault('mcp', {}).update(copy.deepcopy(update))
+        else:
+            canvas['mcp'].update(copy.deepcopy(update))
 
 
 def document_response(canvas):

@@ -13,7 +13,8 @@ import uuid
 from .shell_modules import IDENTITY, encoded, fail
 
 PROFILE = 'trusted-native-renderer-v1'
-KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'gif', 'mp4', 'pdf', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']
+KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'gif', 'mp4', 'pdf', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser', 'canvas-app', 'mcp-app']
+LIVE_KINDS = {'canvas-app', 'mcp-app'}
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
           'image': 'Image', 'gif': 'Retained GIF', 'mp4': 'Retained video', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
@@ -26,7 +27,7 @@ BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': 
 def capabilities(kind):
     """Use the same native admission for projection and mount enforcement."""
     canvas = kind in LABELS
-    inline = kind in KINDS and kind not in {'a2ui', 'browser'}
+    inline = kind in KINDS
     result = {'compact': True, 'inline': inline, 'canvas': canvas}
     if not inline:
         result['reason'] = ('Inline mounting is not qualified for this renderer.'
@@ -44,11 +45,24 @@ def project_artifacts(state):
     return state
 
 
+def target_fields(string):
+    return {'viewId': string(100), 'resourceId': IDENTITY,
+            'resourceRevision': string(64), 'generation': {'type': 'integer', 'minimum': 0}}
+
+
+def view_schema(spec, string):
+    """Optional target is all-or-none, never a partially qualified grant."""
+    fields = target_fields(string)
+    spec['properties'].update(fields)
+    spec['dependentRequired'] = {key: [other for other in fields if other != key] for key in fields}
+    return spec
+
+
 def definitions(schema, string):
-    target = {'viewId': string(100), 'resourceId': IDENTITY,
-              'resourceRevision': string(64), 'generation': {'type': 'integer', 'minimum': 0}}
+    target = target_fields(string)
     actions = {
-        'canvas.views.inline': ('Open a bounded, client-local preview of a version published in the selected chat.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY}, ['resourceId', 'version', 'messageId', 'previewId'])),
+        'canvas.views.inline': ('Open a bounded, client-local preview of a version published in the selected chat. followLatest explicitly opts an interactive owner into live revisions.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY, 'followLatest': {'type': 'boolean'}}, ['resourceId', 'version', 'messageId', 'previewId'])),
+        'canvas.views.follow': ('Switch this same interactive view between Latest and its original published number. Refuses dirty edits; never publishes or launches work.', schema({**target, 'followLatest': {'type': 'boolean'}}, [*target, 'followLatest'])),
         'canvas.views.release': ('Close this exact inline preview without changing the saved artifact or Canvas selection.', schema(target, list(target))),
         'canvas.views.imageDraft': ('Attach this exact saved image to the current client draft for a follow-up. Does not send, generate, or overwrite the original.', schema(target, list(target))),
         'canvas.views.reveal': ('Reveal the exact artifact file in the file manager on its named owning app host. It does not open the browser device file manager. Bind hostId and instanceId from fileReveal.', schema({**target,'hostId':string(200),'instanceId':string(100)}, [*target,'hostId','instanceId'])),
@@ -166,10 +180,9 @@ class CanvasViews:
                 fail('Unknown canvas view.', 404)
             identity = current['resourceId']
         row = self.artifact(identity)
-        if view_id != 'primary':
-            if (row.get('sessionId') != self.service.state.get('selectedSessionId')
-                    or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
-                fail('This preview belongs to another conversation.', 409)
+        if (row.get('sessionId') != self.service.state.get('selectedSessionId')
+                or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
+            fail('This preview belongs to another conversation.', 409)
         from .canvas_versions import definition
         row = definition(row, current.get('selectedVersion'), self.service.db)
         preference = self.preference(view_id, row)
@@ -181,13 +194,44 @@ class CanvasViews:
             preference['generation'] += 1
             preference.pop('activation', None)
             preference.pop('mediaObservation', None)
+            preference.pop('mcp', None)
         return row, preference
 
     def target(self, args):
+        if args.get('clientId', self.service.clients.current.get()) != self.service.clients.current.get():
+            fail('The artifact view targets another client.', 409)
         row, preference = self.resolve(args['viewId'])
+        if args['viewId'] == 'primary' and not (
+                self.service.state.get('canvas', {}).get('open') or self.record().get('retained')):
+            fail('This artifact view is no longer active.', 409)
         if row['id'] != args['resourceId'] or self.revision(row) != args['resourceRevision'] or preference['generation'] != args['generation']:
             fail('This artifact view changed. Read it again before applying the action.', 409)
         return row, preference
+
+    def bindings(self, identity):
+        """Only actual mounted bindings count; saved preferences are not leases."""
+        from .service import AppError
+        result = []
+        for client_id, client in self.service.clients.records.items():
+            views = client.get('canvasViews', {})
+            ids = [view_id for view_id, binding in views.get('inline', {}).items()
+                   if binding.get('resourceId') == identity]
+            if client.get('canvas', {}).get('id') == identity and (
+                    client.get('canvas', {}).get('open') or views.get('retained')):
+                ids.insert(0, 'primary')
+            if not ids:
+                continue
+            with self.service.clients.bind(client_id):
+                for view_id in ids:
+                    try:
+                        summary = self.summary(view_id)
+                    except AppError:
+                        continue
+                    if summary['resourceId'] == identity:
+                        result.append({**{key: summary[key] for key in
+                            ('viewId', 'resourceId', 'resourceRevision', 'generation', 'selectedVersion', 'dirty')},
+                            'clientId': client_id, 'renderStatus': summary.get('activation')})
+        return result
 
     def manifest(self, renderer):
         result = BUILTINS.get(renderer) or self.service.shell.manifest(renderer)
@@ -237,10 +281,16 @@ class CanvasViews:
                 'filePaths': paths(self.service.state, row),
                 'fileReveal': reveal_status(self.service.instance_id) if row.get('path') else None,
                 'selectedVersion': row.get('selectedVersion'),
+                'publishedVersion': (self.service.state['canvas'].get('publishedVersion', row.get('selectedVersion'))
+                    if view_id == 'primary' else self.record()['inline'][view_id].get('publishedVersion',
+                        self.record()['inline'][view_id].get('selectedVersion'))),
+                'followLatest': row['kind'] in LIVE_KINDS and row.get('selectedVersion') is None,
+                'latestRevision': self.artifact(row['id']).get('app', {}).get('revision', self.artifact(row['id']).get('revision', 1)),
                 'latestStateRevision': self.artifact(row['id']).get('app', {}).get('stateRevision'),
                 'latestVersion': row.get('latestVersion', row.get('app', {}).get('revision', row.get('revision', 1))),
                 'versions': [{k: item.get(k) for k in ('version', 'title', 'createdAt')} for item in row.get('app', {}).get('versions', row.get('versions', []))],
                 'activation': preference.get('activation'),
+                **({'mcpContext': copy.deepcopy(preference.get('mcp', {}))} if row['kind'] == 'mcp-app' else {}),
                 **({'app': copy.deepcopy(row['app'])} if row.get('app') else {}),
                 'view': copy.deepcopy(self.service.state['canvas'].get('view', {})) if view_id == 'primary' else copy.deepcopy(preference['view']),
                 'renderReports': copy.deepcopy(self.service.state['canvas'].get('renderReports', {})) if view_id == 'primary' else copy.deepcopy(preference['renderReports']),
@@ -262,6 +312,8 @@ class CanvasViews:
 
     def open_inline(self, args):
         from .canvas_versions import definition, latest
+        if type(args['version']) is not int or args['version'] < 1:
+            fail('Choose a positive integer exact published version.')
         row = self.artifact(args['resourceId'])
         if (row.get('sessionId') != self.service.state.get('selectedSessionId')
                 or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
@@ -271,6 +323,9 @@ class CanvasViews:
                    for link in publications):
             fail('This version was not published in that message.', 409)
         saved = definition(row, args['version'], self.service.db)
+        follow = args.get('followLatest', False)
+        if follow and saved['kind'] not in LIVE_KINDS:
+            fail('This renderer has no qualified live owner.', 409)
         if not capabilities(saved['kind'])['inline']:
             fail('This artifact opens in Canvas.', 409)
         record = self.record()
@@ -278,15 +333,56 @@ class CanvasViews:
         for identity, binding in list(inline.items()):
             if binding.get('sessionId') != self.service.state.get('selectedSessionId'):
                 self.release_inline(identity)
-        binding = {'resourceId': row['id'], 'selectedVersion': args['version'],
+        binding = {'resourceId': row['id'], 'publishedVersion': args['version'],
+                   'selectedVersion': None if follow else args['version'], 'followLatest': follow,
                    'messageId': args['messageId'], 'sessionId': row['sessionId'], 'previewId': args['previewId']}
-        identity = next((key for key, value in inline.items() if value == binding), None)
+        identity = next((key for key, value in inline.items()
+            if value.get('previewId') == args['previewId'] and value.get('sessionId') == row['sessionId']), None)
+        if identity is not None:
+            existing = inline[identity]
+            if (any(existing.get(field) != binding[field] for field in ('resourceId', 'messageId'))
+                    or existing.get('publishedVersion', existing.get('selectedVersion')) != args['version']):
+                # One mount cannot acquire a second lease to sidestep an old
+                # view's dirty guard or replace its original published number.
+                if record['preferences'].get(identity + ':' + existing['resourceId'], {}).get('dirty'):
+                    fail('Finish or cancel this preview edit before replacing its publication.', 409)
+                fail('Release this preview before binding its mount to another publication.', 409)
         if identity is None:
             if len(inline) >= 8:
                 fail('Close a preview to open another here, or open this artifact in Canvas.', 409)
             identity = 'inline-' + str(uuid.uuid4())
             inline[identity] = binding
+        elif inline[identity].get('selectedVersion') != binding['selectedVersion']:
+            _, preference = self.resolve(identity)
+            if preference['dirty']:
+                fail('Finish or cancel this preview edit before changing its version.', 409)
+            inline[identity].update(binding)
         return self.summary(identity)
+
+    def follow(self, args, row, preference):
+        from .canvas_versions import definition
+        if row['kind'] not in LIVE_KINDS:
+            fail('This renderer has no qualified live owner.', 409)
+        view_id = args['viewId']
+        binding = (self.service.state['canvas'] if view_id == 'primary'
+                   else self.record()['inline'][view_id])
+        published = binding.get('publishedVersion', binding.get('selectedVersion'))
+        if published is None:
+            fail('This view has no original published version to return to.', 409)
+        definition(self.artifact(row['id']), published, self.service.db)
+        selected = None if args['followLatest'] else published
+        if selected != binding.get('selectedVersion'):
+            if preference['dirty']:
+                fail('Finish or cancel this view edit before changing its version.', 409)
+            if view_id == 'primary':
+                from .canvas_library import load
+                load(self.service.state, self.service.db, row['id'],
+                     version=selected, open_panel=binding.get('open', False))
+                binding = self.service.state['canvas']
+            else:
+                binding['selectedVersion'] = selected
+        binding.update(publishedVersion=published, followLatest=args['followLatest'])
+        return self.summary(view_id)
 
     def release_inline(self, identity):
         record = self.record()
@@ -312,12 +408,27 @@ class CanvasViews:
         body = resolve_body(self.service.db, body, row['kind'], row['sessionId'])
         canvas = {**copy.deepcopy(row), **body, 'open': True, 'viewId': view_id,
                   'resourceRevision': self.revision(row), 'generation': preference['generation']}
+        binding = self.service.state['canvas'] if view_id == 'primary' else self.record()['inline'][view_id]
+        canvas.update(publishedVersion=binding.get('publishedVersion', binding.get('selectedVersion')),
+                      followLatest=row['kind'] in LIVE_KINDS and row.get('selectedVersion') is None,
+                      latestRevision=self.artifact(row['id']).get('app', {}).get('revision',
+                          self.artifact(row['id']).get('revision', 1)))
         canvas.pop('body', None)
         if view_id == 'primary':
             live = self.service.state['canvas']
             canvas.update({key: copy.deepcopy(live[key]) for key in ('view', 'renderReports', 'document', 'interaction', 'mcp', 'events') if key in live})
         else:
             canvas.update({key: copy.deepcopy(preference[key]) for key in ('view', 'renderReports', 'document', 'interaction', 'events') if key in preference})
+        if row.get('mcpState'):
+            try:
+                canvas['mcp'] = resource(self.service.db, row['mcpState']['$resource'])
+            except (KeyError, ValueError, OSError, TypeError):
+                canvas.pop('mcp', None)
+                canvas.setdefault('renderReports', {})['stored-tool-state'] = {
+                    'status': 'error', 'message': 'The saved tool state is unavailable. No tool work was replayed.'}
+            if row.get('selectedVersion') is None:
+                if canvas.get('mcp'):
+                    canvas['mcp'].update(copy.deepcopy(preference.get('mcp', {})))
         if indirect:
             canvas.pop('content', None)
         else:
@@ -333,6 +444,8 @@ class CanvasViews:
         if action == 'canvas.views.inspect':
             return self.project(), []
         row, preference = self.target(args)
+        if action == 'canvas.views.follow':
+            return self.follow(args, row, preference), []
         if action == 'canvas.views.mediaReport':
             if origin != 'ui':
                 fail('Media observations must come from the authenticated viewing client.', 403)

@@ -219,3 +219,177 @@ async def test_palette_requests_preserve_the_skin_and_review_exact_css(app):
             await dispatch(app, 'theme.apply', {'name': 'Invalid', 'tokens': values})
     with pytest.raises(AppError):
         await dispatch(app, 'theme.apply', {'name': 'Ambiguous', 'tokens': {'accent': '#aabbcc'}, 'css': '#amp-one{}'})
+
+
+def view_target(view):
+    return {key: view[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
+
+
+async def inline(app, row, preview, *, follow=False, client='one'):
+    link = next(item for item in app.state['canvasArtifacts'] if item['id'] == row['id'])['publications'][0]
+    return (await dispatch(app, 'canvas.views.inline', {
+        'resourceId': row['id'], 'messageId': link['messageId'], 'version': link['version'],
+        'previewId': preview, 'followLatest': follow}, client=client))['result']
+
+
+async def test_exact_and_live_inline_authority_is_independent_of_primary(app):
+    row = await create(app)
+    row = await edit(app, row, 'revise', content='<h1>Revision two</h1>')
+    old = await inline(app, row, 'old')
+    for action, extra in (
+        ('state', {'patch': {'note': 'not writable'}}),
+        ('event', {'name': 'choose', 'payload': {'value': 'not writable'}}),
+        ('request', {'name': 'preview', 'input': {'name': 'Forest', 'tokens': {'accent': '#3e7052'}}}),
+    ):
+        with pytest.raises(AppError, match='read-only'):
+            await edit(app, row, action, **view_target(old), **extra)
+    live = await inline(app, row, 'live', follow=True)
+    await dispatch(app, 'canvas.select', {'id': row['id'], 'version': 1})
+    row = await edit(app, row, 'event', **view_target(live), name='choose', payload={'value': 'forest'})
+    with app.clients.bind('one'):
+        assert app.canvas_views.canvas(old['viewId'])['app']['state']['selected'] == 'ocean'
+        assert app.canvas_views.canvas(live['viewId'])['app']['state']['selected'] == 'forest'
+        assert app.state['canvas']['app']['state']['selected'] == 'ocean'
+    # Legacy browser calls still refuse historical primary edits.
+    with pytest.raises(AppError, match='read-only'):
+        await edit(app, row, 'state', patch={'note': 'legacy UI'})
+    result = await app.app_bridge('dispatch', {'action': 'canvas.apps.state',
+        'args': {**cas(row), 'patch': {'note': 'Authenticated agent edit'}}}, row['sessionId'])
+    assert result['result']['app']['state']['note'] == 'Authenticated agent edit'
+
+
+async def test_follow_retains_original_publication_identity_and_dirty_guard(app):
+    row = await create(app)
+    original = await inline(app, row, 'same-mount')
+    saved = deepcopy(app.state['canvasArtifacts'][0])
+    live = (await dispatch(app, 'canvas.views.follow', {
+        **view_target(original), 'followLatest': True}))['result']
+    assert live['viewId'] == original['viewId']
+    assert live['publishedVersion'] == 1 and live['selectedVersion'] is None and live['followLatest']
+    assert live['generation'] > original['generation']
+    await dispatch(app, 'canvas.views.dirty', {**view_target(live), 'dirty': True})
+    for action, args in (
+        ('canvas.views.follow', {**view_target(live), 'followLatest': False}),
+        ('canvas.views.inline', {'resourceId': row['id'], 'messageId': saved['publications'][0]['messageId'],
+            'version': 1, 'previewId': 'same-mount'}),
+    ):
+        with pytest.raises(AppError, match='Finish or cancel'):
+            await dispatch(app, action, args)
+    assert app.state['canvasArtifacts'][0] == saved
+    await dispatch(app, 'canvas.views.dirty', {**view_target(live), 'dirty': False})
+    exact = (await dispatch(app, 'canvas.views.follow', {**view_target(live), 'followLatest': False}))['result']
+    assert exact['viewId'] == original['viewId'] and exact['selectedVersion'] == exact['publishedVersion'] == 1
+    assert not exact['followLatest']
+    assert app.state['canvasArtifacts'][0] == saved
+    with pytest.raises(AppError, match='changed'):
+        await dispatch(app, 'canvas.views.follow', {**view_target(live), 'followLatest': True})
+
+
+async def test_actual_live_bindings_share_state_but_keep_private_dirty_edits(app):
+    row = await create(app)
+    one = await inline(app, row, 'one-live', follow=True)
+    two = await inline(app, row, 'two-live', follow=True, client='two')
+    await dispatch(app, 'canvas.views.dirty', {**view_target(two), 'dirty': True, 'editVersion': 3}, client='two')
+    row = await edit(app, row, 'state', **view_target(one), patch={'note': 'Shared acknowledged state'})
+    inspected = (await dispatch(app, 'canvas.apps.inspect', {'id': row['id']}))['result']
+    dirty = next(view for view in inspected['views'] if view['viewId'] == two['viewId'])
+    assert dirty['clientId'] == 'two' and dirty['generation'] == two['generation'] and dirty['dirty']
+    for client, view in (('one', one), ('two', two)):
+        with app.clients.bind(client):
+            current = app.canvas_views.summary(view['viewId'])
+            assert current['app']['stateRevision'] == row['app']['stateRevision']
+            assert current['app']['state']['note'] == 'Shared acknowledged state'
+            assert current['dirty'] == (client == 'two')
+    for name, args in (('revise', {'content': 'replacement'}), ('restore', {'version': 1})):
+        with pytest.raises(AppError, match='Finish or cancel'):
+            await edit(app, row, name, **args)
+    await dispatch(app, 'canvas.views.dirty', {**view_target(two), 'dirty': False}, client='two')
+    await dispatch(app, 'canvas.views.release', view_target(two), client='two')
+    # Abandoned preferences are not an actual binding or a perpetual dirty grant.
+    app.clients.records['two']['canvasViews']['preferences']['primary:' + row['id']] = {'dirty': True}
+    row = await edit(app, row, 'revise', content='new definition')
+    with app.clients.bind('one'):
+        assert app.canvas_views.summary(one['viewId'])['app']['revision'] == 2
+        assert app.canvas_views.summary(one['viewId'])['generation'] > one['generation']
+    with pytest.raises(AppError):
+        await dispatch(app, 'canvas.apps.state', {**cas(row), **view_target(one), 'patch': {}}, client='two')
+    with pytest.raises(AppError):
+        await edit(app, row, 'state', viewId=one['viewId'], patch={})
+    with pytest.raises(AppError):
+        await edit(app, row, 'state', **view_target(one), patch={})
+
+
+async def test_primary_follow_is_exact_and_does_not_publish(app):
+    row = await create(app)
+    await dispatch(app, 'canvas.select', {'id': row['id'], 'version': 1})
+    with app.clients.bind('one'):
+        exact = app.canvas_views.summary('primary')
+    saved = deepcopy(app.state['canvasArtifacts'][0])
+    live = (await dispatch(app, 'canvas.views.follow', {**view_target(exact), 'followLatest': True}))['result']
+    returned = (await dispatch(app, 'canvas.views.follow', {**view_target(live), 'followLatest': False}))['result']
+    assert returned['selectedVersion'] == 1 and returned['publishedVersion'] == 1
+    assert app.state['canvasArtifacts'][0] == saved
+
+
+async def test_present_latest_number_is_still_exact_and_readonly(app):
+    row = await create(app)
+    row = await edit(app, row, 'revise', content='Version two')
+    with app.clients.bind('one'):
+        queue = app.subscribe()
+        try:
+            result = await app.dispatch('canvas.present', {'sessionId': row['sessionId'],
+                'id': row['id'], 'version': 2,
+                'presentation': {'chat': 'compact', 'canvas': 'open'}})
+            assert result['result']['canvas']['status'] == 'opened'
+            assert app.state['canvas']['selectedVersion'] == 2
+            assert app.state['canvas']['readOnlyVersion']
+            target = view_target(app.canvas_views.summary('primary'))
+            with pytest.raises(AppError, match='read-only'):
+                await app.dispatch('canvas.apps.state', {**cas(row), **target, 'patch': {'note': 'readonly'}})
+        finally:
+            app.unsubscribe(queue)
+
+
+@pytest.mark.parametrize('replacement', ['version', 'message', 'artifact'])
+async def test_repeated_mount_cannot_allocate_around_dirty_publication(app, replacement):
+    row = await create(app)
+    row = await edit(app, row, 'revise', content='Second published definition')
+    publication = next(item for item in app.state['canvasArtifacts'] if item['id'] == row['id'])['publications'][0]
+    incoming = {'resourceId': row['id'], 'version': 1, 'messageId': publication['messageId'],
+                'previewId': 'fixed-mount'}
+    if replacement == 'version':
+        incoming['version'] = 2
+    elif replacement == 'message':
+        message = app._message(app._session(), 'user', 'Another publication anchor')
+        await dispatch(app, 'canvas.present', {'sessionId': row['sessionId'], 'id': row['id'],
+            'version': 1, 'messageId': message['id'],
+            'presentation': {'chat': 'compact', 'canvas': 'unchanged'}})
+        incoming['messageId'] = message['id']
+    else:
+        other = await create(app)
+        other_publication = next(item for item in app.state['canvasArtifacts']
+            if item['id'] == other['id'])['publications'][0]
+        incoming.update(resourceId=other['id'], messageId=other_publication['messageId'])
+    original = await inline(app, row, 'fixed-mount', follow=True)
+    await dispatch(app, 'canvas.views.dirty', {**view_target(original), 'dirty': True})
+    before = deepcopy(app.clients.records['one']['canvasViews'])
+    artifacts = deepcopy(app.state['canvasArtifacts'])
+    with pytest.raises(AppError, match='Finish or cancel'):
+        await dispatch(app, 'canvas.views.inline', incoming)
+    assert app.clients.records['one']['canvasViews'] == before
+    assert app.state['canvasArtifacts'] == artifacts
+    # Even a clean mount must release explicitly, preserving its immutable
+    # publishedVersion and the stale-release boundary until that point.
+    await dispatch(app, 'canvas.views.dirty', {**view_target(original), 'dirty': False})
+    with pytest.raises(AppError, match='Release this preview'):
+        await dispatch(app, 'canvas.views.inline', incoming)
+    with app.clients.bind('one'):
+        retained = app.canvas_views.summary(original['viewId'])
+    assert retained['publishedVersion'] == 1 and retained['viewId'] == original['viewId']
+    await dispatch(app, 'canvas.views.release', view_target(retained))
+    accepted = (await dispatch(app, 'canvas.views.inline', incoming))['result']
+    assert accepted['viewId'] != original['viewId']
+    with pytest.raises(AppError):
+        await dispatch(app, 'canvas.views.release', view_target(original))
+    with app.clients.bind('one'):
+        assert app.canvas_views.summary(accepted['viewId'])['resourceId'] == incoming['resourceId']
