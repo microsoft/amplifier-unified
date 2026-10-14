@@ -206,7 +206,7 @@ class Schedules:
     def dependency_reason(self, session, task, schedule):
         if reason := self.app.assignments.blocked(session):
             return reason
-        if session.get('configurationBusy'):
+        if session.get('configurationBusy') or session.get('fileAccessPending'):
             return 'This task has an unresolved configuration change or execution-folder handoff.'
         if session.get('executionRevision', 0) != schedule.get('executionRevision', 0):
             return 'The task execution folder changed. Review the schedule for its current checkout.'
@@ -261,7 +261,7 @@ class Schedules:
             if schedule['status'] != 'active' or schedule.get('nextDue') is None or schedule['nextDue'] > now: continue
             sid = schedule['sessionId']
             session = self.app._session(sid)
-            if session.get('configurationBusy') or session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
+            if session.get('configurationBusy') or session.get('fileAccessPending') or session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
             try:
                 if handoff := schedule.get('authorization', {}).get('handoff'):
                     await self.app.history.ensure_loaded(handoff['senderSessionId'])
@@ -315,7 +315,7 @@ class Schedules:
                     latest = self.store.get(sid, current['id'])
                     if not self.store.owns(self.clock()): return 'Scheduler ownership changed before admission.'
                     owner = self.app._session(sid)
-                    if owner.get('configurationBusy') or owner.get('executionRevision', 0) != current.get('executionRevision', 0): return 'The task execution folder changed or is moving; this occurrence was skipped.'
+                    if owner.get('configurationBusy') or owner.get('fileAccessPending') or owner.get('executionRevision', 0) != current.get('executionRevision', 0): return 'The task configuration changed or its execution folder is moving; this occurrence was skipped.'
                     if current.get('destination') == 'new_task' or current.get('authorization', {}).get('handoff'):
                         reason = self.dependency_reason(owner, task, current)
                         if reason: return reason
@@ -323,7 +323,7 @@ class Schedules:
                     if run.get('destinationConfigurationHash'):
                         from .session_creation import template
                         if template(self.app, destination)[1]['configurationHash'] != run['destinationConfigurationHash']: return 'The new task configuration changed before admission.'
-                    if destination.get('configurationBusy') or destination.get('executionRevision', 0) != run['destinationExecutionRevision'] or destination.get('interruptionRevision', 0) != run['destinationInterruptionRevision']: return 'The destination task changed or stopped before input admission.'
+                    if destination.get('configurationBusy') or destination.get('fileAccessPending') or destination.get('executionRevision', 0) != run['destinationExecutionRevision'] or destination.get('interruptionRevision', 0) != run['destinationInterruptionRevision']: return 'The destination task changed or stopped before input admission.'
                     if latest['status'] != 'active' or latest['revision'] != current['revision']: return 'The schedule changed before admission.'
                     if self.app._session(sid).get('interruptionRevision', 0) != current['interruptionRevision']: return 'The user stop won input admission; this occurrence was skipped.'
                     return None

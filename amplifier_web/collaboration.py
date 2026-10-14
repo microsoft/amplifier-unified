@@ -638,6 +638,8 @@ class Collaboration:
                 if receipt.get('dependencyOutcomeRevision') and not self.claim_matches(dependency, receipt):
                     return 'This outcome notification was superseded or its qualification changed; inspect the current result.'
             target = self.authorize(source, {"sessionId": receipt["target"]["sessionId"]})
+            if target.get('fileAccessPending'):
+                return 'The recipient has pending file-access settings; existing work must settle before new input.'
             reason = self.service.assignments.blocked(target)
             if reason:
                 return reason
@@ -760,6 +762,8 @@ class Collaboration:
                         self.cancel_expiry(identity)
                         continue
                     target = self.service._session(sid)
+                    if target.get('fileAccessPending'):
+                        break  # Keep queued input until the existing refresh owner retires the old mount.
                     reason = self.guard(receipt)
                     if reason:
                         receipt.update(delivery='expired' if receipt.get('expiresAt', float('inf')) <= time.time() else 'suppressed', detail=reason)
@@ -1373,6 +1377,8 @@ class Collaboration:
                     self.enqueue_continuation(request)
                 return receipt
             elif action == "coordination.create":
+                if source.get('fileAccessPending'):
+                    self.error('Finish applying the source chat’s file settings before creating another task.', 409)
                 # Creation is handled outside the service lock below.
                 self.require_continuation()
                 receipt = None

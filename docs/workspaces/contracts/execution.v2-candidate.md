@@ -621,3 +621,15 @@ mutations commit. This monotonic-clock observation is local to that recap mount;
 it excludes network delivery, physical paint and global application rendering.
 Unavailable samples and unmeasured paint remain explicit; a recorded
 phase or timing is not proof of correctness, live liveness or external effects.
+
+
+### Chat write override reset
+
+The file-access controls described in [configuration authority](../configuration-authority.md#chat-write-overrides)
+use canonical native session settings. Save/reset share UI and agent actions,
+require the matching preview revision and existing file_access/session authority
+for agents, and retain native child ceilings. Reset removes only the session's
+filesystem write allow/deny override keys. Shared workspace settings, read policy
+and other settings are preserved. Inherited configuration changes invalidate the
+preview; saved changes reach the existing runtime refresh boundary before the
+next input, with no replay or unsolicited turn.

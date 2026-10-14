@@ -19,7 +19,7 @@ EFFECTS = {
     'runtime_configuration': 'Replace or enable conversation tools, providers and their configuration',
 }
 PERSISTENT = {
-    **dict.fromkeys(('permissions.save',), 'file_access'),
+    **dict.fromkeys(('permissions.save', 'permissions.reset'), 'file_access'),
     **dict.fromkeys(('providers.save', 'providers.remove', 'providers.move', 'providers.reorder', 'providers.login'), 'connections'),
     **dict.fromkeys(('providers.finishSetup', 'providers.configureImages', 'routing.use', 'routing.save'), 'model_defaults'),
     **dict.fromkeys(('modules.save', 'modules.remove', 'modules.validate', 'sources.save', 'sources.remove', 'sources.validate'), 'modules'),
@@ -52,7 +52,7 @@ def definitions(schema, string):
 def requirement(action, args):
     if action in PERSISTENT:
         if 'scope' not in args:
-            raise ValueError('Choose an explicit configuration scope: local, project, or global. No settings were changed.')
+            raise ValueError('Choose an explicit configuration scope: session, local, project, or global. No settings were changed.')
         return PERSISTENT[action], args['scope']
     if action in BUNDLE_GLOBAL:
         return 'bundles', 'global'

@@ -23,11 +23,49 @@ The root can read/reuse the authority on a later explicit input. Already active
 grants are reusable; natural turn completion does not revoke them. Stop,
 workspace change, explicit revocation or optional expiry invalidates them.
 
+## Chat write overrides
+
+**Files this chat can edit** uses the canonical native session settings layer:
+global, project, workspace-local, then session. `permissions.get` with an explicit
+`sessionId` and `scope: session` previews the current write defaults and the
+workspace defaults that would be inherited after reset. `permissions.save` at
+that scope and `permissions.reset` require the returned `expectedRevision`.
+The revision binds the native session, execution folder, session settings and
+inherited configuration. Re-read after any stale-preview rejection.
+
+Reset removes only `allowed_write_paths` and `denied_write_paths` from this
+session's `overrides.tool-filesystem.config`. It preserves read policy, other
+tool settings, other chats, and shared project/local settings. An already
+inherited policy is a no-op; reset does not create a session settings file.
+Empty ancestors made empty by removal are pruned. Other session declarations,
+bundle restrictions and child ceilings remain effective; the preview describes
+saved defaults, not a claim that every mounted tool has that access. Shell
+policies are separate. The existing **Project file access** form is shared by
+chats in that workspace and is not reset by this control.
+
+Save and reset both require `file_access` at `session` scope for agents, including
+when reset restores wider inherited access. Direct user controls use the same
+action. Native children cannot administer the root or bypass inherited ceilings.
+The canonical locked settings mutation rechecks authorization and the preview.
+Command receipts make an exact retry idempotent. A changed policy invalidates
+only this chat's configuration through the existing runtime owner; active work
+and persistent children reach their existing safe boundary before remounting.
+Before the canonical file write, the existing host record durably fences new
+input with a pending file-access change. New root/worker/voice input is rejected,
+queued peer input waits, and schedules/observations recheck their existing
+admission guards. Answers, approvals and Stop remain available for existing work.
+The UI explains pending access and how to finish or stop existing child work.
+Only confirmed retirement, or proof that no owned mount exists, clears the fence.
+After host restart, new mounts read canonical settings; no old worker is adopted.
+A failed write or lost acknowledgment can conservatively retire the old mount,
+but cannot silently continue it with a missing fence. No-op reset adds no fence.
+No worker or provider turn is started by this control.
+
 ## Effect and ownership mapping
 
 | Effect | Shared routes | Scope |
 | --- | --- | --- |
-| File access | `permissions.save` | Explicit local, project or global |
+| File access | `permissions.save`, `permissions.reset` | Explicit session, local, project or global for save; session only for reset |
 | Connections | Provider save/remove/move/reorder/login | Explicit local, project or global; connection sources can execute code and credentials can change |
 | Model defaults | Provider finish-setup/image defaults, routing use/save | Explicit local, project or global |
 | Modules | Module and source save/remove/validate | Explicit local, project or global; validation can execute code |

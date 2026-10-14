@@ -140,7 +140,7 @@ class VoiceCall:
             if work_paused(self.service.state):
                 raise VoiceError('An update is activating. Please retry in a moment.', 409, 'update_activating')
             session = next((s for s in self.service.state['sessions'] if s['id'] == self.session_id), None)
-            if session is None or session.get('configurationBusy') or self.closed:
+            if session is None or session.get('configurationBusy') or session.get('fileAccessPending') or self.closed:
                 raise VoiceError('This task or voice call is no longer available for connection.', 409, 'task_unavailable')
             portability = getattr(self.service, 'portability', None)
             if portability:
@@ -578,7 +578,7 @@ class VoiceService:
                 session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                 if session is None:
                     raise VoiceError('The conversation is no longer available.', 409, 'no_session')
-                if session.get('configurationBusy'):
+                if session.get('configurationBusy') or session.get('fileAccessPending'):
                     raise VoiceError('This task is changing execution ownership or configuration.', 409, 'task_unavailable')
                 portability = getattr(self.service, 'portability', None)
                 if portability:

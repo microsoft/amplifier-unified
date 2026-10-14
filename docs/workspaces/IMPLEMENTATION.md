@@ -1098,3 +1098,27 @@ repository names, exact source capture, candidate changes, saved-run paging and
 uncertain retries. The production frontend builds successfully. Browser scripts
 were updated for the explicit disclosures; actual browser, responsive layout and
 provider acceptance remain separate integration-owner checks.
+
+
+## Chat write settings and inherited defaults
+
+`permissions.get`/`permissions.save` support explicit session scope, and
+`permissions.reset` removes only that native session's filesystem allowed/denied
+write override keys. Chat → Advanced → Files this chat can edit previews the
+inherited workspace values before reset; the separate Project file access form
+continues to edit shared project/local settings. Both UI and authorized native
+roots use these actions. An agent requires the existing file_access/session grant
+for save and reset, including a reset that restores wider access.
+
+Foundation still owns the settings file, overlay precedence and locked mutation.
+The preview revision includes inherited configuration, current session settings
+and execution identity, and is checked again at the mutation. Exact command
+retries do not repeat writes. No-op reset preserves an absent settings file or
+existing file bytes. Reset preserves unrelated/read settings and shared files;
+it does not clean up earlier workspace-local overrides. The owning runtime
+refreshes only this chat through its existing safe-boundary mechanism. Saved
+policy previews do not claim actual mounted access, override bundle/parent
+ceilings, alter shell policy or start a turn. A pending file-access fence is
+saved before the canonical file write. Existing work may settle; new root,
+worker and voice inputs cannot bypass it, peers wait, and schedule/observation
+guards recheck it. Confirmed retirement or an absent owned mount clears it.

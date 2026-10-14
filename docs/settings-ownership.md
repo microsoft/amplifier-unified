@@ -15,7 +15,8 @@ Controls for an existing conversation are in Chat:
 | Context/recovery and recorded errors | Advanced → Context & recovery |
 | Screen source, consent, worker computer tools | Advanced → Computer access |
 | Memory and past-work preferences | Advanced → Memory & past work |
-| Project/local file permissions | Advanced → Project file access |
+| This chat's write overrides, return to workspace defaults | Advanced → Files this chat can edit |
+| Shared project/local write overrides | Advanced → Project file access |
 | Transcript export and sharing | Share or save |
 | Current outputs and publishing | Canvas → Chat overview |
 | Plan | Chat overview, with optional inline/bottom placement |

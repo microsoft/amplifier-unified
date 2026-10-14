@@ -32,7 +32,7 @@ FIELDS = {
     'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
     'nativeRevision', 'turnCount', 'shared', 'historyManaged', 'historyLoaded',
     'historyLoading', 'sharedHistoryTotal', 'displayMessageCount', 'sessionKind', 'sessionPurpose', 'location', 'nativeAvailable',
-    'historyReadOnlyReason', 'status', 'configurationBusy', 'configurationPending',
+    'historyReadOnlyReason', 'status', 'configurationBusy', 'configurationPending', 'fileAccessPending',
     'preparation', 'pendingConfiguration', 'ownership', 'completion', 'manualUnread', 'unreadCompletion',
     'error', 'errorAt', 'approvals', 'questions', 'collaboration', 'coordinationReference',
     '_catalogId', '_catalogRecentAt', '_deleting',

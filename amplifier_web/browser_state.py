@@ -10,7 +10,7 @@ from .chat_navigation import snapshot as chat_snapshot, _matches, recent_activit
 from .session_navigation import is_top_level
 from .session_activity import navigation_busy
 
-SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy', 'configurationPending', 'configurationRefresh', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
+SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy', 'configurationPending', 'configurationRefresh', 'fileAccessPending', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt', 'navigationActivityAt',
     'sessionKind', 'sessionPurpose', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
     'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason', 'nativeAvailable',
