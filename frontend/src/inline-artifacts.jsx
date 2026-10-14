@@ -299,7 +299,7 @@ export function GeneralArtifact({item,messageId,state,dispatch}){
   if(!loaded||!authorized||revoked)return;
   let active=true;const controller=new AbortController(),target=targetOf(view);
   setBodyError('');
-  request(`/api/canvas/views/${view.viewId}/resource?`+new URLSearchParams(target),{signal:controller.signal}).then(requireArtifactBody).then(canvas=>{
+  request(`/api/canvas/views/${view.viewId}/resource?`+new URLSearchParams(target),{signal:controller.signal}).then(body=>requireArtifactBody(body,target)).then(canvas=>{
    if(active)setLoaded(old=>old===loaded?{...old,canvas,bodyBinding:binding}:old);
   }).catch(error=>{if(active&&error.name!=='AbortError')setBodyError(error.message)});
   return()=>{active=false;controller.abort()};

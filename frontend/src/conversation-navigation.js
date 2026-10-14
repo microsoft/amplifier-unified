@@ -51,7 +51,7 @@ export function createInlineOwnership(){
    mounts.add(record);return ()=>mounts.delete(record);
   },
   registerRenderer(target,adapter){
-   const record={target:{...target},adapter,renderer:true,dirty:false};
+   const record={target:{...target},adapter,renderer:true,dirty:false,sequence:0};
    mounts.add(record);return ()=>{mounts.delete(record)};
   },
   hasMounts:()=>[...mounts].some(record=>!record.renderer),
@@ -77,7 +77,10 @@ export function createInlineOwnership(){
    if(hold.closed||hold.scope!==scopeOf(state)||hold.sessionId!==state?.selectedSessionId)throw Error('This preview scope changed.');
    // An uncertain retry only reconciles the identical admitted command. The
    // old frame is still frozen; its target can already have an SSE successor.
-   if(hold.sent)return;
+   if(hold.sent){
+    if(!hold.adapter.validate(hold.id,hold.proof)||!state?.canvasWorkspace?.views?.some(view=>sameTarget(view,hold.target)||successor(hold,view)))throw Error('The original frozen preview is unavailable. Its version change remains unknown.');
+    return;
+   }
    const view=state?.canvasWorkspace?.views?.find(row=>sameTarget(row,hold.target));
    if(!view||view.dirty||matching(hold.target).some(record=>record.dirty)||!hold.adapter.validate(hold.id,hold.proof))throw Error(inlineEditNotice);
   },

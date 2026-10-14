@@ -371,7 +371,7 @@ async def test_http_native_mcp_views_have_exact_source_result_status_and_one_exp
         source_read = await client.get(f"/api/canvas/views/{view['viewId']}/source", params=query(view))
         assert (await source_read.json())['content'] == HTML
         source_text = await client.get(f'/api/canvas/{identity}/source', params=query(view))
-        assert await source_text.text() == HTML
+        assert source_text.status == 404  # Text-copy route remains HTML/Babylon/CanvasApp only.
         result = await client.get(f'/api/canvas/{identity}/result', params=query(view))
         assert (await result.json())['result']['content'][0]['text'] == 'Historical result'
         tools = await client.get(f'/api/canvas/{identity}/tools', params=query(view))
@@ -483,3 +483,132 @@ async def test_mcp_reconnect_updates_canonical_authority_without_overwriting_pee
         assert after['versions'] == before['versions'] and after['publications'] == before['publications']
         assert after['body'] == before['body'] and after['revision'] == before['revision']
     assert connection.requests == []
+
+
+async def test_http_operation_receipt_retains_host_binding_from_queued_to_mapped_completion(view_http):
+    client, service, identity, one, two, connection = view_http
+    connection.gate = asyncio.Event()
+    payload = {'id': 'bound-operation', 'action': 'smartTools.appCall',
+               'args': {**exact_target(one), 'canvasId': identity, 'name': 'change', 'arguments': {'amount': 6}}}
+    response = await client.post('/api/actions', params={'clientId': 'one'},
+                                headers={'X-Amplifier-State-Transport': 'delta-v1'}, json=payload)
+    assert response.status == 200
+    receipt = await response.json()
+    assert receipt['operationId'] == payload['id']
+    await asyncio.wait_for(connection.started.wait(), 2)
+    path = '/api/smart-tools/operations/' + payload['id']
+    pending = await client.get(path, params=query(one))
+    assert pending.status == 200
+    operation = await pending.json()
+    assert operation['status'] in {'queued', 'running'}
+    assert operation['viewBinding']['target'] == exact_target(one)
+    assert operation['viewBinding']['clientId'] == 'one'
+    assert set(operation['viewBinding']) == {'target', 'clientId', 'sessionId', 'bindingRevision'}
+    for params in (query(two), query(one, client='two'), {'clientId': 'one', 'resourceId': identity}):
+        assert (await client.get(path, params=params)).status in {400, 404, 409}
+    assert (await client.get('/api/smart-tools/operations/unknown', params=query(one))).status == 409
+    # A launch receipt for the same artifact is not this view's operation.
+    assert (await client.get('/api/smart-tools/operations/original-call', params=query(one))).status == 409
+    connection.gate.set()
+    await service.wait_smart_tool(payload['id'])
+    complete = await client.get(path, params=query(one))
+    assert complete.status == 200
+    complete = await complete.json()
+    assert complete['status'] == 'completed' and complete['action'] == 'smartTools.call'
+    assert complete['viewBinding'] == operation['viewBinding']
+    assert complete['result']['structuredContent']['amount'] == 6
+    duplicate = await client.post('/api/actions', params={'clientId': 'one'}, json=payload)
+    assert duplicate.status == 200 and (await duplicate.json())['duplicate']
+    assert len(connection.requests) == 1
+    # Copying the same target into another host-side fixture client still
+    # cannot lend it this client's operation result.
+    service.clients.records['two']['canvasViews'] = deepcopy(service.clients.records['one']['canvasViews'])
+    assert (await client.get(path, params=query(one, client='two'))).status != 200
+    with service.clients.bind('one'):
+        await service.dispatch('canvas.views.release', exact_target(one))
+    assert (await client.get(path, params=query(one))).status in {404, 409}
+    generic = await client.get(path)
+    assert generic.status == 200 and (await generic.json())['result'] == complete['result']
+    with service.clients.bind('one'):
+        assert service.smart_tools.read_operation({'operationId': payload['id']})['status'] == 'completed'
+    assert len(connection.requests) == 1
+
+
+@pytest.mark.parametrize('change', ['account', 'configuration', 'schema', 'grant', 'disconnect'])
+async def test_http_operation_results_require_current_authority_even_for_generic_activity_owner(view_http, change):
+    client, service, identity, one, _, connection = view_http
+    payload = {'id': 'finished-operation', 'name': 'change', 'arguments': {'amount': 3}}
+    assert (await client.post(f'/api/canvas/{identity}/tools/call', params=query(one), json=payload)).status == 200
+    server = service.smart_tools._server('fixture')
+    if change == 'account':
+        server['accountBinding'] = {'issuer': 'https://issuer.example', 'subject': 'changed'}
+    elif change == 'configuration':
+        server['command'] = 'different-executable'
+    elif change == 'schema':
+        service.smart_tools.schemas['fixture'][1]['inputSchema']['properties']['amount']['type'] = 'string'
+    elif change == 'grant':
+        service.smart_tools.schemas['fixture'][1]['_meta'] = {'ui': {'visibility': ['model']}}
+    else:
+        server['status'] = 'disconnected'
+    path = '/api/smart-tools/operations/' + payload['id']
+    assert (await client.get(path, params=query(one))).status == 409
+    generic = await client.get(path)
+    assert generic.status == 200 and (await generic.json())['status'] == 'completed'
+    assert len(connection.requests) == 1
+
+
+async def test_http_reconnect_receipt_returns_progress_only_then_rebinds_only_original_mount(view_http):
+    client, service, identity, one, two, connection = view_http
+    server = service.smart_tools._server('fixture')
+    server.update(status='disconnected', catalogState='stale')
+    reconnecting, proceed = asyncio.Event(), asyncio.Event()
+    original = service.smart_tools.connect
+    async def delayed(*args, **kwargs):
+        reconnecting.set()
+        await proceed.wait()
+        return await original(*args, **kwargs)
+    service.smart_tools.connect = delayed
+    with service.clients.bind('one'):
+        status = inspect(service, identity, exact_target(one))
+    payload = {'id': 'reconnect-operation', 'action': 'smartTools.reconnectView',
+               'args': {**exact_target(one), 'canvasId': identity, 'expectedBindingRevision': status['bindingRevision']}}
+    response = await client.post('/api/actions', params={'clientId': 'one'}, json=payload)
+    assert response.status == 200
+    await asyncio.wait_for(reconnecting.wait(), 2)
+    path = '/api/smart-tools/operations/' + payload['id']
+    progress = await client.get(path, params=query(one))
+    assert progress.status == 200
+    progress = await progress.json()
+    assert progress['status'] == 'running' and 'result' not in progress
+    assert (await client.get(path, params=query(two))).status == 409
+    proceed.set()
+    await service.wait_smart_tool(payload['id'])
+    result = await client.get(path, params=query(one))
+    assert result.status == 200 and (await result.json())['result']['status'] == 'ready'
+    assert (await client.get(path, params=query(two))).status == 409
+    assert connection.requests == []  # No original tool replay or duplicate launch.
+
+
+async def test_legacy_primary_transient_context_does_not_override_canonical_or_inline_binding(view_http):
+    _, service, identity, one, _, connection = view_http
+    with service.clients.bind('one'):
+        await service.dispatch('canvas.select', {'id': identity})
+        await service.dispatch('smartTools.context', {**exact_target(one), 'canvasId': identity, 'context': {'inline': 'private'}})
+        await service.dispatch('smartTools.context', {'canvasId': identity, 'context': {'primary': 'legacy'}})
+        receipt = await service.dispatch('smartTools.appCall', {'canvasId': identity, 'name': 'change', 'arguments': {'amount': 9}},
+                                         command_id='legacy-primary-operation')
+        await service.wait_smart_tool(receipt['operationId'])
+        primary = service.canvas_views.canvas('primary')
+        assert primary['mcp']['context'] == {'primary': 'legacy'}
+        assert primary['mcp']['lastOperationId'] == 'legacy-primary-operation'
+        assert service.canvas_views.canvas(one['viewId'])['mcp']['context'] == {'inline': 'private'}
+        assert 'lastOperationId' not in service.canvas_views.canvas(one['viewId'])['mcp']
+        canonical = deepcopy(primary['mcp'])
+        service.state['canvas']['mcp']['configuration'] = 'stale-primary-authority'
+        assert service.canvas_views.canvas('primary')['mcp']['configuration'] == canonical['configuration']
+        service.state['canvas']['mcp']['configuration'] = canonical['configuration']
+        await service.dispatch('canvas.select', {'id': identity, 'version': 1})
+        historical = service.canvas_views.canvas('primary')
+        assert historical['mcp'].get('context', {}) != {'primary': 'legacy'}
+        assert 'lastOperationId' not in historical['mcp']
+    assert connection.requests == [('call_tool', ('change', {'amount': 9}))]

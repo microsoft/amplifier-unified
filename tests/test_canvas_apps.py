@@ -225,6 +225,50 @@ def view_target(view):
     return {key: view[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
 
 
+@pytest.mark.parametrize('kind', ['html', 'babylon', 'pdf', 'markdown', 'canvas-app'])
+async def test_native_body_projection_and_text_source_kind_contract(authenticated_client, tmp_path, kind):
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    host = await create_app(tmp_path / 'host', workspace=tmp_path, runtime=Runtime(),
+                            voice=False, preload_providers=False, background_updates=False)
+    client = await authenticated_client(host)
+    service = host['service']
+    await service.dispatch('session.create', {})
+    service._message(service._session(), 'user', 'Retain native source')
+    service.clients.attach('source-client')
+    with service.clients.bind('source-client'):
+        if kind == 'canvas-app':
+            result = await service.dispatch('canvas.apps.create', {'title': 'Native', 'manifest': MANIFEST,
+                'initialState': {'selected': 'ocean', 'note': ''}, 'content': '<h1>Native surface</h1>'})
+        elif kind == 'pdf':
+            path = tmp_path / 'native.pdf'
+            path.write_bytes(b'%PDF-1.7\nretained original bytes')
+            result = await service.dispatch('canvas.show', {'kind': kind, 'path': str(path)})
+        else:
+            content = '<!doctype html><h1>Deferred source</h1>' + ' ' * 1_000_001 if kind in {'html', 'babylon'} else 'Native Markdown'
+            result = await service.dispatch('canvas.show', {'kind': kind, 'title': 'Native', 'content': content})
+        identity = result['result']['id']
+        view = service.canvas_views.summary('primary')
+    params = {**view_target(view), 'clientId': 'source-client'}
+    response = await client.get('/api/canvas/views/primary/resource', params=params)
+    assert response.status == 200
+    body = await response.json()
+    assert body['id'] == identity and body['kind'] == kind
+    assert body['viewId'] == params['viewId'] and body['generation'] == params['generation']
+    assert body['resourceRevision'] == params['resourceRevision']
+    if kind in {'html', 'babylon', 'pdf'}:
+        assert 'content' not in body
+        assert len(body['contentResource']['$resource']) == 64 and body['contentResource']['bytes'] > 0
+    elif kind == 'canvas-app':
+        assert body['app']['revision'] == 1 and body['app']['manifest'] == MANIFEST
+    else:
+        assert body['content'] == 'Native Markdown'
+    text = await client.get(f'/api/canvas/{identity}/source', params=params)
+    assert text.status == (200 if kind in {'html', 'babylon', 'canvas-app'} else 404)
+    native = await client.get('/api/canvas/views/primary/source', params=params)
+    assert native.status == 200 and isinstance((await native.json())['content'], str)
+
+
 async def inline(app, row, preview, *, follow=False, client='one'):
     link = next(item for item in app.state['canvasArtifacts'] if item['id'] == row['id'])['publications'][0]
     return (await dispatch(app, 'canvas.views.inline', {

@@ -137,13 +137,14 @@
       // host writes behind the follow command cannot finish until it returns.
       if (transition && transition !== data.prepareTransition) return;
       transition = data.prepareTransition;
-      document.documentElement.inert = true;
+      const blocked = 'inert' in document.documentElement;
+      if (blocked) document.documentElement.inert = true;
       document.activeElement?.blur();
       const draftPending = [...drafts].some(draft => {
         const status = draft.getStatus(); return status.dirty || status.saving || status.error;
       });
-      send({op: 'transition', token: transition, editVersion, blocked: true,
-        quiescent: !localPending && !queued && !pending.size && !gestures.size && !draftPending && !uncertain,
+      send({op: 'transition', token: transition, editVersion, blocked,
+        quiescent: blocked && !localPending && !queued && !pending.size && !gestures.size && !draftPending && !uncertain,
         localPending, queued, pending: pending.size, gestures: gestures.size, draftPending, uncertain});
       return;
     }

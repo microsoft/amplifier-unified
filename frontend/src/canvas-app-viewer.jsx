@@ -24,6 +24,7 @@ export function CanvasAppViewer({canvas,dispatch}){
  const transition=useRef(null),root=useRef(null),[transitioning,setTransitioning]=useState(false);
  const releaseTransition=id=>{
   const hold=transition.current;if(!hold||hold.id!==id)return;
+  hold.reject?.(Error('Surface version preparation ended without replacing this mount.'));
   clearTimeout(hold.timer);transition.current=null;
   frame.current?.contentWindow?.postMessage({type:'canvas-app-host',id:shown.current.id,channel:hold.channel,releaseTransition:id},'*');
   if(frame.current){frame.current.inert=false;frame.current.tabIndex=0}
@@ -32,10 +33,12 @@ export function CanvasAppViewer({canvas,dispatch}){
  useEffect(()=>inlineOwnership.registerRenderer(targetOf(mounted),{
   prepare:id=>{
    if(transition.current||!frame.current||dirtyRef.current||busy.current)throw Error('Finish or cancel unfinished surface input before changing versions.');
+   if(!('inert' in frame.current))throw Error('This browser cannot disable iframe input safely. Version was not changed.');
    const hold={id,channel:channel.current,target:targetOf(shown.current)};transition.current=hold;
    // Freeze keyboard and pointer before asking the bridge. Keep the original
    // DOM; this is not a checkpoint and must not flush queued operations.
    frame.current.inert=true;frame.current.tabIndex=-1;root.current?.focus();setTransitioning(true);
+   if(document.activeElement===frame.current)throw Error('Focus could not leave the surface. Version was not changed.');
    return new Promise((resolve,reject)=>{
     hold.resolve=resolve;hold.reject=reject;
     hold.timer=setTimeout(()=>reject(Error('The surface did not acknowledge disabled, quiescent input. Version was not changed.')),1200);
@@ -174,8 +177,12 @@ export function CanvasAppViewer({canvas,dispatch}){
  }catch(e){setError(e.message)}};
  const preview=async request=>{
   if(canvas.readOnlyVersion||transition.current)throw Error('Select Latest to review native controls.');
-  const exact=args(),result=await dispatch('canvas.apps.inspect',{...exact,requestId:request.id});
+  const exact=args(),{expectedRevision,expectedStateRevision,...target}=exact;
+  const result=await dispatch('canvas.apps.inspect',{...target,requestId:request.id});
   if(result?.accepted!==true)throw Error(result?.error||'The surface review was not accepted.');
+  const current=args();
+  if(result.result?.app?.revision!==expectedRevision||result.result?.app?.stateRevision!==expectedStateRevision||
+   !['viewId','resourceId','resourceRevision','generation','expectedRevision','expectedStateRevision'].every(field=>current[field]===exact[field]))throw Error('This surface changed while reviewing. Review the current request before approving.');
   setReview({request,input:result.result.requestInput,target:exact});
  };
  const url=clientUrl(`/api/canvas/${mounted.id}/app-host?`+new URLSearchParams(targetOf(mounted)));

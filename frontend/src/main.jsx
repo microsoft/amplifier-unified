@@ -236,7 +236,7 @@ function App(){
     return result;
    }catch(error){
     if(hold){
-     if(!posted||error.status>=400&&!error.unconfirmed)inlineOwnership.refuseTransition(hold);
+     if(!posted&&!hold.sent||error.status>=400&&!error.unconfirmed)inlineOwnership.refuseTransition(hold);
      else error.unconfirmed=true; // Unknown transport/replication holds the old mount.
     }
     throw error;

@@ -71,11 +71,12 @@ export function artifactViewCanvas(body,view){
   view:view.view,renderReports:view.renderReports,document:view.document,interaction:view.interaction,events:view.events};
 }
 
-export function requireArtifactBody(body){
+export function requireArtifactBody(body,target){
  const object=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
  const text=value=>typeof value==='string'&&value.length>0;
  const exact=body&&text(body.viewId)&&text(body.resourceRevision)&&
-  Number.isSafeInteger(body.generation)&&body.generation>=0;
+  Number.isSafeInteger(body.generation)&&body.generation>=0&&(!target||
+   body.id===target.resourceId&&['viewId','resourceRevision','generation'].every(field=>body[field]===target[field]));
  const pointer=body?.contentResource;
  const deferred=exact&&['html','babylon','pdf'].includes(body.kind)&&object(pointer)&&
   /^[a-f0-9]{64}$/.test(pointer.$resource)&&Number.isSafeInteger(pointer.bytes)&&pointer.bytes>0;
@@ -94,7 +95,7 @@ export function requireArtifactBody(body){
     body.surface.components.some(row=>row.id===body.surface.root&&object(row.component)):
    mediaKinds.has(body.kind)?media:
    nativeKinds.has(body.kind)&&(deferred||typeof body.content==='string'&&pointer===undefined));
- if(!body||!text(body.id)||!valid){
+ if(!body||!text(body.id)||!valid||target&&!exact){
   throw Error('Saved artifact source is unavailable. Retry the preview or open it in Canvas.');
  }
  return body;

@@ -16,14 +16,14 @@ const {CanvasAppViewer}=await server.ssrLoadModule('/src/canvas-app-viewer.jsx')
 const {inlineOwnership}=await server.ssrLoadModule('/src/conversation-navigation.js');
 test.after(()=>server.close());
 async function fixture(dispatcher,initial={}){
- const callbacks=new Map(),out=[],calls=[],contentWindow={postMessage:data=>out.push(data)};
+ const callbacks=new Map(),out=[],calls=[],contentWindow={postMessage:data=>out.push(data)},frameNode={contentWindow,inert:false};
  globalThis.window={addEventListener:(name,fn)=>callbacks.set(name,fn),removeEventListener:name=>callbacks.delete(name)};
  let canvas={id:'fixture',sessionId:'session',title:'Test',viewId:'primary',resourceId:'fixture',resourceRevision:'r1',generation:0,app:{revision:1,stateRevision:0,state:{tab:'draw'},manifest:{},versions:[],requests:[]},...initial},component;
  const dispatch=async(name,args)=>{calls.push({name,args});const receipt=dispatcher&&await dispatcher(name,args);return receipt??{accepted:true,result:{app:{...canvas.app,stateRevision:canvas.app.stateRevision+1}}}};
- await act(async()=>{component=create(React.createElement(CanvasAppViewer,{canvas,dispatch}),{createNodeMock:node=>node.type==='iframe'?{contentWindow}:null})});
+ await act(async()=>{component=create(React.createElement(CanvasAppViewer,{canvas,dispatch}),{createNodeMock:node=>node.type==='iframe'?frameNode:null})});
  const channel=out.at(-1).channel;
  const send=async data=>act(async()=>callbacks.get('message')({source:contentWindow,data:{type:'canvas-app',id:'fixture',channel,revision:1,stateRevision:0,editVersion:1,...data}}));
- return {component,calls,out,send,dirty:()=>JSON.stringify(component.toJSON()).includes('Unsaved input'),
+ return {component,calls,out,send,frameNode,dirty:()=>JSON.stringify(component.toJSON()).includes('Unsaved input'),
   update:async patch=>act(async()=>{canvas={...canvas,...patch};component.update(React.createElement(CanvasAppViewer,{canvas,dispatch}))}),
   close:()=>act(async()=>component.unmount())};
 }
@@ -149,5 +149,64 @@ test('a refused CanvasApp clean declaration cannot admit a newer design over pri
   await f.update({app:{revision:2,stateRevision:0,state:{},manifest:{},versions:[],requests:[]}});
   assert.ok(JSON.stringify(f.component.toJSON()).includes('A new design is ready.'));
   assert.ok(JSON.stringify(f.component.toJSON()).includes('Clean declaration rejected'));
+ }finally{unregister();await f.close()}
+});
+
+test('native host review/resolve/restore use shown inline quartet and review freshness, not pinned primary',async()=>{
+ const target={viewId:'inline-controls',resourceId:'fixture',resourceRevision:'r1',generation:3};
+ const request={id:'theme-request',status:'pending',action:'theme.preview',summary:'Review theme'};
+ const app={revision:2,stateRevision:4,state:{},manifest:{},versions:[{version:1},{version:2}],requests:[request]};
+ let inspectedApp=app;
+ const f=await fixture(async name=>name==='canvas.apps.inspect'?{accepted:true,result:{app:inspectedApp,requestInput:{css:':root{color:red}'}}}:undefined,{...target,selectedVersion:null,readOnlyVersion:false,app});
+ const button=name=>f.component.root.findAllByType('button').find(node=>node.props.children===name);
+ try{
+  await act(async()=>button('Review theme change').props.onClick());
+  await act(async()=>button('Approve theme change').props.onClick());
+  await act(async()=>button('Decline').props.onClick());
+  await act(async()=>f.component.root.findAllByType('button').find(node=>String(node.props.children).includes('Restore revision')).props.onClick());
+  for(const name of ['inspect','resolve','restore']){
+   const call=f.calls.find(row=>row.name==='canvas.apps.'+name);assert.ok(call);
+   assert.deepEqual(Object.fromEntries(Object.keys(target).map(field=>[field,call.args[field]])),target);
+   if(name==='inspect'){assert.equal(call.args.expectedRevision,undefined);assert.equal(call.args.expectedStateRevision,undefined)}
+   else{assert.equal(call.args.expectedRevision,2);assert.equal(call.args.expectedStateRevision,4)}
+  }
+  await act(async()=>button('Review theme change').props.onClick());
+  await f.update({app:{...app,stateRevision:5}});
+  const before=f.calls.filter(row=>row.name==='canvas.apps.resolve').length;
+  await act(async()=>button('Approve theme change').props.onClick());
+  assert.equal(f.calls.filter(row=>row.name==='canvas.apps.resolve').length,before);
+  assert.ok(JSON.stringify(f.component.toJSON()).includes('changed after review'));
+  await f.update({readOnlyVersion:true,selectedVersion:2});
+  assert.ok(f.component.root.findAllByType('button').filter(node=>String(node.props.children).includes('Restore revision')).every(node=>node.props.disabled));
+ }finally{await f.close()}
+});
+
+test('native prepare uses exact channel/token/edit version, vetoes delayed editing and never checkpoints',async()=>{
+ const target={viewId:'inline-transition',resourceId:'fixture',resourceRevision:'r1',generation:0};
+ const scope={client:{id:'tab',hostInstanceId:'host'},selectedSessionId:'session',canvasWorkspace:{views:[target]}};
+ const unregister=inlineOwnership.register(scope,target,{sessionId:'session',messageId:'turn',version:1});
+ const f=await fixture(undefined,target);
+ const ack={op:'transition',blocked:true,quiescent:true,editVersion:0,localPending:false,queued:0,pending:0,gestures:0,draftPending:false,uncertain:false};
+ try{
+  let prepared;
+  await act(async()=>{prepared=inlineOwnership.prepareTransition(target,'first',false,scope)});
+  assert.equal(f.frameNode.inert,true);assert.equal(f.frameNode.tabIndex,-1);
+  assert.equal(f.out.at(-1).prepareTransition,'first');assert.equal(f.out.some(row=>row.checkpoint),false);
+  await f.send({...ack,token:'stale'});
+  assert.equal(inlineOwnership.transition(target).proof,undefined);
+  // Delayed editing lands after parent preparation; dirty report need not
+  // settle for the local guard to refuse before POST.
+  await f.send({op:'editing',editVersion:1});
+  const rejected=assert.rejects(prepared,/pending, changed or uncertain/);
+  await f.send({...ack,token:'first'});
+  await rejected;assert.equal(f.frameNode.inert,false);assert.equal(f.dirty(),true);
+  await f.send({op:'dirty',requestId:'clean',editVersion:1,args:{dirty:false}});
+  await act(async()=>{prepared=inlineOwnership.prepareTransition(target,'second',false,scope)});
+  await f.send({...ack,token:'second',editVersion:1});
+  const hold=await prepared;inlineOwnership.validateTransition(hold,scope);
+  await f.send({op:'state',requestId:'disabled',args:{patch:{value:'not accepted'}}});
+  assert.equal(f.calls.some(row=>row.name==='canvas.apps.state'),false);
+  assert.match(f.out.at(-1).error,/disabled/);
+  inlineOwnership.refuseTransition(hold);assert.equal(f.frameNode.inert,false);
  }finally{unregister();await f.close()}
 });

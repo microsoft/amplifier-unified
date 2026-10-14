@@ -178,15 +178,19 @@ class SmartCanvas:
         if action in {'smartTools.open', 'smartTools.reconnectView'}:
             record = {'id':operation_id,'action':action,'origin':origin,'target':copy.deepcopy(args),
                       'status':'running','createdAt':time.time(),'updatedAt':time.time()}
-            record['target'].pop('_viewOperation', None)
-            if args.get('_viewOperation'):
-                record['viewBinding'] = copy.deepcopy(args['_viewOperation'])
+            if action == 'smartTools.reconnectView' and 'viewId' in args:
+                try:
+                    record['viewBinding'] = self.operation_binding(args, reconnect=True)
+                except api.AppError as exc:
+                    record.update(status='failed', error=str(exc)[:2000])
             async with self.service.lock:
                 rows = self.service.state['smartTools']['operations']
                 rows[:] = [r for r in rows if r.get('status') == 'running'] + [r for r in rows if r.get('status') != 'running'][-49:]
                 rows.append(record)
                 manager.persist_operation(record)
                 self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
+            if record['status'] == 'failed':
+                return
             try:
                 if action == 'smartTools.reconnectView':
                     from .mcp_view_recovery import reconnect
@@ -206,16 +210,24 @@ class SmartCanvas:
                 self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             return
         if action == 'smartTools.appCall':
+            # A queued HTTP admission already owns its exact association.
+            # Other admitted calls derive it from the current bound client
+            # before any tool await, never from caller-provided metadata.
+            association = (manager.operation(operation_id) or {}).get('viewBinding')
             try:
                 canvas, binding = self.binding(args['canvasId'], args.get('expectedRevision'), args if 'viewId' in args else None)
+                current_association = self.operation_binding(args)
+                if association and association != current_association:
+                    raise api.AppError('This admitted operation belongs to an earlier tool binding.', 409)
+                association = association or current_association
                 if args['name'] not in binding['allowedTools']:
                     raise api.AppError('This tool was not granted to this canvas view.', 403)
             except Exception as exc:
                 async with self.service.lock:
                     record = {'id':operation_id,'action':action,'origin':'app','target':{'canvasId':args['canvasId'],'name':args['name']},
                               'status':'failed','error':str(exc)[:2000],'createdAt':time.time(),'updatedAt':time.time()}
-                    if args.get('_viewOperation'):
-                        record['viewBinding'] = copy.deepcopy(args['_viewOperation'])
+                    if association:
+                        record['viewBinding'] = copy.deepcopy(association)
                     rows = self.service.state['smartTools']['operations']
                     rows[:] = [r for r in rows if r['id'] != operation_id and r.get('status') in {'running', 'queued'}] + [r for r in rows if r['id'] != operation_id and r.get('status') not in {'running', 'queued'}][-49:]
                     rows.append(record)
@@ -225,8 +237,8 @@ class SmartCanvas:
             mapped = {'id':binding['serverId'],'name':args['name'],'arguments':args.get('arguments',{}),
                       'sessionId':canvas.get('sessionId'), '_configuration':binding['configuration'],
                       '_allowedTools':binding['allowedTools'], 'catalogRevision':binding.get('catalogRevision')}
-            if args.get('_viewOperation'):
-                mapped['_viewOperation'] = copy.deepcopy(args['_viewOperation'])
+            if association:
+                mapped['_viewOperation'] = copy.deepcopy(association)
             kwargs = {'defer_publish': True} if defer_publish else {}
             result = await manager.command('smartTools.call', mapped, operation_id, 'agent' if origin == 'agent' else 'app', **kwargs)
             # Context is descriptive, not authority. Retain the latest result only for

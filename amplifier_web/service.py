@@ -2730,15 +2730,9 @@ class AppService:
                         scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
                     if action == 'smartTools.appCall':
                         self.smart_canvas.admit_call(args)
-                        association = self.smart_canvas.operation_binding(args)
-                        if association:
-                            scoped_args['_viewOperation'] = association
                     if action == 'smartTools.reconnectView':
                         from .mcp_view_recovery import admit
                         admit(self, args)
-                        association = self.smart_canvas.operation_binding(args, reconnect=True)
-                        if association:
-                            scoped_args['_viewOperation'] = association
                     pending.append((self.smart_canvas.command,(action,scoped_args,command_id,origin)))
             elif action == 'bundle.default':
                 from .preferences import SettingsStore
@@ -2937,8 +2931,9 @@ class AppService:
                 queued = {'id': command_id, 'action': action, 'origin': 'app',
                           'target': {'canvasId': args['canvasId'], 'name': args['name']},
                           'status': 'queued', 'createdAt': time.time(), 'updatedAt': time.time()}
-                if scoped_args.get('_viewOperation'):
-                    queued['viewBinding'] = copy.deepcopy(scoped_args['_viewOperation'])
+                association = self.smart_canvas.operation_binding(args)
+                if association:
+                    queued['viewBinding'] = association
                 self.state['smartTools']['operations'].append(queued)
                 self.smart_tools.persist_operation(queued)
             from .action_save_scope import scope as action_scope
