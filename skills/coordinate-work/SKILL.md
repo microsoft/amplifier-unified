@@ -176,6 +176,42 @@ reply with a new command ID and the current `expectedResponseRevision`, preservi
 the earlier reply. Do not retry an acknowledged command expecting different bytes,
 overwrite unrelated work, or start another generation yourself to bypass Stop.
 
+## Optional shared task list
+
+Use `assignment.tasks.list` to inspect your existing assignment's task list.
+Unassigned independent chats have no shared list; never enroll them implicitly.
+The commissioning owner may create or edit an unclaimed item with its title,
+acceptance details, optional block and dependencies. Use the current
+`expectedAssignmentRevision` for creation and each item's `expectedRevision`
+for transitions. Dependencies are acyclic and completed/cancelled items cannot
+be reopened or redefined. `assignment.tasks.wait` passively observes a version;
+it neither sends input nor starts a worker.
+
+A bound participant uses `assignment.tasks.claim` to claim a ready item for its
+own conversation. Concurrent claims have one winner. Retain the returned item
+revision and opaque `claim.id`; use both for `assignment.tasks.complete` or
+`assignment.tasks.release`. Read again after a conflict. Completion requires
+`report` and may include opaque `references`; these references do not themselves
+retain artifact bytes. Use the retained-result protocol above for exact files.
+Completion is a holder report, not independent artifact verification, integration
+acceptance, or permission to start dependent work.
+
+Claims express durable responsibility and survive ordinary host restart. Later
+authorized turns can explicitly report or release their retained claim. Stop or
+membership changes make a claim stale without freeing it. Do not treat a stale
+claim, disconnected holder, or old successful command receipt as permission to
+repeat effects. The holder or assignment owner may release; the owner may cancel
+or explicitly reassign to a current member. Reassignment issues a new claim ID,
+fencing the former holder's board updates. Release, cancellation and reassignment
+do not stop already-running file/tool work; use ordinary chat/assignment Stop
+when interruption is intended. No expiry or automatic reassignment is provided.
+
+Keep command IDs stable for uncertain retries. Exact retries return historical
+receipts after current membership authorization; they do not renew old claims.
+Read the current task before acting on a retained acknowledgement. The shared
+list is optional coordination, not a file lock, checkout lease, or mandatory
+hierarchy for unrelated peers.
+
 ## Example brief and result
 
 Brief: “Produce a draft in your task output namespace. Preserve the source.

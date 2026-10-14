@@ -1043,3 +1043,28 @@ reported rather than treated as deletion, completion or released resources.
 Provider/bridge export coverage uses recorded metadata fixtures; the production
 browser journey uses a scripted runtime without model calls. Release, installed
 worker and provider acceptance remain the integration owner's separate checks.
+
+
+## Optional assignment work items — 2026-10-14
+
+`assignment.tasks.list/read/wait/create/update/claim/release/complete/cancel/reassign`
+use the canonical assignment record and existing command receipts. A bounded
+128-item list supports owner-curated acyclic dependencies and atomic participant
+self-claims. Per-item revisions and exact claim identities fence stale holders.
+Stop and detachment retain stale responsibility; ordinary restart retains a valid
+claim. All recovery is explicit, with no claim expiry, automatic work, replay or
+file-lock promise. Reported completion is separate from artifact verification and
+integration validation. Completed and cancelled tasks are immutable.
+
+The bundled Shared task list uses these same actions and readable scoped member
+and prerequisite names. Open views wait passively on scoped versions; hidden or
+closed views cancel their wait. Read paths inspect metadata and command receipts,
+not history or assignment usage. Private form/pending request state stays in the
+browser tab and uncertain mutations retry the same command ID. Mutation receipts
+retain only the changed item, not repeated copies of the entire board.
+
+Source checks cover concurrent claims, dependencies and cycles, old-holder fencing,
+Stop/detachment, restart with explicit later completion, delayed admission, durable
+commit failure and lost acknowledgement, shared UI/agent actions, scoped passive
+waits, and UI identity/reconnect behavior. Installed package, real-provider and
+computer-use acceptance remain separate integration checks.
