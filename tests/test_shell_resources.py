@@ -16,7 +16,7 @@ class Shell:
             clients=SimpleNamespace(current=ContextVar('resource_client', default='one'),
                                     records={'one': {'kind': 'web'}}),
             state={'revision': 1, 'selectedSessionId': 'chat', 'selectedWorkspaceId': 'w', 'view': {}},
-            directory=SimpleNamespace(observation_revision={'navigation':1,'attention':1}), queue_clients={}, queue_sessions={})
+            directory=SimpleNamespace(observation_revision={'navigation':1,'attention':1,'workspace':1}), queue_clients={}, queue_sessions={})
         self.saved = {'composition': {'instances': [{'id':'nav','package':'builtin.chats','slot':'navigation'}],
                                       'presentation': {}}, 'preview': None, 'views': {}, 'baselineView': {}}
         self.recent_limits, self.calls = {}, []
