@@ -159,6 +159,9 @@ objects; inspection never imports requested code, installs packages, starts a
 dormant worker or unparks it. Bounded file reads run outside the event loop.
 Loaded origin, file bytes observed after mounting, and file bytes observed now
 are separate evidence. None claims the exact bytes previously imported.
+Startup captures only in-memory module and mount identities; it performs no
+provenance file reads or background hashing. The explicit inspection supplies
+current-file hashes, with unavailable mount-time evidence left unknown.
 
 `integration.capture/check/read/list` reuse existing command receipts. A capture
 retains up to eight inspected repository source revisions, optional expected
