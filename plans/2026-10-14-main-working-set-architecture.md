@@ -1,6 +1,7 @@
 # Main application: bounded data and responsive clients
 
-**Status: proposed implementation plan, October 14, 2026.** This applies the
+**Status: implementation plan approved, October 14, 2026.** The user approved
+proceeding with this sequence after reviewing draft PR #671. This applies the
 ratified [vision](../docs/architecture/VISION.md), [working-set contract](../contracts/working-set.v1.md),
 [client-state contract](../contracts/client-state.v1.md), and [component boundaries](../contracts/component-boundaries.v1.md)
 to the current main application. It does not ratify new wire semantics, declare
@@ -364,8 +365,8 @@ server/client/worker revisions before claiming the live problem fixed.
 
 ## Decisions and immediate next slice
 
-The architecture direction is already agreed. This plan proposes the concrete
-execution order. Resolve the 30-day/workspace defaults, total-count behavior,
+The architecture direction and execution sequence are approved. Resolve the
+30-day/workspace defaults, total-count behavior,
 resource protocol details, source-generation guarantees, storage partition and
 numeric budgets with their owners before implementing those changes. No need to
 settle every future repository name before repairing current demand boundaries.

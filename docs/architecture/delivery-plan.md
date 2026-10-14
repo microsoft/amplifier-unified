@@ -9,7 +9,7 @@ is not evidence that any runtime behavior is complete or shipped.
 ## Current main application work
 
 The October 14 [bounded-data implementation plan](../../plans/2026-10-14-main-working-set-architecture.md)
-proposes the immediate performance sequence for the existing application. It
+records the approved performance sequence for the existing application. It
 reuses these ownership and working-set commitments without making AHP/ACP adoption
 a release prerequisite. Its concrete resource semantics and numeric budgets remain
 proposals pending owner review. The waves below govern the separate protocol proof
