@@ -15,9 +15,9 @@ export function useStarters(state,act){
  return {catalog,error,reload:async()=>setCatalog(await run(act,'workspace.starters.list'))};
 }
 const empty=()=>({name:'',description:'',instructions:'',bundle:'',repositories:[],trackResources:false,scratch:false,rootGit:false});
-export function StarterSettings({state,act,navigate}){
+export function StarterSettings({state,act,dispatch=act,navigate}){
  const layout=useContext(SettingsLayoutContext);
- const {catalog,error:loadError,reload}=useStarters(state,act),[draft,setDraft]=useState(null),[base,setBase]=useState(null),[query,setQuery]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[confirm,setConfirm]=useState(null),id=useId();
+ const {catalog,error:loadError,reload}=useStarters(state,dispatch),[draft,setDraft]=useState(null),[base,setBase]=useState(null),[query,setQuery]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[confirm,setConfirm]=useState(null),id=useId();
  const submitting=useRef(false),navigation=state.view?.workspaceStarterEditor||{};
  const dirty=!!draft&&JSON.stringify(draft)!==JSON.stringify(base);
  const route=patch=>act('view.update',{patch:{workspaceStarterEditor:{...navigation,...patch}}});
@@ -28,8 +28,8 @@ export function StarterSettings({state,act,navigate}){
  const edit=row=>{if(busy)return;if(dirty&&row.id!==draft?.id){setError('Save or cancel the current starter before opening another.');route({detailOpen:true});return}if(row.id!==draft?.id||!draft)load(row);route({id:row.id||null,detailOpen:true})};
  const change=(key,value)=>{setDraft({...draft,[key]:value});setNotice('')};
  const perform=async fn=>{if(submitting.current)return;submitting.current=true;setBusy(true);setError('');try{await fn();await reload()}catch(err){setError(err.message)}finally{submitting.current=false;setBusy(false)}};
- const duplicate=row=>{if(dirty){setError('Save or cancel the current starter first.');return}perform(async()=>{const value=await run(act,'workspace.starters.duplicate',{id:row.id});load(value);route({id:value.id,detailOpen:true});setNotice('Copy created. Customize it below.')})};
- const save=event=>{event.preventDefault();perform(async()=>{const {id:identity,revision,builtIn,...starter}=draft;const value=await run(act,'workspace.starters.save',{starter,...(identity?{id:identity,expectedRevision:revision}:{})});setDraft(value);setBase(value);route({id:value.id,detailOpen:true});setNotice('Saved. Existing workspaces are unchanged.')})};
+ const duplicate=row=>{if(dirty){setError('Save or cancel the current starter first.');return}perform(async()=>{const value=await run(dispatch,'workspace.starters.duplicate',{id:row.id});load(value);route({id:value.id,detailOpen:true});setNotice('Copy created. Customize it below.')})};
+ const save=event=>{event.preventDefault();perform(async()=>{const {id:identity,revision,builtIn,...starter}=draft;const value=await run(dispatch,'workspace.starters.save',{starter,...(identity?{id:identity,expectedRevision:revision}:{})});setDraft(value);setBase(value);route({id:value.id,detailOpen:true});setNotice('Saved. Existing workspaces are unchanged.')})};
  const shown=(catalog?.items||[]).filter(row=>(row.name+' '+row.description).toLowerCase().includes(query.toLowerCase()));
  return <section className="a-workspace-starters" data-part="workspace-starters" aria-label="Workspace starters">
   <p className="a-starter-intro">Reusable starting setups for new workspaces. Choose a built-in to inspect it, or duplicate one to make it yours.</p>
@@ -54,7 +54,7 @@ export function StarterSettings({state,act,navigate}){
     {!draft.builtIn&&draft.id&&<div className="a-starter-danger"><button type="button" className="a-link a-danger" disabled={busy||dirty} onClick={()=>setConfirm(draft)}><Trash2/>Delete this starter</button><p className="a-caption">Only the definition is deleted. Workspaces and files remain.</p></div>}
    </form>:<p>Select a starter to see what it includes.</p>}
   </Collection>
-  {confirm&&<div role="alertdialog" aria-label="Delete starter" className="a-workspace-setup"><p>Delete “{confirm.name}”? Existing workspaces and files stay intact.</p><button type="button" disabled={busy} onClick={()=>perform(async()=>{await run(act,'workspace.starters.remove',{id:confirm.id,expectedRevision:confirm.revision});setDraft(null);setBase(null);setConfirm(null);route({id:null,detailOpen:false})})}>Delete starter</button><button type="button" disabled={busy} onClick={()=>setConfirm(null)}>Cancel deletion</button></div>}
+  {confirm&&<div role="alertdialog" aria-label="Delete starter" className="a-workspace-setup"><p>Delete “{confirm.name}”? Existing workspaces and files stay intact.</p><button type="button" disabled={busy} onClick={()=>perform(async()=>{await run(dispatch,'workspace.starters.remove',{id:confirm.id,expectedRevision:confirm.revision});setDraft(null);setBase(null);setConfirm(null);route({id:null,detailOpen:false})})}>Delete starter</button><button type="button" disabled={busy} onClick={()=>setConfirm(null)}>Cancel deletion</button></div>}
  </section>;
 }
 
