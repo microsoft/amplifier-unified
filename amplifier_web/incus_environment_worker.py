@@ -21,9 +21,12 @@ import sys
 import time
 from urllib.parse import quote
 
-QUALIFIED_VERSION = '0.4.0'
-# Reviewed legacy PR #37 (0eb3485); launcher bytes vary with installation path.
-QUALIFIED_PACKAGE_SHA256 = '5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39'
+# Preserve previously qualified owners and configuration identity during upgrades.
+# Launcher bytes vary with installation path; package pairs are exact.
+QUALIFIED_PACKAGES = {
+    '0.4.0': '5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39',
+    '0.4.1': 'b70849c08aff3b8103e078ecf99d25180ac2afe0330ee7d44f72f88e7538df06',
+}
 OUTPUT_BYTES = 8192
 CONTROL_BYTES = 65536
 EXPORT_BYTES = 8 * 1024 ** 3
@@ -100,7 +103,7 @@ def validate_configuration(value):
     for key in ('executableSha256', 'packageSha256', 'image'):
         if not isinstance(config[key], str) or not re.fullmatch(r'[a-f0-9]{64}', config[key]):
             raise ValueError('Backend code and image identities must be exact SHA-256 values.')
-    if config['packageSha256'] != QUALIFIED_PACKAGE_SHA256:
+    if config['packageSha256'] not in QUALIFIED_PACKAGES.values():
         raise ValueError('The legacy package pin is not the app-qualified generation.')
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}', config['project']):
         raise ValueError('An explicit Incus project is required.')
@@ -129,7 +132,7 @@ def validate_configuration(value):
     if probe['exit_code'] or probe['truncated']:
         raise ValueError('The qualified legacy interpreter is unavailable.')
     installed = json.loads(probe['stdout'])
-    if installed['version'] != QUALIFIED_VERSION or package_digest(installed['directory']) != config['packageSha256']:
+    if QUALIFIED_PACKAGES.get(installed['version']) != config['packageSha256'] or package_digest(installed['directory']) != config['packageSha256']:
         raise ValueError('The installed legacy backend is not this app\'s qualified generation.')
     config.update(interpreter=str(interpreter), packageDirectory=installed['directory'])
     for key, env_key in [('maxRunning', 'AMPLIFIER_DTU_MAX_RUNNING'), ('maxInstances', 'AMPLIFIER_DTU_MAX_INSTANCES'), ('minFreeBytes', 'AMPLIFIER_DTU_MIN_FREE_BYTES')]:
@@ -203,8 +206,13 @@ def cli(config, env, arguments, timeout=30):
         raise BackendFailure('backend_unknown', 'The backend did not return a structured receipt.')
     if result['exit_code'] or not isinstance(value, dict):
         code = value.get('error', 'backend_unknown') if isinstance(value, dict) else 'backend_unknown'
-        denied = code in {'execution_capacity', 'retained_capacity', 'storage_pressure', 'storage_unknown', 'admission_busy', 'request_conflict', 'name_conflict', 'state_unsafe'}
-        raise BackendFailure(code, 'The backend did not admit this request.' if denied else 'The backend outcome needs reconciliation.', value if isinstance(value, dict) else {}, admitted=not denied)
+        denied = code in {'execution_capacity', 'retained_capacity', 'storage_pressure', 'storage_unknown', 'admission_busy', 'request_conflict', 'name_conflict', 'state_unsafe', 'approved_image_missing', 'approved_image_unavailable'}
+        message = ('The approved local image is missing. Restore or explicitly configure an available image before submitting a new check.'
+                   if code == 'approved_image_missing' else
+                   'The approved local image could not be inspected. Restore backend access before submitting a new check.'
+                   if code == 'approved_image_unavailable' else
+                   'The backend did not admit this request.' if denied else 'The backend outcome needs reconciliation.')
+        raise BackendFailure(code, message, value if isinstance(value, dict) else {}, admitted=not denied)
     return value
 
 
@@ -227,6 +235,27 @@ def identity(payload):
     if any(not isinstance(payload.get(key), str) or not payload[key] or len(payload[key]) > 200 for key in ('operationId', 'rootOwner')):
         raise ValueError('A durable launch identity and root owner are required.')
     return 'ut-' + hashlib.sha256((payload['rootOwner'] + '\0' + payload['operationId']).encode()).hexdigest()[:32]
+
+
+def check_legacy_image(config, env, payload):
+    """Older qualified backends lack the atomic image preflight added in 0.4.1."""
+    if config.get('packageSha256') != QUALIFIED_PACKAGES['0.4.0']:
+        return
+    previous = cli(config, env, ['launch-status', payload['operationId']])
+    if previous.get('state') != 'not_recorded':
+        # Existing uncertainty belongs to its recorded operation. Missing image
+        # cache entries cannot turn an earlier launch into a safe new attempt.
+        return
+    try:
+        result = incus(config, env, ['image', 'list', 'local:', config['image'], '--format=json'])
+        images = json.loads(result['stdout'])
+        if result['exit_code'] or result['truncated'] or not isinstance(images, list):
+            raise ValueError('Image observation unavailable')
+        found = any(isinstance(item, dict) and item.get('fingerprint') == config['image'] for item in images)
+    except (BackendFailure, OSError, ValueError, TypeError):
+        raise BackendFailure('approved_image_unavailable', 'The approved local image could not be inspected. No environment was launched.', admitted=False)
+    if not found:
+        raise BackendFailure('approved_image_missing', 'The approved local image is missing. Restore or explicitly configure an available image before submitting a new check.', admitted=False)
 
 
 def observe(config, env, name, payload, confinement=False):
@@ -301,6 +330,7 @@ def execute_call(payload):
             common.source_identity(name, snapshot)
             if file_digest(root / 'source.tar', 512 * 1024 ** 2)[0] != snapshot['archive_sha256']:
                 raise BackendFailure('snapshot_changed', 'The exact source archive changed; nothing was launched.', admitted=False)
+            check_legacy_image(config, env, payload)
             profile = {'name': 'unified-owned-offline', 'description': 'Owned offline test environment',
                 'base': {'image': 'local:' + config['image'], 'config': {'security.privileged': 'false', 'security.nesting': 'false', 'limits.memory': '1GiB', 'limits.cpu': '2', 'limits.processes': '128'}},
                 'provision': {'setup_cmds': ['mkdir -p /workspace /artifacts', 'python3 --version']}}

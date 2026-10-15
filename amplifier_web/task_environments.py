@@ -259,7 +259,7 @@ def project_result(home, row, request):
     result = request['result']
     action = request['action'].rsplit('.', 1)[-1]
     changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
-    if result.get('admissionDenied'):
+    if action == 'start' and (result.get('admissionDenied') or result.get('effectAdmitted') is False):
         changes['backendAdmitted'] = False
     environment_state = ('running' if result.get('ok') else 'unknown') if action == 'execute' else result.get('status', 'unknown')
     if action == 'remove' and result.get('ok') and environment_state == 'removed':
@@ -314,7 +314,8 @@ def effect(app, row, action, args, config, request, admit):
         else:
             admitted = True
             result = invoke(config, home, row, action, args)
-        state = 'completed' if result.get('ok') else 'failed' if result.get('admissionDenied') else 'outcome_unknown' if admitted else 'failed'
+        not_admitted = result.get('admissionDenied') or result.get('effectAdmitted') is False
+        state = 'completed' if result.get('ok') else 'failed' if not_admitted else 'outcome_unknown' if admitted else 'failed'
         if action == 'execute' and result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
             state = 'failed'
         request = app.operations.requests.finish(request, state, resourceId=row['id'], result=result,

@@ -156,6 +156,32 @@ async def test_capacity_race_known_refusal_can_retry_without_orphan(app, queue, 
     assert [action for action, _ in backend].count('execute') == 1
 
 
+async def test_missing_prerequisite_is_known_failure_without_retry_or_retained_slot(app, queue, backend, monkeypatch):
+    invoke = environments.invoke
+    def unavailable(config, home, row, action, args):
+        if action == 'start':
+            backend.append((action, args))
+            return {'ok': False, 'effectAdmitted': False, 'status': 'not-started',
+                    'code': 'approved_image_missing', 'message': 'The approved image is unavailable.'}
+        return invoke(config, home, row, action, args)
+    monkeypatch.setattr(environments, 'invoke', unavailable)
+    await submit(app)
+    await drive(queue)
+    receipt = record(queue, app)
+    assert receipt['job']['status'] == 'failed'
+    assert receipt['job']['launch']['state'] == 'failed'
+    row = environments.get(app.data_dir, scope(app)['sessionId'], receipt['job']['resourceId'])
+    assert row['status'] == 'retired' and not row['backendAdmitted']
+    assert Path(environments.storage.directory(app.data_dir, row)).is_dir()
+    await submit(app)
+    await drive(queue)
+    assert [action for action, _ in backend] == ['prepare', 'start']
+    monkeypatch.setattr(environments, 'invoke', invoke)
+    await submit(app, 'new-check')
+    await drive(queue)
+    assert record(queue, app, 'new-check')['job']['status'] == 'passed'
+
+
 async def test_restart_after_check_uses_journal_and_only_cleans_up(app, queue, backend, monkeypatch):
     await submit(app)
     cleanup = queue.cleanup

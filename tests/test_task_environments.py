@@ -119,6 +119,18 @@ async def test_timeout_is_retained_unknown_and_same_request_never_runs_again(app
         await act(app, 'execute', row, 'uncertain', command='different-command')
 
 
+async def test_refused_command_preserves_existing_environment_ownership(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    monkeypatch.setattr(owner, 'invoke', lambda *args: {
+        'ok': False, 'effectAdmitted': False, 'status': 'unknown',
+        'message': 'Source readiness changed; no command was admitted.'})
+    result = await act(app, 'execute', row, 'refused', command='check')
+    assert result['request']['state'] == 'failed'
+    assert owner.get(app.data_dir, scope(app)['sessionId'], row['id'])['backendAdmitted']
+    with pytest.raises(AppError, match='already owns'):
+        await start(app, 'competing-after-refusal')
+
+
 async def test_unready_source_observation_blocks_host_execution(app, backend, monkeypatch):
     await start(app)
     reads = []
