@@ -1205,8 +1205,14 @@ async def test_old_canonical_media_restart_reopen_preserves_origin_without_displ
         reopened.clients.attach('canonical-reopen-browser')
         with reopened.clients.bind('canonical-reopen-browser'):
             await reopened.dispatch('session.select', {'id': sid})
+            await reopened.history.refresh_session(sid)
             source = reopened._session(sid, hydrate=False)
+            shown = reopened.history.windows.project(source)
+            assert len(shown['messages']) == 100
+            assert shown['messageWindow']['coverage']['kind'] == 'native-saved'
+            assert all(row['displayOnly'] for row in shown['messages'])
             markers = copy.deepcopy(dict.get(source, '_coldFields', {}))
+            resident_messages = copy.deepcopy(dict.get(source, 'messages', []))
             items = (await reopened.outputs.media.describe(sid, old))['items']
             assert len(items) == 1 and items[0]['id'] == saved['id']
             assert await reopened.outputs.media.bytes({**items[0], 'messageId': old}) == gif()
@@ -1214,7 +1220,8 @@ async def test_old_canonical_media_restart_reopen_preserves_origin_without_displ
                 assert not dict.__contains__(source, 'messages')
                 assert dict.get(source, '_coldFields', {}).get('messages') == markers['messages']
             else:
-                assert len(dict.get(source, 'messages', [])) == 100
+                assert dict.get(source, 'messages', []) == resident_messages
+                assert resident_messages == []
         assert (directory / 'transcript.jsonl').read_bytes() == raw
     finally:
         await reopened.close()
@@ -3210,9 +3217,14 @@ async def test_discovered_worker_descriptor_http_empty_without_byte_report_or_mu
     with service.clients.bind('worker-http-browser'):
         await service.dispatch('session.select', {'id': child_id})
         await service.history.refresh_session(child_id)
-        child = service._session(child_id)
-        assistants = [row for row in child['messages'] if row.get('role') == 'assistant']
-        assert assistants, 'Normal history refresh must load the discovered worker assistant'
+        child = service._session(child_id, hydrate=False)
+        shown = service.history.windows.project(child)
+        assistants = [row for row in shown['messages'] if row.get('role') == 'assistant']
+        assert len(assistants) == 1
+        assert assistants[0]['text'] == 'Synthetic child saved response.'
+        assert assistants[0]['displayOnly'] is True
+        assert shown['messageWindow']['coverage']['kind'] == 'native-saved'
+        assert dict.get(child, 'messages', []) == []
         message = assistants[0]
     # Synthetic legacy retained record: byte/link guards must refuse even a
     # complete tuple already owned by the worker. This is NOT attachment proof.
