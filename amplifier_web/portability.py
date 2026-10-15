@@ -222,7 +222,12 @@ class Portability:
             await self.app.history.ensure_loaded(session['id'])
             await asyncio.to_thread(capture_workspace, session.get('workingDirectory') or session['workspace'], args['sourceRevision'], args['mode'])
             async with self.app.lock:
-                data.capture(self.app, session)
+                payload = data.capture(self.app, session)
+                owner = self.media_validation_owner(session['id'])
+            await self.validate_media(payload)
+            async with self.app.lock:
+                if self.media_validation_owner(session['id']) != owner:
+                    raise ValueError('Task ownership changed during media validation')
         async with self.app.lock:
             # Voice connect claims state.voice under this same lock. Recheck
             # after the awaited history/Git preflight, then fence atomically.
@@ -257,6 +262,11 @@ class Portability:
                 current = self.app._session(session['id'])
                 payload = data.capture(self.app, current)
                 payload['workspace'] = workspace
+                owner = self.media_validation_owner(session['id'])
+            await self.validate_media(payload)
+            async with self.app.lock:
+                if self.media_validation_owner(session['id']) != owner:
+                    raise ValueError('Task ownership changed during media validation')
                 result = self.node.prepared(row['id'], payload)
                 result['releaseEvidence'] = {key: evidence.get(key) for key in ('nativeSessionId', 'quiesced', 'transferFenced', 'inputsReplayed')}
                 self.node.save(result)
@@ -265,6 +275,20 @@ class Portability:
             async with self.app.lock:
                 self.node.unknown(row['id']); self.changed()
             raise_if_cancelled()
+
+    def media_validation_owner(self, sid):
+        """Cheap owner/fence facts; never a transcript or display projection."""
+        session = self.app._session(sid, hydrate=False)
+        return (id(session), tuple(session.get(key) for key in (
+            'workspace', 'workingDirectory', 'runtimeSessionId', 'nativeIdentity',
+            'nativeProject', 'executionRevision')),
+            tuple(sorted((row['id'], row['phase'], row['revision'])
+                         for row in self.node.records(sid))), self.fenced(sid))
+
+    async def validate_media(self, payload):
+        from .resource_files import settle_worker
+        async with self.app.outputs.media.workers:
+            await settle_worker(data.validate, payload)
 
     def destination_configuration(self, payload, workspace):
         # The probe runs from the destination repository's settings scope. No
@@ -355,7 +379,10 @@ class Portability:
     async def stage(self, args):
         envelope = read_capsule(Path(args['path']))
         body = self.node.verify(envelope, kind='capsule')
-        payload = body['payload']; data.validate(payload)
+        payload = body['payload']
+        await self.validate_media(payload)
+        # No transfer admission has happened yet. All destination identity,
+        # fence and native-history checks below are fresh after the worker.
         if body['sessionId'] != payload['session']['id']:
             raise ValueError('Task identity does not match its package')
         # A retry is a receipt read, even though native staging already exists.
@@ -499,7 +526,10 @@ class Portability:
         from amplifier_portability.protocol import encoded
         if digest(encoded(body)) != row['capsuleHash']:
             raise ValueError('The staged task package changed after readiness')
-        payload = body['payload']; data.validate(payload)
+        payload = body['payload']
+        await self.validate_media(payload)
+        if self.read(args['sessionId'], args['id']) != row:
+            raise ValueError('Transfer ownership changed during media validation')
         if row['phase'] == 'active':
             result = self.node.activating(row['id'], certificate, args['expectedRevision'])
             session = self.app._session(row['sessionId'])

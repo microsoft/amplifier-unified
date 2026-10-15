@@ -30,6 +30,7 @@ async def test_real_saves_removed_origin_eviction_unlink_and_reopen(
         session, corpus, store, _, _ = cold_alias_corpus(app)
         mid = 'saved-web-assistant'
     sid = session['id']
+    native_metadata = {'bundle_name': session['bundle'], 'working_dir': session['workspace']}
     args = {**media_args_without_hydration(session), 'messageId': mid, 'title': ''}
     data = gif() if format == 'gif' else mp4()
     Path(session['workspace'], args['path']).write_bytes(data)
@@ -50,8 +51,13 @@ async def test_real_saves_removed_origin_eviction_unlink_and_reopen(
         pytest.fail('Retained read attempted live transcript qualification')
 
     async def check(service):
-        metadata = (await service.app_bridge('dispatch', {
-            'action': 'outputs.read', 'args': {'id': saved['id']}}, sid))['result']
+        from amplifier_web import cold_display
+        def no_display(*args, **kwargs):
+            pytest.fail('Retained metadata bridge hydrated unrelated display history')
+        with monkeypatch.context() as patch:
+            patch.setattr(cold_display, 'load', no_display)
+            metadata = (await service.app_bridge('dispatch', {
+                'action': 'outputs.read', 'args': {'id': saved['id']}}, sid))['result']
         assert metadata['kind'] == 'media' and metadata['title'] == ''
         assert metadata['origin'] == original['origin']
         assert metadata['browserObservation']['status'] == 'unbound'
@@ -72,12 +78,12 @@ async def test_real_saves_removed_origin_eviction_unlink_and_reopen(
         for index in range(3):
             corpus.extend([{'role': 'user', 'content': f'Real appended input {index}'},
                            {'role': 'assistant', 'content': f'Real appended reply {index}'}])
-            store.save(sid, corpus, {}, preserve_system=True)
+            store.save(sid, corpus, native_metadata, preserve_system=True)
             await check(app)
         corpus[1] = {'role': 'user', 'content': 'Rewritten former origin'}
-        store.save(sid, corpus, {}, preserve_system=True)
+        store.save(sid, corpus, native_metadata, preserve_system=True)
         await check(app)
-        store.save(sid, corpus[-2:], {}, preserve_system=True)
+        store.save(sid, corpus[-2:], native_metadata, preserve_system=True)
         Path(session['workspace'], args['path']).unlink()
         await check(app)
         with app.clients.bind('retained-reader'):
@@ -107,6 +113,40 @@ async def test_real_saves_removed_origin_eviction_unlink_and_reopen(
         await check(reopened)
     finally:
         await reopened.close()
+
+
+async def test_native_display_only_id_cannot_admit_media_or_replace_saved_proof(media_app):
+    from amplifier_web.service import AppError
+    app = media_app
+    args = media_args(app)
+    row = app._session()['messages'][-1]
+    row['displayOnly'] = True
+    with pytest.raises(AppError, match='display-only'):
+        await app.dispatch('outputs.attachMedia', args, command_id='window-admission')
+    assert app.outputs.store.list(args['sessionId'])['items'] == []
+    row.pop('displayOnly')
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    row['displayOnly'] = True
+    app.clients.attach('display-only-reader')
+    with app.clients.bind('display-only-reader'):
+        assert await app.outputs.media.bytes({**saved, 'messageId': args['messageId']}) == gif()
+    with pytest.raises(AppError, match='display-only'):
+        await app.dispatch('outputs.attachMedia', args, command_id='new-window-admission')
+
+
+async def test_cold_display_only_alias_never_becomes_canonical_admission(media_app, monkeypatch):
+    """Dependency discriminator: the detached alias owner must retain the flag."""
+    app = media_app
+    session, _, _, _, _ = cold_alias_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': 'saved-web-assistant'}
+    session['messages'][0]['displayOnly'] = True
+    app._state['selectedSessionId'] = None
+    monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+    assert session['id'] in app.cold_display.retire(force=True)
+    assert not dict.__contains__(session, 'messages')
+    with pytest.raises(ValueError):
+        await app.outputs.media.attach(args, 'ui', 'cold-window-admission')
+    assert app.outputs.store.list(session['id'])['items'] == []
 
 
 @pytest.mark.parametrize('change', ['append', 'client', 'root', 'registry', 'body', 'index'])
@@ -161,6 +201,59 @@ async def test_retained_await_rechecks_owner_registry_and_index_not_history(
                 with pytest.raises(ValueError):
                     await pending
             assert finished.is_set()
+        finally:
+            release.set()
+            await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize('operation', ['metadata', 'head'])
+@pytest.mark.parametrize('change', ['append', 'registry', 'index', 'root'])
+async def test_metadata_and_head_awaits_recheck_fresh_retained_facts(
+        media_app, monkeypatch, operation, change):
+    from amplifier_web import output_media
+    app = media_app
+    args = media_args(app)
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    exact = {**saved, 'messageId': args['messageId']}
+    app.clients.attach('metadata-reader')
+    entered, release = threading.Event(), threading.Event()
+    real = output_media._signature
+
+    def blocked(source):
+        result = real(source)
+        entered.set()
+        assert release.wait(10)
+        return result
+
+    monkeypatch.setattr(output_media, '_signature', blocked)
+    with app.clients.bind('metadata-reader'):
+        read = (app.outputs.media.metadata(args['sessionId'], saved['id'], {})
+                if operation == 'metadata' else app.outputs.media.head(exact))
+        pending = asyncio.create_task(read)
+        try:
+            assert await asyncio.to_thread(entered.wait, 10)
+            record = app.outputs.record(args['sessionId'], saved['id'])
+            if change == 'append':
+                await app.on_runtime_event('assistant.message', {
+                    'sessionId': args['sessionId'], 'text': 'Saved while reading metadata'})
+            elif change == 'root':
+                app._session(args['sessionId'], hydrate=False)['sessionKind'] = 'worker'
+            elif change == 'index':
+                app.db.execute('UPDATE state_resources SET value=? WHERE id=?',
+                               ('{}', record['body']['$resource']))
+                app.db.commit()
+            else:
+                record['title'] = 'Replaced immutable metadata'
+                app.db.execute('UPDATE output_records SET value=? WHERE id=?',
+                               (json.dumps(record), saved['id']))
+                app.db.commit()
+            release.set()
+            if change == 'append':
+                result = await pending
+                assert (result['id'] == saved['id'] if operation == 'metadata' else result == len(gif()))
+            else:
+                with pytest.raises(ValueError):
+                    await pending
         finally:
             release.set()
             await asyncio.gather(pending, return_exceptions=True)

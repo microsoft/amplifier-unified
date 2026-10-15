@@ -20,6 +20,9 @@ async def test_fork_retained_gif_wrapper_remaps_only_exact_surviving_output(medi
     with app.clients.bind('fork-wrapper'):
         await app.dispatch('canvas.openGif', {**saved, 'messageId': args['messageId']}, include_state=False)
     source_row = copy.deepcopy(next(row for row in app.state['canvasArtifacts'] if row['kind'] == 'gif'))
+    snapshot = (await app.dispatch('outputs.attach', {'sessionId': args['sessionId'],
+        'kind': 'canvas', 'canvasId': source_row['id'], 'title': 'Saved GIF adapter',
+        'messageId': args['messageId']}))['result']
     if malformed:
         wrong = app.state_resource(source_row['body']['$resource'])
         wrong['mediaReference']['item']['sessionId'] = 'foreign-owner'
@@ -35,6 +38,7 @@ async def test_fork_retained_gif_wrapper_remaps_only_exact_surviving_output(medi
     await app.dispatch('session.fork', {'id': sid})
     target = app._session()
     outputs = app.outputs.store.list(target['id'])['items']
+    assert not any(row.get('forkSource', {}).get('outputId') == snapshot['id'] for row in outputs)
     clone = next(row for row in outputs if row['kind'] == 'media')
     wrappers = [row for row in app.state['canvasArtifacts'] if row['sessionId'] == target['id'] and row['kind'] == 'gif']
     if malformed:

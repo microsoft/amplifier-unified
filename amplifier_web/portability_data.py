@@ -149,15 +149,63 @@ def capture(app, session):
         resources[key] = copy.deepcopy(resource)
         pending.extend(references(resource))
     value['resources'] = resources
-    validate(value)
+    # Existing capture checks stay synchronous with their owner-thread DB reads.
+    # The production transfer route qualifies media structure in a bounded
+    # worker before admission; release compares the exact already-qualified data.
+    validate(value, media=False)
     return value
 
 
-def validate(value):
+def validate(value, *, media=True):
     try:
         _validate(value)
+        if media:
+            validate_media_payload(value)
     except (KeyError, TypeError, AttributeError, IndexError) as exc:
         raise ValueError('Malformed task transfer data') from exc
+
+
+def validate_media_payload(value):
+    """Pure detached media qualification for the existing bounded worker seam."""
+    from .output_media import retained_facts, validate_retained_body, validate_media_reference
+    sid = value['session']['id']
+    outputs = {row['id']: row for row in value['outputs']}
+    for row in outputs.values():
+        if row.get('kind') == 'canvas' and row.get('canvasKind') == 'gif':
+            source = value['resources'][row['canvasSource']['$resource']]
+            encoded = value['resources'][row['body']['$resource']]
+            content = (base64.b64decode(encoded['data'], validate=True)
+                       if encoded['encoding'] == 'base64' else encoded['data'].encode())
+            body = json.loads(content)
+            if (not isinstance(body, dict) or set(body) != {'mediaReference'} or body != source):
+                raise ValueError('Saved GIF Canvas snapshot differs from its exact adapter source.')
+            reference = body['mediaReference']
+            validate_media_reference(reference, outputs[reference['item']['id']], sid, kind='gif')
+        if row.get('kind') != 'media':
+            continue
+        retained_facts(row, sid)
+        body = value['resources'][row['body']['$resource']]
+        if not isinstance(body, dict) or set(body) != {'encoding', 'data'} or body['encoding'] != 'base64':
+            raise ValueError('Invalid transferred media body encoding.')
+        validate_retained_body(base64.b64decode(body['data'], validate=True), row)
+    for row in value['canvas']:
+        if row.get('kind') != 'gif':
+            continue
+        for definition in [row, *row.get('versions', [])]:
+            for field in ('body', 'contentResource'):
+                if field not in definition:
+                    continue
+                body = value['resources'][definition[field]['$resource']]
+                if not isinstance(body, dict) or set(body) != {'mediaReference'}:
+                    raise ValueError('Invalid transferred GIF adapter body.')
+                reference = body['mediaReference']
+                record = outputs[reference['item']['id']]
+                validate_media_reference(reference, record, sid, kind='gif')
+            if 'body' not in definition:
+                raise ValueError('Transferred GIF requires an exact saved body.')
+            if 'mediaReference' in definition:
+                reference = definition['mediaReference']
+                validate_media_reference(reference, outputs[reference['item']['id']], sid, kind='gif')
 
 
 def _receipt_belongs(record, sid, output_ids, comment_outputs):

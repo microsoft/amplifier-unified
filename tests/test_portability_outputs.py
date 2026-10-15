@@ -1,6 +1,7 @@
 """Delayed output reads cannot commit across a task ownership boundary."""
 import asyncio
 import copy
+import json
 from pathlib import Path
 from threading import Event
 
@@ -421,6 +422,9 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         app.clients.attach('transfer-wrapper')
         with app.clients.bind('transfer-wrapper'):
             await app.dispatch('canvas.openGif', {**media, 'messageId': mid}, include_state=False)
+        wrapper = next(row for row in app.state['canvasArtifacts'] if row['sessionId'] == sid and row['kind'] == 'gif')
+        snapshot = (await app.dispatch('outputs.attach', {'sessionId': sid, 'kind': 'canvas',
+            'canvasId': wrapper['id'], 'title': 'Retained GIF adapter snapshot'}))['result']
         raw = (store.directory(sid) / 'transcript.jsonl').read_bytes()
         # Existing small PNG and nested graph must survive alongside media.
         image = png()
@@ -461,6 +465,7 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         assert target.outputs.content(target.outputs.record(sid, saved_png['id'])) == image
         assert target.outputs.content(target.outputs.record(sid, out1['id'])) == b'First output'
         assert target.outputs.content(target.outputs.record(sid, out2['id'])) == b'Second output'
+        assert target.outputs.content(target.outputs.record(sid, snapshot['id'])) == app.outputs.content(app.outputs.record(sid, snapshot['id']))
         assert target.state_resource(parent['$resource']) == {'children': [leaf]}
         assert target.state_resource(leaf['$resource']) == {'content': 'Nested retained small resource'}
         assert not app.runtime.workers and not target.runtime.workers
@@ -471,7 +476,7 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         await target.close()
 
 
-@pytest.mark.parametrize('defect', ['bytes', 'dimensions', 'structure', 'wrapper-owner', 'wrapper-version'])
+@pytest.mark.parametrize('defect', ['bytes', 'dimensions', 'structure', 'wrapper-owner', 'wrapper-version', 'snapshot-owner'])
 async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_install(
         tmp_path, monkeypatch, defect):
     import base64
@@ -484,6 +489,9 @@ async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_insta
         app.clients.attach('transfer-validation')
         with app.clients.bind('transfer-validation'):
             await app.dispatch('canvas.openGif', {**saved, 'messageId': mid}, include_state=False)
+        wrapper = next(row for row in app.state['canvasArtifacts'] if row['kind'] == 'gif')
+        snapshot = (await app.dispatch('outputs.attach', {'sessionId': sid, 'kind': 'canvas',
+            'canvasId': wrapper['id'], 'title': 'GIF snapshot'}))['result']
         payload = portability_data.capture(app, app._session(sid))
         record = next(row for row in payload['outputs'] if row['id'] == saved['id'])
         if defect == 'bytes':
@@ -498,6 +506,19 @@ async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_insta
             payload['resources'][prepared.identity] = body
             record.update(body={'$resource': prepared.identity, 'bytes': prepared.size},
                           bytes=len(damaged), sha256=digest(damaged))
+        elif defect == 'snapshot-owner':
+            snapshot = next(row for row in payload['outputs'] if row['id'] == snapshot['id'])
+            body = copy.deepcopy(payload['resources'][snapshot['canvasSource']['$resource']])
+            body['mediaReference']['item']['sessionId'] = 'foreign-owner'
+            prepared = resource_files.prepare(body)
+            payload['resources'][prepared.identity] = body
+            snapshot['canvasSource'] = {'$resource': prepared.identity, 'bytes': prepared.size}
+            content = json.dumps(body, ensure_ascii=False, sort_keys=True)
+            encoded = {'encoding': 'utf-8', 'data': content}
+            prepared = resource_files.prepare(encoded)
+            payload['resources'][prepared.identity] = encoded
+            snapshot.update(body={'$resource': prepared.identity, 'bytes': prepared.size},
+                            sha256=digest(content.encode()), bytes=len(content.encode()))
         else:
             row = next(row for row in payload['canvas'] if row['kind'] == 'gif')
             body = copy.deepcopy(payload['resources'][row['body']['$resource']])
@@ -512,6 +533,62 @@ async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_insta
         assert target.db.execute('SELECT * FROM output_records').fetchall() == before
         assert target.state['canvasArtifacts'] == []
     finally:
+        host_env(monkeypatch, source)
+        await app.close()
+        host_env(monkeypatch, destination)
+        await target.close()
+
+
+@pytest.mark.parametrize('change', ['execution', 'cancel'])
+async def test_transfer_media_worker_settles_and_rechecks_source_before_admission(
+        tmp_path, monkeypatch, change):
+    import threading
+    from amplifier_web import portability_data
+    app, target, source, destination, root, destrepo, sid, *_ = await setup_hosts(tmp_path, monkeypatch)
+    entered, release, finished = Event(), Event(), Event()
+    pending = None
+    try:
+        host_env(monkeypatch, source)
+        await attach_saved_media(app, sid, root)
+        inspected = (await app.dispatch('worktree.inspect', {'sessionId': sid}))['result']
+        owner, real = threading.get_ident(), portability_data.validate
+
+        def blocked(payload, **kwargs):
+            assert threading.get_ident() != owner
+            result = real(payload, **kwargs)
+            entered.set()
+            assert release.wait(10)
+            finished.set()
+            return result
+
+        # capture's existing baseline validation remains on-owner; only the new
+        # complete detached validation is delayed.
+        def validate(payload, **kwargs):
+            return real(payload, **kwargs) if kwargs.get('media') is False else blocked(payload, **kwargs)
+
+        monkeypatch.setattr(portability_data, 'validate', validate)
+        pending = asyncio.create_task(app.dispatch('portability.export', {
+            'sessionId': sid, 'destination': target.portability.node.identity['id'],
+            'sourceRevision': inspected['repository']['sourceRevision'],
+            'expectedExecutionRevision': app._session(sid).get('executionRevision', 0),
+            'mode': 'carry_dirty', 'reviewedContent': True}, command_id='media-worker-export'))
+        assert await asyncio.to_thread(entered.wait, 10)
+        if change == 'execution':
+            app._session(sid)['executionRevision'] = app._session(sid).get('executionRevision', 0) + 1
+        else:
+            pending.cancel()
+            await asyncio.sleep(0)
+            assert not pending.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError if change == 'cancel' else AppError):
+            await pending
+        assert finished.is_set()
+        assert not app.portability.node.records(sid) and not app.portability.jobs
+        assert not app.portability.fenced(sid)
+    finally:
+        release.set()
+        if pending:
+            await asyncio.gather(pending, return_exceptions=True)
         host_env(monkeypatch, source)
         await app.close()
         host_env(monkeypatch, destination)

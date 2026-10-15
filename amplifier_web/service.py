@@ -2150,15 +2150,13 @@ class AppService:
             if has_retained_version:
                 retained_file = await load_retained_file(self.collaboration, args['sessionId'], args['referenceRequestId'],
                     args['path'] + '@sha256:' + args.get('expectedSha256', ''), args.get('referenceResponseRevision'))
-        gif_proof = gif_record = None
+        gif_snapshot = None
         if action == 'canvas.openGif':
             media = self.outputs.media
             try:
-                # Canonical identity work owns its own lock and worker. Never
-                # call identity/guarded inside the action mutation lock.
-                proof = await media.identity(args['sessionId'], args['messageId'], scoped=True)
                 async with self.lock:
-                    gif_record = copy.deepcopy(media.guard(args, proof=proof))
+                    gif_snapshot = media.snapshot(args)
+                    gif_record = gif_snapshot[0]
                     if gif_record.get('media', {}).get('mimeType') != 'image/gif':
                         raise ValueError('Open in Canvas is available only for retained GIFs.')
                     self.canvas_views.guard_transition(action, args)
@@ -2167,17 +2165,13 @@ class AppService:
                 # bytes() uses the existing bounded workers/cache/hash guards;
                 # none of these bytes enter Canvas state or action receipts.
                 await media.bytes(args)
-                gif_proof = await media.identity(args['sessionId'], args['messageId'], scoped=True)
-                if gif_proof != proof:
-                    raise ValueError('The saved assistant identity changed while opening Canvas.')
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
         pending = []
         async with self.lock:
             if action == 'canvas.openGif':
                 try:
-                    current = self.outputs.media.guard(args, proof=gif_proof)
-                    if current != gif_record:
+                    if self.outputs.media.snapshot(args) != gif_snapshot:
                         raise ValueError('The retained GIF changed while opening Canvas.')
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
@@ -2432,7 +2426,7 @@ class AppService:
                     diagnostic_result = open_file(self, args, origin, retained_file=retained_file)
                 elif action == 'canvas.openGif':
                     from .canvas_library import open_gif
-                    diagnostic_result = open_gif(self, args, gif_proof)
+                    diagnostic_result = open_gif(self, args)
                 elif action == 'canvas.openAttachment':
                     from .canvas_files import open_attachment
                     diagnostic_result = open_attachment(self, args, origin)
@@ -3201,7 +3195,9 @@ class AppService:
                 persist(self.data_dir,session)
             if action in {'session.fork','session.recover'} or action == 'message.edit' and args.get('mode','fork')=='fork':
                 canvas_mapping = fork_artifacts(self.state,source['id'],session,self.db)
-                self.outputs.fork(source['id'],session,canvas_mapping,media_origins=media_origins)
+                media_clones = self.outputs.fork(source['id'],session,canvas_mapping,media_origins=media_origins)
+                from .canvas_library import fork_gifs
+                fork_gifs(self.state, source['id'], session, self.db, media_clones)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
                 if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft
@@ -4478,6 +4474,11 @@ class AppService:
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
                 result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_domain_receipt))
+            if args['action'] == 'outputs.read' and result.get('result', {}).get('kind') == 'media':
+                # A retained-media metadata read must not append an overview
+                # that hydrates unrelated cold messages/execution.
+                return {**result, 'state': {'revision': self.state['revision'], 'sessionId': session_id,
+                    '_stateAccess': {'note': 'Retained media metadata is complete. Use get_state explicitly for other app state.'}}}
             await self._flush_pending_progress()
             if compact_domain_receipt:
                 # The exact domain receipt already carries admission, correlation

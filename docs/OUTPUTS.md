@@ -14,6 +14,43 @@ Forks copy only linked outputs anchored to retained message IDs, reuse immutable
 
 `amplifier_outputs` owns portable relationship storage and read-only Git evidence. Unified owns authorization, workspace/source access, private resources and presentation. No provider-specific artifact library is required.
 
+## Retained GIF and MP4 lifetime
+
+`outputs.attachMedia` still requires current canonical assistant identity, exact
+workspace bytes/hash, structural media validation and fresh write authority after
+worker awaits. Resident browser `displayOnly` identities are rejected; the same
+exclusion in detached saved-alias qualification remains an open dependency.
+A saved output's historical origin is provenance, not a continuing
+live-transcript requirement: later append, rewrite, truncation, display eviction
+or source-file removal does not revoke the saved version.
+
+Retained byte reads require the owning root conversation, exact registry
+ID/version/hash/provenance tuple and current authenticated client selection.
+Misses validate bytes, structure and immutable metadata off-thread; bounded warm
+cache hits still check the freshly detached resource index and backing file's
+device/inode/size/modification/change signature. HEAD checks indexed metadata
+without opening or decoding media. Registry/resource replacement or revoked
+client/conversation scope fails rather than borrowing another source.
+
+`outputs.read` returns bounded metadata, real historical origin and paged comments
+without hydrating display/execution or selecting a browser. Agent reads remain
+caller-conversation owned; an unbound read reports `unbound`, not playback evidence
+from another browser. Reports and `canvas.openGif` remain authenticated UI-only.
+The existing Outputs detail uses the existing media viewer/download controls;
+only GIF has the existing Open in Canvas action.
+
+Unlink suppresses automatic discovery but retains exact authorized library/byte
+access. Relink changes only the relationship revision, not bytes, IDs or playback.
+Forks still require linked outputs and surviving origins at the existing cutoff.
+Existing GIF wrappers are remapped only to exact surviving output clones;
+malformed or cutoff wrappers are skipped before copying. Signed/reviewed transfer
+routes validate output ownership, bytes/structure and exact GIF references without
+requiring the historical origin to remain in the transcript. Generic output and
+total transfer limits, signed receipts and existing resource GC remain unchanged.
+Generic GIF Canvas output snapshots are omitted from forks rather than carrying
+source-session bindings; transfers validate both their encoded snapshot and exact
+Canvas source reference.
+
 Validation:30 backend checks across output, resource-retention, server and canvas behavior;210 frontend checks including safe Markdown writing blocks. Actual service/Chromium validates edited writing vs original message, exact file download after source edits, real local Git review/line notes, unlink/restore/reload, mobile bounds, selected chat/draft preservation and zero model calls. This does not establish rendered document fidelity or remote provider/account acceptance.
 
 ## Explicit visual inspection
