@@ -135,11 +135,17 @@ async def test_completion_badge_preference_and_bulk_review_preserve_pending_work
         item=next(i for i in after['items'] if not i['read'])
         await app.dispatch('attention.read', {'ids':[item['id']], 'fingerprints':{item['id']:item['fingerprint']}})
         assert app.get_state()['attention']['unread']==0
+        assert row['approvals']==original['approvals'] and row['questions']==original['questions']
     finally: await app.close()
     app=AppService(tmp_path/'data',workspace=tmp_path)
     app.management=Management(app)
     try:
         assert app.get_state()['notificationSettings']['completionBadge'] is False
         assert app.get_state()['attention']['unread']==0
-        assert app._session()['approvals'][0]['status']=='pending'
+        # Reviewing attention did not answer the current-host permission.
+        # Replacing its host expires the native waiter without replaying it.
+        approval=app._session()['approvals'][0]
+        assert approval['status']=='expired'
+        assert approval['resolutionReason']=='host_restarted'
+        assert app._session()['questions']==original['questions']
     finally: await app.close()
