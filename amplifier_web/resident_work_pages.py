@@ -49,6 +49,10 @@ class ResidentWorkPages:
              for row in source['execution']['turns']]]
         return hashlib.sha256(_encode(facts)).hexdigest()
 
+    def _owner_stamp(self, session):
+        from .work_windows import source_identity
+        return hashlib.sha256(_encode([id(session), source_identity(session)])).hexdigest()
+
     def _token(self, value):
         body = _encode(value)
         return base64.urlsafe_b64encode(hmac.digest(self.windows.key, body, 'sha256') + body).decode()
@@ -73,9 +77,10 @@ class ResidentWorkPages:
             and str(row.get('turnId')) + '@' + (anchors[row['id']] or 'start') == group]
         return selected, anchors, next(iter(segments), None)
 
-    def _entry(self, session, group):
+    def _entry(self, session, group, *, reconcile=False):
         entry = self.groups.get(self._key(session, group))
-        if entry is None or entry['stamp'] != self._stamp(session):
+        if (entry is None or entry['owner'] != self._owner_stamp(session)
+                or not reconcile and entry['stamp'] != self._stamp(session)):
             raise ValueError('This Work window expired. Close and reopen its steps.')
         self.groups.move_to_end(self._key(session, group))
         return entry
@@ -96,7 +101,7 @@ class ResidentWorkPages:
         if before is None:
             start, end, within = max(0, len(nodes) - NODE_LIMIT), len(nodes), None
             entry = {'stamp': stamp, 'key': 'resident-work:' + self._token([self._client(), session['id'], group, stamp]),
-                     'ranges': {}, 'ids': {}, 'revision': None}
+                     'owner': self._owner_stamp(session), 'ranges': {}, 'ids': {}, 'positions': {}, 'revision': None}
         else:
             cursor = self._parse(before)
             entry = self._entry(session, group)
@@ -128,8 +133,14 @@ class ResidentWorkPages:
         if len(ranges) > MAX_RANGES or len(identities) > MAX_STEPS:
             raise ValueError('This open Work window reached its page limit. Close and reopen its steps to release it.')
         if selected:
+            positions = {row['id']: index for index, row in enumerate(nodes[start:end], start)}
+            admitted = {row['id']: positions.get(row['id'], positions.get(row.get('parentId')))
+                        for row in selected}
+            if any(index is None for index in admitted.values()):
+                raise ValueError('This Work changed. Close and reopen its steps.')
             entry['ranges'][scope] = True
             entry['ids'].update((row['id'], scope) for row in selected)
+            entry['positions'].update(admitted)
         self.groups.pop(self._key(session, group), None)
         self.groups[self._key(session, group)] = entry
         while len(self.groups) > MAX_GROUPS:
@@ -157,7 +168,7 @@ class ResidentWorkPages:
         if (not isinstance(known, dict) or len(known) > MAX_STEPS
                 or not all(isinstance(key, str) and isinstance(value, str) for key, value in known.items())):
             raise ValueError('Choose a bounded open Work window.')
-        entry = self._entry(session, group)
+        entry = self._entry(session, group, reconcile=True)
         if not set(known) <= entry['ids'].keys():
             raise ValueError('This Work window expired. Close and reopen its steps.')
         nodes = raw(session).get('execution', {}).get('nodes', [])
@@ -188,6 +199,7 @@ class ResidentWorkPages:
                       for low, end in merged for start in range(low, end, NODE_LIMIT)]
         by_id = {row['id']: index for index, row in positions.items()}
         ids = {}
+        current_positions = {}
         for row in selected:
             # Returned delegate observations use their admitted worker's range;
             # their actual message field remains owned by the message reader.
@@ -196,10 +208,18 @@ class ResidentWorkPages:
             if scope is None:
                 raise ValueError('This Work changed. Close and reopen its steps.')
             ids[row['id']] = scope
+            current_positions[row['id']] = index
+        # A new message or canonical reconciliation may replace the list without
+        # moving these steps. Revalidate only the admitted ranges: the same IDs
+        # must still occupy their accepted positions in this exact group. Never
+        # search the historical graph to recover a moved or replaced window.
+        if any(current_positions.get(identity) != entry['positions'][identity] for identity in known):
+            raise ValueError('This Work changed. Close and reopen its steps.')
         ranges = dict.fromkeys(ids.values(), True)
         if len(selected) > MAX_STEPS or len(ranges) > MAX_RANGES:
             raise ValueError('This open Work window reached its page limit. Close and reopen its steps to release it.')
-        entry['ids'], entry['ranges'] = ids, ranges
+        entry['ids'], entry['ranges'], entry['positions'] = ids, ranges, current_positions
+        entry['stamp'] = self._stamp(session)
         entry['revision'] = (latest_segment or segment or {}).get('detailRevision', entry['revision'])
         older = self._cursor(session, group, entry)
         return {'items': [self._compact(session, row, anchors.get(row['id']), entry)

@@ -171,3 +171,66 @@ def test_small_live_appends_coalesce_receipts_instead_of_spending_one_per_revisi
     assert len(owner.live_pages.groups[(None, 's', 't@user')]['ranges']) == 2
     older = owner.live_pages.read(session, 't@user', before=result['before'], revision=result['revision'])
     assert [row['id'] for row in older['items']] == [str(i) for i in range(26)]
+
+
+@pytest.mark.parametrize('change', ['completed-reconstruction', 'assistant-append'])
+def test_open_steps_follow_completion_and_message_append(tmp_path, monkeypatch, change):
+    import copy
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=2)
+    node = session['execution']['nodes'][-1]
+    node.update(kind='llm', phase='running', endedAt=None)
+    first = owner.live_pages.read(session, 't@user')
+    known = {row['id']: row['detailVersion'] for row in first['items']}
+    if change == 'completed-reconstruction':
+        # Canonical reconciliation may replace an equivalent resident list.
+        session['execution'] = copy.deepcopy(session['execution'])
+    else:
+        session['messages'].append({'id': 'answer', 'role': 'assistant',
+                                    'text': 'Done', 'createdAt': 3})
+    session['execution']['nodes'][-1].update(phase='completed', endedAt=2,
+        usage={'inputTokens': 100, 'outputTokens': 20, 'totalTokens': 120})
+    owner.invalidate({'s'})
+    synced = owner.live_pages.sync(session, 't@user', known)
+    assert synced['order'] == ['0', '1']
+    assert synced['items'][-1]['phase'] == 'completed'
+    assert synced['items'][-1]['usage']['totalTokens'] == 120
+    assert owner.live_pages.read_text(session, first['items'][0]['outputDetail'])['value'] == 'body ' * 1000
+
+
+@pytest.mark.parametrize('change', ['reorder', 'truncate', 'replace-id', 'reanchor', 'source-rebind', 'session-replaced'])
+def test_live_sync_rejects_changed_admitted_positions_or_group(tmp_path, monkeypatch, change):
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=2)
+    first = owner.live_pages.read(session, 't@user')
+    known = {row['id']: row['detailVersion'] for row in first['items']}
+    if change == 'reorder':
+        session['execution']['nodes'].reverse()
+    elif change == 'truncate':
+        session['execution']['nodes'].pop(0)
+    elif change == 'replace-id':
+        session['execution']['nodes'][0]['id'] = 'replacement'
+    elif change == 'reanchor':
+        session['execution']['nodes'][0]['anchorMessageId'] = 'different'
+    elif change == 'session-replaced':
+        session = dict(session)
+    else:
+        session['nativeIdentity'] = 'different'
+    owner.invalidate({'s'})
+    with pytest.raises(ValueError, match='changed|expired'):
+        owner.live_pages.sync(session, 't@user', known)
+
+
+def test_reconciled_open_window_reissues_strict_older_cursor(tmp_path, monkeypatch):
+    owner, session, _ = live_fixture(tmp_path, monkeypatch)
+    first = owner.live_pages.read(session, 't@user')
+    known = {row['id']: row['detailVersion'] for row in first['items']}
+    session['execution']['nodes'] = list(session['execution']['nodes'])
+    session['messages'].append({'id': 'answer', 'role': 'assistant', 'createdAt': 3})
+    owner.invalidate({'s'})
+    with pytest.raises(ValueError, match='changed|expired'):
+        owner.live_pages.read(session, 't@user', before=first['before'])
+    synced = owner.live_pages.sync(session, 't@user', known)
+    assert synced['order'] == [str(i) for i in range(26, 126)]
+    with pytest.raises(ValueError, match='changed|expired'):
+        owner.live_pages.read(session, 't@user', before=first['before'])
+    older = owner.live_pages.read(session, 't@user', before=synced['before'], revision=synced['revision'])
+    assert [row['id'] for row in older['items']] == [str(i) for i in range(26)]

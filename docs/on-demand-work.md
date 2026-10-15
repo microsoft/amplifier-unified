@@ -77,8 +77,13 @@ it never silently drops prior steps or reports an exhausted history. Closing and
 reopening starts a fresh bounded page; chat-interest departure retires receipts.
 
 Cursors bind the host-owned source, bounded grouping facts, and publication fence.
-Live sync reconstructs only admitted ranges plus the current tail, so updates
-preserve previously requested steps without scanning the full execution graph.
-A source replacement or expired receipt requires reopening the group. Field
+Live sync reconstructs only admitted ranges plus the current tail. A new message
+or reconstructed resident list can advance the open receipt when every retained
+step still has the same ID, resident position, and group under the same session
+and source owner. Terminal status and usage updates therefore settle without
+closing the group. Reordered, removed, replaced, or reanchored retained steps
+require reopening; sync never searches the full execution graph to recover them.
+Explicit older cursors remain strict and sync issues a fresh cursor after a valid
+advance. A source replacement or expired receipt requires reopening the group. Field
 readers resolve only admitted resident ranges and retain exact digest validation.
 Canonical execution, accounting, and independent complete APIs are unchanged.
