@@ -35,7 +35,7 @@ try{
   await expect(target().getByRole('button',{name:'Reply to message',exact:true})).toHaveCount(0);
   await expect(target().getByRole('button',{name:'React to message',exact:true})).toHaveCount(0);
   await expect(target().getByRole('button',{name:'Edit message',exact:true})).toHaveCount(0);
-  await expect(target().getByRole('button',{name:'Fork conversation after this turn',exact:true})).toHaveCount(0);
+  await expect(target().getByRole('button',{name:/^Fork conversation/})).toHaveCount(0);
   evidence.assertion('Native display-only target remains readable',(await target().innerText()).includes('Saved message 150'));
  });
  await probe('canonical-older-page',['messages.rail'],async()=>{

@@ -97,3 +97,36 @@ test('loaded bundle choices are usable while the inherited default is unresolved
   assert.equal(calls.find(c=>c.args?.patch?.newSessionDraft)?.args.patch.newSessionDraft.bundle,'work');
  }finally{await renderAct(async()=>root?.unmount())}
 });
+
+test('compact catalog loading and retry preserve the explicit unlisted bundle',async()=>{
+ const calls=[];let root,state={view:{newSessionDraft:{workspace:'/trial',bundle:'custom:saved'},composerBundle:{open:true,sessionId:null}},registeredBundles:[]};
+ const render=()=>React.createElement(BundleControl,{state,compact:true,act:async(name,args)=>{calls.push({name,args});return {accepted:false,error:'Catalog unavailable'}}});
+ try{
+  await renderAct(async()=>root=create(render()));
+  assert.equal(root.root.findByType('select').props.value,'custom:saved');
+  assert.equal(root.root.findByType('select').findByType('option').children.join(''),'custom:saved');
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/No bundles|Loading bundles/);
+  state={...state,registeredBundles:[{value:'work',label:'Work'}]};await renderAct(async()=>root.update(render()));
+  assert.equal(root.root.findByType('select').props.value,'custom:saved');
+  assert.equal(calls.some(row=>row.name==='view.update'||row.name==='bundle.switch'||row.name==='conversation.send'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
+test('compact bundle switch locks pending choice and failed completion does not resubmit',async()=>{
+ const calls=[];let root,release,operation;
+ const state={view:{composerBundle:{open:true,sessionId:'chat'}},registeredBundles:[{value:'work'},{value:'anchors'}]},session={id:'chat',bundle:'work'};
+ const act=(name,args)=>{calls.push({name,args});return name==='bundle.switch'?new Promise((resolve,reject)=>{release=()=>reject(Error('Switch unavailable'))}):Promise.resolve({accepted:true})};
+ try{
+  await renderAct(async()=>root=create(React.createElement(BundleControl,{state,session,compact:true,act,working:false})));
+  const picker=()=>root.root.findByType('select');
+  await renderAct(async()=>{operation=picker().props.onChange({target:{value:'anchors'}})});
+  assert.equal(picker().props.disabled,true);assert.equal(picker().props.value,'work');
+  await renderAct(async()=>picker().props.onChange({target:{value:'anchors'}}));
+  assert.equal(calls.filter(row=>row.name==='bundle.switch').length,1);
+  await renderAct(async()=>{release();await operation});
+  assert.equal(picker().props.disabled,undefined);assert.equal(picker().props.value,'work');
+  assert.match(JSON.stringify(root.toJSON()),/Switch unavailable/);
+  assert.equal(calls.filter(row=>row.name==='bundle.switch').length,1);
+  assert.equal(calls.some(row=>row.name==='conversation.send'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
