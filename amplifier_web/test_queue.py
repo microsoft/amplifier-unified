@@ -429,6 +429,7 @@ class TestQueue:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            log.exception('Queued check lifecycle interrupted; reconciling its recorded effects')
             receipt = self.get(identity)
             if receipt['job'].get('resourceId'):
                 # A failure between saving an effect and saving the queue's
@@ -489,7 +490,7 @@ class TestQueue:
             if row.get('environmentState') not in {'running', 'stopped', 'unknown', 'not-started'}:
                 raise ValueError('The exact environment has not reached a cleanup boundary.')
             receipt['job'].setdefault('check', {'state': 'outcome_unknown',
-                'message': 'The host restarted; no check command was replayed.'})
+                'message': 'The interrupted lifecycle has no recorded check result; no check command was replayed.'})
             self.save(receipt)
             await self.cleanup(receipt, config, recovery=True)
         except Exception as exc:
