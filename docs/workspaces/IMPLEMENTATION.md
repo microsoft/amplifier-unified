@@ -999,7 +999,7 @@ permissions, pending requests or retained files are silently migrated. The DTU
 backend's own state remains app-private. This supersedes the outside-repository
 placement described in the original slice below.
 
-Focused acceptance: 109 backend tests, six client tests and 15 browser scenarios
+Focused acceptance: 129 backend tests, six client tests and 15 browser scenarios
 passed in an isolated qualifier. Actual Core/Foundation root, fresh-child and
 resumed-child writes exercised both patch engines without approval, including
 denied, narrower and read-only policy cases. Browser checks used real allocation
