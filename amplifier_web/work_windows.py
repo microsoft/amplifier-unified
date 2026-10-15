@@ -67,6 +67,8 @@ class WorkWindows:
         self.closed = False
         self.projector = None
         self.retry_at = {}
+        from .resident_work_pages import ResidentWorkPages
+        self.live_pages = ResidentWorkPages(self)
 
     def _worker(self):
         if self.projector is None and not sys.platform.startswith('linux'):
@@ -105,7 +107,7 @@ class WorkWindows:
         self._notify(identity)
 
     def invalidate(self, identities=None):
-        for identity in set(self.current) | set(self.pending):
+        for identity in set(self.current) | set(self.pending) | set(self.epochs):
             if identities is None or identity in identities:
                 self.epoch += 1
                 self.epochs.pop(identity, None)
@@ -155,6 +157,7 @@ class WorkWindows:
         return value
 
     def retain_interest(self, identities):
+        self.live_pages.retain_interest(identities)
         for identity, task in tuple(self.pending.items()):
             if identity not in identities:
                 task.cancel()
@@ -362,5 +365,6 @@ class WorkWindows:
             await asyncio.gather(*tasks, return_exceptions=True)
         if self.projector is not None:
             await self.projector.close()
+        self.live_pages.groups.clear()
         self.pages.clear(); self.current.clear(); self.status.clear()
         self.epochs.clear(); self.retry_at.clear()

@@ -386,3 +386,55 @@ async def test_resident_page_budget_retries_intact_older_record(tmp_path, monkey
         page = await service.history.windows.read('app', before=page['before'])
         received = page['items'] + received
     assert [row['id'] for row in received] == [str(i) for i in range(5)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cold', [False, True])
+async def test_saved_window_reactions_are_current_exact_id_annotations_without_body_hydration(tmp_path, monkeypatch, cold):
+    import sqlite3
+    from amplifier_web import cold_display
+    from amplifier_web.resource_files import put
+    service, session = service_for(tmp_path, managed=False)
+    session.pop('nativeProject')
+    session['messages'] = [{'id': str(i), 'role': 'user', 'text': f'Message {i}'} for i in range(101)]
+    class PointAnnotations(dict):
+        def items(self):
+            raise AssertionError('Do not scan unrelated message annotations')
+    session['messageAnnotations'] = PointAnnotations({'1': {'reactions': ['❤️'],
+        'attribution': {'caption': 'Untrusted'}, 'text': 'Not the body'}, '0': {'reactions': ['👍']}})
+    db = sqlite3.connect(tmp_path / 'state.sqlite3')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        if cold:
+            reference = put(db, session['messages'])
+            session = cold_display.ColdRecord({**session, '_coldFields': {'messages': reference}}, db)
+            dict.pop(session, 'messages')
+            service.db = db
+            service._session = lambda identity, **kwargs: session
+        monkeypatch.setattr(cold_display, 'load', lambda *args: pytest.fail('No full body hydration'))
+        await service.history.windows.load('app')
+        first = service.history.windows.project(session)
+        row = first['messages'][0]
+        assert row['id'] == '1' and row['text'] == 'Message 1' and row['reactions'] == ['❤️']
+        assert 'attribution' not in row and first['messageWindow']['hasEarlier']
+        session['messageAnnotations']['1']['reactions'] = []
+        current = service.history.windows.project(session)
+        assert current['messages'][0]['reactions'] == []
+        assert row['reactions'] == ['❤️'], 'Published rows must stay detached'
+        older = await service.history.windows.read('app', before=current['messageWindow']['before'])
+        assert older['items'][0]['id'] == '0' and older['items'][0]['reactions'] == ['👍']
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_native_display_only_window_does_not_inherit_saved_reactions(tmp_path, monkeypatch):
+    from amplifier_web import automatic_history
+    monkeypatch.setattr(automatic_history, 'amplifier_home', lambda: tmp_path)
+    transcript(tmp_path, [{'role': 'assistant', 'content': 'Native observation'}])
+    service, session = service_for(tmp_path)
+    await service.history.load('app')
+    row = service.history.windows.project(session)['messages'][0]
+    session['messageAnnotations'] = {row['id']: {'reactions': ['❤️']}}
+    current = service.history.windows.project(session)['messages'][0]
+    assert current['displayOnly'] and 'reactions' not in current

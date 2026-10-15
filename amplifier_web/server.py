@@ -164,6 +164,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         from .work_windows import web_context
         windows = service.event_log_view.windows
         if 'field' in request.query:
+            if (request.query.get('windowKey') or '').startswith('resident-work:'):
+                return web.json_response(windows.live_pages.read_text(session, dict(request.query)))
             if request.query.get('windowKey'):
                 owner = service.history.windows if request.query.get('part') == 'messages' else windows
                 return web.json_response(await owner.read_text(session['id'], dict(request.query)))
@@ -179,8 +181,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                 return web.json_response(windows.nodes(session['id'], request.query['group'],
                     revision=request.query.get('revision')))
             if part == 'nodes':
-                return web.json_response(page(windows.live_view(session), part, request.query.get('before'),
-                    group=request.query.get('group'), revision=request.query.get('revision')))
+                return web.json_response(windows.live_pages.read(session, request.query.get('group'),
+                    before=request.query.get('before'), revision=request.query.get('revision')))
         session = service._session(session['id'])
         return web.json_response(page(session, request.query.get('part'), request.query.get('before'),
                                       group=request.query.get('group'), revision=request.query.get('revision'),
@@ -268,7 +270,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         session = service._session(args.get('sessionId'), hydrate=False)
         from .work_windows import web_context
         if web_context(service):
-            return web.json_response(sync_work(service.event_log_view.windows.live_view(session), args.get('group'), args.get('known')))
+            return web.json_response(service.event_log_view.windows.live_pages.sync(session, args.get('group'), args.get('known')))
         session = service._session(session['id'])
         return web.json_response(sync_work(session, args.get('group'), args.get('known'),
                                            window_message_id=args.get('windowMessageId')))

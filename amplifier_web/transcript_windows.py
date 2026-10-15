@@ -246,10 +246,18 @@ class TranscriptWindows:
         result['items'] = rows
         result.pop('_owner', None)
         saved_owner = result.pop('_savedOwner', None)
+        # Reactions belong to the canonical saved message ID, independently of
+        # the disposable body window. Look up only admitted IDs and never copy
+        # unsupported annotation fields or decorate native display-only rows.
+        current = self.service._session(session_id, hydrate=False)
+        annotations = dict.get(current, 'messageAnnotations', {})
         for index, row in enumerate(result['items']):
             if not row.get('displayOnly'):
                 from .browser_detail import compact
                 result['items'][index] = compact(row, session_id, 'messages', 4096)
+                annotation = annotations.get(row.get('id'), {})
+                if isinstance(annotation, dict) and 'reactions' in annotation:
+                    result['items'][index]['reactions'] = copy.deepcopy(annotation['reactions'])
                 if row.get('attribution'):
                     result['items'][index]['attribution'] = row['attribution']
                 if saved_owner and result['items'][index].get('textDetail'):
