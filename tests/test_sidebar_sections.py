@@ -9,20 +9,25 @@ from test_shell_modules import service, command, prepare
 from amplifier_web.shell_modules import DEFAULT
 
 
-@pytest.mark.parametrize('count,size,pages', [(0,0,1),(40,40,1),(50,50,1),(51,40,2),(80,40,2),(81,40,3)])
-def test_recent_threshold_excludes_pins_before_paging(count, size, pages):
+@pytest.mark.parametrize('count,size,pages', [(0,1,1),(40,41,1),(50,40,2),(51,40,2),(80,40,3),(81,40,3)])
+def test_recent_threshold_includes_pins_before_paging(count, size, pages):
     state = state_fixture()
     state['view']['navChatScope'] = 'all'
     state['sessions'] = [chat(f'chat-{i}', recent=i) for i in range(count)] + [chat('pin')]
     state['pinnedSessionIds'] = ['pin']
     before = deepcopy(state)
     page = snapshot(state, section='recent')
-    assert (page['total'], len(page['items']), page['pages']) == (count, size, pages)
-    assert 'pin' not in ids(page) and state == before
+    assert (page['total'], len(page['items']), page['pages']) == (count + 1, size, pages)
+    assert state == before
     assert ids(snapshot(state, section='pinned')) == ['pin']
     state['view']['navChatPage'] = {**page['scope'], 'index': 999}
     final = snapshot(state, section='recent')
-    assert final['index'] == pages - 1 and final['end'] == count
+    assert final['index'] == pages - 1 and final['end'] == count + 1
+    all_ids = []
+    for index in range(pages):
+        state['view']['navChatPage'] = {**page['scope'], 'index': index}
+        all_ids.extend(ids(snapshot(state, section='recent')))
+    assert all_ids.count('pin') == 1 and len(all_ids) == count + 1
     if count:
         state['view']['navFilter'] = 'chat-0'
         filtered = snapshot(state, section='recent')
@@ -39,10 +44,10 @@ def test_pins_remain_available_beyond_a_recent_page():
     last = snapshot(state, section='pinned')
     assert first['total'] == 110 and len(first['items']) == 40
     assert ids(last) == [str(i) for i in range(80,110)]
-    assert snapshot(state, section='recent')['total'] == 40
+    assert snapshot(state, section='recent')['total'] == 150
 
 
-def test_section_activity_counts_precede_status_filters_and_exclude_pins():
+def test_section_activity_counts_precede_status_filters_and_include_pins():
     state = state_fixture()
     state['view'].update(navChatScope='all', navStatusFilter='attention')
     state['sessions'] = [chat('error', error='Failed', status='error'),
@@ -50,7 +55,8 @@ def test_section_activity_counts_precede_status_filters_and_exclude_pins():
     state['pinnedSessionIds'] = ['pin']
     page = snapshot(state, section='recent')
     assert ids(page) == ['error']
-    assert page['activityCounts']['attention'] == page['activityCounts']['working'] == 1
+    assert page['activityCounts']['attention'] == 1
+    assert page['activityCounts']['working'] == 2
 
 
 @pytest.mark.parametrize('patch', [
@@ -79,7 +85,7 @@ async def test_sections_are_agent_visible_client_local_and_do_not_fork_history(s
     assert sections['workspace']['total'] == 61
     assert query['view']['navSectionsCollapsed'] == ['workspaces']
     other = (await command(service, 'shell.query', clientId='two', instanceId='chats'))['result']
-    assert other['sidebarNavigation']['recent']['total'] == 60
+    assert other['sidebarNavigation']['recent']['total'] == 62
     assert not other['view'].get('navSectionsCollapsed')
     assert service.state['sessions'] == before
     assert service.state['view']['draft'] == 'Keep this unsent message'

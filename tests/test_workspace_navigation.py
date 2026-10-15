@@ -278,8 +278,8 @@ def test_workspace_pins_are_ordered_deduplicated_and_independent_of_chat_activit
     value['pinnedSessionIds'] = ['busy-chat']
     original = copy.deepcopy(value)
     result = browse(copy.deepcopy(value), navWorkspaceMode='recent')
-    assert [row['workspaceId'] for row in result['rows']] == ['old', 'empty', 'busy']
-    assert [row.get('pinned', False) for row in result['rows']] == [True, True, False]
+    assert [row['workspaceId'] for row in result['rows']] == ['busy', 'empty', 'old']
+    assert [row.get('pinned', False) for row in result['rows']] == [False, True, True]
     assert result['rows'][1]['chatCount'] == 0
     assert workspace_pins(value) == ['old', 'empty']
     assert value == original
@@ -312,12 +312,13 @@ def test_unavailable_pins_keep_identity_and_order_but_do_not_expose_missing_fold
     value['pinnedWorkspaceIds'] = ['two', 'one']
     value['view']['navWorkspaceMode'] = 'recent'
     value['workspaces'][1]['available'] = False
-    assert [row['workspaceId'] for row in snapshot(value)['rows']] == ['one', 'busy']
+    assert [row['workspaceId'] for row in snapshot(value)['rows']] == ['busy', 'one']
     assert workspace_pins(value) == ['two', 'one']
     value['workspaces'][1].update(name='Renamed', available=True)
     result = snapshot(value)
-    assert [row['workspaceId'] for row in result['rows']] == ['two', 'one', 'busy']
-    assert result['rows'][0]['customName'] == 'Renamed'
+    assert [row['workspaceId'] for row in result['rows']] == ['busy', 'one', 'two']
+    assert result['rows'][2]['customName'] == 'Renamed'
+    assert [row['workspaceId'] for row in snapshot(value, pinned_only=True)['rows']] == ['two', 'one']
     assert value['pinnedWorkspaceIds'] == ['two', 'one']
 
 
@@ -350,7 +351,7 @@ def test_workspace_cache_keys_cover_whole_pin_vector_including_unavailable_and_o
     projections.workspace_pins_changed()
     second = projections.workspaces(value)
     assert second is not first
-    assert [row['workspaceId'] for row in second['rows'][:2]] == ['108', '109']
+    assert [row['workspaceId'] for row in second['rows']] == [row['workspaceId'] for row in first['rows']]
     assert projections.shell_key(value) != key
     assert projections.values[('workspace-index', 'active')] is index
     assert projections.values[('chats', 'sentinel')] is chat_cache
@@ -358,7 +359,8 @@ def test_workspace_cache_keys_cover_whole_pin_vector_including_unavailable_and_o
     projections.invalidate(state=value, session_ids=set())
     value['workspaces'][110]['available'] = True
     restored = projections.workspaces(value)
-    assert [row['workspaceId'] for row in restored['rows'][:3]] == ['108', '110', '109']
+    assert [row['workspaceId'] for row in restored['rows'][:3]] == ['0', '1', '2']
+    assert [row['workspaceId'] for row in snapshot(value, pinned_only=True)['rows']] == ['108', '110', '109']
     assert projections.shell_key(value) != key
 
 
@@ -395,8 +397,9 @@ async def test_workspace_pins_persist_in_records_checkpoints_backup_export_and_r
     restored = AppService(tmp_path / 'state', workspace=paths[0])
     assert restored.state['pinnedWorkspaceIds'] == [two, one]
     recent = snapshot({**restored.state, 'view': {'navWorkspaceMode': 'recent'}})
-    assert [row['workspaceId'] for row in recent['rows']] == [two, one]
-    assert recent['rows'][1]['customName'] == 'Renamed one'
+    assert [row['workspaceId'] for row in recent['rows']] == [one, two]
+    assert recent['rows'][0]['customName'] == 'Renamed one'
+    assert [row['workspaceId'] for row in snapshot({**restored.state, 'view': {'navWorkspaceMode': 'recent'}}, pinned_only=True)['rows']] == [two, one]
     await restored.dispatch('workspace.remove', {'id': two})
     assert restored.state['pinnedWorkspaceIds'] == [one]
     assert paths[1].is_dir() and not restored.state['sessions']

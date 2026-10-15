@@ -301,7 +301,7 @@ def registry(state):
     return by_id, by_path, labels, roots, grouped
 
 
-def catalog(state, *, indexed=None):
+def catalog(state, *, indexed=None, pin_first=True):
     """Filter/sort once; selected chat and pagination belong to each client."""
     by_id, by_path, labels, roots, grouped = registry(state) if indexed is None else indexed
     selected = by_id.get(state.get('selectedWorkspaceId'))
@@ -370,8 +370,8 @@ def catalog(state, *, indexed=None):
                      **({'archived': True} if is_archived else {}),
                      'recentActivityAt': navigation_activity(session)})
     # Python's stable sort preserves source-array order for equal timestamps.
-    rows.sort(key=lambda row: (not row['pinned'],
-        pin_order.get(row['id'], 0) if row['pinned'] else
+    rows.sort(key=lambda row: (not row['pinned'] if pin_first else False,
+        pin_order.get(row['id'], 0) if pin_first and row['pinned'] else
         (row['title'].lower() if sort == 'name' else
          -(row['createdAt'] or 0) if sort == 'created' else -row['recentActivityAt'])))
     return rows, scope, counts
@@ -382,12 +382,12 @@ def snapshot(state, *, indexed=None, section=None):
     # Section counts are computed before the activity filter, so switching from
     # Attention to Working still reports the full matching count for each.
     catalog_state = {**state, 'view': {**view, 'navStatusFilter': 'all'}} if section else state
-    rows, scope, counts = catalog(catalog_state) if indexed is None else indexed
+    rows, scope, counts = catalog(catalog_state, pin_first=section not in ('recent', 'shortcuts')) if indexed is None else indexed
     scope = {**scope, 'selectedSessionId': state.get('selectedSessionId')}
     if section:
         scope['section'] = section
-        if section in ('pinned', 'recent', 'shortcuts'):
-            rows = [row for row in rows if row['pinned'] == (section == 'pinned')]
+        if section == 'pinned':
+            rows = [row for row in rows if row['pinned']]
         if section in ('recent', 'shortcuts', 'search'):
             scope['showAgentCreated'] = view.get('navShowAgentCreated') is True
             rows = [row for row in rows if scope['showAgentCreated']

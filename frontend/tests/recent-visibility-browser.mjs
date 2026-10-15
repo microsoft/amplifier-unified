@@ -91,10 +91,12 @@ try{
  await page.setViewportSize({width:1280,height:1000});
  await showAgentCreated(!(await projection()).scope.showAgentCreated);
  await expect(sidebar().getByRole('button',{name:'Show agent-created',exact:true})).toHaveCount(0);
- await expect.poll(async()=>(await projection()).total).toBe(133);
+ await expect.poll(async()=>(await projection())?.total).toBe(134);
  await waitForRows(20);
+ assert.ok((await order()).includes(initial.pinned));
+ await expect(page.locator(`[data-shell-instance="chats"] [data-sidebar-section="pinned"] [data-session-id="${initial.pinned}"]`)).toHaveCount(1);
  await showAgentCreated(!(await projection()).scope.showAgentCreated);
- await expect.poll(async()=>(await projection()).total).toBe(total);
+ await expect.poll(async()=>(await projection())?.total).toBe(total);
  assert.deepEqual(await order(),firstOrder);
  // Passive browse setup: real current draft, attachment, Canvas and model/bundle.
  await page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill('Keep original draft');
@@ -151,7 +153,7 @@ try{
  await waitForRows(120);
  assert.equal(await writes(),beforeScroll+1);
  // Appended content and anchor restoration must not recursively request 140.
- await expect.poll(async()=>(await projection()).limit).toBe(120);
+ await expect.poll(async()=>(await projection())?.limit).toBe(120);
  assert.equal(await writes(),beforeScroll+1);
  assert.equal((await order()).length,new Set(await order()).size);
  // Hidden/inert/collapsed Recent remains passive even with scroll intent.
@@ -193,11 +195,11 @@ try{
  await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentNavigation);
  await waitForRows(100);
  await showAgentCreated(true);
- await expect.poll(async()=>(await projection()).scope.showAgentCreated).toBe(true);
+ await expect.poll(async()=>(await projection())?.scope.showAgentCreated).toBe(true);
  await waitForRows(100);
  assert.ok((await order()).includes(initial.commissioned));
  await showAgentCreated(!(await projection()).scope.showAgentCreated);
- await expect.poll(async()=>(await projection()).scope.showAgentCreated).toBe(false);
+ await expect.poll(async()=>(await projection())?.scope.showAgentCreated).toBe(false);
  await waitForRows(100);assert.ok(!(await order()).includes(initial.commissioned));
  assert.deepEqual(await preservation(page),before);
  assert.deepEqual(await preservation(other),otherBefore);
@@ -210,7 +212,7 @@ try{
  await dispatch(page,'shell.changes.apply',{clientId,expectedRevision:inspected.revision,changeId:prepared.result.id});
  await waitForRows(20,page,'recent-second');await waitForRows(100);
  await showAgentCreated(true,'recent-second');
- await expect.poll(async()=>(await projection(page,'recent-second')).scope.showAgentCreated).toBe(true);
+ await expect.poll(async()=>(await projection(page,'recent-second'))?.scope.showAgentCreated).toBe(true);
  assert.equal((await projection()).scope.showAgentCreated,false);
  await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.['recent-second']?.recentNavigation);
  await waitForRows(100);await waitForRows(20,page,'recent-second');
@@ -278,7 +280,7 @@ try{
  await sidebar().getByRole('button',{name:'Load older chats',exact:true}).click();
  // The independent SSE query may already have reconciled to 80. Either way,
  // only an explicit read is permitted; check server mutation identities.
- await expect.poll(async()=>(await projection()).limit).toBe(80);
+ await expect.poll(async()=>(await projection())?.limit).toBe(80);
  if(await sidebar().getByRole('button',{name:'Retry',exact:true}).count())await sidebar().getByRole('button',{name:'Retry',exact:true}).click();
  await waitForRows(80);await page.unroute('**/api/actions');
  const writes80=(await metrics()).mutations.filter(row=>row.action==='shell.view.update'&&row.args?.instanceId==='chats'&&row.args.patch?.navRecentLimit===80);
@@ -286,10 +288,13 @@ try{
  // Steady progress retains the loaded order, scroll and active control.
  const steady=await order(),toggle=sidebar().getByRole('button',{name:'Load older chats',exact:true});
  await toggle.scrollIntoViewIfNeeded();await toggle.focus();
+ const geometry=()=>page.evaluate(()=>{const rail=document.querySelector('.a-nav-content');const box=n=>{const r=n.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height}};return {scrollTop:rail.scrollTop,scrollHeight:rail.scrollHeight,clientHeight:rail.clientHeight,rail:box(rail),focus:document.activeElement?.textContent,sections:[...rail.querySelectorAll('[data-sidebar-section]')].map(n=>({section:n.dataset.sidebarSection,...box(n)})),statuses:[...rail.querySelectorAll('[role=status],[role=alert]')].map(n=>({text:n.textContent,...box(n)})),rows:[...rail.querySelectorAll('[data-sidebar-section=recent] [data-session-id]')].map(n=>({id:n.dataset.sessionId,...box(n)}))}});
+ const beforeGeometry=await geometry();
  const scrollBefore=await page.locator('.a-nav-content').evaluate(node=>node.scrollTop);
  await control({progress:true});
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.status)).toBe('working');
  assert.deepEqual(await order(),steady);await expect(toggle).toBeFocused();
+ if(evidence)await writeFile(evidence+'.progress-geometry.json',JSON.stringify({before:beforeGeometry,after:await geometry()},null,2)+'\n');
  assert.equal(await page.locator('.a-nav-content').evaluate(node=>node.scrollTop),scrollBefore);
  await control({ready:true});await control({attention:true});
  await expect.poll(async()=>(await order())[0]).toBe(initial.selected);
@@ -347,7 +352,7 @@ try{
   limits:[20,40,60,80,100,120,140],naturalExhaustion:true,noMountResizeFill:true,userDownwardOnly:true,
   programmaticAnchorPassive:true,staleFocusIntentPassive:true,hiddenInertCollapsedPassive:true,namedPreviewReads:0,
   offscreenUnnamedSummaryLazy:true,visibleUnnamedReadCached:true,visibilityAt20And100:true,currentRank25NotForced:true,
-  pinsDistinct:true,legacyForkVisible:true,queryFailureRetainedRows:true,streamProjectionTimeout:true,retryFailureRetainedRows:true,retryResourceReads:retryReads,retryReadOnly:true,unknownWriteNotReplayed:true,
+  pinsRetainedInEligibleRecent:true,legacyForkVisible:true,queryFailureRetainedRows:true,streamProjectionTimeout:true,retryFailureRetainedRows:true,retryResourceReads:retryReads,retryReadOnly:true,unknownWriteNotReplayed:true,
   twoClientsTwoModulesReload:true,keyboardFocus:true,narrowCoarseTouch:true,progressAnchor:true,countShrink:true,
   draftAttachmentsCanvasModelBundleRetained:true,modelCalls:0};
  if(evidence){

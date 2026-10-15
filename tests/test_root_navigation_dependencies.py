@@ -218,7 +218,7 @@ async def test_scale_six_queries_reuse_100_observations(service, tmp_path, monke
     def pages():
         return [service.projections.chats(state, section=section) for section, state in states]
     first, cold_vm, cold_ms = measure_sql(service, pages)
-    assert len(queries) == 6 and first[0]['total'] == count  # native unpinned roots plus beta
+    assert len(queries) == 6 and first[0]['total'] == count + 1  # all native roots plus beta
     decoded = []
     decode = service.directory.decode
     monkeypatch.setattr(service.directory, 'decode', lambda raw: (decoded.append(raw), decode(raw))[1])

@@ -159,19 +159,19 @@ async def main():
         # Faults affect only this requested presentation resource, leaving
         # commands, client state, canonical history and other clients intact.
         faults = {'holdClient': None, 'omissions': 0, 'unnamedId': None, 'unnamedClient': None}
-        original_resources = service.shell.resources.snapshot
         original_navigation = service.shell.navigation
 
-        def resources(identity):
-            result = original_resources(identity)
-            if result is not None and identity == faults['holdClient']:
-                result = copy.deepcopy(result)
-                entry = result.get('instances', {}).get('chats', {})
-                if entry.get('resources', {}).pop('recentNavigation', None) is not None:
-                    faults['omissions'] += 1
-            return result
-
         def navigation(*args, **kwargs):
+            if (faults['holdClient'] is not None
+                    and kwargs.get('identity') == faults['holdClient']
+                    and args[1]['id'] == 'chats' and kwargs.get('_page_only')
+                    and 'recentNavigation' in kwargs.get('navigation_resources', ())):
+                # Let the real resource owner publish pending/completed revisions.
+                # Removing a page after snapshot() would reuse its completed
+                # revision on retry, correctly rejected as stale by the client.
+                from amplifier_web.shell_query_owner import PendingQuery
+                faults['omissions'] += 1
+                raise PendingQuery()
             result = original_navigation(*args, **kwargs)
             if (faults['unnamedId'] is None or kwargs.get('identity') != faults['unnamedClient']
                     or args[1]['id'] != 'chats'):
@@ -188,7 +188,6 @@ async def main():
                     pending.extend(value)
             return result
 
-        service.shell.resources.snapshot = resources
         service.shell.navigation = navigation
 
         async def control(request):

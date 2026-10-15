@@ -21,7 +21,7 @@ const navigation=new Set(['builtin.chats','builtin.workspaces']);
 
 const sidebarFields={pinnedNavigation:['pinnedNavigation'],
  recentNavigation:['recentNavigation','recentShortcuts'],
- workspaceShortcuts:['workspaceShortcuts','unpinnedWorkspaceShortcuts']};
+ workspaceShortcuts:['workspaceShortcuts']};
 const queryScope=['mode','workspaceId','filter','clientId','instanceId','generation'];
 function readingResources(bootstrap,instance,prior,snapshot,wanted){
  const retained={};

@@ -104,8 +104,9 @@ class StateProjections:
             elif key[0] == 'chat-index':
                 rows, scope, counts = value
                 sort = scope.get('sort', 'activity')
+                pin_first = key[-1]
                 rows = [{**row, 'pinned': row['id'] in pins} for row in rows]
-                rows.sort(key=lambda row: (not row['pinned'], pins[row['id']] if row['pinned'] else
+                rows.sort(key=lambda row: (not row['pinned'] if pin_first else False, pins[row['id']] if pin_first and row['pinned'] else
                     row['title'].lower() if sort == 'name' else
                     -(row['createdAt'] or 0) if sort == 'created' else -row['recentActivityAt'], positions[row['id']]))
                 retained[key] = (rows, scope, counts)
@@ -260,7 +261,9 @@ class StateProjections:
             filters['navStatusFilter'] = 'all'
         catalog_state = {**state, 'view': {**view, 'navStatusFilter': 'all'}} if section else state
         registrations = self.get(('chat-registry',), lambda: registry(state))
-        index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True)), lambda: catalog(catalog_state, indexed=registrations))
+        pin_first = section not in ('recent', 'shortcuts')
+        index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True), pin_first),
+                         lambda: catalog(catalog_state, indexed=registrations, pin_first=pin_first))
         return index
 
     def root_navigation_dependencies(self, state):
@@ -343,14 +346,15 @@ class StateProjections:
                 lambda: pinned_navigation(self.directory, state, rows))
         return snapshot(state, self.chat_catalog(state, section='pinned')[0], rows)
 
-    def workspace_shortcuts(self, state):
+    def workspace_shortcuts(self, state, *, workspace_id=None, exclude_pinned=False):
         from .workspace_navigation import _index, snapshot
         scoped = {**state, 'view': {**state.get('view', {}), 'navWorkspaceMode': 'recent',
                                    'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}}
         index = self.workspace_index(scoped)
         dependencies = self.workspace_dependencies(scoped) if self.directory else ()
-        return self.get(('workspace-shortcuts', *dependencies, *self.workspace_scope(scoped)),
-                        lambda: snapshot(scoped, index=index, exclude_pinned=True)['rows'])
+        return self.get(('workspace-shortcuts', workspace_id, exclude_pinned, *dependencies, *self.workspace_scope(scoped)),
+                        lambda: snapshot(scoped, index=index, workspace_id=workspace_id,
+                                         exclude_pinned=exclude_pinned)['rows'])
 
     def browser(self, state, *, selected_context=False):
         from .browser_state import navigation, subagent_navigation

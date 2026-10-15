@@ -43,7 +43,6 @@ class Shell:
             if name.startswith('sidebar'): result['sidebarNavigation'][name[7:].lower()] = page
             else: result[name] = page
             if name == 'recentNavigation': result.update(recentShortcuts=page['items'], recentScope={})
-            if name == 'workspaceShortcuts': result['unpinnedWorkspaceShortcuts'] = []
         return result
 
     def manifest(self, package):
