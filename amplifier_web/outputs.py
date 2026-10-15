@@ -140,9 +140,16 @@ class Outputs:
         kept={row['id'] for row in target.get('messages',[]) if row.get('id')}
         rows=self.app.db.execute('SELECT value FROM output_records WHERE session_id=? ORDER BY created',(source_id,)).fetchall()
         mapping={}
+        media_clones={}
         for saved, in rows:
             original=json.loads(saved)
             if not original.get('linked'):
+                continue
+            if original.get('kind') == 'canvas' and original.get('canvasKind') == 'gif':
+                # A generic saved Canvas output has two embedded adapter
+                # snapshots (canvasSource and encoded body). Do not carry
+                # source-bound references. The exact GIF library wrapper is
+                # copied separately only after its media output survives.
                 continue
             message_id = original.get('origin', {}).get('messageId')
             if original.get('kind') == 'media':
@@ -169,8 +176,11 @@ class Outputs:
                 if canvas_mapping and original['canvasId'] in canvas_mapping:
                     value['canvasId'] = canvas_mapping[original['canvasId']]
             clone=self.store.create(target['id'],value);mapping[original['id']]=clone['id']
+            if original.get('kind') == 'media':
+                media_clones[original['id']] = (original, clone)
             for comment in self.store.comments(original['id']):
                 self.store.comment(clone['id'],{**comment,'forkSourceCommentId':comment['id']})
+        return media_clones
 
     async def dispatch(self,action,args,origin,command_id,*,image_identity=None):
         from .service import AppError
@@ -179,6 +189,15 @@ class Outputs:
                 return await self.media.attach(args, origin, command_id)
             if action == 'outputs.mediaReport':
                 return await self.media.observe(args, origin)
+            # Metadata needs only the owning registry and index, not a hydrated
+            # display/execution snapshot or a selected browser.
+            if action == 'outputs.read':
+                async with self.app.lock:
+                    self.app._session(args['sessionId'], hydrate=False)
+                    is_media = self.record(args['sessionId'], args['id']).get('kind') == 'media'
+                if is_media:
+                    result = await self.media.metadata(args['sessionId'], args['id'], args)
+                    return {'accepted': True, 'result': result}
             async with self.app.lock:
                 session=copy.deepcopy(self.app._session(args['sessionId']))
                 if action=='outputs.list':
@@ -193,12 +212,6 @@ class Outputs:
                     return {'accepted':True,'result':result}
                 if action=='outputs.read':
                     record=self.record(session['id'],args['id'])
-                    if record.get('kind') == 'media':
-                        observation = self.media.observation(record)
-                        return {'accepted':True,'result':{**self.media.descriptor(record),
-                            'saved':True,'attached':bool(record.get('linked')),
-                            'browserObservation':observation,
-                            'playback':observation.get('playback', 'unknown')}}
                     data=self.content(record)
                     comments=self.store.comments(record['id']);start=args.get('commentOffset',0);count=args.get('commentLimit',5)
                     result={**record,'comments':comments[start:start+count],'nextCommentOffset':start+count if start+count<len(comments) else None}

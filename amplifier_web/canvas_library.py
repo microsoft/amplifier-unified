@@ -153,12 +153,12 @@ def empty(state, *, open_panel=False):
                        'sessionId':state.get('selectedSessionId'),'workspaceId':state.get('selectedWorkspaceId')}
 
 
-def open_gif(service, args, proof):
+def open_gif(service, args):
     """Under the action lock, bind one immutable reference to this client only."""
     from .service import AppError
-    # Fresh guard immediately before mutation: an earlier guarded record is
-    # not authority. Canonical proof is obtained off-lock by the dispatcher.
-    record = service.outputs.media.guard(args, proof=proof)
+    # Fresh retained registry/scope guard immediately before mutation. Historical
+    # origin is provenance, not a request to requalify the live transcript.
+    record = service.outputs.media.guard(args)
     if record.get('media', {}).get('mimeType') != 'image/gif':
         raise AppError('Open in Canvas is available only for retained GIFs.', 409)
     item = {key: copy.deepcopy(record[key]) for key in
@@ -222,6 +222,8 @@ def fork_artifacts(state, source_id, target, db=None):
     kept={m['id'] for m in target.get('messages',[]) if m.get('id')}
     mapping = {}
     for row in list(state.get('canvasArtifacts',[])):
+        if row.get('kind') == 'gif':
+            continue  # Exact output remapping owns these, never a shallow copy.
         if row.get('sessionId')==source_id and row.get('messageId') in kept:
             from .canvas_versions import fork_definition
             definition = fork_definition(row, kept, db)
@@ -233,6 +235,44 @@ def fork_artifacts(state, source_id, target, db=None):
             state['canvasArtifacts'].append(cloned)
             mapping[row['id']] = cloned['id']
     return mapping
+
+
+def fork_gifs(state, source_id, target, db, media_clones):
+    """Copy only exact immutable GIF adapters whose linked outputs survived.
+
+    Validate every carried definition before any write; malformed or cutoff
+    wrappers are skipped, not a late exception after creating a failed target.
+    """
+    from .output_media import validate_media_reference
+    from .resource_files import detach, read_detached, put
+    from .canvas_versions import save
+    for row in list(state.get('canvasArtifacts', [])):
+        if row.get('sessionId') != source_id or row.get('kind') != 'gif':
+            continue
+        try:
+            definitions = [row, *row.get('versions', [])]
+            references = []
+            for definition in definitions:
+                body = read_detached(detach(db, definition['body']['$resource']), max_bytes=8000)
+                if not isinstance(body, dict) or set(body) != {'mediaReference'}:
+                    raise ValueError('Invalid GIF adapter body.')
+                reference = body['mediaReference']
+                original, clone = media_clones[reference['item']['id']]
+                validate_media_reference(reference, original, source_id, kind='gif')
+                references.append(reference)
+            if any(reference != references[0] for reference in references):
+                continue  # Never implicitly repair a noncanonical wrapper history.
+        except (ValueError, KeyError, TypeError, OSError, AttributeError):
+            continue
+        item = {key: copy.deepcopy(clone[key]) for key in
+                ('id', 'sessionId', 'title', 'filename', 'version', 'sha256', 'bytes', 'media')}
+        body = put(db, {'mediaReference': {'item': item, 'messageId': clone['origin']['messageId']}})
+        copied = {'id': uuid.uuid4().hex, 'kind': 'gif', 'title': clone['title'],
+                  'sessionId': target['id'], 'workspaceId': row.get('workspaceId'),
+                  'messageId': None, 'createdAt': time.time(), 'body': body,
+                  'tabOpen': False, 'view': {}}
+        save(copied, None, state, message=None)
+        state['canvasArtifacts'].append(copied)
 
 
 def image_output(state, session, output):

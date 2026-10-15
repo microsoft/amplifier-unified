@@ -240,8 +240,12 @@ async def test_media_actual_assistant_commit_receipt_revision_and_source_removal
     await media_app.dispatch('outputs.unlink', {'sessionId': args['sessionId'], 'id': record['id'], 'expectedRevision': 1})
     assert session['mediaRevision'] == 2
     with media_app.clients.bind('media-client'):
-        with pytest.raises(ValueError, match='linked'):
-            await media_app.outputs.media.bytes(tuple_args)
+        assert (await media_app.outputs.media.describe(args['sessionId'], args['messageId']))['items'] == []
+        assert await media_app.outputs.media.bytes(tuple_args) == gif()
+    # Unlink never relaxes fresh attachment admission.
+    session['messages'][0]['role'] = 'user'
+    with pytest.raises(ValueError, match='assistant'):
+        await media_app.outputs.media.attach(args, 'ui', 'unlinked-new-attach')
 
 
 async def test_media_role_unknown_foreign_hash_and_command_forgery(media_app):
@@ -333,8 +337,12 @@ async def test_warm_cache_never_bypasses_changed_index(tmp_path, in_memory):
     media = Media(SimpleNamespace(app=app))
     body = await put_prepared_async(db, _prepare_media(gif()))
     db.commit()
-    record = {'body': body, 'sha256': hashlib.sha256(gif()).hexdigest()}
+    record = {'id': 'saved-media', 'sessionId': 'own', 'kind': 'media',
+              'title': '', 'filename': 'clip.gif', 'version': 1, 'bytes': len(gif()),
+              'origin': {'source': 'ui', 'messageId': 'saved-assistant'},
+              'media': validate_media(gif()), 'body': body, 'sha256': hashlib.sha256(gif()).hexdigest()}
     media.guard = lambda values, proof=None: record
+    media.client_scope = lambda sid: 'index-client'
 
     async def indexed_identity(*args, **kwargs):
         return {'fact': ('saved-assistant', 'assistant'), 'snapshot': session}
@@ -779,7 +787,8 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
     monkeypatch.setattr(app.cold_display, 'hydrate', no_bodies)
     app.clients.attach('index-recovery-browser')
     with app.clients.bind('index-recovery-browser'):
-        assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
+        # Canonical proof still belongs to NEW admission, not discovery.
+        await app.outputs.media.identity(session['id'], requested)
         assert len(acquired) == 2 and acquired[0] is not acquired[1]
         assert len(conflicts) == 1
         assert type(conflicts[0]) is ValueError
@@ -796,7 +805,7 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
         with monkeypatch.context() as warm:
             warm.setattr(foundation_history, '_decode', no_bodies)
             warm.setattr(media_saved_aliases.DisplayJSON, 'string', no_bodies)
-            assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
+            await app.outputs.media.identity(session['id'], requested)
         assert len(acquired) == 3 and acquired[2] is acquired[1] and len(conflicts) == 1
         assert proofs[1] == proof
     assert hashes and owner not in hashes
@@ -843,7 +852,7 @@ async def test_media_index_conflict_budget_and_attachment_publication_fail_close
     with app.clients.bind('index-refusal-browser'):
         with pytest.raises(ValueError) as error:
             if boundary == 'descriptor':
-                await app.outputs.media.describe(session['id'], old)
+                await app.outputs.media.identity(session['id'], old)
             else:
                 await app.outputs.media.attach(args, 'ui', 'index-refusal-attach')
     assert len(acquired) == (4 if boundary.startswith('final-') else 2)
@@ -917,7 +926,7 @@ async def test_media_index_retry_never_rescues_unsafe_second_snapshot(
     with app.clients.bind('unsafe-index-browser'):
         with pytest.raises(ValueError):
             if boundary == 'descriptor':
-                await app.outputs.media.describe(session['id'], old)
+                await app.outputs.media.identity(session['id'], old)
             else:
                 await app.outputs.media.attach(args, 'ui', 'unsafe-index-attach')
     assert len(acquired) == 2 and acquired[0] is not acquired[1] and len(conflicts) == 1
@@ -1109,19 +1118,23 @@ async def test_canonical_240_tail_100_old_window_empty_attach_http_and_body_boun
                 **query, 'id': record['id'], 'version': record['version'], 'sha256': record['sha256'],
                 'generation': 1, 'sequence': 1, 'renderState': 'ready', 'playback': 'paused'}})
         assert observed.status == 200 and (await observed.json())['accepted']
-        for invalid in ('missing', '\x00malformed', 'x' * 201,
-                        automatic_history.display_message(corpus[0], 0, session)['id']):
+        for invalid in ('\x00malformed', 'x' * 201):
             refused = await client.get('/api/outputs/media', params={**query, 'messageId': invalid})
             assert refused.status == 400
+        for absent in ('missing', automatic_history.display_message(corpus[0], 0, session)['id']):
+            response = await client.get('/api/outputs/media', params={**query, 'messageId': absent})
+            assert response.status == 200 and (await response.json())['items'] == []
     assert reads == [60]  # Warm descriptor/bytes/report never read message bodies.
     assert threads and owner not in threads
     assert dict.get(session, 'messages') == tail
     assert (directory / 'transcript.jsonl').read_bytes() == raw
-    # Disappearance invalidates canonical authority even while the tail is
-    # untouched. No empty-success response disguises the missing origin.
+    # Disappearance ends NEW admission, not access to the retained tuple.
     store.save(sid, corpus[2:], {}, preserve_system=True)
-    assert (await client.get('/api/outputs/media', params=query)).status == 400
-    assert (await client.get(route, params=exact)).status == 400
+    assert (await client.get('/api/outputs/media', params=query)).status == 200
+    retained = await client.get(route, params=exact)
+    assert retained.status == 200 and await retained.read() == gif()
+    with pytest.raises(ValueError):
+        await service.outputs.media.attach(args, 'ui', 'removed-origin-admission')
 
 
 def media_args_without_hydration(session):
@@ -1163,15 +1176,15 @@ async def test_retained_web_alias_and_native_forgery_ambiguity(media_app):
         assert (await app.outputs.media.describe(session['id'], alias['id']))['items'] == []
         session['messages'].append({**alias, 'id': 'competing-web-assistant'})
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], alias['id'])
+            await app.outputs.media.identity(session['id'], alias['id'])
         session['messages'].pop()
         session['messages'].insert(0, copy.deepcopy(alias))
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], alias['id'])
+            await app.outputs.media.identity(session['id'], alias['id'])
         session['messages'].pop(0)
         session.update(historyManaged=True, messages=[{**canonical, 'id': 'forged-native-id'}])
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], 'forged-native-id')
+            await app.outputs.media.identity(session['id'], 'forged-native-id')
 
 
 async def test_hidden_canonical_assistant_id_does_not_grant_media_authority(media_app):
@@ -1184,7 +1197,7 @@ async def test_hidden_canonical_assistant_id_does_not_grant_media_authority(medi
     app.clients.attach('hidden-canonical-browser')
     with app.clients.bind('hidden-canonical-browser'):
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], internal)
+            await app.outputs.media.identity(session['id'], internal)
 
 
 async def test_old_canonical_media_restart_reopen_preserves_origin_without_display_hydration(media_app):
@@ -1258,7 +1271,7 @@ async def test_cold_retained_web_alias_requires_bounded_saved_alias_descriptor(m
 
 
 @pytest.mark.parametrize('change', ['role', 'generation', 'execution', 'namespace'])
-async def test_canonical_bytes_revalidate_entire_operation_scope(media_app, monkeypatch, change):
+async def test_retained_bytes_ignore_changed_live_history_association(media_app, monkeypatch, change):
     import asyncio
     import threading
     from amplifier_web import output_media
@@ -1291,8 +1304,7 @@ async def test_canonical_bytes_revalidate_entire_operation_scope(media_app, monk
                 else:
                     session['nativeIdentity'] = 'different-canonical-session'
             release.set()
-            with pytest.raises(ValueError):
-                await pending
+            assert await pending == gif()
         finally:
             release.set()
             await asyncio.gather(pending, return_exceptions=True)
@@ -1714,9 +1726,9 @@ async def test_cold_saved_alias_conflicts_fail_closed(media_app, defect):
     app.clients.attach('invalid-alias-browser')
     with app.clients.bind('invalid-alias-browser'):
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], rows[0]['id'])
+            await app.outputs.media.identity(session['id'], rows[0]['id'])
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], canonical)
+            await app.outputs.media.identity(session['id'], canonical)
     assert not dict.__contains__(chilled, 'messages')
 
 
@@ -1731,7 +1743,7 @@ async def test_untrusted_compact_alias_hint_cannot_replace_saved_body(media_app)
     with app.clients.bind('hint-browser'):
         assert (await app.outputs.media.describe(session['id'], canonical))['items'] == []
         with pytest.raises(ValueError, match='assistant'):
-            await app.outputs.media.describe(session['id'], 'hint-only-alias')
+            await app.outputs.media.identity(session['id'], 'hint-only-alias')
     assert not dict.__contains__(chilled, 'messages')
 
 
@@ -1797,13 +1809,14 @@ async def test_cold_alias_later_boundaries_recheck_detached_index(media_app, bou
             app.db.execute('UPDATE state_resources SET value=? WHERE id=?',
                            ('{"$blob":"' + 'f' * 64 + '"}', reference['$resource']))
             app.db.commit()
+            if boundary == 'descriptor':
+                assert app.outputs.media.descriptors(session['id'], 'saved-web-assistant', proof)['items'][0]['id'] == record['id']
+            elif boundary == 'guard':
+                assert app.outputs.media.guard(values, proof=proof)['id'] == record['id']
+            else:
+                assert app.outputs.media.report(values, 'ui', proof=proof)['accepted']
             with pytest.raises(ValueError, match='resource index changed'):
-                if boundary == 'descriptor':
-                    app.outputs.media.descriptors(session['id'], 'saved-web-assistant', proof)
-                elif boundary == 'guard':
-                    app.outputs.media.guard(values, proof=proof)
-                else:
-                    app.outputs.media.report(values, 'ui', proof=proof)
+                app.outputs.media.assistant(chilled, 'saved-web-assistant', proof)
     assert not dict.__contains__(chilled, 'messages')
 
 
@@ -2713,7 +2726,7 @@ async def test_legacy_inline_alias_fresh_hashing_runs_off_owner_thread_on_warm_m
     with app.clients.bind('inline-worker-browser'):
         for requested in (canonical, 'saved-web-assistant'):
             assert (await app.outputs.media.describe(sid, requested))['items'] == []
-    assert len(threads) == 4 and owner not in threads
+    assert len(threads) == 2 and owner not in threads
     assert dict.get(chilled, '_coldFields') == markers and not dict.__contains__(chilled, 'messages')
 
 
@@ -2832,7 +2845,7 @@ async def assert_resident_media_refused(app, session, directory, identities, mon
         with app.clients.bind('resident-refusal-browser'):
             for index, identity in enumerate(identities):
                 with pytest.raises(ValueError, match='assistant'):
-                    await app.outputs.media.describe(session['id'], identity)
+                    await app.outputs.media.identity(session['id'], identity)
                 command = 'resident-refusal-' + str(index)
                 with pytest.raises(AppError):
                     await app.dispatch('outputs.attachMedia', {**args, 'messageId': identity},
@@ -3110,14 +3123,15 @@ async def test_resident_index_only_claimant_evidence_is_frozen_for_later_boundar
         async with app.lock:
             # Still a valid unique alias, but not the captured authority.
             session['messages'][0]['id'] = 'different-valid-retained-alias'
+            if boundary == 'descriptor':
+                assert app.outputs.media.descriptors(session['id'], canonical, proof)['items'][0]['id'] == record['id']
+            elif boundary == 'guard':
+                assert app.outputs.media.guard(values, proof=proof)['id'] == record['id']
+            else:
+                assert app.outputs.media.report(values, 'ui', proof=proof)['accepted']
             with pytest.raises(ValueError, match='identity changed'):
-                if boundary == 'descriptor':
-                    app.outputs.media.descriptors(session['id'], canonical, proof)
-                elif boundary == 'guard':
-                    app.outputs.media.guard(values, proof=proof)
-                else:
-                    app.outputs.media.report(values, 'ui', proof=proof)
-        assert app.outputs.media.observations == {}
+                app.outputs.media.assistant(session, canonical, proof)
+        assert bool(app.outputs.media.observations) == (boundary == 'report')
     assert (directory / 'transcript.jsonl').read_bytes() == raw
 
 
@@ -3182,10 +3196,10 @@ async def test_missing_kind_keeps_root_identity_and_descriptor_errors(media_app)
     with media_app.clients.bind('missing-kind-browser'):
         assert (await media_app.outputs.media.describe(session['id'], session['messages'][0]['id']))['items'] == []
         with pytest.raises(ValueError, match='assistant'):
-            await media_app.outputs.media.describe(session['id'], 'unknown')
+            await media_app.outputs.media.identity(session['id'], 'unknown')
         session['messages'][0]['role'] = 'user'
         with pytest.raises(ValueError, match='assistant'):
-            await media_app.outputs.media.describe(session['id'], session['messages'][0]['id'])
+            await media_app.outputs.media.identity(session['id'], session['messages'][0]['id'])
 
 
 async def test_discovered_worker_descriptor_http_empty_without_byte_report_or_mutation_authority(
@@ -3450,10 +3464,17 @@ async def test_gif_canvas_fail_closed_without_any_mutation(media_app, case):
         await task
     with app.clients.bind(None if case == 'no-client' else 'gif-refusal'):
         before = gif_canvas_state(app)
-        with pytest.raises(AppError):
-            await app.dispatch('canvas.openGif', values, origin='agent' if case == 'agent' else 'ui',
-                               command_id='refused-gif-open', include_state=False)
-        assert gif_canvas_state(app) == before
+        if case in {'unlinked', 'user-role'}:
+            assert (await app.dispatch('canvas.openGif', values, command_id='retained-gif-open', include_state=False))['accepted']
+            assert await app.outputs.media.bytes(values) == gif()
+            session['messages'][-1]['role'] = 'user'
+            with pytest.raises(AppError):
+                await app.dispatch('outputs.attachMedia', args, command_id='new-gif-admission')
+        else:
+            with pytest.raises(AppError):
+                await app.dispatch('canvas.openGif', values, origin='agent' if case == 'agent' else 'ui',
+                                   command_id='refused-gif-open', include_state=False)
+            assert gif_canvas_state(app) == before
 
 
 async def test_gif_canvas_dirty_primary_rejected_before_remember(media_app, monkeypatch):
@@ -3479,7 +3500,7 @@ async def test_gif_canvas_dirty_primary_rejected_before_remember(media_app, monk
             assert gif_canvas_state(app) == before
 
 
-@pytest.mark.parametrize('change', ['role', 'chat', 'unlink', 'canonical-revision'])
+@pytest.mark.parametrize('change', ['chat', 'record', 'body', 'root'])
 async def test_gif_canvas_final_proof_locked_recheck_without_nested_lock(media_app, monkeypatch, change):
     import asyncio
     from amplifier_web.service import AppError
@@ -3492,37 +3513,45 @@ async def test_gif_canvas_final_proof_locked_recheck_without_nested_lock(media_a
     task = getattr(app, '_storage_maintenance_task', None)
     if task:
         await task
-    real = app.outputs.media.identity
+    real = app.outputs.media.bytes
     calls = 0
     async def witnessed(*args, **kwargs):
         nonlocal calls
-        assert not app.lock.locked(), 'Identity called from inside the action lock'
-        proof = await real(*args, **kwargs)
+        assert not app.lock.locked(), 'Byte read called from inside the action lock'
+        data = await real(*args, **kwargs)
         calls += 1
-        # Preflight identity, bytes start/end identities, then the final proof.
-        if calls == 4:
+        # Mutate after successful byte qualification, before locked UI mutation.
+        if calls == 1:
             async with app.lock:
-                if change == 'role':
-                    session['messages'][0]['role'] = 'user'
-                elif change == 'chat':
+                if change == 'chat':
                     app.clients.record()['selectedSessionId'] = None
-                elif change == 'unlink':
-                    app.outputs.store.link(record['id'], 1, False)
+                elif change == 'root':
+                    session['sessionKind'] = 'worker'
                 else:
-                    session['nativeRevision'] = ['changed-after-proof']
+                    import json
+                    from amplifier_web.resource_files import put
+                    current = app.outputs.record(session['id'], record['id'])
+                    if change == 'body':
+                        current['body'] = put(app.db, {'encoding': 'base64', 'data': 'AAAA'})
+                    else:
+                        current['title'] = 'Changed immutable record'
+                    app.db.execute('UPDATE output_records SET value=? WHERE id=?',
+                                   (json.dumps(current), current['id']))
             assert not app.lock.locked()
-        return proof
-    monkeypatch.setattr(app.outputs.media, 'identity', witnessed)
+        return data
+    monkeypatch.setattr(app.outputs.media, 'bytes', witnessed)
     with app.clients.bind('gif-proof-client'):
         before = gif_canvas_state(app)
         with pytest.raises(AppError):
             await asyncio.wait_for(app.dispatch('canvas.openGif', values, command_id='proof-click', include_state=False), 10)
-        assert calls == 4
+        assert calls == 1
         after = gif_canvas_state(app)
-        if change == 'unlink':
+        if change in {'record', 'body'}:
             # The independent authority mutation is intentional, not an open
             # side effect. Everything else must remain byte-for-byte unchanged.
             before['outputs'] = after['outputs']
+            if change == 'body':
+                before['resources'] = after['resources']
         assert after == before
 
 
@@ -3620,11 +3649,15 @@ async def test_gif_canvas_stale_alias_and_generic_forgery_refused(media_app):
         raw = (directory / 'transcript.jsonl').read_bytes()
         session['messages'][0]['text'] += 'stale alias'
         before = gif_canvas_state(app)
+        assert (await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False))['accepted']
+        # The existing wrapper is reused, not replayed or duplicated.
+        after = gif_canvas_state(app)
+        assert len(after['artifacts']) == len(before['artifacts'])
+        assert [row['body'] for row in after['artifacts']] == [row['body'] for row in before['artifacts']]
+        assert after['outputs'] == before['outputs']
+        assert await app.outputs.media.bytes(gif_open_args(args, record)) == gif()
         with pytest.raises(AppError):
-            await app.dispatch('canvas.openGif', gif_open_args(args, record), include_state=False)
-        assert gif_canvas_state(app) == before
-        with pytest.raises(ValueError):
-            await app.outputs.media.bytes(gif_open_args(args, record))
+            await app.dispatch('outputs.attachMedia', args, command_id='stale-alias-new-attach')
         assert (directory / 'transcript.jsonl').read_bytes() == raw
 
 def test_full_resolution_gif_admission_keeps_format_and_budgets():
@@ -3638,7 +3671,7 @@ def test_full_resolution_gif_admission_keeps_format_and_budgets():
         validate_media(oversized)
 
 
-async def test_media_discovery_requalifies_transient_revision_race(media_app, monkeypatch):
+async def test_media_discovery_never_qualifies_live_history_even_during_revision_race(media_app, monkeypatch):
     from amplifier_web.media_message_identity import StaleMediaIdentityError
     from unittest.mock import AsyncMock
     session = media_app._session()
@@ -3655,14 +3688,12 @@ async def test_media_discovery_requalifies_transient_revision_race(media_app, mo
     monkeypatch.setattr(media, 'identity', racing)
     with media_app.clients.bind('race-browser'):
         assert (await media.describe(session['id'], session['messages'][0]['id']))['items'] == []
-        assert calls == 2
+        assert calls == 0
         failed = AsyncMock(side_effect=StaleMediaIdentityError('still changing'))
         monkeypatch.setattr(media, 'identity', failed)
-        with pytest.raises(StaleMediaIdentityError):
-            await media.describe(session['id'], session['messages'][0]['id'])
-        assert failed.await_count == 3
+        assert (await media.describe(session['id'], session['messages'][0]['id']))['items'] == []
+        assert failed.await_count == 0
         denied = AsyncMock(side_effect=ValueError('identity collision'))
         monkeypatch.setattr(media, 'identity', denied)
-        with pytest.raises(ValueError, match='collision'):
-            await media.describe(session['id'], session['messages'][0]['id'])
-        assert denied.await_count == 1
+        assert (await media.describe(session['id'], session['messages'][0]['id']))['items'] == []
+        assert denied.await_count == 0
