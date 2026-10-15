@@ -21,7 +21,7 @@ async def main():
         print('ISOLATED_SESSION', sid, flush=True)
         queue = service.subscribe()
         try:
-            await service.dispatch('conversation.send', {'text': 'This is a bounded integration test. First use app_control list_actions exactly once. Then delegate one task to foundation:explorer: use bash pwd once to report the working directory, without editing anything or examining other files. After the worker reports, tell me the action count and directory, and say STANDALONE_OK. Do not launch any other workers.'}, command_id='standalone-live-smoke')
+            await service.dispatch('conversation.send', {'text': 'This is a bounded integration test. First use app_control list_actions exactly once. Then delegate one task to foundation:explorer: use bash pwd once to report the working directory, without editing anything or examining other files. After the worker reports, tell me the catalog total returned by list_actions (not the first page item count) and directory, and say STANDALONE_OK. Do not launch any other workers.'}, command_id='standalone-live-smoke')
             previous = None
             async with asyncio.timeout(480):
                 while True:

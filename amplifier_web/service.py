@@ -4492,7 +4492,7 @@ class AppService:
                 # call can exhaust a single, non-compactable human turn.
                 return {**result, 'state': {
                     'revision': self.state['revision'], 'sessionId': session_id,
-                    '_stateAccess': {'note': 'The domain receipt preserves action admission and any returned result. A pending operation is not completion. Use get_state with a JSON Pointer for saved results or other state.',
+                    '_stateAccess': {'note': 'The domain receipt preserves admission and the full action result when available. A pending operation is not completion. Use get_state with a JSON Pointer for saved results or other state.',
                         **({'resultPaths': ['/permissions', '/managementResults/' + result['operationId']]} if args['action'].startswith('permissions.') and result.get('operationId') else {})}}}
             if compact_smart_tool:
                 context = {'revision': self.state['revision'], 'sessionId': session_id,

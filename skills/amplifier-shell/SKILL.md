@@ -17,7 +17,9 @@ delivered by a behavior so agents can learn the shell's separate extension API.
    `$statePath` references with bounded reads when the overview omits details.
 2. Request current action schemas using `app_control(operation="list_actions",
    args={"prefix":"shell."})` and, for artifact views,
-   `args={"prefix":"canvas.views."}`.
+   `args={"prefix":"canvas.views."}`. Read `items`, following `nextOffset` with
+   the same prefix and revision. For an oversized schema, use its `schemaRead`
+   arguments and concatenate all `schemaText` pages before parsing the action.
    Inspect the relevant shell or view before preparing a change. For shell
    components, use the returned `slots`, `registry`, `resolvedInstances` and
    `componentCommands`; only author against contracts that host exposes. Discover
