@@ -5,7 +5,7 @@ import json
 import pytest
 
 from amplifier_web.shell_resources import scope_for
-from test_shell_modules import service
+from test_shell_modules import service, settled_resources
 from test_automatic_history import app_factory, native_session
 
 
@@ -38,7 +38,7 @@ async def test_repeated_native_refresh_and_admitted_save_keep_navigation_generat
     with service.clients.bind('reconciliation-client'):
         owner = service.shell.resources
         owner.register('reconciliation-client', 1, ['sidebarRecent', 'workspaceShortcuts'], scope_for(service.state))
-        pages = deepcopy(owner.snapshot('reconciliation-client'))
+        pages = deepcopy(await settled_resources(service, 'reconciliation-client'))
     page_attempts = service.performance_diagnostics.snapshot()['shellResourceRebuilds']['total']
     before = service.directory.observation_revision['navigation']
     frozen = deepcopy(row)
