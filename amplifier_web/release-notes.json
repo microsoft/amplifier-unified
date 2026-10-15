@@ -8,11 +8,10 @@
         "Opening a chat reads a bounded recent message page and root activity window. Older pages load on request; viewing a chat does not reconstruct its full transcript or child-worker histories.",
         "Saved message IDs remain intact. Imported runtime history is a separate read-only view, and partial work pages do not claim complete conversation totals.",
         "Conversation navigation uses already loaded messages and local previews instead of fetching the full history index on every chat switch.",
-        "Recovery notices no longer appear inline in the conversation; the original saved recovery records are retained."
-      ],
-      "notices": [
+        "Recovery notices no longer appear inline in the conversation; the original saved recovery records are retained.",
         "Saved history pages can expire when their source changes. Return to the latest messages to start a fresh reading window."
-      ]
+      ],
+      "notices": []
     },
     {
       "version": "0.20.156",
