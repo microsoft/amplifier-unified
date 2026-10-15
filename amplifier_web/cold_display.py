@@ -406,6 +406,7 @@ class ColdDisplay:
             service.projections.detail_bodies.pop(row['id'], None)
             event = getattr(service, 'event_log_view', None)
             if event:
+                event.invalidate({row['id']})
                 event.projected.pop(row['id'], None)
                 event.read_paths.pop(row['id'], None)
                 event.read_revisions.pop(row['id'], None)

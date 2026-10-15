@@ -21,6 +21,7 @@ import {useNavigation} from '../../../packages/shell-sdk/index.js';
 import {waitForSnapshot} from './wait-for-snapshot';
 import {hasNavigationResource} from './navigation-demand';
 import {NavigationResourceStatus} from './navigation-resource-status';
+import {usePinOrderSettlement} from './pin-order-settlement';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
@@ -87,7 +88,7 @@ export function useNavigationController(host,kind){
   finally{submitting.current=false;setSaving(false)}
  };
  useEffect(()=>{if(!draft.mode)return;form.current?.scrollIntoView?.({block:'nearest'});form.current?.querySelector?.('input')?.focus()},[draft.mode,draft.id]);
- return {state,act,refreshResources:host.refreshResources,prefix,view,draft,form,saving,formError,history,refreshing,workspace,workspaceCount,allChats,setDraft,updateDraft,choose,submit};
+ return {host,state,act,refreshResources:host.refreshResources,prefix,view,draft,form,saving,formError,history,refreshing,workspace,workspaceCount,allChats,setDraft,updateDraft,choose,submit};
 }
 export function NavigationEditor({model}){
  const {state,act,prefix,draft,form,saving,formError,setDraft,updateDraft,submit}=model;
@@ -330,14 +331,14 @@ export function PinnedChats({page,model,now}){
 }
 export function PinnedItems({page,model,workspaceModel=model,now,navigation,canEdit=true}){
  const [error,setError]=useState('');
+ const settle=usePinOrderSettlement(model.host);
  const items=page.items.map(item=>({...item,label:item.kind==='workspace'?(item.row.customName||item.row.name):(item.row.title||'Untitled conversation')})),visible=items.map(item=>item.id);
  const reorder=async(next,{id,to})=>{
   setError('');
   try{
-   const response=await model.act('navigation.pinOrder',{ids:movePin(model.state.pinnedItemIds||[],id,visible[to])});
-   const receipt=response?.result?.accepted!==undefined?response.result:response;
-   if(receipt?.accepted===false)throw Error(receipt.error||'Could not reorder pins.');
-  }catch(err){setError(err.message||'Could not reorder pins. Please try again.');throw err}
+   const previous=[...(model.state.pinnedItemIds||[])],expected=movePin(previous,id,visible[to]);
+   await settle(()=>model.act('navigation.pinOrder',{ids:expected}),previous,expected,next);
+  }catch(err){if(err.name!=='AbortError')setError(err.message||'Could not reorder pins. Please try again.');throw err}
  };
  const browse=async path=>{
   navigation?.browse('workspaces');

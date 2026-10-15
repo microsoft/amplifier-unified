@@ -61,6 +61,60 @@ def test_replacement_and_corrupt_checkpoint_fall_back_to_canonical_log(home, mon
     assert reader.read(row) is None
 
 
+@pytest.mark.parametrize('prefix', [b'{"schema": 1,', b'{"schema": 200,', b' ' * 128])
+def test_obsolete_or_unrecognized_header_is_rejected_before_graph_decode(home, monkeypatch, prefix):
+    import gzip
+    row = session(home, 'obsolete')
+    path = events.event_path(row, row['id'])
+    append(path, row['id'])
+    cache = checkpoints.Checkpoints(home / 'host')
+    cache.directory.mkdir(parents=True)
+    target = cache.path(path, row['id'])
+    target.write_bytes(gzip.compress(prefix + b'"unused":"' + b'x' * (2 * 1024 * 1024) + b'"}'))
+    original_read = gzip.GzipFile.read
+    decoded = []
+    def read(stream, count=-1):
+        value = original_read(stream, count)
+        decoded.append(len(value))
+        return value
+    def unexpected(*args, **kwargs):
+        pytest.fail('Rejected checkpoint must not allocate/decode the saved graph')
+    index = events.EventIndex(path, row['id'])
+    with monkeypatch.context() as patch:
+        patch.setattr(gzip.GzipFile, 'read', read)
+        patch.setattr(checkpoints.json, 'loads', unexpected)
+        assert not cache.load(index)
+    assert sum(decoded) <= checkpoints.HEADER_BYTES
+    assert index.refresh()
+    assert [node['toolCallId'] for node in index.nodes.values()] == ['call']
+
+
+@pytest.mark.parametrize('stage', ['decompress', 'decode', 'restore'])
+def test_optional_checkpoint_allocation_failure_resets_then_reads_canonical(home, monkeypatch, stage):
+    row = session(home, 'allocation')
+    path = events.event_path(row, row['id'])
+    append(path, row['id'])
+    original = events.EventIndex(path, row['id']); original.refresh()
+    cache = checkpoints.Checkpoints(home / 'host'); cache.save(original)
+    index = events.EventIndex(path, row['id'])
+    def failure(*args, **kwargs):
+        if stage == 'restore':
+            index.nodes['partial'] = {'id': 'partial'}
+            index.offset = 123
+        raise MemoryError
+    with monkeypatch.context() as patch:
+        if stage == 'decompress':
+            patch.setattr(checkpoints.gzip.GzipFile, 'read', failure)
+        elif stage == 'decode':
+            patch.setattr(checkpoints.json, 'loads', failure)
+        else:
+            patch.setattr(checkpoints, 'restore', failure)
+        assert not cache.load(index)
+    assert not index.nodes and index.offset == 0
+    assert index.refresh()
+    assert index.nodes == original.nodes and index.association_events == original.association_events
+
+
 def test_checkpoint_preserves_pending_identity_and_prompt_association(home):
     row = session(home, 'pending')
     path = events.event_path(row, row['id'])

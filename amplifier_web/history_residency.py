@@ -133,6 +133,7 @@ def retire(service):
             if row.get('workspace'):
                 service._view_cache.pop(str(view_path(service.data_dir, row)), None)
             event = service.event_log_view
+            event.invalidate({identity})
             for name in ('projected','read_paths','read_revisions'):
                 getattr(event, name, {}).pop(identity, None)
             service.history.loads.pop(identity, None)

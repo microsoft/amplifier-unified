@@ -5,6 +5,7 @@ from amplifier_web import chat_navigation, workspace_navigation
 from amplifier_web.service import AppError
 from test_automatic_history import app_factory
 from test_browser_state import catalog
+from test_shell_modules import settled_resources
 
 
 def fixture(app_factory, count=1000):
@@ -364,6 +365,7 @@ async def test_shell_resources_track_offpage_navigation_not_unrelated_progress(a
     app, rows = fixture(app_factory)
     with app.clients.bind('client-0'):
         register_shell_resources(app)
+        await settled_resources(app, 'client-0')
         original = app.browser_state()
         visible = {row['id'] for row in chat_resource(original)['value']['chatNavigation']['items']}
         target = next(row for row in reversed(rows[:1000])
@@ -378,11 +380,13 @@ async def test_shell_resources_track_offpage_navigation_not_unrelated_progress(a
         # must still observe a change outside the previous bounded page.
         await app.dispatch('shell.view.update', {'clientId':'client-0', 'instanceId':'chats',
                            'patch':{'navFilter':'Renamed off page'}})
+        await settled_resources(app, 'client-0')
         changed = app.browser_state()
         assert changed['shellBootstrapKey'] == original['shellBootstrapKey']
         assert [row['id'] for row in chat_resource(changed)['value']['chatNavigation']['items']] == [target['id']]
         target['approvals'] = [{'id': 'permission', 'status': 'pending'}]
         app._save()
+        await settled_resources(app, 'client-0')
         latest = app.browser_state()
         assert chat_resource(latest)['revision'] > chat_resource(changed)['revision']
         assert chat_resource(latest)['value'] != chat_resource(changed)['value']
@@ -405,6 +409,7 @@ async def test_ordinary_snapshots_repair_a_dropped_shell_invalidation(app_factor
     app, _ = fixture(app_factory, count=20)
     with app.clients.bind('client-0'):
         register_shell_resources(app)
+        await settled_resources(app, 'client-0')
         queue = app.subscribe()
         first = app.browser_state()
         await app.dispatch('shell.view.update', {'clientId': 'client-0', 'instanceId': 'chats', 'patch': {'navFilter': 'changed'}})
@@ -413,12 +418,16 @@ async def test_ordinary_snapshots_repair_a_dropped_shell_invalidation(app_factor
         assert context['value']['view']['navFilter'] == 'changed'
         assert context['value']['viewRevision'] > first['shellResources']['instances']['chats']['resources']['context']['value']['viewRevision']
         assert immediate['shellBootstrapKey'] == first['shellBootstrapKey']
-        assert chat_resource(immediate)['value']['chatNavigation']['total'] == 0
+        # Controller metadata is immediate; the page is an independently bounded
+        # read. Settle that actual owner before testing loss of its queued update.
+        await settled_resources(app, 'client-0')
+        completed = app.browser_state()
+        assert chat_resource(completed)['value']['chatNavigation']['total'] == 0
         for _ in range(4):
             app._publish()
         frames = [queue.get_nowait() for _ in range(4)]
         assert all('shellClientId' not in frame for frame in frames)
-        assert all(frame['shellResources'] == immediate['shellResources'] for frame in frames)
+        assert all(frame['shellResources'] == completed['shellResources'] for frame in frames)
         assert all(frame['shellResources']['demandId'] == 1 for frame in frames)
         app.unsubscribe(queue)
 
@@ -494,6 +503,7 @@ async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_row
     monkeypatch.setattr(app.directory, 'chats', counted)
     with app.clients.bind('client-0'):
         register_shell_resources(app)
+        await settled_resources(app, 'client-0')
         first = app.browser_state()
         navigation = app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)})
         builds.clear()
@@ -507,6 +517,8 @@ async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_row
             assert app.projections.chats({**app.state, 'attention': app.projections.attention(app.state)}) == navigation
             assert current['revision'] > first['revision']
         assert builds == []
+        assert app.shell.resources.queries.runner is None
+        assert app.shell.resources.queries.jobs == {}
         # A same-valued replacement must not make later invalidation depend on
         # old source-object identity. The new off-page row still changes the UI.
         replacement = dict(rows[900])
@@ -517,6 +529,7 @@ async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_row
         replacement.update(title='Changed off page', status='working')
         saved_revision = app.state['revision']
         app._save()  # No revision change: still must invalidate all queries.
+        await settled_resources(app, 'client-0')
         fresh = app.browser_state()
         assert fresh['revision'] == saved_revision
         assert chat_resource(fresh)['revision'] > chat_resource(first)['revision']

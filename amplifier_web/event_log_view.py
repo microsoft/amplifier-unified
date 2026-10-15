@@ -679,9 +679,18 @@ class EventLogView:
         self._interest_cursor = 0
         self._retry_at = OrderedDict()
         self._refused = OrderedDict()  # At most eight small deterministic-cap receipts.
+        self._work_generation = 0
 
     def invalidate(self, session_ids=None):
         """Invalidate before mutations are published, including deferred/failed saves."""
+        # The same bounded weak owners that justify passive reuse own the public
+        # completion receipt. Never leave a retained generation labelled current
+        # after a writer invalidates it, and never admit an owner to update it.
+        for identity, (reference, _) in self._clean_inputs.items():
+            if session_ids is None or identity in session_ids:
+                owner = reference()
+                if owner is not None and owner.get('workProjection', {}).get('current') is True:
+                    self._set_work_status(owner, 'loading')
         for identity, fence in self._pending_inputs.items():
             if session_ids is None or identity in session_ids:
                 fence[0] = True
@@ -714,7 +723,7 @@ class EventLogView:
         # Residency/cold-field retirement can discard projected independently.
         # Keep this metadata bound independent of that cache's eviction path.
         while len(self._clean_inputs) > 64:
-            self._clean_inputs.popitem(last=False)
+            self.invalidate({next(iter(self._clean_inputs))})
 
     def _new_index(self, path, identity):
         index = EventIndex(path, identity)
@@ -1338,20 +1347,56 @@ class EventLogView:
                 self.projected.move_to_end(identity)
                 while len(self.projected) > 64:
                     expired, _ = self.projected.popitem(last=False)
+                    self.invalidate({expired})
                     self._clean_inputs.pop(expired, None)
                     self.read_paths.pop(expired, None)
                     self.read_revisions.pop(expired, None)
                     self.read_proofs.pop(expired, None)
 
-    @staticmethod
-    def _set_work_status(session, status, reason=None):
-        value = {'status': status}
+    def _set_work_status(self, session, status, reason=None, *, receipt=None):
+        value = {'status': status, 'current': receipt is not None}
+        retained = receipt or session.get('workProjection', {}).get('receipt')
+        if (isinstance(retained, dict) and retained.get('sessionId') == session['id']
+                and retained.get('hostInstanceId') == getattr(self.service, 'instance_id', None)):
+            value['receipt'] = retained
         if reason is not None:
             value['reason'] = reason
         if session.get('workProjection') == value:
             return False
         session['workProjection'] = value
         return True
+
+    def _accept_work(self, session, revisions):
+        """Constant-size evidence of this host's already-validated read scope.
+
+        Counts describe the accepted tree, not rendered groups or an independent
+        inventory of canonical history. No body walk, encoding or I/O is needed.
+        """
+        try:
+            weakref.ref(session)
+        except TypeError:
+            # Embedders with plain dict owners have no weak lifetime proof.
+            # Keep their display status, without claiming a current receipt.
+            return self._set_work_status(session, 'ready')
+        self._work_generation += 1
+        execution = session.get('execution') or {}
+        receipt = {'hostInstanceId': getattr(self.service, 'instance_id', None),
+                   'sessionId': session['id'], 'generation': self._work_generation,
+                   'sourceCount': len(revisions), 'nodeCount': len(execution.get('nodes', ())),
+                   'turnCount': len(execution.get('turns', ()))}
+        return self._set_work_status(session, 'ready', receipt=receipt)
+
+    def _notify_work(self, identity):
+        """Ephemeral status uses the existing bounded, loss-safe web lane."""
+        shell = getattr(self.service, 'shell', None)
+        if shell is None:
+            return
+        # Registered bundled interests are capped at 32. No dormant owner,
+        # independent API reader or unrelated client's frame is constructed.
+        for client in tuple(shell.resources.clients):
+            record = self.service.clients.records.get(client, {})
+            if record.get('kind') == 'web' and record.get('selectedSessionId') == identity:
+                shell.notify(client)
 
     async def _refresh_process(self, identity):
         """Publish only an exact, still-owned display read from the subprocess.
@@ -1371,7 +1416,7 @@ class EventLogView:
                     return
                 session = self.service._session(identity)
                 if self._set_work_status(session, 'loading'):
-                    self.service._publish(session_ids={identity}, record_only=True, detail_only=True)
+                    self._notify_work(identity)
         owner = session
         fence = [False]
         self._pending_inputs[identity] = fence
@@ -1394,10 +1439,17 @@ class EventLogView:
                 count(self.service, 'events.process.refusal_reused')
                 return
             if (same_sources and clean is not None and self._clean_inputs.get(identity) is clean
-                    and clean[0]() is session and clean[1] == self._input_identity(session)):
+                    and clean[0]() is session and clean[1] == self._input_identity(session)
+                    and session.get('workProjection', {}).get('current') is True):
                 count(self.service, 'events.projection.passive_reused')
                 return
             self._clean_inputs.pop(identity, None)
+            if not same_refusal:
+                async with self.service.lock:
+                    if fence[0] or self.service.closed or self.service._session(identity) is not owner:
+                        return
+                    if self._set_work_status(owner, 'loading'):
+                        self._notify_work(identity)
             def prepare():
                 value = copy.deepcopy(self.projection_input(owner))
                 return value, input_digest(value)
@@ -1411,6 +1463,15 @@ class EventLogView:
                 return
             self._refused.pop(identity, None)
             if same_sources and cached[0] == digest:
+                # A published mutation can invalidate a receipt without changing
+                # its actual inputs. Restore coverage once after exact validation;
+                # the quiet weak-receipt path above makes no publication.
+                async with self.service.lock:
+                    if fence[0] or self.service.closed or self.service._session(identity) is not owner:
+                        return
+                    if owner.get('workProjection', {}).get('current') is not True:
+                        self._accept_work(owner, before)
+                        self._notify_work(identity)
                 self._remember_clean(owner)
                 count(self.service, 'events.projection.reused')
                 return
@@ -1445,7 +1506,7 @@ class EventLogView:
                     if fence[0] or self.service.closed or self.service._session(identity) is not owner:
                         return
                     if self._set_work_status(owner, 'unavailable' if deterministic else 'retrying', reason):
-                        self.service._publish(session_ids={identity}, record_only=True, detail_only=True)
+                        self._notify_work(identity)
                     if deterministic:
                         self._refused[identity] = {'reason': reason, 'digest': digest, 'revisions': refused_revisions}
                         self._refused.move_to_end(identity)
@@ -1474,9 +1535,11 @@ class EventLogView:
                     return
                 if changed:
                     owner['execution'] = tree
-                status_changed = self._set_work_status(owner, 'ready')
-                if changed or status_changed:
+                status_changed = self._accept_work(owner, revisions)
+                if changed:
                     self.service._publish(session_ids={identity}, record_only=True, detail_only=True)
+                elif status_changed:
+                    self._notify_work(identity)
                 self._retry_at.pop(identity, None)
                 self.projected[identity] = (result['inputDigest'], revisions)
                 self.read_paths[identity] = tuple(Path(path) for path in result['paths'])
@@ -1485,6 +1548,7 @@ class EventLogView:
                 self.projected.move_to_end(identity)
                 while len(self.projected) > 64:
                     retired, _ = self.projected.popitem(last=False)
+                    self.invalidate({retired})
                     self._clean_inputs.pop(retired, None)
                     self.read_paths.pop(retired, None)
                     self.read_revisions.pop(retired, None)

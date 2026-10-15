@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.156",
+      "title": "Reduce history cache waste and settle navigation updates correctly",
+      "changes": [
+        "History readers reject obsolete event checkpoints before allocating their full contents. Canonical history remains authoritative and the existing memory limits remain enforced.",
+        "Pin reordering keeps its pending display until the saved order arrives, preventing the next keyboard move from using an outdated list. App options stay inside compact viewports.",
+        "Work completion diagnostics now identify the accepted chat generation separately from the first visible messages. Very large selected Work histories can still exceed the bounded result limit; this release does not claim that case is resolved.",
+        "Focused browser checks follow asynchronous navigation coverage and current Settings controls. Release publishing can reuse a matching verified frontend result when GitHub omits the run\u2019s direct pull-request association."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.155",
       "title": "Restore chat lists after background reader startup failures",
       "changes": [

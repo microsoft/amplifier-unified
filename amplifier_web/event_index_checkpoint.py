@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 import zlib
@@ -22,6 +23,7 @@ MAX_FILES = 1024
 WRITE_BUFFER = 64 * 1024
 MAX_SCALAR_CHARS = 256 * 1024
 MAX_DEPTH = 64
+HEADER_BYTES = 64
 
 
 class CheckpointTooLarge(ValueError):
@@ -130,13 +132,20 @@ class Checkpoints:
                 return False
             with os.fdopen(os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)), 'rb') as stream:
                 with gzip.GzipFile(fileobj=stream) as compressed:
+                    # Our writer puts the format first. Reject obsolete or
+                    # malformed disposable files before expanding their graph.
+                    prefix = compressed.read(min(HEADER_BYTES, MAX_DECODED + 1))
+                    header = re.match(rb'\s*\{\s*"schema"\s*:\s*([0-9]+)\s*,', prefix)
+                    if header is None or int(header[1]) != SCHEMA:
+                        return False
+                    compressed.seek(0)
                     raw = compressed.read(MAX_DECODED + 1)
             if len(raw) > MAX_DECODED:
                 return False
             restore(index, json.loads(raw))
             os.utime(path, None, follow_symlinks=False)
             return True
-        except (OSError, ValueError, TypeError, KeyError, AttributeError, EOFError, zlib.error):
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, EOFError, zlib.error, MemoryError):
             index.reset()
             return False
 
