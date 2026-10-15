@@ -2,12 +2,15 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import './composer-test-helpers.mjs';
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit'],env:{...process.env,BRIDGE_TIMEOUT_FIXTURE:'1'}});
 let browser;
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
  browser=await chromium.launch({headless:true});const context=await browser.newContext({permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage();await page.goto(ready.url);
+ const composer=page.getByRole('textbox',{name:'Message Amplifier'});
+ await composer.fill('Private unsent diagnostic question');
  await page.getByRole('button',{name:'View error details',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Error details',exact:true});
  await dialog.getByRole('button',{name:'Copy diagnostics',exact:true}).click();
@@ -26,5 +29,9 @@ try{
  const manual=JSON.parse(await dialog.getByRole('textbox',{name:'Diagnostic report'}).inputValue());
  assert.equal(manual.failure.generationId,'bridge-generation');
  assert.ok(manual.client.recentRequests.some(row=>row.requestId&&Number.isFinite(row.serverMs)));
+ assert.ok(!JSON.stringify(report).includes('Private unsent diagnostic question'));
+ assert.ok(!JSON.stringify(manual).includes('Private unsent diagnostic question'));
+ await dialog.getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(composer).toHaveDraft('Private unsent diagnostic question');
  console.log('Support diagnostics: correlated bridge evidence, browser/server timings, manual fallback passed');
 }finally{await browser?.close();fixture.kill('SIGTERM')}

@@ -2,6 +2,11 @@ import {chromium} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+import {mkdir,mkdtemp} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+const outputDir=process.env.AMPLIFIER_TEST_OUTPUT_DIR||await mkdtemp(join(tmpdir(),'amplifier-execution-actions-'));
+await mkdir(outputDir,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe']});
 let log='';fixture.stderr.on('data',chunk=>log+=chunk);
 const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);resolve(JSON.parse(line).port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))})});
@@ -47,11 +52,11 @@ try{
  const ids=[await patch.getAttribute('data-node-id'),await command.getAttribute('data-node-id')];
  await page.evaluate(ids=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:['turn:inspect@long-answer',...ids],navPinned:false,navExpanded:false}}),ids);
  await patch.locator('.a-execution-diff').waitFor();await patch.scrollIntoViewIfNeeded();await page.mouse.move(1250,20);
- await page.screenshot({path:'/tmp/amplifier-execution-actions.png'});
- await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:'/tmp/amplifier-execution-actions-dark.png'});
+ await page.screenshot({path:join(outputDir,'actions-desktop.png')});
+ await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:join(outputDir,'actions-dark.png')});
  await page.setViewportSize({width:390,height:844});await patch.scrollIntoViewIfNeeded();await page.mouse.move(380,830);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
- await page.screenshot({path:'/tmp/amplifier-execution-actions-mobile.png'});
+ await page.screenshot({path:join(outputDir,'actions-mobile.png')});
  assert.deepEqual(errors,[]);
  console.log('Canonical event-log command/result, patch, read, todo, app and nested worker payloads render; empty, error and legacy states are honest; shared expansion survives reload and mobile fits.');
 }catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}
