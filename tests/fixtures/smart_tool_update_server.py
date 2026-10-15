@@ -46,7 +46,7 @@ async def serve():
         site = web.TCPSite(runner, '127.0.0.1', 0)
         await site.start()
         url = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
-        app['allowed_origins'].add(url)
+        app['allowed_origins'] = app['allowed_origins'] | {url}
         print(json.dumps({'url': url, 'package': amplifier_web.__file__}), flush=True)
         try:
             await asyncio.Event().wait()
