@@ -2120,6 +2120,156 @@
       "limits": [
         "Underlying no-hidden-traversal outcome2 stays partial; no filesystem traversal spy."
       ]
+    },
+    {
+      "workflow": "nav.sections",
+      "expectedIndices": [
+        0,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open ordinary sidebar and await real Recent rows",
+        "Toggle only Recent by pointer/Enter",
+        "Observe settled empty Pinned removal"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic passive history/runtime; exact public input controls and owners asserted."
+      ]
+    },
+    {
+      "workflow": "nav.select",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Select an actual pinned row and verify heading/row/pane/info identity",
+        "Select a second chat before releasing a held old response",
+        "Verify stale response never replaces new selected owner"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic passive history/runtime; exact public input controls and owners asserted."
+      ]
+    },
+    {
+      "workflow": "nav.workspace-browse",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open All workspaces, filter and page actual 105 matches",
+        "Open workspace chats through Browse",
+        "Verify pure ancestor distinction and exact empty filter"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic passive history/runtime; exact public input controls and owners asserted."
+      ]
+    },
+    {
+      "workflow": "nav.drawer",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open drawer at390px by actual tap and keyboard",
+        "Dismiss with Escape and verify opener focus",
+        "Keep selected draft and enabled conversation controls"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic passive history/runtime; exact public input controls and owners asserted."
+      ]
+    },
+    {
+      "workflow": "notifications.read-end",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Observe synthetic completion while different owner/hidden/modal/scroll-away",
+        "Return visible focused selected chat to end",
+        "Verify exact fingerprint acknowledged only in that state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Visibility/focus conditions are explicitly emulated for read-end; no OS tab/provider acceptance."
+      ]
+    },
+    {
+      "workflow": "entry.reconnect",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Close actual WebSocket while browser goes offline",
+        "Edit private draft offline with existing attachment/read anchor retained",
+        "Reconnect and physically reload exact chat/attachment/reading offset"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic retained chat/plan prerequisites; public controls and real browser transport where named."
+      ]
+    },
+    {
+      "workflow": "info.plan",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Inspect canonical Plan beside composer",
+        "Change public Appearance Plan location to inline and Canvas overview",
+        "Observe explicit unavailable plan and unchanged read-only data"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic retained chat/plan prerequisites; public controls and real browser transport where named."
+      ]
+    },
+    {
+      "workflow": "updates.install",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open Settings Updates and explicitly Update Amplifier",
+        "Review exact staged target and blocking chat",
+        "Keep original serving generation, selected chat and private draft"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic updater effects; truthful serving/staged identity outcome0 of failure remains unqualified; rollback is Advanced-details supplemental."
+      ]
+    },
+    {
+      "workflow": "updates.failure",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Observe explicit unknown installation outcome and disabled retry/check",
+        "Move fixture to known failure then explicitly Try update again",
+        "Verify original generation and chat data retained"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic updater effects; truthful serving/staged identity outcome0 of failure remains unqualified; rollback is Advanced-details supplemental."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
