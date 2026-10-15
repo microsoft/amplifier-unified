@@ -638,7 +638,7 @@ test('Recent unmount cancels its projection wait and releases its listener witho
  assert.equal(listeners.size,0);assert.equal(writes.length,1);
 });
 
-test('cold resource placeholders never claim empty catalogs and matching updates keep rows',()=>{
+test('cold resource placeholders never claim empty catalogs and retained sidebar updates stay quiet',()=>{
  const pending={...snapshot,navigationResources:[],navigationResourcePending:{
   pinnedNavigation:{status:'pending'},recentNavigation:{status:'pending'},workspaceShortcuts:{status:'pending'}},
   recentNavigation:undefined,recentShortcuts:undefined,workspaceShortcuts:undefined};
@@ -648,7 +648,11 @@ test('cold resource placeholders never claim empty catalogs and matching updates
  assert.doesNotMatch(cold,/Your recent chats appear here|Create a workspace to start/);
  const updating={...snapshot,navigationResourcePending:{recentNavigation:{status:'pending'}}};
  const warm=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...coldHost,getSnapshot:()=>updating}})));
- assert.match(warm,/Updating recent chats/);assert.match(warm,/Research ideas/);
+ assert.doesNotMatch(warm,/Updating recent chats|Loading recent chats/);
+ assert.match(warm,/Research ideas/);assert.match(warm,/aria-busy="true"/);
+ const retrying={...updating,navigationResourcePending:{recentNavigation:{status:'retry'}}};
+ const failed=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...coldHost,getSnapshot:()=>retrying}})));
+ assert.match(failed,/Retry recent chats/);assert.match(failed,/Research ideas/);
 });
 
 
