@@ -42,7 +42,7 @@ async def test_configuration_deduplication_and_on_demand_provenance_survive_rest
     dispatched=await app.app_bridge('dispatch',{'action':'canvas.show','args':{'kind':'text','content':'hello'}},sid)
     assert len(json.dumps(dispatched))<30000 and dispatched['state']['canvas']['content']=='hello'
     actions=await app.app_bridge('list_actions',{'prefix':'canvas.'},sid)
-    assert actions and all(a['name'].startswith('canvas.') for a in actions)
+    assert actions['items'] and all(a['name'].startswith('canvas.') for a in actions['items'])
     await app.close()
     app=AppService(tmp_path,workspace=tmp_path)
     assert (await app.app_bridge('get_state',{'path':path},sid))['value']==provenance['agents'][99]['include_paths'][0]

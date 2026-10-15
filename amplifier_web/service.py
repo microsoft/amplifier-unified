@@ -4341,11 +4341,8 @@ class AppService:
             from .agent_state import read_state
             return read_state(agent_snapshot(args.get('clientId')), args, session_id=session_id, resolve=self.state_resource, directory=self.directory)
         if operation in {"list_actions", "actions.list"}:
-            actions = self.get_actions()
-            prefix = args.get('prefix', '')
-            if not isinstance(prefix, str):
-                raise AppError('Action prefix must be text.')
-            return [item for item in actions if item['name'].startswith(prefix)]
+            from .agent_actions import read_actions
+            return read_actions(self.get_actions(), args)
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
@@ -4433,7 +4430,7 @@ class AppService:
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.environments.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -4495,7 +4492,8 @@ class AppService:
                 # call can exhaust a single, non-compactable human turn.
                 return {**result, 'state': {
                     'revision': self.state['revision'], 'sessionId': session_id,
-                    '_stateAccess': {'note': 'The domain receipt contains the full action result. Use get_state with a JSON Pointer when other app state is needed.'}}}
+                    '_stateAccess': {'note': 'The domain receipt preserves admission and the full action result when available. A pending operation is not completion. Use get_state with a JSON Pointer for saved results or other state.',
+                        **({'resultPaths': ['/permissions', '/managementResults/' + result['operationId']]} if args['action'].startswith('permissions.') and result.get('operationId') else {})}}}
             if compact_smart_tool:
                 context = {'revision': self.state['revision'], 'sessionId': session_id,
                            '_stateAccess': {'note': 'Use smartTools.readResult with the receipt operationId to read status and results. Use get_state with a JSON Pointer for other app state.'}}
