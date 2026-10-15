@@ -15,6 +15,7 @@ async def test_collaboration_authority_normalizes_only_prior_host_on_keyed_admis
     owner['approvals'] = [
         {'id': 'collaboration:prior', 'status': 'pending'},
         {'id': 'ordinary-approval', 'status': 'pending'},
+        {'id': 'capability:durable', 'status': 'pending'},
     ]
     active = app._new_session({'title': 'Selected chat'})
     app._state['sessions'].extend([owner, active])
@@ -41,7 +42,15 @@ async def test_collaboration_authority_normalizes_only_prior_host_on_keyed_admis
     else:
         assert admitted['collaborationGeneration'] == generation
         assert admitted['approvals'][0]['status'] == 'pending'
-    assert admitted['approvals'][1]['status'] == 'pending'
+    ordinary = admitted['approvals'][1]
+    if restart:
+        # Native waiters belong to the prior host; durable configuration
+        # decisions retain their own authority across host replacement.
+        assert ordinary['status'] == 'expired'
+        assert ordinary['resolutionReason'] == 'host_restarted'
+    else:
+        assert ordinary == {'id': 'ordinary-approval', 'status': 'pending'}
+    assert admitted['approvals'][2] == {'id': 'capability:durable', 'status': 'pending'}
     assert not app.runtime.started and not app.runtime.sent
 
 
