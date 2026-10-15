@@ -1,0 +1,556 @@
+{
+  "schemaVersion": 1,
+  "appRevision": "09b9cbc596f280a67e4ebc6a1275fe2b5eb653d8",
+  "build": {
+    "version": "0.20.165",
+    "id": "135d5933af904245"
+  },
+  "context": "fresh browser first workspace demand and retained-worker send at copied scale; existing service and filesystem caches",
+  "startedAt": "2026-10-15T17:45:05.647Z",
+  "finishedAt": "2026-10-15T17:47:04.410Z",
+  "passed": true,
+  "browserErrors": [],
+  "allSyntheticWorkersStopped": true,
+  "workspaceNativeRootRows": 274,
+  "catalog": {
+    "capturedNativeRows": 27508,
+    "additionalSyntheticRows": 14,
+    "observedNativeRowsAfterRun": 27522,
+    "observedNativeProjectsAfterRun": 5273,
+    "readOnlyNativeProjectMounts": 4532
+  },
+  "capture": {
+    "catalogPrimaryAndAppBlobs": "complete and hash-verified",
+    "eventsVerifiedShards": 12,
+    "eventsTotalShards": 32,
+    "fullEventFidelity": false,
+    "globalAtomicSnapshot": false,
+    "pausedAtCompleteShardBoundaryDuringMeasurement": true
+  },
+  "isolation": {
+    "privateRootAndLoopbackOnlyNetwork": true,
+    "copiedCanonicalWriteOpenDenied": [
+      "metadata.json",
+      "transcript.jsonl",
+      "events.jsonl"
+    ],
+    "derivedPresentationCOWDirectories": 112,
+    "appBlobCOWRoots": 3,
+    "frozenNewSyntheticOwners": 14,
+    "runtimeAndBridgeNegativeControls": 7,
+    "httpEffectNegativeControls": 3,
+    "realSingleWorkerStreamAndStopControl": true,
+    "pureFenceTestsPassed": 11
+  },
+  "runtime": {
+    "realRuntimeManagerAndSubprocessWorkers": true,
+    "provider": "local deterministic250ms deltas",
+    "externalProvider": false,
+    "runtimeQualification": "bypassed through previously qualified immutable worker interpreter",
+    "resourceLimits": {
+      "memoryBytes": 12884901888,
+      "cpuQuotaPercent": 600,
+      "scope": "requested sibling service limits, further restricted by parent DTU"
+    },
+    "parentDtuLimits": {
+      "cpuCount": 4,
+      "effectiveCpuSet": "0,9,16-17",
+      "memoryBytes": 8589934592,
+      "cpuMax": "max 100000",
+      "verification": "Incus limits.cpu/limits.memory plus parent cgroup cpuset.cpus.effective/memory.max/cpu.max"
+    },
+    "effectiveCeilings": {
+      "cpuCount": 4,
+      "memoryBytes": 8589934592,
+      "sharedWithIdleRetainedServices": true
+    }
+  },
+  "desiredWarmAckMs": 300,
+  "harnessSha256": "ea6e76dc4f1fceaf66e728f2cde9ac5e53720db9ea101b2c0ebeb2264c411c11",
+  "rawReceiptsSha256": {
+    "0": "2d09251d2195a5844f195f072d28f4ca007d065abcf44e37e21b51425f1148eb",
+    "6": "86dd63f0c57d1a64902ee04fb738d14ef3d5a7c650e767f32bd890905e030a83",
+    "12": "518182fefac67da9056f3c3bc4040bf41610a417c7eb30e395b839cbb50e2c93"
+  },
+  "stages": [
+    {
+      "backgroundWorkers": 0,
+      "actualWorkersDuringSample": 1,
+      "sameRealWorkerAcrossWarmSends": true,
+      "warmSendSamples": [
+        {
+          "ackMs": 653.2702300000001,
+          "firstVisibleMs": 868.3319120000006,
+          "gestureToRequestMs": 54.47900390625,
+          "requestToResponseHeadersMs": 591.907,
+          "requestToBodyMs": 593.201
+        },
+        {
+          "ackMs": 719.2243249999992,
+          "firstVisibleMs": 926.6092589999989,
+          "gestureToRequestMs": 59.743896484375,
+          "requestToResponseHeadersMs": 653.198,
+          "requestToBodyMs": 656.559
+        },
+        {
+          "ackMs": 648.4907449999992,
+          "firstVisibleMs": 868.2282729999988,
+          "gestureToRequestMs": 47.4169921875,
+          "requestToResponseHeadersMs": 595.128,
+          "requestToBodyMs": 596.824
+        }
+      ],
+      "warmAckMs": {
+        "count": 3,
+        "p50": 653.2702300000001,
+        "p95": 719.2243249999992,
+        "max": 719.2243249999992
+      },
+      "workspace": [
+        {
+          "name": "first workspace demand",
+          "actionReceipts": [
+            {
+              "action": "view.update",
+              "status": 200,
+              "elapsedMs": 130.2183980000009
+            }
+          ],
+          "pageSettledMs": 489.56784400000106,
+          "visibleMs": 533.7190250000003,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 130.40532800000074
+        },
+        {
+          "name": "exact chat filter",
+          "actionReceipts": [
+            {
+              "action": "session.titlePreview",
+              "status": 200,
+              "elapsedMs": 314.71107400000074
+            },
+            {
+              "action": "session.titlePreview",
+              "status": 200,
+              "elapsedMs": 320.76057000000037
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 703.7612100000006
+            },
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 800.698316
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 1883.269905000001
+            }
+          ],
+          "pageSettledMs": 1882.600937000001,
+          "visibleMs": 1908.9198429999997,
+          "total": 1,
+          "rows": 1,
+          "targetActionAckMs": 800.8416930000003
+        },
+        {
+          "name": "clear filter",
+          "actionReceipts": [
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 114.68304499999977
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 449.0400959999988
+            }
+          ],
+          "pageSettledMs": 448.063349,
+          "visibleMs": 480.5198789999995,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 114.77336599999944
+        },
+        {
+          "name": "explicit next page",
+          "actionReceipts": [
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 142.866931999999
+            }
+          ],
+          "pageSettledMs": 446.32752000000073,
+          "visibleMs": 476.6907289999999,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 142.94893299999785
+        },
+        {
+          "name": "explicit previous page",
+          "actionReceipts": [
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 1531.7864539999973
+            },
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 1627.564280999999
+            }
+          ],
+          "pageSettledMs": 3550.6251950000005,
+          "visibleMs": 3573.532747999998,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 1627.8544450000009
+        }
+      ],
+      "healthRequestMs": {
+        "count": 8,
+        "p50": 1.2577590000000782,
+        "p95": 1.768564999998489,
+        "max": 1.768564999998489
+      },
+      "hostCpuSeconds": 10.48234347200001,
+      "eventLoopLagMs": {
+        "count": 161,
+        "p95": 143.03455483168364
+      },
+      "workerCountAfterStop": 0
+    },
+    {
+      "backgroundWorkers": 5,
+      "actualWorkersDuringSample": 6,
+      "sameRealWorkerAcrossWarmSends": true,
+      "warmSendSamples": [
+        {
+          "ackMs": 751.671488,
+          "firstVisibleMs": 927.9524299999975,
+          "gestureToRequestMs": 57.635986328125,
+          "requestToResponseHeadersMs": 690.115,
+          "requestToBodyMs": 691.17
+        },
+        {
+          "ackMs": 803.5910460000014,
+          "firstVisibleMs": 1092.0564240000022,
+          "gestureToRequestMs": 56.81005859375,
+          "requestToResponseHeadersMs": 742.863,
+          "requestToBodyMs": 744.192
+        },
+        {
+          "ackMs": 891.3890780000002,
+          "firstVisibleMs": 1382.5575480000007,
+          "gestureToRequestMs": 46.397705078125,
+          "requestToResponseHeadersMs": 840.338,
+          "requestToBodyMs": 841.234
+        }
+      ],
+      "warmAckMs": {
+        "count": 3,
+        "p50": 803.5910460000014,
+        "p95": 891.3890780000002,
+        "max": 891.3890780000002
+      },
+      "workspace": [
+        {
+          "name": "first workspace demand",
+          "actionReceipts": [
+            {
+              "action": "view.update",
+              "status": 200,
+              "elapsedMs": 153.9789469999996
+            }
+          ],
+          "pageSettledMs": 693.0409609999988,
+          "visibleMs": 728.8967630000006,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 154.20618199999808
+        },
+        {
+          "name": "exact chat filter",
+          "actionReceipts": [
+            {
+              "action": "session.titlePreview",
+              "status": 200,
+              "elapsedMs": 369.1815020000031
+            },
+            {
+              "action": "session.titlePreview",
+              "status": 200,
+              "elapsedMs": 369.7321000000011
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 715.2270810000009
+            },
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 816.6282360000005
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 2151.626191000003
+            }
+          ],
+          "pageSettledMs": 2150.558578,
+          "visibleMs": 2174.806706000003,
+          "total": 1,
+          "rows": 1,
+          "targetActionAckMs": 816.7304130000011
+        },
+        {
+          "name": "clear filter",
+          "actionReceipts": [
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 179.0281079999986
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 542.7710960000004
+            }
+          ],
+          "pageSettledMs": 542.9053060000006,
+          "visibleMs": 565.4600219999993,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 179.11596500000087
+        },
+        {
+          "name": "explicit next page",
+          "actionReceipts": [
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 137.48447900000247
+            }
+          ],
+          "pageSettledMs": 421.27136600000085,
+          "visibleMs": 448.3697680000005,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 137.58460800000103
+        },
+        {
+          "name": "explicit previous page",
+          "actionReceipts": [
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 251.15057999999772
+            },
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 1196.0109909999992
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 4029.702462999998
+            }
+          ],
+          "pageSettledMs": 4029.7764639999987,
+          "visibleMs": 4054.5367579999984,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 1196.233745999998
+        }
+      ],
+      "healthRequestMs": {
+        "count": 8,
+        "p50": 1.2831030000015744,
+        "p95": 111.19856699999946,
+        "max": 111.19856699999946
+      },
+      "hostCpuSeconds": 11.262763567999997,
+      "eventLoopLagMs": {
+        "count": 150,
+        "p95": 197.3268061876297
+      },
+      "workerCountAfterStop": 0
+    },
+    {
+      "backgroundWorkers": 11,
+      "actualWorkersDuringSample": 12,
+      "sameRealWorkerAcrossWarmSends": true,
+      "warmSendSamples": [
+        {
+          "ackMs": 1027.4330530000007,
+          "firstVisibleMs": 1375.1567830000022,
+          "gestureToRequestMs": 52.194091796875,
+          "requestToResponseHeadersMs": 968.594,
+          "requestToBodyMs": 969.89
+        },
+        {
+          "ackMs": 1074.3051569999989,
+          "firstVisibleMs": 1334.236278999997,
+          "gestureToRequestMs": 46.508056640625,
+          "requestToResponseHeadersMs": 1021.803,
+          "requestToBodyMs": 1023.33
+        },
+        {
+          "ackMs": 841.0246819999993,
+          "firstVisibleMs": 1091.5248919999976,
+          "gestureToRequestMs": 50.384033203125,
+          "requestToResponseHeadersMs": 785.645,
+          "requestToBodyMs": 786.706
+        }
+      ],
+      "warmAckMs": {
+        "count": 3,
+        "p50": 1027.4330530000007,
+        "p95": 1074.3051569999989,
+        "max": 1074.3051569999989
+      },
+      "workspace": [
+        {
+          "name": "first workspace demand",
+          "actionReceipts": [
+            {
+              "action": "view.update",
+              "status": 200,
+              "elapsedMs": 224.87291499999992
+            }
+          ],
+          "pageSettledMs": 881.2019870000004,
+          "visibleMs": 923.177635,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 225.08242100000643
+        },
+        {
+          "name": "exact chat filter",
+          "actionReceipts": [
+            {
+              "action": "session.titlePreview",
+              "status": 200,
+              "elapsedMs": 408.4113089999955
+            },
+            {
+              "action": "session.titlePreview",
+              "status": 200,
+              "elapsedMs": 408.4968779999981
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 768.5177100000001
+            },
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 900.559030999997
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 3068.602197
+            }
+          ],
+          "pageSettledMs": 3077.9455069999967,
+          "visibleMs": 3109.2830140000005,
+          "total": 1,
+          "rows": 1,
+          "targetActionAckMs": 900.6457680000021
+        },
+        {
+          "name": "clear filter",
+          "actionReceipts": [
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 105.81779500000266
+            }
+          ],
+          "pageSettledMs": 781.7931129999997,
+          "visibleMs": 814.8377120000005,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 105.92491600000358
+        },
+        {
+          "name": "explicit next page",
+          "actionReceipts": [
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 132.53958299999795
+            },
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 214.23722100000305
+            }
+          ],
+          "pageSettledMs": 526.3443330000009,
+          "visibleMs": 558.5620899999994,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 214.32307800000126
+        },
+        {
+          "name": "explicit previous page",
+          "actionReceipts": [
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 309.600827000002
+            },
+            {
+              "action": "shell.view.update",
+              "status": 200,
+              "elapsedMs": 599.9957950000025
+            },
+            {
+              "action": "session.plans",
+              "status": 200,
+              "elapsedMs": 4559.821452000004
+            }
+          ],
+          "pageSettledMs": 4558.929888999999,
+          "visibleMs": 4594.120369000004,
+          "total": 274,
+          "rows": 40,
+          "targetActionAckMs": 600.1913330000025
+        }
+      ],
+      "healthRequestMs": {
+        "count": 8,
+        "p50": 1.3357120000000577,
+        "p95": 1.7570770000020275,
+        "max": 1.7570770000020275
+      },
+      "hostCpuSeconds": 12.318028623999993,
+      "eventLoopLagMs": {
+        "count": 141,
+        "p95": 238.99914491921663
+      },
+      "workerCountAfterStop": 0
+    }
+  ],
+  "limitations": [
+    "Three warm send samples per stage; one workspace and one traversal of each operation per stage; not sustained-load certification.",
+    "Stage0 means zero background workers and one actual foreground worker.",
+    "Fresh independent browser per stage; service, filesystem and earlier-stage derived caches remain warm. First demand is not a cold-disk measurement.",
+    "Only12 of32 native event shards were present and hash-verified; no full Work-history fidelity claim.",
+    "Deterministic local provider; previously qualified interpreter reused without repeating runtime qualification.",
+    "The original first attempt passed stage0 warm sends/first workspace demand then failed a harness receipt predicate that omitted shell.view.update. Its raw evidence remains separate; no product failure inferred.",
+    "Workspace automatic plan/title detail requests are retained in each phase; their causal contribution is not yet established.",
+    "Latency goals are not met merely because correctness assertions passed. All9 measured warm acknowledgements exceed300ms."
+  ]
+}
