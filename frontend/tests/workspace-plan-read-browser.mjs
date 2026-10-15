@@ -18,7 +18,7 @@ try{
  const inspect=()=>page.request.get(url+'/fixture/plan-read').then(r=>r.json());
  let holdPlan=true,holdMutation=false;
  await page.route('**/api/actions',async route=>{
-  const body=route.request().postDataJSON();
+  const body=route.request().postDataJSON()||{};
   if(body.action==='session.plans'){
    const response=await route.fetch(),receipt=await response.json();
    assert.equal(receipt.accepted,true);assert.equal('stateRevision' in receipt,false);assert.equal('_stateIndependent' in receipt,false);
@@ -40,7 +40,7 @@ try{
  const firstIds=await rows.evaluateAll(elements=>elements.map(el=>el.dataset.sessionId));
  // Keep the first real plan response held through both public gestures.
  await page.getByRole('button',{name:'Show more conversations',exact:true}).click();
- await expect(rows).toHaveCount(6);
+ await expect(rows).toHaveCount(16);
  const secondIds=await rows.evaluateAll(elements=>elements.map(el=>el.dataset.sessionId));
  assert.ok(secondIds.every(id=>!firstIds.includes(id)));
  await page.getByRole('searchbox',{name:'Filter conversations',exact:true}).fill(secondIds[0]);

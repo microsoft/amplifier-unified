@@ -19,7 +19,7 @@ async def main(home):
     selected = service._session()
     workspace = selected['workspace']
     paths = []
-    for index in range(45):
+    for index in range(55):
         made = await service.dispatch('session.create', {
             'title': f'Plan chat {index:02}', 'workspace': workspace, 'select': False})
         session = service._session(made['sessionId'])
@@ -31,7 +31,8 @@ async def main(home):
             'result': {'success': True, 'output': {'todos': [
                 {'content': f'Accepted task {index:02}', 'status': 'completed'}]}}}}) + '\n')
         paths.append(path)
-    await service.dispatch('session.select', {'id': selected['id']})
+    await service.dispatch('session.select', {'id': session['id']})
+    selected = session
     runtime_calls = []
     for name in ('start', 'stop', 'control'):
         original = getattr(runtime, name)
