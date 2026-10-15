@@ -459,6 +459,8 @@ class AppService:
         self._state = value
 
     def __init__(self, data_dir: Path, runtime=None, workspace=None):
+        from .runtime_event_batches import EventSink
+        self.on_runtime_event = EventSink(self.on_runtime_event, self.on_runtime_events)
         from .installed_build import capture
         self.installed_build = capture()
         self.data_dir = Path(data_dir).expanduser()
@@ -3789,6 +3791,50 @@ class AppService:
                     current.update(status='error', error=str(exc))
                 self._publish_changes(sessions={session['id']})
 
+    def _ingest_runtime_execution(self, session, payload):
+        with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
+            ingest_execution(session,payload)
+        if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
+            # Auxiliary preparation failures stay on their call. The
+            # manager's terminal generation.failed event owns whether
+            # this turn stopped; a successful recovery is not an app fault.
+            session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
+            session.pop('health', None)
+
+    async def on_runtime_events(self, events):
+        """Apply ordered terminal receipts, then durably publish their union once."""
+        from .runtime_event_batches import MAX_EVENTS, terminal
+        if not events or len(events) > MAX_EVENTS or not all(terminal(*event) for event in events):
+            raise ValueError('Invalid terminal event batch')
+        roots = {payload.get('rootSessionId') or payload.get('sessionId') for _, payload in events}
+        if len(roots) != 1 or not next(iter(roots)):
+            raise ValueError('Terminal event batch must belong to one root')
+        async with self.lock:
+            try:
+                session = self._session(next(iter(roots)))
+            except AppError:
+                return
+            changed = {session['id']}
+            from .chat_navigation import runtime_activity
+            from .conversation_steering import observe as observe_steering
+            try:
+                for kind, payload in events:
+                    self.event_log_view.invalidate({session['id']})
+                    self.diagnostics.runtime_event(kind, payload, session)
+                    runtime_activity(session, kind, payload)
+                    self._ingest_runtime_execution(session, payload)
+                    changed.update(self.collaboration.observe(session, kind, payload))
+                    observe_steering(self, session, kind, payload)
+            except Exception:
+                # Like a single-event reader fault, stop before later commands.
+                # Preserve the applied prefix, including unknown partial observer
+                # side effects. Neither this prefix nor the failed tail is replayed.
+                self._publish_full(reason='Terminal receipt observer failed; preserve unknown partial effects')
+                raise
+            # _publish includes all prior progress writers and retains their
+            # dirty scope on failure. No reducer/observer is replayed on retry.
+            self._publish(session_ids=changed, record_only=True, detail_only=True)
+
     async def on_runtime_event(self, kind, payload):
         if kind == 'image.generated':
             from .image_results import attach_completed
@@ -3832,14 +3878,7 @@ class AppService:
                 data=legacy(directory);data['naming_completed_inputs']=payload.get('completedInputs',[])
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
-                with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
-                    ingest_execution(session,payload)
-                if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
-                    # Auxiliary preparation failures stay on their call. The
-                    # manager's terminal generation.failed event owns whether
-                    # this turn stopped; a successful recovery is not an app fault.
-                    session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
-                    session.pop('health', None)
+                self._ingest_runtime_execution(session, payload)
             elif kind == 'runtime.delivery':
                 self._delivery(session, payload['inputId'], 'failed' if payload.get('delivery') == 'failed' else 'accepted')
             elif kind == "runtime.ended":

@@ -110,7 +110,7 @@ Suggested arrangement for a workspace with an authorized parallel task, delibera
     runtime/                            # linked worktree
 ```
 
-Keep temporary task areas outside borrowed source repositories. The workspace-root preference controls new user-visible workspace homes, not history or cache placement. Task working directories do not change the conversation's native history home. Task IDs, resource IDs, and receipt IDs are allowed; they are not replacement conversation IDs.
+Routine task storage belongs under the chat's actual working folder and uses its existing file access without another approval. Exclude managed task storage from ordinary Git snapshots, preserve explicit restrictions, and retain the ownership ledger outside source. Existing external allocations keep their paths. The workspace-root preference controls new user-visible workspace homes, not history or cache placement. Task working directories do not change the conversation's native history home. Task IDs, resource IDs, and receipt IDs are allowed; they are not replacement conversation IDs.
 
 For documents, produce output drafts in the chosen folder and use version-checked replacement for shared originals. Dependencies, environments, ports, and external resources can also conflict. Record their actual bindings for separate tasks and previews. A worktree protects independent working files; it is not a sandbox for arbitrary shell programs.
 

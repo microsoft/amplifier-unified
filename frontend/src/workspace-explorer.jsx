@@ -2,7 +2,7 @@ import {revealNavigationTitles} from './navigation-title';
 import {useRegionActivity} from './activity-region';
 import React,{useEffect,useRef,useState} from 'react';
 import {ArrowLeft,ChevronRight,Folder,FolderDot,MoreHorizontal,Search,FolderPlus,Pencil,Trash2,MessageCircle,MessageSquarePlus,Pin,PinOff,ArrowUp,ArrowDown} from 'lucide-react';
-import {NavigationRow,NavigationStatus,WorkspaceDetails,useActivityClock} from './navigation-details';
+import {NavigationRow,NavigationStatus,WorkspaceDetails,useActivityClock,navigationDetailsContext} from './navigation-details';
 import {workspaceContext,parentPath} from './navigation-presentation';
 import {movePin} from './chat-navigation';
 
@@ -27,7 +27,7 @@ export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compa
  const className=`a-workspace-row ${workspace?'is-workspace':''} ${selected?'is-selected':''}`;
  if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
  if(!workspace)return <div className={className} data-workspace-path={row.path}>{content}</div>;
- return <NavigationRow className={className} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} actions={<>
+ return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} actions={<>
   <button type="button" className="a-link" data-action="workspace.select" onClick={()=>{close();open(row)}}><MessageCircle/>Open chats</button>
   <button type="button" data-action={row.archived?'workspace.restore':'workspace.archive'} onClick={()=>{close();act(row.archived?'workspace.restore':'workspace.archive',{id:row.workspaceId})}}>{row.archived?'Restore workspace':'Archive workspace'}</button>
   <button type="button" data-action="workspace.pin" aria-label={(row.pinned?'Unpin workspace ':'Pin workspace ')+row.path} onClick={()=>{close();act('workspace.pin',{id:row.workspaceId,pinned:!row.pinned})}}>{row.pinned?<PinOff/>:<Pin/>}{row.pinned?'Unpin workspace':'Pin workspace'}</button>

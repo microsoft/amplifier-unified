@@ -167,7 +167,7 @@ class ShellQueryOwner:
         # file/staging commits and child progress must not starve root reads.
         # App writes use this connection, so data_version catches out-of-band
         # local mutations without rejecting ordinary canonical saves.
-        return (durable_stamp(directory.db, directory._native_namespace, operation),
+        return (durable_stamp(directory.db, directory._native_namespace, operation, directory._live_values),
                 directory.db.execute('PRAGMA main.data_version').fetchone()[0],
                 tuple(semantic[name] for name in query_collections(operation)),
                 directory._native_path, directory._native_namespace,

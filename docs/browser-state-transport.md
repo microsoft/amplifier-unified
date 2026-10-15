@@ -160,6 +160,20 @@ Unversioned direct SQL edits to the disposable native cache are not a supported
 mutation path: repair must invalidate or rebuild it. Source-file replacement and
 out-of-band application-database writes are still fenced.
 
+Native query receipts separate root recency from structural root/workspace
+changes. For at most 128 admitted owners, an exact project/native-ID lookup may
+discount recency only when the canonical join freezes it: a web-owned overlay
+or a busy native-managed overlay. Any additional stored alias that could expose
+recency prevents that discount; more than 128 aliases is conservative as well.
+Titles, naming policy, availability, membership, idle/dormant recency and local
+status changes still invalidate. The page dependency and worker's pinned source
+receipt use the same rule, so unchanged busy roots cannot repeatedly replace an
+otherwise current pending query. An unaccounted raw native generation falls back
+to broad invalidation and rotates the effective epoch on the next canonical save.
+The two disposable scalar tables are populated only by changed metadata; startup
+does not backfill the native library, and unchanged observation memo hits perform
+no additional per-owner receipt reads.
+
 A cold miss returns promptly with `pending[name] = {status, retryAfterMs}`.
 Status is `pending` or `retry`. A prior value is retained only for the same
 descriptor and normalized query scope, and is explicitly displayed as updating;
@@ -248,8 +262,16 @@ requested `sessionId`, `filter`, and `index`; the page's own `index` is the
 clamped result index. Missing or mismatched coverage means not loaded, never an
 empty history. Closing the dialog retires its page from the next stream frame.
 
-The selected summary retains `subagentCount`, obtained by the canonical indexed
-parent predicate without decoding a child page. A selected child's exact parent
+The selected summary supplies `subagentCount` when a visible control can use it:
+Work & automation, its legacy runtime Direction view, the worker-history dialog,
+or an open non-settings Canvas while viewing a chat. An open Canvas is treated
+conservatively because its artifact views are projected separately. Ordinary
+chat streaming with those controls closed omits the count and performs no child
+history query. Opening a control reads current membership; omission is not an
+empty history. The open worker page supplies its own unfiltered total; other
+count consumers use the canonical indexed parent predicate without decoding a
+child page. Explicit and independent-reader contracts retain their count.
+A selected child's exact parent
 summary remains available for Open parent. Selected messages, Work details,
 approvals/questions, private drafts and Canvas, voice context, attention and
 receipts keep their existing behavior. Shell descriptor and resource revisions

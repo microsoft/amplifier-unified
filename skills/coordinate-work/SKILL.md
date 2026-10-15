@@ -86,6 +86,13 @@ compare those exact links, not equal message text.
    process probe. Reservations are separate cooperative claims. Scratch folders,
    test databases, browser profiles and dynamic previews are not automatically
    allocated or discovered by this view. Do not infer isolation from an empty page.
+   Use `workspace.resources.provision/read/retire` for task-owned scratch folders,
+   browser profiles and SQLite files. New allocations live inside this chat's
+   actual working folder and use its existing access without another approval;
+   explicit file restrictions and child policies still apply. They are excluded
+   from ordinary Git snapshots. For new work, create a new allocation rather than
+   expanding access to an older allocation outside the workspace. Keep old
+   allocations and their results intact; never migrate or replay them automatically.
    Identical sibling plans can reuse that qualified profile; preparation is not
    execution or completion. Read elapsed progress and honor Stop rather than
    replaying a slow request. Failed/cancelled preparation retains diagnostics.

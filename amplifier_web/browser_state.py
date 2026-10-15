@@ -232,14 +232,17 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     workers = derived.get('subagentNavigation')
     if workers is not None:
         visible.add(workers['scope']['sessionId'])
-    selected_children = (workers['unfilteredTotal'] if workers is not None and workers['scope']['sessionId'] == selected
-                         else directory.child_count(state, selected_row) if directory else len(index.children(selected_row))) if selected_row else 0
+    from .browser_demand import worker_history_count
+    count_requested = 'browserResources' not in derived or worker_history_count(state)
+    selected_children = ((workers['unfilteredTotal'] if workers is not None and workers['scope']['sessionId'] == selected
+                          else directory.child_count(state, selected_row) if directory else len(index.children(selected_row)))
+                         if selected_row and count_requested else None)
     detail_project = detail_project or project
     visible_rows = dict(index.by_id)
     if directory is not None:
         visible_rows.update({row['id']:row for row in directory.summary_ids(visible - visible_rows.keys(), state=state)})
     result['sessions'] = [{**((row if row['id']==session_id else detail_project(row)) if row['id'] in full and row['id'] in index.by_id else summary(row)),
-                           **({'subagentCount': selected_children} if row['id'] == selected else {})}
+                           **({'subagentCount': selected_children} if row['id'] == selected and count_requested else {})}
                           for row in (visible_rows[key] for key in sorted(visible & visible_rows.keys(), key=lambda key: (index.positions.get(key, len(index.positions)), key)))]
     from .conversation_library import projection as organization_projection
     result['conversationOrganization'] = organization_projection(state, visible, directory=directory)

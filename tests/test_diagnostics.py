@@ -64,6 +64,30 @@ async def test_auxiliary_failure_keeps_label_and_safe_category_without_error_pay
     assert 'private prompt' not in json.dumps(records) and 'secret' not in json.dumps(records)
 
 
+async def test_bridge_metadata_keeps_correlated_facts_without_arguments_or_results(service):
+    collector = service.diagnostics
+    facts = {'bridgeId': 'bridge-1', 'operation': 'capacity.admit',
+        'generation_id': 'generation-1', 'runtimeSessionId': 'runtime-1',
+        'phase': 'timeout', 'timeoutSeconds': 60, 'elapsedSeconds': 60.02,
+        'errorType': 'TimeoutError'}
+    collector.runtime_event('runtime.bridge', {**facts,
+        'args': {'prompt': 'private request'}, 'response': 'private response',
+        'error': 'private exception', 'unknown': 'private value'},
+        {'id': 'fixture', 'workspace': service.default_workspace})
+    await collector.flush()
+    row = next(row for row in collector.read()['items'] if row['event'] == 'runtime:bridge')
+    assert {key: row['data'][key] for key in facts} == facts
+    assert row['data']['type'] == 'runtime.bridge'
+    assert 'private' not in json.dumps(row)
+    # The same projection used for export must retain safe facts on repeat reads.
+    from amplifier_web.diagnostics import metadata_fields
+    exported = metadata_fields(row['data'])
+    assert {key: exported[key] for key in facts} == facts
+    assert 'private' not in json.dumps(exported)
+    ordinary = metadata_fields({**facts, 'type': 'other.event'})
+    assert not {'bridgeId', 'operation', 'generation_id', 'timeoutSeconds', 'elapsedSeconds'} & ordinary.keys()
+
+
 @pytest.mark.parametrize('kind,payload_kind,label',[
     ('execution.event','llm','private prompt content'),
     ('execution.event','worker','private prompt content'),

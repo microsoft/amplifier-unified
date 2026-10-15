@@ -119,6 +119,16 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
     from amplifier_web.management import Management
     app.management = Management(app)
     await app.dispatch('capability.grant', {'sessionId':root['id'], 'effects':['file_access'], 'scopes':['global'], 'reason':'Explicit setup'})
+    # This identity fixture has no mounted file tools. Supply its root's allowed
+    # observation explicitly; real file/patch policy is covered by
+    # test_workspace_task_storage. A child must be rejected before this check.
+    async def storage_access(sid, paths):
+        assert sid == root['id']
+        assert all(Path(path).is_relative_to(tmp_path) for path in paths)
+        return {'status': 'observed', 'paths': {path: {'status': 'allowed'} for path in paths}}
+    policy = AsyncMock(side_effect=storage_access)
+    if effect == 'task-storage':
+        monkeypatch.setattr(app, 'runtime', SimpleNamespace(resource_access=policy, close=AsyncMock()))
     worker = Worker()
     worker.session = parent
     worker.runtime = SimpleNamespace(generation={'id':'generation'})
@@ -150,6 +160,7 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
         if mode == 'resumed':
             await registry.resume('child', 'continue', parent)
         assert len(observed) == (2 if mode in {'resumed','nested'} else 1)
+        policy.assert_not_awaited()
         assert app.configuration_authority.snapshot(root)['grants'][0]['usable']
         result = await parent.coordinator.get('tools')['app_control'].execute({'operation':'dispatch','args':{
             'action':action,'id':'native-root-admin','args':action_args}})
@@ -163,6 +174,7 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
             rows = read(app.data_dir, root['id'], {})['items']
             assert len(rows)==1 and rows[0]['status']=='ready'
             assert Path(rows[0]['path']).is_dir()
+            assert policy.await_count == 2  # Admission and returned access observation.
     finally:
         _PERSISTENT.reset(token)
         await parent.cleanup()

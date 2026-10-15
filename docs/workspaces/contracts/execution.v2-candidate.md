@@ -550,8 +550,10 @@ coverage limits, never reported absent or safely isolated.
 ### Owned task storage — 2026-10-14 candidate addition
 
 The workspace resource owner may explicitly provision a private task-owned scratch
-directory, browser-profile directory or local SQLite database outside borrowed
-source repositories. It retains allocation intent before filesystem effects,
+directory, browser-profile directory or local SQLite database inside the chat's
+actual execution folder (working directory, falling back to workspace). Routine
+workspace descendants use existing file access without a configuration approval.
+The private ownership ledger remains outside the workspace. It retains allocation intent before filesystem effects,
 binds ownership to the authenticated root, bounds outstanding allocations and
 records directory/file identity. Stable retries return the same allocation;
 interrupted or replaced resources remain inspectable and are never recreated
@@ -562,14 +564,25 @@ preserves contents and does not assert that external users of the files stopped.
 Allocation does not change file-access settings or executable mount plans.
 Inspection reports the current supported mounted file/patch policy for the
 allocated path without warming a worker. Existing applicable access remains
-usable; absent access follows the ordinary explicit file-access authorization
-route. Unknown or custom tools never become an inferred grant. A browser-profile
+usable; an agent allocation with denied, mixed or unobserved access is refused
+before workspace effects. This includes newly created ancestors and ignore files.
+Explicit user UI allocation does not warm a worker or certify agent access.
+Unknown or custom tools never become an inferred grant. A browser-profile
 directory is not a launched or confined browser, and a SQLite file is not a
 provisioned database server. User and agent controls share ownership, receipts
 and revision checks; peer workspace membership confers no allocation control.
 
-The first supported allocation locations are opaque, app-owned paths. The caller
-does not supply a destination inside a borrowed repository. At most 32 nonretired
+New allocations use `.amplifier/task-storage/<root-hash>/<allocation-id>` inside
+the captured execution folder, with a local `.gitignore` excluding their contents
+from ordinary Git/DTU source snapshots. The user’s root ignore rules are unchanged.
+The execution folder identity and path components are checked before effects;
+symlink substitution or a conflicting ignore file cannot redirect allocation.
+Managed checkout archive/restore retains the bytes and follows the exact existing
+worktree owner's verified move records. Other path changes are unavailable, not
+permission to recreate or relocate storage. Existing app-owned allocations keep
+their original locations. Retries preserve the original placement even after a
+chat moves. No files or pending permissions are migrated automatically.
+The caller does not supply a destination. At most 32 nonretired
 allocations belong to one root and 512 to one app home; these are allocation-count
 limits, not disk quotas. A stopped allocation owner is reconciled to unknown only
 after its physical owner lock is free. Retirement releases a count slot but never

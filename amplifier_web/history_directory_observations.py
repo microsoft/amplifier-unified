@@ -186,6 +186,9 @@ def revision(directory,state):
     memo = getattr(directory, '_observation_revision_memo', None)
     if reusable and memo is not None and memo[0] == stamp:
         return dict(memo[1])
+    from .native_query_receipts import receipt as native_query_receipt
+    effective_native = {key: native_query_receipt(directory.db, directory._native_namespace, key, directory._live_values)
+                        for key in ('root_navigation', 'workspace')} if directory._native_path else {}
     overlays = {key:[] for key in COLLECTIONS}
     from .history_directory import COLUMNS
     cached = getattr(directory, '_observation_parts', {})
@@ -224,7 +227,7 @@ def revision(directory,state):
                           sorted(set(state.get('hiddenNativeWorkspaces',[]))),
                           sorted(encoded((row.get('id'),row.get('project'),sorted(row.get('ids') or [])))
                                  for row in tombstones(directory.db))])
-    result = {key:(directory._native_namespace,native[4 if key=='root_navigation' else 3 if key=='workspace' else 2 if key=='navigation' else 0 if key=='sessions' else 1],local.get(key,0),
+    result = {key:(directory._native_namespace,tuple(effective_native[key]) if key in effective_native else native[2 if key=='navigation' else 0 if key=='sessions' else 1],local.get(key,0),
                  digest(sorted(overlays[key])),digest(pins if key=='sessions' else workspace_read if key in {'workspace','root_navigation'} else read),suppression)
             for key in COLLECTIONS}
     # Never remember uncommitted mutable facts: rollback followed by another

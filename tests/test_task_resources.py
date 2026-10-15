@@ -12,8 +12,16 @@ import pytest
 
 from amplifier_web import task_resources as owner
 from amplifier_web.service import AppError
-from test_collaborative_workspaces import app, agent_action
+from test_collaborative_workspaces import app as base_app, agent_action
 from test_coordination_generation import agent
+
+
+@pytest.fixture
+def app(base_app):
+    async def observed(sid, paths):
+        return {'status': 'observed', 'paths': {path: {'status': 'allowed', 'settingsChanged': False} for path in paths}}
+    base_app.runtime.resource_access = AsyncMock(side_effect=observed)
+    return base_app
 
 
 def allocation(home, command='new', kind='scratch-directory', sid='root'):
@@ -146,7 +154,7 @@ async def test_ui_agent_routes_allocate_real_storage_without_policy_changes_or_m
     settings = copy.deepcopy(app.state.get('settings'))
     result = await agent_action(app, source, 'workspace.resources.provision', values, 'agent-resource')
     row = result['result']['items'][0]
-    assert Path(row['path']).is_file() and row['access']['status'] == 'unknown'
+    assert Path(row['path']).is_file() and row['access']['status'] == 'allowed'
     assert app.state.get('settings') == settings
     assert not app.runtime.inputs
     read_values = {key:value for key,value in values.items() if key != 'kind'}
@@ -315,6 +323,7 @@ async def test_authenticated_session_http_creates_retries_and_retires_only_its_o
 @pytest.mark.parametrize('change', ['stop','generation','workspace'])
 async def test_physical_owner_rechecks_after_waiting_for_admission_lock(app, change):
     source = app.state['sessions'][0]
+    workspace = Path(source['workspace'])
     values = args(app)
     await app.lock.acquire()
     pending = asyncio.create_task(agent_action(app, source, 'workspace.resources.provision', values, 'waiting-owner'))
@@ -334,6 +343,7 @@ async def test_physical_owner_rechecks_after_waiting_for_admission_lock(app, cha
     with pytest.raises(AppError):
         await pending
     assert not (app.data_dir/'workspace-resources'/'owned').exists()
+    assert not (workspace/'.amplifier').exists()
     assert owner.read(app.data_dir, source['id'], {})['items'][0]['status']=='suppressed'
 
 

@@ -2,6 +2,27 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.162",
+      "title": "Keep navigation and busy conversations responsive",
+      "changes": [
+        "Consecutive final Work updates now share a save during busy bursts, reducing repeated persistence while preserving event order and control-request handling.",
+        "Chat details popovers close when navigating to a different chat or workspace. Inspecting another row without navigating still works.",
+        "New task storage stays in the chat working folder and follows current file-access rules. Existing storage remains in place.",
+        "Runtime bridge diagnostics retain bounded timing and correlation details to help distinguish worker delays from host handling delays."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.161",
+      "title": "Keep navigation current while conversations are working",
+      "changes": [
+        "Sidebar activity follows current conversation state while navigation pages refresh. Workspace highlighting follows the current view instead of a remembered workspace route.",
+        "Pinned and recent queries can finish while busy conversations update unchanged native recency. Changes to visible titles, membership, availability, or ordering still refresh their results.",
+        "Ordinary conversation streaming no longer counts hidden worker history. Work controls and open worker history still receive current counts when needed."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.160",
       "title": "Keep open Work details current as responses finish",
       "changes": [

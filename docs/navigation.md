@@ -284,7 +284,10 @@ within a fixed 60 px row (52 px with the existing compact shell density). Hoveri
 for 550 ms opens details without changing the row geometry. The full title,
 selectable/copyable path, session ID, and pin/rename/remove actions are also
 available through the keyboard- and touch-accessible **…** button. Escape and
-outside clicks close the flyout; explicit open/close restores focus. A short
+outside clicks close the flyout; explicit open/close restores focus. Changing the
+selected chat, workspace, or main browsing surface also dismisses existing details
+without moving keyboard focus. A fresh peek may still inspect another row without
+selecting it, and unrelated activity updates keep its details open. A short
 pointer grace period lets people move from a row into its details. Saved skins
 continue to supply colors, while the structural row rules prevent old wrapping
 and hidden-action styles from reintroducing the layout problem.

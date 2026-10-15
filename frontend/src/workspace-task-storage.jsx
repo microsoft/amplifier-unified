@@ -26,7 +26,7 @@ export function TaskStorage({workspaceId,sessionId,initial,act,active,readOnly})
  };
  return <section aria-label="Task storage">
   <h4>Task storage</h4>
-  <p>Create a separate folder or local database for this chat. Files stay outside your source repositories. Creating storage leaves file permissions unchanged.</p>
+  <p>Create a separate folder or local database inside this chat’s working folder. It uses the folder’s existing access and is excluded from ordinary Git snapshots. Explicit file restrictions still apply.</p>
   {draft.pending&&<p role="status">A storage change has no confirmed response. {!readOnly&&<button className="a-link" disabled={busy||!active} onClick={()=>mutate()}>Check the same storage change</button>} <button className="a-link" disabled={busy} onClick={()=>retain({...draft,pending:null})}>Dismiss retry</button> Files and receipts are retained.</p>}
   {error&&<p role="alert">{error}</p>}
   {page.items.length===0&&<p>No task storage on this page.</p>}
@@ -34,7 +34,7 @@ export function TaskStorage({workspaceId,sessionId,initial,act,active,readOnly})
    <strong>{row.label||kinds[row.kind]} · {row.status}</strong>
    <p>{row.path}</p>
    <p>File-tool access: {row.access?.status||'unknown'}{row.observation&&' · Files '+row.observation}</p>
-   {row.access?.status==='denied'&&<p>The current file policy denies this location. Use the existing file-access settings or ask for scoped permission before writing here.</p>}
+   {row.access?.status==='denied'&&<p>{row.placement==='app-storage'?'This older allocation is outside the working folder. Create new task storage for new work; existing files remain here.':'A configured file restriction blocks this location. Review the chat’s file-access settings before writing here.'}</p>}
    <details><summary>Ownership and access details</summary><pre className="a-state-view">{JSON.stringify(row,null,2)}</pre></details>
    {!readOnly&&row.status!=='retired'&&<button className="a-soft" disabled={busy||!!draft.pending||!active} onClick={()=>mutate('workspace.resources.retire',{id:row.id,expectedRevision:row.revision})}>Retire and retain files</button>}
   </li>)}</ul>
