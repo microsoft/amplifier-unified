@@ -8,14 +8,14 @@ const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',impor
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/archive-feedback';
 await mkdir(output,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'/.venv/bin/python',[root+'/tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,release;
+let browser,release,releaseNavigation;
 try{
  const url=await new Promise((resolve,reject)=>{
   let text='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);
   fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}});
   fixture.once('error',reject);fixture.once('exit',code=>reject(Error('Fixture exited '+code)));
  });
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:JSON.parse(process.env.AMPLIFIER_CHROMIUM_ARGS||'[]')});
  const context=await browser.newContext({viewport:{width:1200,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),peer=await context.newPage(),errors=[];
  for(const p of [page,peer]){p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForFunction(()=>window.amplifier?.dispatch)}
@@ -31,13 +31,17 @@ try{
  await action('attachment.add',{sessionId:sid,name:'draft.txt',base64:Buffer.from('Synthetic attachment').toString('base64')});
  await action('view.update',{patch:{navPinned:true}});
  const before=await page.request.get(url+'/fixture').then(r=>r.json());
- let mode='hold',archiveCalls=0,restoreCalls=0;
+ let mode='hold',archiveCalls=0,restoreCalls=0,holdNavigation=false,workspaceRequests=0;
  await page.route('**/api/actions',async route=>{
   const body=route.request().postDataJSON();
+  if(body?.action==='view.update'&&body.args?.patch?.workSurface==='workspace')workspaceRequests++;
+  if(holdNavigation&&body?.action==='view.update'&&body.args?.patch?.workSurface==='chat'){
+   holdNavigation=false;await new Promise(resolve=>{releaseNavigation=resolve});
+  }
   if(body?.action==='session.restore')restoreCalls++;
   if(body?.action!=='session.archive'){await route.continue();return}
   archiveCalls++;
-  if(mode==='reject'){await route.fulfill({status:403,contentType:'application/json',body:JSON.stringify({accepted:false,error:'Synthetic archive rejection'})});return}
+  if(mode==='reject'||mode==='reject200'){await route.fulfill({status:mode==='reject'?403:200,contentType:'application/json',body:JSON.stringify({accepted:false,error:'Synthetic archive rejection'})});return}
   const response=await route.fetch();
   if(mode==='hold')await new Promise(resolve=>{release=resolve});
   await route.fulfill({response});
@@ -49,6 +53,7 @@ try{
  await headerArchive();
  await expect(page.locator('[data-archive-notice]')).toContainText('Archiving…');
  assert.equal((await state()).view.workSurface||'chat','chat');
+ await expect(page.getByRole('button',{name:'Chat',exact:true})).toBeFocused();
  await page.screenshot({path:output+'/pending.png'});
  await expect.poll(()=>!!release).toBe(true);release();release=null;mode='normal';
  await expect(page.locator('[data-archive-notice]')).toContainText('Chat archived');
@@ -68,12 +73,28 @@ try{
  mode='reject';await headerArchive();
  await expect(page.locator('[data-archive-notice]')).toContainText('Synthetic archive rejection');
  assert.equal((await state()).view.workSurface||'chat','chat');
+ await expect(page.getByRole('button',{name:'Chat',exact:true})).toBeFocused();
+ mode='reject200';await headerArchive();
+ await expect(page.locator('[data-archive-notice][role="alert"]')).toContainText('Synthetic archive rejection');
+ assert.equal((await state()).view.workSurface||'chat','chat');
  // Same A -> B -> A identity is not authority for an old archive to redirect.
  mode='hold';await headerArchive();await expect.poll(()=>!!release).toBe(true);
  await action('session.select',{id:other});await action('session.select',{id:sid});
  release();release=null;mode='normal';
  await expect(page.locator('[data-archive-notice]')).toContainText('Chat archived');
  assert.equal((await state()).view.workSurface||'chat','chat');
+ await action('session.restore',{id:sid});
+ // A queued browse must recheck user intent before sending its request.
+ holdNavigation=true;
+ await page.evaluate(()=>{window.heldNavigation=window.amplifier.dispatch('view.update',{patch:{workSurface:'chat'}})});
+ await expect.poll(()=>!!releaseNavigation).toBe(true);
+ const workspaceBefore=workspaceRequests;
+ await headerArchive();
+ await expect(page.locator('[data-archive-notice]')).toContainText('Chat archived');
+ await page.evaluate(()=>{window.newerNavigation=window.amplifier.dispatch('view.update',{patch:{workSurface:'chats'}})});
+ releaseNavigation();releaseNavigation=null;
+ await page.evaluate(()=>Promise.all([window.heldNavigation,window.newerNavigation]));
+ assert.equal((await state()).view.workSurface,'chats');assert.equal(workspaceRequests,workspaceBefore);
  await action('session.restore',{id:sid});
  // A row action for another chat doesn't leave the current conversation.
  await action('session.select',{id:sid});await action('session.pin',{id:other,pinned:true});
@@ -97,5 +118,5 @@ try{
  const after=await page.request.get(url+'/fixture').then(r=>r.json());
  assert.deepEqual(after.started,before.started);assert.deepEqual(after.stopped,before.stopped);assert.deepEqual(after.sent,before.sent);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,archiveCalls,restoreCalls,pending:true,workspaceAndManagedDestination:true,undo:true,explicitRejection:true,roundtripRace:true,noncurrentRow:true,rawApiUnchanged:true,peerUnchanged:true,draftAndAttachmentPreserved:true,narrow:true,noRuntimeLifecycleChanges:true}));
-}finally{release?.();await browser?.close();fixture.kill()}
+ console.log(JSON.stringify({passed:true,archiveCalls,restoreCalls,pending:true,workspaceAndManagedDestination:true,undo:true,explicitRejection:true,http200Rejection:true,roundtripRace:true,queuedNavigationRace:true,noncurrentRow:true,rawApiUnchanged:true,peerUnchanged:true,draftAndAttachmentPreserved:true,narrow:true,noRuntimeLifecycleChanges:true}));
+}finally{release?.();releaseNavigation?.();await browser?.close();fixture.kill()}

@@ -24,6 +24,7 @@ test('shared button has pending label and same target for archive and restore',a
 test('success Undo is bound to the archived id; error/unknown never offers Undo',async()=>{
  const calls=[],value={notice:{id:'a',title:'Example',phase:'success',archive:true,text:'Chat archived'},pending:[],run:(...args)=>calls.push(args),dismiss(){}};
  let root;await act(async()=>{root=create(React.createElement(ArchiveNotice,{value}))});
+ assert.equal(root.root.findByProps({'data-archive-notice':true}).props.style.color,'var(--a-ink)');
  await act(async()=>root.root.findByProps({'data-action':'session.restore'}).props.onClick());
  assert.deepEqual(calls,[[{id:'a',title:'Example'},false]]);
  value.notice={...value.notice,phase:'unknown',text:'Unconfirmed'};
@@ -32,6 +33,7 @@ test('success Undo is bound to the archived id; error/unknown never offers Undo'
  value.notice={...value.notice,phase:'error'};
  await act(async()=>root.update(React.createElement(ArchiveNotice,{value})));
  assert.equal(root.root.findByProps({'data-archive-notice':true}).props.role,'alert');
+ assert.equal(root.root.findByProps({'data-archive-notice':true}).props.style,undefined);
  await act(async()=>root.unmount());
 });
 test('library component uses the shared interaction instead of raw integration dispatch',async()=>{

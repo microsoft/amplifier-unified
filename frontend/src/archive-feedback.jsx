@@ -8,7 +8,7 @@ export function ArchiveButton({chat,archived=false,children,...props}){
 }
 export function ArchiveNotice({value}){
  const notice=value.notice;if(!notice)return null;
- return <div className="a-alert" data-archive-notice role={notice.phase==='error'?'alert':'status'} aria-live={notice.phase==='error'?'assertive':'polite'} aria-atomic="true">
+ return <div className="a-alert" style={notice.phase==='error'?undefined:{color:'var(--a-ink)',background:'var(--a-soft)',borderColor:'var(--a-line)'}} data-archive-notice role={notice.phase==='error'?'alert':'status'} aria-live={notice.phase==='error'?'assertive':'polite'} aria-atomic="true">
   <span>{notice.text}{notice.title&&<> · {notice.title}</>}</span>
   {notice.phase==='success'&&notice.archive&&<button type="button" className="a-link" data-action="session.restore" disabled={value.pending.includes(notice.id)} onClick={()=>value.run({id:notice.id,title:notice.title},false)}>Undo</button>}
   {notice.phase!=='pending'&&<button type="button" className="a-icon" aria-label="Dismiss archive notification" onClick={value.dismiss}><X/></button>}
