@@ -57,7 +57,7 @@ try{
  }
  const allocations=(await action('workspace.resources.read',{workspaceId:workspace.id,sessionId:sid})).result.items;
  assert.equal(allocations.length,3);assert.equal(new Set(allocations.map(row=>row.path)).size,3);
- assert.ok(allocations.every(row=>!row.path.startsWith(workspace.path+'/')&&!row.fileAccessChanged));
+ assert.ok(allocations.every(row=>row.path.startsWith(workspace.path+'/.amplifier/task-storage/')&&row.placement==='working-folder'&&!row.fileAccessChanged));
  for(const row of allocations){assert.ok((await stat(row.path)).isDirectory()||row.kind==='sqlite-database');assert.equal(row.access.status,'unknown')}
  const scratch=allocations.find(row=>row.kind==='scratch-directory');
  await writeFile(scratch.path+'/retained.txt','Preserve unknown user content');
