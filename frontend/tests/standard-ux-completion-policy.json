@@ -2270,6 +2270,71 @@
       "limits": [
         "Synthetic updater effects; truthful serving/staged identity outcome0 of failure remains unqualified; rollback is Advanced-details supplemental."
       ]
+    },
+    {
+      "workflow": "configuration.routing",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open All workspaces, exact workspace, Details and Model rules",
+        "Reorder choices and save exact local then project owner",
+        "Verify required roles, inert unknown fields and other workspace/chat invariants"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Existing idle chat only; no real package/behavioral validation, network fetch or active-worker acceptance."
+      ]
+    },
+    {
+      "workflow": "configuration.routing-config",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Edit invalid choice JSON and preserve unsaved input",
+        "Refuse first profile save then explicitly retry same named profile",
+        "Verify last-good files before retry"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Existing idle chat only; no real package/behavioral validation, network fetch or active-worker acceptance."
+      ]
+    },
+    {
+      "workflow": "configuration.registry",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Open Workspace Details Modules & sources",
+        "Save exact module in this workspace, explicitly validate then reject invalid JSON",
+        "Reload exact module owner"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Existing idle chat only; no real package/behavioral validation, network fetch or active-worker acceptance."
+      ]
+    },
+    {
+      "workflow": "configuration.sources",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open Source overrides from ordinary workspace Details",
+        "Validate without save, save good mapping and reject failed replacement",
+        "Remove exact module/bundle overrides and verify inherited defaults"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Existing idle chat only; no real package/behavioral validation, network fetch or active-worker acceptance."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
