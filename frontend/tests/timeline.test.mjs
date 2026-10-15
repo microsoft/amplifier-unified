@@ -127,12 +127,13 @@ test('work summary unions overlapping intervals and preserves unknown usage and 
 });
 
 
-test('orphan recovery notices remain grouped and chronological without exposing internal observations',async()=>{
+test('recovery observations stay in saved data without rendering chat notices',async()=>{
  const {conversationWorkRows}=await import('../src/timeline-data.js');
  const notice=id=>({id,observation:{source:'local-job-recovery'}});
- const rows=conversationWorkRows([{id:'user'},notice('a'),notice('b'),{id:'hidden',observation:{source:'amplifier-delegate'}},{id:'assistant'},notice('represented'),notice('last')],{before:[],after:new Map([['represented',['turn']]])});
- assert.deepEqual(rows.map(r=>[r.kind,r.id]),[['message','user'],['recovery','recovery:a'],['message','assistant'],['work','work:turn'],['recovery','recovery:last']]);
- assert.deepEqual(rows[1].messages.map(m=>m.id),['a','b']);
+ const messages=[{id:'user'},notice('a'),notice('b'),{id:'assistant'},notice('attached'),notice('last')],before=JSON.stringify(messages);
+ const rows=conversationWorkRows(messages,{before:[],after:new Map([['attached',['turn']]])});
+ assert.deepEqual(rows.map(r=>[r.kind,r.id]),[['message','user'],['message','assistant'],['work','work:turn']]);
+ assert.equal(JSON.stringify(messages),before,'hiding notices must preserve canonical observations');
 });
 
 

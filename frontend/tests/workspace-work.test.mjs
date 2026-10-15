@@ -5,6 +5,8 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {CoordinationPanel,RelatedWork,selectWorkspaceChat}=await vite.ssrLoadModule('/src/coordination.jsx');
+const {WorkspaceWork,WorkspaceWorkInspection}=await vite.ssrLoadModule('/src/workspace-work.jsx');
+const {ChatOverview}=await vite.ssrLoadModule('/src/work-overview.jsx');
 const {WorkHeader}=await vite.ssrLoadModule('/src/work-shell.jsx');
 const {WorkNavigationContext}=await vite.ssrLoadModule('/src/work-navigation.js');
 const {IntegrationEvidence,repositoryChoices}=await vite.ssrLoadModule('/src/integration-evidence.jsx');
@@ -25,11 +27,76 @@ const list={items:[{target:{sessionId:'own'},title:'Plan the app',kind:'conversa
 const accepted=result=>({accepted:true,result});
 const candidate=(id='candidate-a',paths=['/copies/app','/copies/lib'])=>({id,sessionId:'own',kind:'capture',status:'matched',purpose:'Combined check',repositories:paths.map(repositoryPath=>({repositoryPath,sourceRevision:'version:'+repositoryPath}))});
 
-test('header exposes workspace work directly without selecting a chat or changing its draft',async()=>{
+test('conversation header leaves workspace work in the workspace and canvas surfaces',async()=>{
  const calls=[],opened=[],state={view:{},selectedWorkspaceId:'w',workspaces:[{id:'w',name:'Project',path:'/workspace'}],sessions:[session]};let root;
  await act(async()=>{root=create(React.createElement(WorkNavigationContext.Provider,{value:{}},React.createElement(WorkHeader,{state,session,act:(...args)=>calls.push(args),open:panel=>opened.push(panel),presentation:{layout:{}},narrow:false})))});
- const entry=root.root.findByProps({'aria-label':'Workspace work'});await act(async()=>entry.props.onClick());
- assert.deepEqual(opened,['coordination']);assert.deepEqual(calls,[]);assert.match(content(entry),/Workspace work/);await act(async()=>root.unmount());
+ assert.equal(root.root.findAllByProps({'aria-label':'Workspace work'}).length,0);
+ assert.deepEqual(opened,[]);assert.deepEqual(calls,[]);await act(async()=>root.unmount());
+});
+
+test('canvas overview has one workspace work action without requiring existing workers',async()=>{
+ const calls=[],state={view:{draft:'private draft'},selectedSessionId:'own',selectedWorkspaceId:'w',workspaces:[{id:'w',name:'Project',path:'/workspace'}],sessions:[session]};let root;
+ await act(async()=>{root=create(React.createElement(ChatOverview,{state,act:async(...args)=>calls.push(args),changeDraft:()=>{throw Error('Draft must remain unchanged')}}))});
+ await click(root,'Workspace work');assert.deepEqual(calls,[['view.update',{patch:{panel:'coordination'}}]]);
+ assert.equal(state.view.draft,'private draft');assert.equal(state.selectedSessionId,'own');await act(async()=>root.unmount());
+});
+
+test('workspace disclosure stays passive until opened and scopes inspection without selecting another chat',async()=>{
+ const calls=[],workspace={id:'other-workspace',path:'/other'},other={target:{sessionId:'other'},title:'Other project chat',kind:'conversation',status:'idle'};
+ const dispatch=async(action,args)=>{calls.push([action,args]);if(action==='coordination.list')return accepted({items:[other],nextOffset:null});if(action==='coordination.context')return accepted({workspace:'/other',requests:[]});throw Error('Unexpected action '+action)};let root;
+ await act(async()=>{root=create(React.createElement(WorkspaceWork,{workspace,session,dispatch}))});
+ assert.deepEqual(calls,[]);await toggle(root,'Workspace work');
+ assert.deepEqual(calls,[['coordination.list',{workspace:'/other',offset:0,limit:20,includeWorkers:false}]]);
+ assert.equal(root.root.findByProps({id:'workspace-work-chat'}).props.value,'');
+ await select(root,'workspace-work-chat','other');
+ assert.deepEqual(calls.slice(1),[['coordination.context',{sessionId:'other'}],['coordination.list',{workspace:'/other',limit:20,includeWorkers:false}]]);
+ assert.match(content(root.toJSON()),/Reviewing from Other project chat/);
+ assert.equal(root.root.findByType(CoordinationPanel).props.sessionId,'other');assert.equal(calls.some(([action])=>action==='session.select'),false);
+ await act(async()=>root.unmount());
+});
+
+test('workspace chat picker pages bounded results and retains an inspected chat outside the current page',async()=>{
+ const calls=[],workspace={id:'w',path:'/workspace'},row=(id,title)=>({target:{sessionId:id},title,kind:'conversation',status:'idle'});
+ const dispatch=async(action,args)=>{calls.push([action,args]);if(action==='coordination.context')return accepted(context);return accepted({items:[row(args.offset===20?'later':'first','Same title')],nextOffset:args.offset===20?null:20})};let root;
+ await act(async()=>{root=create(React.createElement(WorkspaceWorkInspection,{workspace,session,dispatch}))});
+ await click(root,'Next chats');assert.deepEqual(calls.at(-1),['coordination.list',{workspace:'/workspace',offset:20,limit:20,includeWorkers:false}]);
+ assert.equal(root.root.findByProps({id:'workspace-work-chat'}).props.value,'own');
+ assert.equal(root.root.findByProps({id:'workspace-work-chat'}).findAllByType('option').length,3);
+ await click(root,'Previous chats');assert.deepEqual(calls.at(-1),['coordination.list',{workspace:'/workspace',offset:0,limit:20,includeWorkers:false}]);
+ await act(async()=>root.unmount());
+});
+
+test('obsolete workspace picker responses cannot replace a new workspace visit',async()=>{
+ let resolveOld;const dispatch=async(action,args)=>args.workspace==='/old'?new Promise(resolve=>{resolveOld=resolve}):accepted({items:[{target:{sessionId:'new'},title:'New workspace chat'}],nextOffset:null});let root;
+ await act(async()=>{root=create(React.createElement(WorkspaceWorkInspection,{workspace:{id:'old',path:'/old'},dispatch}))});
+ await act(async()=>root.update(React.createElement(WorkspaceWorkInspection,{workspace:{id:'new',path:'/new'},dispatch})));
+ await act(async()=>resolveOld(accepted({items:[{target:{sessionId:'old'},title:'Old workspace chat'}],nextOffset:20})));
+ assert.match(content(root.toJSON()),/New workspace chat/);assert.doesNotMatch(content(root.toJSON()),/Old workspace chat/);await act(async()=>root.unmount());
+});
+
+test('workspace inspection refuses a chat context from a different workspace',async()=>{
+ const calls=[];let root;await act(async()=>{root=create(React.createElement(RelatedWork,{sessionId:'own',expectedWorkspace:'/other',dispatch:async(action,args)=>{calls.push(action);return accepted(context)}}))});
+ assert.deepEqual(calls,['coordination.context']);assert.match(content(root.toJSON()),/no longer belongs to the workspace/);await act(async()=>root.unmount());
+});
+
+test('workspace context refresh hides stale content and follow-up controls after a chat moves',async()=>{
+ let moved=false;const calls=[];let root;
+ const dispatch=async(action,args)=>{calls.push([action,args]);return accepted(action==='coordination.context'?{...context,workspace:moved?'/moved':'/workspace'}:list)};
+ await act(async()=>{root=create(React.createElement(CoordinationPanel,{dispatch,sessionId:'own',session,expectedWorkspace:'/workspace'}))});
+ await toggle(root,'Follow up or watch work');assert.ok(details(root,'Follow up or watch work'));assert.match(content(root.toJSON()),/Library helper/);
+ moved=true;const before=calls.length;await click(root,'Refresh workspace work');
+ assert.deepEqual(calls.slice(before),[['coordination.context',{sessionId:'own'}]]);
+ assert.match(content(root.toJSON()),/no longer belongs to the workspace/);assert.doesNotMatch(content(root.toJSON()),/Library helper|Follow up or watch work|Combine and check work|Review before continuing/);
+ moved=false;await click(root,'Refresh workspace work');assert.ok(details(root,'Follow up or watch work'));await act(async()=>root.unmount());
+});
+
+test('follow-up refresh cannot silently move workspace-scoped targets to another workspace',async()=>{
+ let moved=false;const calls=[];let root;
+ const dispatch=async(action,args)=>{calls.push([action,args]);return accepted(action==='coordination.context'?{...context,workspace:moved?'/moved':'/workspace'}:list)};
+ await act(async()=>{root=create(React.createElement(CoordinationPanel,{dispatch,sessionId:'own',session,expectedWorkspace:'/workspace'}))});
+ await toggle(root,'Follow up or watch work');moved=true;const before=calls.length;await click(root,'Refresh targets');
+ assert.deepEqual(calls.slice(before),[['coordination.context',{sessionId:'own'}]]);assert.match(content(root.toJSON()),/no longer belongs to the workspace/);assert.equal(details(root,'Follow up or watch work'),undefined);assert.doesNotMatch(content(root.toJSON()),/Library helper|Combine and check work|Review before continuing/);
+ await act(async()=>root.unmount());
 });
 
 test('overview reads only bounded workspace projections and leaves messaging controls demand-loaded',async()=>{

@@ -18,24 +18,27 @@ export async function selectWorkspaceChat(dispatch,id,isCurrent){
  return response;
 }
 
-export function CoordinationPanel({dispatch,sessionId,session,onOpenChat}){
- const [controls,setControls]=useState(false);
+export function CoordinationPanel({dispatch,sessionId,session,onOpenChat,expectedWorkspace}){
+ const [controls,setControls]=useState(false),[scoped,setScoped]=useState(null),[scopeError,setScopeError]=useState('');
+ const scopeReady=ready=>{setScoped(ready?sessionId:null);if(ready)setScopeError('');else setControls(false)};
+ const scopeInvalid=message=>{setScoped(null);setControls(false);setScopeError(message)};
  return <div className="a-coordination a-workspace-work">
-  {sessionId?<RelatedWork key={sessionId} dispatch={dispatch} sessionId={sessionId} session={session} onOpenChat={onOpenChat}/>:<p>Open a chat to inspect work in its workspace.</p>}
-  <details onToggle={event=>setControls(event.currentTarget.open)}><summary>Follow up or watch work</summary>
-   {controls&&sessionId&&<CoordinationTargets dispatch={dispatch} sessionId={sessionId}/>}
-  </details>
+  {sessionId?<RelatedWork key={sessionId} dispatch={dispatch} sessionId={sessionId} session={session} onOpenChat={onOpenChat} expectedWorkspace={expectedWorkspace} onScopeReady={scopeReady} scopeInvalid={!!scopeError}/>:<p>Open a chat to inspect work in its workspace.</p>}
+  {scopeError&&<p role="alert">{scopeError}</p>}
+  {(!expectedWorkspace||scoped===sessionId)&&<details onToggle={event=>setControls(event.currentTarget.open)}><summary>Follow up or watch work</summary>
+   {controls&&sessionId&&<CoordinationTargets dispatch={dispatch} sessionId={sessionId} expectedWorkspace={expectedWorkspace} onScopeInvalid={scopeInvalid}/>}
+  </details>}
  </div>;
 }
 
-function CoordinationTargets({dispatch,sessionId}){
+function CoordinationTargets({dispatch,sessionId,expectedWorkspace,onScopeInvalid}){
  // Session storage is isolated by origin and tab; client IDs rotate on reload.
  const storageKey='amplifier-coordination-v1';
  const [saved,setSaved]=useState(()=>{try{return {...empty,...JSON.parse(sessionStorage.getItem(storageKey)||'null')}}catch{return empty}});
  const inflight=useRef(new Set());
  const savedRef=useRef(saved),[items,setItems]=useState([]),[error,setError]=useState(''),[waitError,setWaitError]=useState(''),[notice,setNotice]=useState(''),[working,setWorking]=useState(null),[waiting,setWaiting]=useState(false);
  const write=update=>{const next=update(savedRef.current);savedRef.current=next;setSaved(next);try{sessionStorage.setItem(storageKey,JSON.stringify(next))}catch{setNotice('This browser could not save delivery cursors. Reports may appear again after reload.')}};
- const refresh=async()=>{try{const source=await dispatch('coordination.context',{sessionId},{feedback:false});if(!source.result.workspace)throw Error('The workspace is unavailable.');const response=await dispatch('coordination.list',{workspace:source.result.workspace,limit:100}, {feedback:false});setItems(response.result.items);if(response.result.truncated)setNotice('Showing the first 100 targets. Agents can address any known conversation directly.')}catch(error){setError(error.message)}};
+ const refresh=async()=>{try{const source=await dispatch('coordination.context',{sessionId},{feedback:false});if(!source.result.workspace)throw Error('The workspace is unavailable.');if(expectedWorkspace&&source.result.workspace!==expectedWorkspace){const message='This chat no longer belongs to the workspace being reviewed. Refresh the chat list.';setItems([]);onScopeInvalid?.(message);throw Error(message)}const response=await dispatch('coordination.list',{workspace:source.result.workspace,limit:100}, {feedback:false});setItems(response.result.items);if(response.result.truncated)setNotice('Showing the first 100 targets. Agents can address any known conversation directly.')}catch(error){setError(error.message)}};
  useEffect(()=>{refresh()},[]);
  useEffect(()=>{
   if(!saved.selected.length)return;
@@ -103,7 +106,7 @@ function ResultFileStatus({response}){
  return null;
 }
 
-export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
+export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorkspace,onScopeReady,scopeInvalid=false}){
  const visit=useRef(0),openingRef=useRef(false),sectionRef=useRef(null);
  const [review,setReview]=useState(false);
  const [opening,setOpening]=useState(null);
@@ -111,14 +114,16 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
  const [items,setItems]=useState([]),[context,setContext]=useState({requests:[]}),[error,setError]=useState(''),[inspected,setInspected]=useState({}),[original,setOriginal]=useState(null);
  const refresh=async()=>{
   const current=++visit.current;setError('');
+  if(expectedWorkspace){onScopeReady?.(false);setContext({requests:[]});setItems([]);setNext(null);setInspected({});setOriginal(null);setReview(false);setRecap(false)}
   const state=await dispatch('coordination.context',{sessionId},{feedback:false});
   if(current!==visit.current)return;
   if(!state.result.workspace)throw Error('The workspace is unavailable.');
+  if(expectedWorkspace&&state.result.workspace!==expectedWorkspace)throw Error('This chat no longer belongs to the workspace being reviewed. Refresh the chat list.');
   const peers=await dispatch('coordination.list',{workspace:state.result.workspace,limit:20,includeWorkers:false},{feedback:false});
   if(current!==visit.current)return;
-  setContext(state.result);setInspected({});setItems(peers.result.items);setNext(peers.result.nextOffset??null);
+  setContext(state.result);setInspected({});setItems(peers.result.items);setNext(peers.result.nextOffset??null);onScopeReady?.(true);
  };
- useEffect(()=>{setInspected({});setOriginal(null);setContext({requests:[]});setItems([]);setNext(null);setError('');refresh().catch(error=>{if(visit.current===current)setError(error.message)});const current=visit.current;return()=>{visit.current++}},[sessionId]);
+ useEffect(()=>{setInspected({});setOriginal(null);setContext({requests:[]});setItems([]);setNext(null);setError('');refresh().catch(error=>{if(visit.current===current)setError(error.message)});const current=visit.current;return()=>{visit.current++}},[sessionId,expectedWorkspace]);
  const more=async()=>{const current=visit.current;try{const response=await dispatch('coordination.list',{workspace:context.workspace,offset:next,limit:20,includeWorkers:false},{feedback:false});if(current!==visit.current)return;setItems(previous=>[...new Map([...previous,...response.result.items].map(row=>[row.target.sessionId,row])).values()]);setNext(response.result.nextOffset??null)}catch(error){if(current===visit.current)setError(error.message)}};
  const inspectResult=async requestId=>{const current=visit.current;try{const value=await dispatch('coordination.result',{requestId},{feedback:false});if(current!==visit.current)return;setInspected(previous=>({...previous,[requestId]:value.result}))}catch(error){if(current===visit.current)setError(error.message)}};
  const reveal=async(sid,messageId)=>{const current=visit.current;try{const response=await dispatch('coordination.read',{sessionId:sid,messageId,textLimit:4000},{feedback:false});if(current!==visit.current)return;setOriginal(response.result.message)}catch(error){if(current===visit.current)setError(error.message)}};
@@ -142,6 +147,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
   <p>See what is happening around this chat. Inspecting keeps your conversation and draft in place.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh workspace work</button>
+  {(!expectedWorkspace||(!scopeInvalid&&context.workspace===expectedWorkspace))&&<>
   <details onToggle={event=>{if(event.target===event.currentTarget)setReview(event.currentTarget.open)}}><summary>Review before continuing</summary>{review&&<WorkspaceReview key={'review:'+sessionId} dispatch={dispatch} sessionId={sessionId} workspace={context.workspace} requests={context.requests} onOpenChat={onOpenChat} onShowSection={showSection}/>}</details>
   <WorkspaceAwareness key={'workspace:'+sessionId} dispatch={dispatch} sessionId={sessionId} context={context} refresh={refresh}/>
   <section aria-label="Attention and requests"><h3>Attention and requests</h3>
@@ -183,5 +189,6 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
    </details>}{result&&<p className="a-caption">{result.detail}</p>}
   </article>})}
  </details>
+ </>}
  </section>;
 }

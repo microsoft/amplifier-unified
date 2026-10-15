@@ -146,7 +146,7 @@ try{
  // release. Existing rows stay visible, reads never replay a user command, and
  // an explicit retry settles through the normal resource owner and stream.
  const queryControl=async mode=>{
-  const response=await page.request.post(url+'/fixture/scoped-query',{data:{mode}});
+  const response=await page.request.post(url+'/fixture/scoped-query',{data:{mode,clientId:(await state()).client.id}});
   assert.equal(response.status(),200);return response.json();
  };
  await queryControl('hold');
@@ -179,7 +179,9 @@ try{
  // automatic retry is allowed when the window expires.
  await page.waitForTimeout(5100);
  assert.equal(subscriptionCount,beforeCooldownRequests);
- assert.equal((await (await page.request.get(url+'/fixture/scoped-query')).json()).entered,priorEntered);
+ const heldProof=await (await page.request.get(url+'/fixture/scoped-query')).json();
+ assert.equal(heldProof.entered,priorEntered);
+ assert.ok(heldProof.events.some(event=>event.targeted&&event.failureFenceCurrent===true),'The failed current query must belong to the visible Chats instance');
  expectRetryCooldown=false;
  await body.getByRole('button',{name:'Retry chat search',exact:true}).click();
  await expect.poll(async()=>(await (await page.request.get(url+'/fixture/scoped-query')).json()).entered).toBeGreaterThan(priorEntered);
@@ -187,6 +189,18 @@ try{
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B refreshed',exact:true})).toBeVisible();
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toHaveCount(0);
  checks.push({heldQueryRetainsRows:true,queryFailureExplicitRetry:true,queryWaitKeepsVisibleControlsResponsive:true});
+ // A failed first page is unavailable, not still loading or a proven empty list.
+ await queryControl('fail');
+ await body.getByRole('searchbox',{name:'Search chats',exact:true}).fill('Cold failed search');
+ await expect(body.getByRole('button',{name:'Retry chat search',exact:true})).toBeVisible();
+ await expect(body.getByRole('status').filter({hasText:'Search unavailable'})).toBeVisible();
+ await expect(body.getByRole('status').filter({hasText:/Searching|Loading/})).toHaveCount(0);
+ await expect(body.getByRole('heading',{name:'No chats found',exact:true})).toHaveCount(0);
+ await expect(body.locator('[data-session-id]')).toHaveCount(0);
+ await queryControl('release');
+ await body.getByRole('searchbox',{name:'Search chats',exact:true}).fill('');
+ await waitCoverage(['sidebarSearch']);
+ checks.push({coldFailureIsUnavailableNotLoadingOrEmpty:true});
  await browse('workspaces');await waitCoverage(['workspaceExplorer']);await expect(body.getByRole('heading',{name:'Your workspaces',exact:true})).toBeVisible();
  await act('session.select',{id:chats[0]});await waitCoverage([]);await expect(composer).toHaveDraft('Keep this unsent scoped-navigation draft');
  assert.equal(await page.evaluate(()=>window.scopedDocument===document.querySelector('#amp-one')&&window.scopedFrame===document.querySelector('.a-canvas-html')),true);

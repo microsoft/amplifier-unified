@@ -3,9 +3,10 @@ import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
-const full=Array.from({length:791},(_,i)=>({id:'m'+i,role:i<731&&i%10===0?'user':'assistant',text:'Message '+i,createdAt:1000+i}));
-let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{setupJourney:'done',navPinned:true},sessions:[{id:'chat',sessionKind:'root',title:'Long chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:false,historyLoaded:true,messages:full.slice(-60),messageWindow:{offset:731,total:791,before:'m731'},execution:{nodes:[],turns:[]}}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',canvas:{open:false}};
-const previews=[],windows=[];let invalidIndex=true;
+const full=Array.from({length:791},(_,i)=>({id:'m'+i,role:i%10===0?'user':'assistant',text:'Message '+i,createdAt:1000+i}));
+const messageWindow={mode:'cursor',offset:null,total:null,before:'older-731',hasEarlier:true,windowKey:'latest-731',coverage:{kind:'saved-web',historyComplete:false}};
+let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{setupJourney:'done',navPinned:true},sessions:[{id:'chat',sessionKind:'root',title:'Long chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:false,historyLoaded:true,messages:full.slice(-60),messageWindow,execution:{nodes:[],turns:[]}}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',canvas:{open:false}};
+const previews=[],indexes=[],windows=[],earlier=[];let restoring=false;
 let browser,vite,page;const errors=[],calls=[];
 const shell=createShellHttpFixture(()=>state);
 try{
@@ -18,11 +19,22 @@ try{
   if(shellResponse!==undefined)return route.fulfill({json:shellResponse});
   if(path==='/api/conversation/navigation'){
    const query=new URL(route.request().url()).searchParams,id=query.get('messageId');
-   if(!id&&invalidIndex){invalidIndex=false;return route.fulfill({json:{}})}
-   if(!id)return route.fulfill({json:{revision:'fixed',turns:full.filter(row=>row.role==='user').map(row=>({id:row.id,position:Number(row.id.slice(1))}))}});
+   if(!id){indexes.push(query.toString());return route.fulfill({status:500,json:{error:'The loaded-window rail must not request a whole-history index.'}})}
    const index=full.findIndex(row=>row.id===id);
-   if(query.get('window')==='true'){windows.push(id);const start=Math.max(0,index-5);return route.fulfill({json:{messages:full.slice(start,start+60),offset:start,total:full.length,before:start?'m'+Math.max(0,start-55):null,after:'m'+(start+60),execution:{nodes:[],turns:[]}}})}
-   previews.push(id);return route.fulfill({json:{id,text:full[index].text,reply:full[index+1].text}});
+   if(query.get('window')==='true'){
+    windows.push({id,restoring});const start=Math.max(0,index-5);
+    return route.fulfill({json:{messages:full.slice(start,start+60),offset:start,total:full.length,before:start?'m'+Math.max(0,start-55):null,after:'m'+(start+60),execution:{nodes:[],turns:[]}}});
+   }
+   previews.push(id);return route.fulfill({status:500,json:{error:'Hover must use text already in the loaded window.'}});
+  }
+  if(path==='/api/conversation/detail'){
+   const query=new URL(route.request().url()).searchParams,before=query.get('before');
+   assert.equal(query.get('part'),'messages');assert.equal(query.get('sessionId'),'chat');
+   assert.match(before,/^older-\d+$/);const end=Number(before.slice(6)),start=Math.max(0,end-100);
+   assert.ok(end>0&&end<=731);earlier.push(before);
+   return route.fulfill({json:{items:full.slice(start,end),mode:'cursor',offset:null,total:null,
+    before:start?'older-'+start:null,hasEarlier:start>0,windowKey:'page-'+start,
+    coverage:{kind:'saved-web',historyComplete:false}}});
   }
   if(path==='/api/state')return route.fulfill({json:shell.state()});
   if(path==='/api/outputs/media'&&route.request().method()==='GET')
@@ -36,46 +48,60 @@ try{
   return route.fulfill({json:{ok:true}});
  });
  await page.goto(vite.resolvedUrls.local[0]);
- await page.getByRole('button',{name:'Retry chat navigator',exact:true}).click();
- const marks=page.locator('.a-rail-mark');await expect(marks).toHaveCount(74);
- assert.equal(previews.length,0);
+ const marks=page.locator('.a-rail-mark');await expect(marks).toHaveCount(6);
+ const assertLoadedMarks=async()=>{
+  const visible=await page.locator('[data-message-id]').evaluateAll(rows=>rows.map(row=>row.dataset.messageId));
+  const ids=await marks.evaluateAll(rows=>rows.map(row=>row.dataset.turnId));
+  assert.deepEqual(ids,visible.filter(id=>full.find(row=>row.id===id)?.role==='user').slice(-100));
+ };
+ await assertLoadedMarks();assert.deepEqual({indexes,previews,windows,earlier},{indexes:[],previews:[],windows:[],earlier:[]});
  await expect(marks.last()).toHaveAttribute('data-visible','true');
- await marks.nth(3).hover();await expect(page.locator('.a-rail-preview-jump')).toHaveText('Message 30');
- assert.deepEqual(previews,['m30']);
- const firstMark=await marks.nth(3).boundingBox(),firstLine=await marks.nth(3).locator('span').boundingBox();
+ await marks.nth(3).hover();await expect(page.locator('.a-rail-preview-jump')).toHaveText('Message 770');
+ await expect(page.locator('.a-rail-preview p')).toHaveText('Message 771');
+ assert.deepEqual(previews,[]);
+ // Only an explicit earlier-page action broadens the reading window. Its
+ // unknown total is not permission to preload the remaining 631 messages.
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
+ await expect(page.locator('[data-message-id]')).toHaveCount(160);
+ await expect(marks).toHaveCount(16);await assertLoadedMarks();
+ assert.deepEqual(earlier,['older-731']);assert.deepEqual(windows,[]);
+ const bookmarked=page.locator('.a-rail-mark[data-turn-id="m670"]');
+ await bookmarked.hover();await expect(page.locator('.a-rail-preview-jump')).toHaveText('Message 670');
+ const firstMark=await bookmarked.boundingBox(),firstLine=await bookmarked.locator('span').boundingBox();
  assert.ok(firstLine.x-firstMark.x<5,'Marks must start at the rail edge, leaving room for magnification.');
  const bookmark=page.getByRole('button',{name:'Bookmark message',exact:true});
  const bookmarkBox=await bookmark.boundingBox();
  await page.mouse.move(bookmarkBox.x+8,bookmarkBox.y+8,{steps:20});
  await bookmark.click();await expect(bookmark).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Remove message bookmark',exact:true})).toBeVisible();
- await page.mouse.move(600,80);await marks.nth(3).hover();await expect(page.locator('.a-rail-preview-jump')).toHaveText('Message 30');
- assert.deepEqual(previews,['m30']);
- await marks.nth(3).click();await expect(page.locator('[data-message-id="m30"]')).toBeVisible();
- assert.deepEqual(windows,['m30']);
- assert.ok(await page.locator('[data-message-id]').count()<=60);
- assert.equal(await page.locator('[data-message-id="m790"]').count(),0);
+ await page.mouse.move(600,80);await bookmarked.hover();await expect(page.locator('.a-rail-preview-jump')).toHaveText('Message 670');
+ assert.deepEqual(previews,[]);
+ await bookmarked.click();await expect(page.locator('[data-message-id="m670"]')).toBeVisible();
+ assert.deepEqual(windows,[]);assert.equal(await page.locator('[data-message-id]').count(),160);
  // A publication while reading older messages must not repeat the jump.
  const pane=page.locator('.a-messages');
  await pane.evaluate(el=>{el.scrollTop=250;el.dispatchEvent(new Event('scroll'))});
  const readingTop=await pane.evaluate(el=>el.scrollTop);
- state={...state,revision:2,sessions:state.sessions.map(s=>({...s,sharedHistoryOffset:10,messages:[...s.messages,{id:'m791',role:'assistant',text:'New live reply'}],messageWindow:{...s.messageWindow,total:792}}))};
+ state={...state,revision:state.revision+1,sessions:state.sessions.map(s=>({...s,messages:[...s.messages,{id:'m791',role:'assistant',text:'New live reply'}]}))};
  await page.evaluate(value=>window.emitState(value),shell.state());
- await expect(page.locator('[data-message-id="m791"]')).toHaveCount(0);
+ await expect(page.locator('[data-message-id="m791"]')).not.toBeInViewport();
  await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBe(readingTop);
+ assert.deepEqual(earlier,['older-731']);assert.deepEqual(windows,[]);
  // A reload initially gets only the live tail. Fetch the saved reading window
  // through the same bounded API and retain the offset within its anchor row.
  const reading=await pane.evaluate(el=>{const top=el.getBoundingClientRect().top,node=[...el.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);return {id:node.dataset.messageId,offset:node.getBoundingClientRect().top-top}});
- await page.reload();
+ restoring=true;await page.reload();
  await expect(page.locator(`[data-message-id="${reading.id}"]`)).toBeVisible();
  await expect.poll(()=>pane.evaluate((el,id)=>el.querySelector(`[data-message-id="${id}"]`).getBoundingClientRect().top-el.getBoundingClientRect().top,reading.id)).toBeCloseTo(reading.offset,0);
- assert.equal(windows.at(-1),reading.id);
+ restoring=false;assert.deepEqual(windows,[{id:reading.id,restoring:true}]);
+ assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('amplifier.message-bookmarks.v1')).chat),['m670']);
  assert.ok(await page.locator('[data-message-id]').count()<=60);
  await page.evaluate(value=>window.emitState(value),shell.state());
  await page.getByRole('button',{name:'Return to latest',exact:true}).click();
  await expect(page.locator('[data-message-id="m791"]')).toBeVisible();
  assert.ok(await page.locator('[data-message-id]').count()<=61);
- await marks.nth(4).hover();await expect(page.locator('.a-rail-preview-jump')).toHaveText('Message 40');
+ await expect(marks).toHaveCount(6);await assertLoadedMarks();
+ await marks.nth(4).hover();await expect(page.locator('.a-rail-preview-jump')).toHaveText('Message 780');
  // The current/last turn must use the same fisheye width as any other turn.
  const preview=page.locator('.a-rail-preview');
  const expandedWidth=async mark=>(await mark.locator('span').boundingBox()).width;
@@ -87,11 +113,11 @@ try{
  };
  await assertPreviewGap(marks.nth(4));
  await page.screenshot({path:'/tmp/conversation-navigation.png'});
- await marks.last().hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 730');
+ await marks.last().hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 790');
  await expect.poll(()=>expandedWidth(marks.last())).toBeCloseTo(ordinaryWidth,1);
  await assertPreviewGap(marks.last());
  await page.screenshot({path:'/tmp/conversation-navigation-last.png'});
- await marks.nth(4).hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 40');
+ await marks.nth(4).hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 780');
  await page.emulateMedia({reducedMotion:'reduce'});
  assert.equal(await marks.nth(4).locator('span').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
  assert.equal(await page.locator('.a-messages').getAttribute('data-overflow-above'),'true');
@@ -126,9 +152,16 @@ try{
  await page.setViewportSize({width:390,height:844});await expect(rail).toBeHidden();
  await page.setViewportSize({width:1440,height:900});await expect(rail).toBeVisible();
  // New input leaves an older reading window; arrival alone did not.
- await marks.nth(6).click();await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
+ await expect(page.locator('[data-message-id="m670"]')).toHaveCount(1);
+ await page.locator('.a-rail-mark[data-turn-id="m670"]').click();
+ await expect(page.locator('[data-message-id="m670"]')).toBeInViewport();
+ assert.deepEqual(earlier,['older-731','older-731']);
+ restoring=true;await page.reload();
+ await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toBeVisible();restoring=false;
  await page.locator('.ProseMirror').fill('A new question');await page.locator('.ProseMirror').press('Enter');
  await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toHaveCount(0);
  await expect(page.locator('[data-message-id="m791"]')).toHaveCount(1);
- assert.deepEqual(errors,[]);console.log('Full-history rail, lazy cached hover, bounded unloaded jump, and return to latest passed.');
-}catch(error){console.error(JSON.stringify({errors,calls:calls.slice(-8)}));await page?.screenshot({path:'/tmp/conversation-navigation-failure.png'});throw error;}finally{await browser?.close();await vite?.close();}
+ assert.deepEqual(indexes,[]);assert.deepEqual(previews,[]);assert.ok(windows.every(row=>row.restoring));
+ assert.deepEqual(errors,[]);console.log('Loaded-window rail, zero index/hover requests, explicit earlier paging, local jumps, reading restoration, and return to latest passed.');
+}catch(error){console.error(JSON.stringify({errors,calls:calls.slice(-8),indexes,previews,windows,earlier}));await page?.screenshot({path:'/tmp/conversation-navigation-failure.png'});throw error;}finally{await browser?.close();await vite?.close();}

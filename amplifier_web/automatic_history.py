@@ -389,6 +389,8 @@ class AutomaticHistory:
             diagnostics=getattr(service, 'performance_diagnostics', None))
         self.lock = asyncio.Lock()
         self.loads = {}
+        from .transcript_windows import TranscriptWindows
+        self.windows = TranscriptWindows(service)
         self.task = None
         self.last_scan = None
         self._native_snapshot = None
@@ -409,6 +411,7 @@ class AutomaticHistory:
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        await self.windows.close()
         await asyncio.to_thread(self.index.close)
 
     async def loop(self):
@@ -919,6 +922,9 @@ class AutomaticHistory:
                  if hasattr(self.service, 'projections') else
                  {row['id']: row for row in self.service.state['sessions']})
         for selected in [by_id[key] for key in selected_ids if key in by_id]:
+            if self.windows.observed(selected['id']):
+                await self.load(selected['id'], only_if_changed=True, display=True)
+                continue
             if not selected.get('nativeProject') or selected.get('status') in BUSY or selected.get('configurationBusy'):
                 continue
             current = await asyncio.to_thread(revision, selected)
@@ -926,15 +932,19 @@ class AutomaticHistory:
                 # Selection/reconnect may already own the reader. Recheck the
                 # canonical stamp after its load lock, so a queued catalog poll
                 # consumes that result while still observing a later append.
-                await self.load(selected['id'], only_if_changed=True)
+                await self.load(selected['id'], only_if_changed=True,
+                                display=self.windows.observed(selected['id']))
 
     async def refresh_session(self, session_id):
         await self.load(session_id, only_if_changed=True)
 
     @measured('history.load', session=True)
-    async def load(self, session_id, *, before=None, limit=100, only_if_changed=False):
+    async def load(self, session_id, *, before=None, limit=100, only_if_changed=False, display=False, canonical=False):
         paging = before is not None
         async with self.loads.setdefault(session_id, TimedLock(self.service, 'history.lock.wait')):
+            if not canonical and not paging and (display or self.windows.bound_web()):
+                await self.windows.load(session_id, only_if_changed=only_if_changed)
+                return
             if getattr(self.service, 'directory', None) is not None:
                 from .service import AppError
                 async with self.service.lock:
@@ -1044,7 +1054,7 @@ class AutomaticHistory:
                       if key in session}
             current_revision = await asyncio.to_thread(revision, source)
             if not session.get('historyLoaded', True) or session.get('historyLoading') or current_revision != session.get('nativeRevision'):
-                await self.load(session_id, only_if_changed=True)
+                await self.load(session_id, only_if_changed=True, canonical=True)
                 session = self.service._session(session_id)
             if session.get('historyError'):
                 raise ValueError(session['historyError'])

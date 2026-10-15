@@ -154,42 +154,59 @@ async def main(home):
         app.router.add_post('/fixture/damage', damage)
     release_query_gate = lambda: None
     if '--scoped-query-control' in sys.argv:
-        # Only this synthetic browser opts in. Hold the named display query,
-        # then delegate to its real process owner; no replacement result pages.
+        # Only this synthetic browser opts in. Target its visible Chats search,
+        # not the independent Workspaces instance's queued search. A global
+        # counter mistakes that second legitimate query for an automatic retry.
+        # Delegate to the real process owner after release; no replacement pages.
         query_owner = app['service'].shell.resources.queries
         original_factory = query_owner.factory
         gate = asyncio.Event(); gate.set()
         release_query_gate = gate.set
-        query_mode, entered = 'release', 0
+        query_mode, entered, target_client = 'release', 0, None
+        query_events = []
         def controlled_factory(*args, **kwargs):
             projector = original_factory(*args, **kwargs)
             original_project = projector.project
             async def project(inputs, **options):
                 nonlocal entered
                 if inputs['operation'] == 'chats' and inputs['args']['section'] == 'search':
+                    job = query_owner.jobs.get(query_owner.active, {})
+                    event = {'key': options.get('key'), 'mode': query_mode, 'interests': sorted({(item[2], item[3]) for item in job.get('interests', {}).values()})}
+                    query_events.append(event)
+                    del query_events[:-16]
+                    targeted = any(item[0] == target_client and item[2:4] == ('chats', 'sidebarSearch')
+                                   for item in job.get('interests', {}).values())
+                    event['targeted'] = targeted
+                    if not targeted:
+                        return await original_project(inputs, **options)
                     if query_mode == 'hold':
                         entered += 1
                         await gate.wait()
                     if query_mode == 'fail':
+                        event['failureFenceCurrent'] = query_owner._fence(inputs['operation']) == job.get('fence')
                         return {'status': 'retry', 'reason': 'worker_failed'}
                 return await original_project(inputs, **options)
             projector.project = project
             return projector
         query_owner.factory = controlled_factory
         async def query_control(request):
-            nonlocal query_mode
+            nonlocal query_mode, target_client
             if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
                 raise web.HTTPForbidden()
             if request.method == 'POST':
-                mode = (await request.json()).get('mode')
+                payload = await request.json()
+                mode, identity = payload.get('mode'), payload.get('clientId')
+                if not isinstance(identity, str) or identity not in app['service'].clients.records:
+                    raise web.HTTPBadRequest()
                 if mode not in {'hold', 'release', 'fail'}:
                     raise web.HTTPBadRequest()
+                target_client = identity
                 query_mode = mode
                 if mode == 'hold':
                     gate.clear()
                 else:
                     gate.set()
-            return web.json_response({'mode': query_mode, 'entered': entered})
+            return web.json_response({'mode': query_mode, 'entered': entered, 'events': query_events})
         app.router.add_get('/fixture/scoped-query', query_control)
         app.router.add_post('/fixture/scoped-query', query_control)
     runner = web.AppRunner(app)

@@ -326,17 +326,36 @@ def sync_work(session, group, known, *, window_message_id=None):
                      'group':group, 'revision':segment['detailRevision']})
 
 
-def project(session, *, resolver=None):
+def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
+    if work_overlay is not None:
+        from .cold_display import raw
+        # ColdRecord's ordinary mapping interface materializes all virtual
+        # bodies. A requested display window has no need to issue those aliases.
+        resident = raw(session)
+        session = {key: value for key, value in resident.items()
+                   if not key.startswith('_cold') and key not in {'execution', 'historyActivity'}}
+        session['messages'] = (message_overlay or {}).get('messages', resident.get('messages', [])[-100:])
+        session['execution'] = {'nodes': [], 'turns': []}
+        visible = {row['id'] for row in session['messages']}
+        session['messageAnnotations'] = {key: value for key, value in resident.get('messageAnnotations', {}).items() if key in visible}
     result=dict(session)
     from .peer_attribution import display_annotations
     result['messageAnnotations'] = display_annotations(session)
-    messages=page(session,'messages',resolver=resolver);groups=page(session,'groups')
-    result.update(messages=messages.pop('items'),messageWindow=messages,
-                  sharedHistoryUserTurnOffset=messages['userOffset'])
+    if message_overlay is not None:
+        result.update(message_overlay)
+        messages = None
+    else:
+        messages = page(session,'messages',resolver=resolver)
+    groups = page(session,'groups') if work_overlay is None else None
+    if messages is not None:
+        result.update(messages=messages.pop('items'),messageWindow=messages,
+                      sharedHistoryUserTurnOffset=messages['userOffset'])
     # Native disk paging can retain thousands of previously loaded messages.
     # Browser projection stays bounded independently; older rows remain available
     # through the same message cursor before fetching another disk page.
-    if 'execution' in session:
+    if work_overlay is not None:
+        result.update(work_overlay)
+    elif 'execution' in session:
         result['execution']={**{key:value for key,value in session['execution'].items() if key != 'retiredUsageNodes'},'nodes':[],'turns':groups.pop('turns'),'segments':groups.pop('items'),'detailsDeferred':True}
         from .image_generation import project as image_work
         result['execution']['imageGeneration'] = image_work(session, session['execution'])
