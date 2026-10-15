@@ -252,3 +252,9 @@ def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatc
         assert owner.configuration(app)[1] == 'unavailable'
     target.write_text(json.dumps(value)); target.chmod(0o644)
     assert owner.configuration(app)[1] == 'unavailable'
+    target.chmod(0o600)
+    target.write_text('[]')
+    assert owner.configuration(app)[1] == 'unavailable'
+    monkeypatch.setattr(owner, 'SUPPORTED_HOST', False)
+    monkeypatch.delattr(owner.os, 'getuid')
+    assert owner.configuration(app)[1] == 'unavailable'

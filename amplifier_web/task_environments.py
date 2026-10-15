@@ -55,15 +55,17 @@ def configuration(app):
     target = app.data_dir / 'test-environments.json'
     if not target.exists():
         return None, 'disabled', 'Test environments have not been enabled. A managed Linux test host needs setup.'
+    if not SUPPORTED_HOST:
+        return None, 'unavailable', 'This version needs a managed Linux test host. Local setup is not available on this platform.'
     try:
         info = target.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 16384:
             raise ValueError('The operator configuration must be a private regular file.')
         value = json.loads(target.read_text())
+        if not isinstance(value, dict):
+            raise ValueError('The operator configuration must be an object.')
         if value.get('enabled') is not True:
             return None, 'disabled', 'Test environments are disabled on this host.'
-        if not SUPPORTED_HOST:
-            return None, 'unavailable', 'This version needs a managed Linux test host. Local setup is not available on this platform.'
         if set(value) - {'enabled', 'installationId', 'commit', 'dockerHost', 'image'}:
             raise ValueError('The operator configuration contains unsupported settings.')
         if not DTU_COMMIT or value.get('commit') != DTU_COMMIT:
