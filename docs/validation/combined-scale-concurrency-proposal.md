@@ -114,3 +114,73 @@ stop only the sibling service, confirm no processes or open file references, unm
 its binds/overlay, and remove its writable database branch, blob upper, socket,
 browser profile, and temporary source. Preserve immutable captures, the original
 reading replica, persistent development chats, and compact evidence.
+
+## Measured implementation, October 15
+
+The sibling fixture is now implemented and its first combined run passed. The
+sanitized numeric receipt is [combined-scale-concurrency-20261015.json](combined-scale-concurrency-20261015.json).
+It binds application `09b9cbc596f280a67e4ebc6a1275fe2b5eb653d8` and built client
+`0.20.165 / 135d5933af904245`. The copied catalog contains 27,508 native owners;
+14 newly created synthetic owners bring the observed count to 27,522. All
+captured owners retain their IDs and remain nonexecutable.
+
+`scale_runtime_prepare.py` creates the sibling root/network namespace and an
+online SQLite backup branch. Three app blob trees use a read-only captured lower
+and private writable upper. Every existing copied native project is mounted
+read-only. `scale_runtime_derived.py` permits only 112 exact app-owned `unified`
+presentation-cache directories through separate COW overlays. Missing legacy
+cache directories are represented in private project scaffolds; the resulting
+project view is still mounted read-only except those exact cache leaves. No
+canonical transcript or event file is writable. The native projects scaffold is
+owned by the service account, as Foundation requires, with mode 0555; copied
+project mounts retain their independent read-only enforcement.
+
+Before startup, copied schedules and outbound automation are disabled. Fresh
+configuration contains only the deterministic local provider; no copied provider
+keys, authentication files, client views, or private drafts are used. The actual
+network namespace contains only loopback and an external connection is refused.
+The service uses its own port and token, never another DTU service's listener.
+The original reading replica and persistent development preview remain intact.
+
+`scale_runtime_fence.py` freezes at most 14 exact synthetic IDs plus their
+workspace, bundle, native project, native identity, runtime identity, and
+web-owned history bindings. It rechecks them at action, bridge, and real runtime
+entry points. Shell command envelopes receive the same inner-action check.
+Copied-owner sends, source rebinding, unlisted creation, child delegation,
+scheduled input, takeover, arbitrary controls, and other unneeded effect routes
+are refused. Restart reuses only the source-bound private synthetic-owner
+receipt, validating all bindings again; it does not create another 14 owners.
+
+Eleven pure boundary cases, seven real dispatch/bridge/runtime refusals, three
+HTTP effect refusals, actual read-only file-open refusals, and a real single
+synthetic worker stream/Stop cycle passed before measurement. Two initial setup
+failures were retained privately: a root-owned ancestor refused by Foundation,
+and a missing fresh `view.mode` default after excluding private browser state.
+Both stopped before worker admission; their fixture corrections did not alter
+product behavior or copied source data.
+
+The browser then exercised actual public synthetic sends and Stop, and clicked
+between a copied pinned chat and the synthetic foreground chat while 1, 6, and
+12 real workers streamed. The stage called "0" has zero background workers and
+one foreground worker. Capture was cooperatively paused only at a completed
+shard boundary, and all other owned browser/test jobs were idle during the run.
+Every worker exited afterward; capture resumed immediately.
+
+Visible stream delay p95 was 129/169/229 ms, based on only 23 markers in each
+six-second window. Copied-chat selection maximums were 346/268/311 ms over three
+visits per stage. Cold-process send acknowledgements were 1.46/1.76/2.09 seconds;
+first visible response was 1.78/2.27/2.55 seconds. Stop returned the UI in
+895/872/865 ms. These satisfy the existing cold-send/first-visible three-second
+and selection/stream/Stop targets in this short run. They do not establish the
+500 ms retained-worker send target, sustained stability, or external-provider
+behavior. Whole-service memory peak was about 1.52 GiB and includes startup and
+all stages; no per-stage resource attribution is claimed.
+
+Only 10 of 32 event shards were verified at measurement time. Primary histories,
+metadata, catalog and app blobs were complete; full Work/event-history fidelity
+remains unqualified. The copied navigation samples were bounded recent pages of
+one pinned chat and are warm revisits. The next useful scale discriminator is a
+large workspace's cold open/filter/explicit pagination under 12 workers, with
+request acknowledgement, query settlement and visible paint separated. The
+previous approximately 1.44-second workspace observation is not resolved by
+these chat-navigation samples. No broad rerun is needed to answer that question.

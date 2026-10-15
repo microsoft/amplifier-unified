@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 1,
+  "appRevision": "09b9cbc596f280a67e4ebc6a1275fe2b5eb653d8",
+  "build": {
+    "version": "0.20.165",
+    "id": "135d5933af904245"
+  },
+  "capturedSourceVersion": "0.20.164",
+  "startedAt": "2026-10-15T17:22:55.582Z",
+  "finishedAt": "2026-10-15T17:23:57.989Z",
+  "passed": true,
+  "browserErrors": [],
+  "allSyntheticWorkersStopped": true,
+  "catalog": {
+    "capturedNativeRows": 27508,
+    "additionalSyntheticRows": 14,
+    "observedNativeRowsAfterRun": 27522,
+    "observedNativeProjectsAfterRun": 5273,
+    "readOnlyNativeProjectMounts": 4532
+  },
+  "capture": {
+    "catalogPrimaryAndAppBlobs": "complete and hash-verified",
+    "eventsVerifiedShards": 10,
+    "eventsTotalShards": 32,
+    "fullEventFidelity": false,
+    "globalAtomicSnapshot": false,
+    "pausedAtCompleteShardBoundaryDuringMeasurement": true
+  },
+  "isolation": {
+    "privateRootAndLoopbackOnlyNetwork": true,
+    "copiedCanonicalWriteOpenDenied": [
+      "metadata.json",
+      "transcript.jsonl",
+      "events.jsonl"
+    ],
+    "derivedPresentationCOWDirectories": 112,
+    "appBlobCOWRoots": 3,
+    "frozenNewSyntheticOwners": 14,
+    "runtimeAndBridgeNegativeControls": 7,
+    "httpEffectNegativeControls": 3,
+    "realSingleWorkerStreamAndStopControl": true,
+    "pureFenceTestsPassed": 11
+  },
+  "runtime": {
+    "realRuntimeManagerAndSubprocessWorkers": true,
+    "provider": "local deterministic250ms deltas",
+    "externalProvider": false,
+    "runtimeQualification": "bypassed through previously qualified immutable worker interpreter",
+    "resourceLimits": {
+      "memoryBytes": 12884901888,
+      "cpuQuotaPercent": 600
+    },
+    "wholeServiceCgroupMemoryPeakBytes": 1629425664,
+    "memoryPeakIncludesSetupAndAllStages": true
+  },
+  "stages": [
+    {
+      "backgroundWorkers": 0,
+      "actualWorkersDuringSample": 1,
+      "visibleStreamLagMs": {
+        "count": 23,
+        "p50": 113,
+        "p95": 129,
+        "max": 142
+      },
+      "copiedChatSelectionMs": {
+        "count": 3,
+        "p50": 286.87240199999997,
+        "p95": 345.78341199999977,
+        "max": 345.78341199999977
+      },
+      "syntheticChatSelectionMs": {
+        "count": 3,
+        "p50": 174.59290899999996,
+        "p95": 196.95080000000053,
+        "max": 196.95080000000053
+      },
+      "healthRequestMs": {
+        "count": 8,
+        "p50": 1.7261789999993198,
+        "p95": 55.684526000000915,
+        "max": 55.684526000000915
+      },
+      "coldWorkerSendAckMs": 1458.896537,
+      "coldWorkerFirstVisibleMs": 1784.249358,
+      "stopUiMs": 895.2088480000002,
+      "eventLoopLagMs": {
+        "count": 151,
+        "p95": 60.54606735706329
+      },
+      "hostCpuSecondsInMeasuredPhase": 3.437319647999999,
+      "remainingWorkersAfterStop": 0
+    },
+    {
+      "backgroundWorkers": 5,
+      "actualWorkersDuringSample": 6,
+      "visibleStreamLagMs": {
+        "count": 23,
+        "p50": 138,
+        "p95": 169,
+        "max": 170
+      },
+      "copiedChatSelectionMs": {
+        "count": 3,
+        "p50": 225.76157800000146,
+        "p95": 268.09648599999855,
+        "max": 268.09648599999855
+      },
+      "syntheticChatSelectionMs": {
+        "count": 3,
+        "p50": 220.23635000000286,
+        "p95": 302.71214300000065,
+        "max": 302.71214300000065
+      },
+      "healthRequestMs": {
+        "count": 8,
+        "p50": 1.376752000000124,
+        "p95": 23.692657999999938,
+        "max": 23.692657999999938
+      },
+      "coldWorkerSendAckMs": 1764.6016870000021,
+      "coldWorkerFirstVisibleMs": 2265.6368040000016,
+      "stopUiMs": 871.7204160000001,
+      "eventLoopLagMs": {
+        "count": 127,
+        "p95": 104.70747463405132
+      },
+      "hostCpuSecondsInMeasuredPhase": 4.577753808000011,
+      "remainingWorkersAfterStop": 0
+    },
+    {
+      "backgroundWorkers": 11,
+      "actualWorkersDuringSample": 12,
+      "visibleStreamLagMs": {
+        "count": 23,
+        "p50": 192,
+        "p95": 229,
+        "max": 281
+      },
+      "copiedChatSelectionMs": {
+        "count": 3,
+        "p50": 231.9898050000047,
+        "p95": 310.65314000000217,
+        "max": 310.65314000000217
+      },
+      "syntheticChatSelectionMs": {
+        "count": 3,
+        "p50": 302.9857770000017,
+        "p95": 308.20554699999775,
+        "max": 308.20554699999775
+      },
+      "healthRequestMs": {
+        "count": 8,
+        "p50": 1.489649000002828,
+        "p95": 84.11080399999628,
+        "max": 84.11080399999628
+      },
+      "coldWorkerSendAckMs": 2085.600330000001,
+      "coldWorkerFirstVisibleMs": 2553.137370000004,
+      "stopUiMs": 864.9082440000057,
+      "eventLoopLagMs": {
+        "count": 99,
+        "p95": 203.9101867005229
+      },
+      "hostCpuSecondsInMeasuredPhase": 4.712482687999994,
+      "remainingWorkersAfterStop": 0
+    }
+  ],
+  "limitations": [
+    "Stage label0 means zero background workers; it has one foreground worker while streaming.",
+    "Each visible-stream distribution has23markers over6seconds; selection distributions have3visits and health8requests. These are short samples, not sustained-load percentiles.",
+    "The copied catalog and primary histories are real-scale. Imported owners never execute;14newsynthetic owners alone may run.",
+    "One copied pinned chat is revisited per stage; this is warm bounded-tail navigation, not every workspace or full-history/Work acceptance.",
+    "Fresh processes use a previously qualified interpreter and local deterministic provider. Dependency qualification and external provider/network latency are excluded.",
+    "No warm retained-worker send metric, long-run memory stability, CPU breakdown across workers, or full event-corpus fidelity is claimed.",
+    "Namespace mount preparation and initial owner setup are excluded from timings.",
+    "Observed resource peak covers namespace setup and all stages; it is not a per-stage or isolated worker peak."
+  ],
+  "helperSha256": {
+    "scripts/scale_runtime_app.py": "b8a737eb2073f1368be95f88348e8b3a673ce15ed646e8c5938e27441b36007e",
+    "scripts/scale_runtime_browser.mjs": "f8b2ac393fa99190bf143f5c6c76d726190140bf36ad3e5231550c62e8f6c481",
+    "scripts/scale_runtime_controls.py": "b2852b9ed411ab795f8a061ec2c5f892af5156a3aed3e4b19eb5881e32628619",
+    "scripts/scale_runtime_fence.py": "562229340917c46febd2c1726b4ed0d99df96be581e88a92bcc45e875dd388c4",
+    "scripts/scale_runtime_prepare.py": "d1b1f08101c8b34bd73f766988081749f27d88129c3c4c28d30e4b36a500a01c",
+    "scripts/scale_runtime_derived.py": "a497a0f349bd1359249cf1d4e42349a51efa42a5ab38d63acf2cdd5735e99b88"
+  },
+  "privateReceiptSha256": "159a0a20e010b5c62bea472c55e36cae5ff601c2ceddfb27eab83254ef185bcd"
+}

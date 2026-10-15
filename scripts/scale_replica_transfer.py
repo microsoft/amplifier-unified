@@ -28,6 +28,16 @@ def run(args):
                 if not old.get('allHashesMatch') or not archive.is_file():
                     raise ValueError('Invalid resume receipt')
                 continue
+            # Quiet measurement requests take effect only between complete
+            # shards. Never freeze a live Incus websocket or an active source
+            # reader halfway through a transfer.
+            if args.pause_file:
+                marker = args.pause_file.with_name(args.pause_file.name + '.ack')
+                while args.pause_file.exists():
+                    marker.write_text(json.dumps({'phase': phase, 'nextShard': shard,
+                                                  'pausedAtBoundary': True}) + '\n')
+                    time.sleep(1)
+                marker.unlink(missing_ok=True)
             health = subprocess.run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=8',args.host,
                 'curl -k -sS --connect-timeout 3 --max-time 8 -o /dev/null -w "%{http_code} %{time_total}" https://127.0.0.1:8443/api/health'],
                 capture_output=True,text=True,timeout=12,check=True).stdout.split()
@@ -71,4 +81,5 @@ if __name__ == '__main__':
     parser.add_argument('--seed',required=True)
     parser.add_argument('--rate-mib',type=float,default=80)
     parser.add_argument('--phases',nargs='+',default=['databases','primary','artifacts','events'])
+    parser.add_argument('--pause-file',type=Path)
     run(parser.parse_args())
