@@ -412,6 +412,15 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         media, mid, data = await attach_saved_media(app, sid, root)
         await app.on_runtime_event('assistant.message', {'sessionId': sid, 'text': 'A later assistant page.'})
         store = SessionStore.for_app(app.data_dir, root)
+        # Retained transfer admission is exact record/body authority, not
+        # continued existence of an assistant in the transferred transcript.
+        store.save(sid, [{'role': 'user', 'content': 'Rewritten native history'},
+                         {'role': 'assistant', 'content': 'Replacement answer'}],
+                   {'bundle_name': app._session(sid)['bundle'], 'working_dir': str(root)},
+                   preserve_system=True)
+        app.clients.attach('transfer-wrapper')
+        with app.clients.bind('transfer-wrapper'):
+            await app.dispatch('canvas.openGif', {**media, 'messageId': mid}, include_state=False)
         raw = (store.directory(sid) / 'transcript.jsonl').read_bytes()
         # Existing small PNG and nested graph must survive alongside media.
         image = png()
@@ -455,6 +464,53 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         assert target.state_resource(parent['$resource']) == {'children': [leaf]}
         assert target.state_resource(leaf['$resource']) == {'content': 'Nested retained small resource'}
         assert not app.runtime.workers and not target.runtime.workers
+    finally:
+        host_env(monkeypatch, source)
+        await app.close()
+        host_env(monkeypatch, destination)
+        await target.close()
+
+
+@pytest.mark.parametrize('defect', ['bytes', 'dimensions', 'structure', 'wrapper-owner', 'wrapper-version'])
+async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_install(
+        tmp_path, monkeypatch, defect):
+    import base64
+    from amplifier_web import portability_data, resource_files
+    from amplifier_worktrees.git import digest
+    app, target, source, destination, root, destrepo, sid, *_ = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        saved, mid, raw = await attach_saved_media(app, sid, root)
+        app.clients.attach('transfer-validation')
+        with app.clients.bind('transfer-validation'):
+            await app.dispatch('canvas.openGif', {**saved, 'messageId': mid}, include_state=False)
+        payload = portability_data.capture(app, app._session(sid))
+        record = next(row for row in payload['outputs'] if row['id'] == saved['id'])
+        if defect == 'bytes':
+            record['bytes'] += 1
+        elif defect == 'dimensions':
+            record['media']['width'] += 1
+            record['media']['decodedPixelBytesEstimate'] *= 2
+        elif defect == 'structure':
+            damaged = raw[:-1]
+            body = {'encoding': 'base64', 'data': base64.b64encode(damaged).decode()}
+            prepared = resource_files.prepare(body)
+            payload['resources'][prepared.identity] = body
+            record.update(body={'$resource': prepared.identity, 'bytes': prepared.size},
+                          bytes=len(damaged), sha256=digest(damaged))
+        else:
+            row = next(row for row in payload['canvas'] if row['kind'] == 'gif')
+            body = copy.deepcopy(payload['resources'][row['body']['$resource']])
+            item = body['mediaReference']['item']
+            item['sessionId' if defect == 'wrapper-owner' else 'version'] = 'foreign' if defect == 'wrapper-owner' else 99
+            prepared = resource_files.prepare(body)
+            payload['resources'][prepared.identity] = body
+            row['body'] = {'$resource': prepared.identity, 'bytes': prepared.size}
+        before = target.db.execute('SELECT * FROM output_records').fetchall()
+        with pytest.raises(ValueError):
+            portability_data.validate(payload)
+        assert target.db.execute('SELECT * FROM output_records').fetchall() == before
+        assert target.state['canvasArtifacts'] == []
     finally:
         host_env(monkeypatch, source)
         await app.close()

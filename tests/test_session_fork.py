@@ -2,10 +2,56 @@ import copy
 import json
 from pathlib import Path
 import pytest
+from test_output_media import media_app
 
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.session_store import fork_session, complete_tool_exchanges
 from amplifier_web.service import AppService, AppError
+
+
+@pytest.mark.parametrize('malformed', [False, True])
+async def test_fork_retained_gif_wrapper_remaps_only_exact_surviving_output(media_app, malformed):
+    from test_output_media import media_args, gif
+    from amplifier_web.resource_files import put
+    app = media_app
+    args = media_args(app)
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('fork-wrapper')
+    with app.clients.bind('fork-wrapper'):
+        await app.dispatch('canvas.openGif', {**saved, 'messageId': args['messageId']}, include_state=False)
+    source_row = copy.deepcopy(next(row for row in app.state['canvasArtifacts'] if row['kind'] == 'gif'))
+    if malformed:
+        wrong = app.state_resource(source_row['body']['$resource'])
+        wrong['mediaReference']['item']['sessionId'] = 'foreign-owner'
+        forged = put(app.db, wrong)
+        row = next(row for row in app.state['canvasArtifacts'] if row['id'] == source_row['id'])
+        row['body'] = forged
+        row['versions'][0]['body'] = forged
+    sid = args['sessionId']
+    store = SessionStore.for_app(app.data_dir, app._session(sid)['workspace'])
+    store.save(sid, [{'role': 'user', 'content': 'Keep'},
+                     {'role': 'assistant', 'content': app._session(sid)['messages'][-1]['text']}],
+               {'bundle_name': app._session(sid)['bundle']}, preserve_system=True)
+    await app.dispatch('session.fork', {'id': sid})
+    target = app._session()
+    outputs = app.outputs.store.list(target['id'])['items']
+    clone = next(row for row in outputs if row['kind'] == 'media')
+    wrappers = [row for row in app.state['canvasArtifacts'] if row['sessionId'] == target['id'] and row['kind'] == 'gif']
+    if malformed:
+        assert wrappers == []
+    else:
+        assert len(wrappers) == 1 and wrappers[0]['id'] != source_row['id']
+        assert wrappers[0]['publications'] == [] and wrappers[0]['messageId'] is None
+        for definition in [wrappers[0], *wrappers[0]['versions']]:
+            reference = app.state_resource(definition['body']['$resource'])['mediaReference']
+            assert reference['item']['id'] == clone['id']
+            assert reference['item']['sessionId'] == target['id']
+            assert reference['item']['version'] == clone['version']
+            assert reference['messageId'] == clone['origin']['messageId']
+        app.clients.records['fork-wrapper']['selectedSessionId'] = target['id']
+        with app.clients.bind('fork-wrapper'):
+            assert await app.outputs.media.bytes({**clone, 'messageId': clone['origin']['messageId']}) == gif()
+    assert app.outputs.record(sid, saved['id'])['id'] == saved['id']
 
 
 def transcript():
