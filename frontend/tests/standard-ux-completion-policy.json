@@ -660,6 +660,399 @@
       ],
       "status": "requires-exact-ledger-claims",
       "limits": []
+    },
+    {
+      "workflow": "work.group",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open a completed turn Work disclosure",
+        "Observe exact turn-owned steps only on demand"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "work.paging",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open latest 100 steps",
+        "Choose Load earlier steps",
+        "Observe exact 126 retained across live sync"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "work.fields",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Expand one recorded tool step",
+        "Retry its failed source read",
+        "Read and copy exact full field"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "work.usage",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Keep running Work group open",
+        "Observe completion and exact usage",
+        "Reload without losing settled state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "work.retry",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Retry failed group read",
+        "Hold delta while newer revision arrives",
+        "Retain readable expanded steps"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "voice.call",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Start synthetic voice call",
+        "Mute",
+        "Navigate and Stop originating work",
+        "End call separately"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "support.help",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open Error details",
+        "Copy bounded diagnostic report",
+        "Use manual fallback after clipboard refusal"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "create.suggestion",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Activate each empty-chat suggestion",
+        "Repeat with nonempty draft"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "create.workspace-new",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open New workspace",
+        "Choose name and starter",
+        "Inspect More options/root",
+        "Preview then confirm"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "create.workspace-existing",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Choose Use existing folder",
+        "Browse/type path",
+        "Review existing registration/native chats",
+        "Confirm"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "create.workspace-fault",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Fail create before acceptance",
+        "Lose accepted reply",
+        "Reopen same intent"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "create.starter-result",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Create starter with successful and failed disposable imports",
+        "Inspect retained imports",
+        "Retry unfinished setup"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "create.picker",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Search picker",
+        "Page",
+        "Select existing",
+        "Open create/attach and cancel"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "workspace.tabs",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Chats, Files, Details",
+        "Return to selected chat",
+        "Switch workspace while tab request pending"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "workspace.files",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open folder/file",
+        "Go parent",
+        "Copy path",
+        "Attempt unavailable folder and file without compatible chat"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "workspace.details",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Copy Folder",
+        "Rename",
+        "Inspect starter readiness and bundle default"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "workspace.config",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open AI connections & images, Model rules, Modules & sources",
+        "Change fixture override and return to inherited value"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "workspace.review",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Expand Workspace work",
+        "Refresh",
+        "Page chats",
+        "Open chat to review",
+        "Inspect unfinished handoff/approval summaries"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "workspace.resources",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open Resources",
+        "Record synthetic resource",
+        "Cancel/save",
+        "Mark observation absent/reaped/active with evidence"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "workspace.reservations",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Refresh/page reservations",
+        "Set key/sharing/note",
+        "Reserve",
+        "Reconcile with evidence",
+        "Cancel reconciliation"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "decisions.approval",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Inspect title/details/scope",
+        "Allow or Deny",
+        "Repeat after peer response",
+        "Restart host fixture"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "decisions.question",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Select option",
+        "Enter custom answer",
+        "Submit",
+        "Skip optional",
+        "Observe delivery failure/retry"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
+    },
+    {
+      "workflow": "decisions.closed",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Chat info\u2192Questions & answers",
+        "Inspect answer history and closed states"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
@@ -750,5 +1143,13 @@
     "ordinaryPathObserved": "All explicitly mapped ordinary indices have passed browser claims; remaining exceptional outcomes may still be open.",
     "allOutcomesObservedInContext": "Every inventoried outcome has a passed browser claim in a named appropriate context; no claim of every provider/device/layout.",
     "optionalVariants": "Original four-mode matrix is retained as discovery/risk guidance, not a Cartesian release or day-completion gate."
-  }
+  },
+  "revisions": [
+    {
+      "at": "2026-10-15T17:21:02.123822+00:00",
+      "reason": "Individually map newly qualified root Work/support and actual workspace/decision public paths. Partial workspace identity remains partial; API-only storage entry and Advanced screen capture are not counted as ordinary entry completion.",
+      "previousOrdinaryPaths": 44,
+      "ordinaryPaths": 67
+    }
+  ]
 }

@@ -28,3 +28,5 @@ ordinary paths still need explicit mapping; some already have outcome evidence.
 Every per-outcome gap remains open until supported or explicitly reviewed as an
 external capability/product limitation. The original ledger snapshot and exact
 proof references remain under `output/readiness-day-20261015/ui-inventory`.
+
+The next explicit mapping revision adds the observed Work disclosure/paging, support, workspace creation and decision paths. Workspace tab identity remains partial until the selected sidebar state is asserted. API-only storage entry and Advanced screen capture are retained as contextual evidence without ordinary-path entry credit.
