@@ -359,7 +359,7 @@ class Children:
                 raise ValueError("Agent orchestrator must be configured as a module declaration")
             orchestrator.setdefault("config", {}).update(copy.deepcopy(orchestrator_config))
         routing_policy = parent.coordinator.get_capability("web.default_routing_policy") is True
-        preferences_source = (_PREFERENCES_SOURCE.get()
+        preferences_source = ((None if resumed else _PREFERENCES_SOURCE.get())
                               or ((session_metadata or {}).get("preferences_source", "explicit")
                                   if provider_preferences else
                                   "explicit" if overlay.get("provider_preferences") else "role"))
@@ -468,7 +468,7 @@ class Children:
             coordinator.hooks.register("context:compaction_finished", compacted, name="unified-child-context-checkpoint")
             for capability in ("model_role_resolver", "web.activity.install"):
                 value = parent.coordinator.get_capability(capability)
-                if capability == "model_role_resolver" and coordinator.get_capability(capability) is not None:
+                if routing_policy and capability == "model_role_resolver" and coordinator.get_capability(capability) is not None:
                     continue
                 if value is not None:
                     coordinator.register_capability(capability, value)
