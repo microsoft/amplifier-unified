@@ -91,6 +91,8 @@ instructions and asks delegated workers to coordinate use of the shared canvas. 
 
 Call `app_control` with `operation:get_state` to see the canvas and
 `operation:list_actions` with `args:{"prefix":"canvas."}` for canvas action schemas.
+Read the returned `items` and follow `nextOffset` with the same prefix/revision;
+see [bounded discovery](AGENT-RESULTS.md) for oversized-schema reads.
 The default state read is a bounded overview of the calling conversation and
 visible UI. Other conversations are listed by title/status, without their content.
 Use `get_state` with `args:{"path":"/canvas","offset":0,"limit":50}` to inspect
