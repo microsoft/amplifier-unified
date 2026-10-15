@@ -128,7 +128,10 @@ async def test_real_boundary_import_and_core_loader_remount(tmp_path, monkeypatc
     from amplifier_core.loader import ModuleLoader
     from amplifier_core.validation.base import import_module_from_path
 
-    assert boundary.SimpleContextManager is simple.SimpleContextManager
+    # The managed boundary now owns its request policy through a dedicated
+    # subclass. Exercise that real policy to preload context-simple before
+    # asking Core to load the same package from a separately prepared source.
+    assert isinstance(boundary.BoundaryContextManager()._fitter(), simple.SimpleContextManager)
     installed = Path(simple.__file__).parent
     root = tmp_path / 'checkout'
     shutil.copytree(installed, root / PACKAGE, ignore=shutil.ignore_patterns('__pycache__'))
