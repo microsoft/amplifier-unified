@@ -1657,7 +1657,7 @@ class AppService:
             try:
                 target = self.directory.resolve(args[target_key], scope,
                                                 include_hidden_workspaces=action == 'session.select')
-                if target is None:
+                if target is None and not self.outputs.metadata_action(action, args):
                     await self.history.refresh()
                     target = self.directory.resolve(args[target_key], scope,
                                                     include_hidden_workspaces=action == 'session.select')
@@ -4426,7 +4426,7 @@ class AppService:
                 action_args.setdefault('id', session_id)
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
-                if self.outputs.metadata_action(args['action'], action_args):
+                if args['action'] in {'outputs.list', 'outputs.read', 'outputs.mediaReport'}:
                     try:
                         owner = self.outputs._owner(session_id, action_args.get('nativeProject'))
                     except ValueError as exc:

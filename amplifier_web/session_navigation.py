@@ -3,7 +3,7 @@
 
 def is_top_level(session):
     kind = session.get('sessionKind')
-    if kind in {'root', 'worker', 'internal'}:
+    if kind in ('root', 'worker', 'internal'):
         return kind == 'root'
     # Older web forks keep a parent link for navigation but execute as roots.
     if session.get('forkTranscript') or session.get('editOrigin'):

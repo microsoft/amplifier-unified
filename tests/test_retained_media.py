@@ -56,6 +56,10 @@ async def test_real_saves_removed_origin_eviction_unlink_and_reopen(
         # Stop and settle that owner before measuring this read-only operation;
         # retain the strict counter and all record-preservation assertions.
         await service.diagnostics.close()
+        maintenance = getattr(service, '_storage_maintenance_task', None)
+        if maintenance is not None:
+            await asyncio.shield(maintenance)
+            assert maintenance.done()
         def no_display(*args, **kwargs):
             pytest.fail('Retained metadata bridge hydrated unrelated display history')
         def no_admit(*args, **kwargs):
@@ -409,8 +413,14 @@ async def cold_retained_owner(media_app, monkeypatch):
         assert saved['sid'] not in app._session_projection_refs
         app.clients.attach('cold-metadata-reader')
         app.clients.records['cold-metadata-reader']['selectedSessionId'] = saved['sid']
+        client_record = app.clients.records['cold-metadata-reader']
         yield app, saved
     finally:
+        # Revocation cases remove this synthetic client while a read is pending.
+        # Restore only its fixture record after assertions, so normal app.close
+        # can persist its existing dirty entry rather than failing teardown.
+        if 'cold-metadata-reader' not in app.clients.records and 'client_record' in locals():
+            app.clients.records['cold-metadata-reader'] = client_record
         await app.close()
 
 

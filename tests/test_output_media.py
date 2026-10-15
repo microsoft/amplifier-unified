@@ -3150,19 +3150,21 @@ async def test_nonroot_descriptor_exception_is_scoped_and_identity_free(media_ap
     async def forbidden_identity(*args, **kwargs):
         pytest.fail('Non-root empty discovery reached attachment identity')
 
-    original = app._session
+    original = app.outputs._owner
 
-    def session_lookup(sid=None, **kwargs):
-        calls.append((app.lock.locked(), kwargs.get('hydrate')))
+    def owner_lookup(sid, **kwargs):
+        calls.append(app.lock.locked())
         return original(sid, **kwargs)
 
     monkeypatch.setattr(app.outputs.media, 'identity', forbidden_identity)
     with app.clients.bind('nonroot-descriptor-browser'):
         with monkeypatch.context() as patch:
-            patch.setattr(app, '_session', session_lookup)
+            patch.setattr(app.outputs, '_owner', owner_lookup)
+            patch.setattr(app, '_session', lambda *args, **kwargs: pytest.fail(
+                'Non-root discovery must not admit or hydrate the conversation'))
             assert await app.outputs.media.describe(session['id'], 'not-an-attachment') == {
                 'items': [], 'overflow': False, 'mediaRevision': 7}
-        assert calls and all(locked and hydrate is False for locked, hydrate in calls)
+        assert calls and all(calls)
     with app.clients.bind('nonroot-foreign-browser'):
         with pytest.raises(ValueError, match='client'):
             await app.outputs.media.describe(session['id'], 'not-an-attachment')
