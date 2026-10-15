@@ -6,11 +6,11 @@ const statuses={started:'Running',accepted:'Accepted',rejected:'Rejected',uncert
 const failedStatuses=['failed','interrupted','rejected'];
 const label=phase=>phaseLabels[phase]||phase?.replaceAll('-',' ')||'Update';
 export function diagnosticReceipt(diagnostics,reconciliation){
- const fields=['id','at','attemptId','kind','phase','status','revision','commandId','durationMs','exitCode','stdoutBytes','stderrBytes','errorType','timedOut','expectedVersion','observedVersion','expectedRevision','observedRevision','reason','package','component','installationId','targetInstallationId'];
+ const fields=['id','at','attemptId','kind','phase','status','revision','commandId','durationMs','exitCode','stdoutBytes','stderrBytes','errorType','timedOut','expectedVersion','observedVersion','expectedRevision','observedRevision','reason','package','component','installationId','targetInstallationId','osError','failureLocation'];
  const clean=event=>{
   if(!event)return undefined;
   const result=Object.fromEntries(fields.filter(key=>event[key]!==undefined).map(key=>[key,event[key]]));
-  if(event.probe)result.probe=Object.fromEntries(['ok','isolated','packageInEnvironment','frontendPresent','loginAvailable','standalone','providersPresent','cliAbsent','dependenciesPrepared','stage','errorType','version','pythonVersion','reason','failureLocation','profileIndex'].filter(key=>event.probe[key]!==undefined).map(key=>[key,event.probe[key]]));
+  if(event.probe)result.probe=Object.fromEntries(['ok','isolated','packageInEnvironment','frontendPresent','loginAvailable','standalone','providersPresent','cliAbsent','dependenciesPrepared','stage','errorType','version','pythonVersion','reason','failureLocation','osError','profileIndex'].filter(key=>event.probe[key]!==undefined).map(key=>[key,event.probe[key]]));
   return result;
  };
  const verified=reconciliation?Object.fromEntries(['attemptId','version','revision','verifiedAt'].filter(key=>reconciliation[key]!==undefined).map(key=>[key,reconciliation[key]])):undefined;
@@ -28,6 +28,7 @@ function facts(event){
  const parts=[];
  if(event.component||event.installationId)parts.push(event.component||event.installationId);
  if(event.package)parts.push(event.package);
+ if(event.osError||event.probe?.osError)parts.push(event.osError||event.probe.osError);
  if(recoveryGuidance[event.reason||event.probe?.reason])parts.push(recoveryGuidance[event.reason||event.probe?.reason]);
  if(event.probe?.errorType)parts.push(event.probe.errorType);
  else if(event.errorType)parts.push(event.errorType);

@@ -1,4 +1,5 @@
 import json
+import errno
 import sys
 from types import SimpleNamespace
 import pytest
@@ -8,6 +9,52 @@ from amplifier_web.update_diagnostics import CommandFailure,CommandTimeout,PROBE
 from amplifier_web.service import AppService
 from test_service import Runtime
 from test_app_updates import prepared_activation
+
+
+@pytest.mark.parametrize('code, reason', [(errno.ENOSPC, 'disk-full'), (errno.EDQUOT, 'disk-quota-exceeded'),
+                                          (errno.EACCES, 'storage-permission-denied')])
+async def test_background_os_failure_identifies_cause_without_private_text(tmp_path, monkeypatch, code, reason):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    waits = 0
+    async def wait(delay):
+        nonlocal waits
+        waits += 1
+        if waits > 1:
+            manager.closed = True
+    async def fail():
+        raise OSError(code, 'private-provider-secret', '/private/user/path')
+    monkeypatch.setattr(manager, 'wait_for_work', wait)
+    monkeypatch.setattr(manager, 'tick', fail)
+    await manager.loop()
+    receipt = service.state['updates']['diagnostics']['lastFailure']
+    assert receipt['osError'] == errno.errorcode[code]
+    assert receipt['reason'] == reason
+    assert receipt['phase'] == 'background-update'
+    assert 'private-provider-secret' not in json.dumps(service.state['updates'])
+    assert '/private/user/path' not in json.dumps(service.state['updates'])
+    assert 'Review its diagnostic receipt' not in service.state['updates']['error']
+    await service.close()
+
+
+async def test_operation_and_probe_preserve_os_cause_in_sanitized_receipt(tmp_path):
+    from amplifier_web.update_diagnostics import probe_failure
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    def fail():
+        raise OSError(errno.ENOSPC, 'private-output', '/private/file')
+    with pytest.raises(OSError) as caught:
+        manager.diagnostics.sync('candidate-record', fail)
+    assert manager.diagnostics.state['lastFailure']['osError'] == 'ENOSPC'
+    caught.value.diagnostic_facts = {'private': '/private/credential', 'reason': 'private-value'}
+    raw_probe = probe_failure(caught.value, 'prepare')
+    assert 'private' not in json.dumps(raw_probe)
+    parsed = probe_record(PROBE_PREFIX + json.dumps(raw_probe))
+    assert parsed['reason'] == 'disk-full' and parsed['osError'] == 'ENOSPC'
+    assert 'private' not in json.dumps(parsed)
+    await service.close()
 
 
 async def test_subprocess_failure_retains_safe_classification_not_output(tmp_path):

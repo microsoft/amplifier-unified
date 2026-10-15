@@ -638,11 +638,11 @@ class UpdateManager:
             # concurrent request must not change an active update's work gate.
             if action == 'featureInstall':return
             if self.service.state['updates'].get('phase')=='error' and self.service.state['updates'].get('error') and self.service.state['updates']['error']!=previous_error:return
-            from .update_diagnostics import exception_type
+            from .update_diagnostics import exception_facts, failure_guidance
             last=self.diagnostics.state.get('latest',{})
             phase=last.get('phase',action)
-            if last.get('status')!='failed':self.diagnostics.record(phase,'failed',errorType=exception_type(error))
-            await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
+            if last.get('status')!='failed':self.diagnostics.record(phase,'failed',**exception_facts(error))
+            await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
         finally:
             # Manual actions used to leave ready work behind a 60-second
             # polling sleep. Wake the owner; keep all admission/idle checks in
@@ -902,12 +902,12 @@ class UpdateManager:
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,detail='Update prepared; making it available to new conversation work.')
             except BaseException as error:
-                from .update_diagnostics import exception_type
+                from .update_diagnostics import exception_facts
                 interrupted=isinstance(error,asyncio.CancelledError)
                 status='interrupted' if interrupted else 'failed'
                 failure=self.diagnostics.state.get('lastFailure',{})
                 if failure.get('attemptId')!=self.diagnostics.state.get('attemptId'):
-                    self.diagnostics.record(phase,status,**{'errorType':exception_type(error),**getattr(error,'diagnostic_facts',{})})
+                    self.diagnostics.record(phase,status,**{**getattr(error,'diagnostic_facts',{}),**exception_facts(error)})
                 failure=self.diagnostics.state['lastFailure']
                 self.diagnostics.record('ecosystem-stage',status,commandId=stage_id,preserve_last_failure=True)
                 await self.publish(phase='interrupted' if interrupted else 'error',pendingRelease=None,
@@ -933,8 +933,8 @@ class UpdateManager:
                     # primary receipt before sibling cancellation is recorded.
                     failure = self.diagnostics.state.get('lastFailure', {})
                     if failure.get('attemptId') != self.diagnostics.state.get('attemptId'):
-                        from .update_diagnostics import exception_type
-                        self.diagnostics.record('ecosystem-source-preflight', 'failed', errorType=exception_type(error))
+                        from .update_diagnostics import exception_facts
+                        self.diagnostics.record('ecosystem-source-preflight', 'failed', **exception_facts(error))
                     raise
         async def prepare(row):
             target=stage/'foundation'/row['path']
@@ -1175,8 +1175,8 @@ class UpdateManager:
                 raise
             except Exception as error:
                 await self.service.discard_runtime(candidate)
-                from .update_diagnostics import exception_type
-                self.diagnostics.record('ecosystem-activation','failed',errorType=exception_type(error))
+                from .update_diagnostics import exception_facts
+                self.diagnostics.record('ecosystem-activation','failed',**exception_facts(error))
                 await self.publish(phase='error',error='Could not activate the ecosystem update; review its diagnostic receipt before retrying.')
 
     async def installSmartTools(self):
@@ -1270,12 +1270,12 @@ class UpdateManager:
                 await self.tick()
             except asyncio.CancelledError: raise
             except Exception as error:
-                from .update_diagnostics import exception_type
+                from .update_diagnostics import exception_facts, failure_guidance
                 last=self.diagnostics.state.get('latest',{})
                 if last.get('status') not in {'failed','interrupted'}:
-                    self.diagnostics.record('background-update','failed',errorType=exception_type(error))
+                    self.diagnostics.record('background-update','failed',**exception_facts(error))
                 phase=self.diagnostics.state['latest']['phase']
-                await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
+                await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
             sequence = self.service.state['updates'].get('sequence', {})
             # A finished stage can continue on the next event-loop turn.
             # External commands interrupt the ordinary background cadence;
