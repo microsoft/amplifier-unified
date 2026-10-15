@@ -15,10 +15,12 @@ try{
  });
  const target=url,root=fileURLToPath(new URL('../',import.meta.url));
  vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ const inspect=async()=>{const response=await page.request.get(new URL('/api/fixture/nativeWindow',page.url()).href);assert.ok(response.ok());return response.json()};
+ const beforeExport=await inspect();
  // The legacy fixture's conversation-settings route now opens Chat info.
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(page.locator('[data-part="overlay"]')).toHaveCount(0);
@@ -31,7 +33,13 @@ try{
  await expect(page.getByRole('status').filter({hasText:'Copied conversation Markdown'})).toBeVisible();
  const copied=await page.evaluate(()=>navigator.clipboard.readText());
  assert.match(copied,/The earliest question/);assert.match(copied,/## User \(voice\)\n\nSpoken follow-up/);
+ assert.ok(copied.includes(beforeExport.sessionId),'Default export identifies its exact source');
  assert.ok(copied.includes('```python\nprint("exact α")  \n```\n'));assert.match(copied,/saved-diagram/);
+ const preview=page.getByLabel('Reviewed Markdown');assert.equal(await preview.inputValue(),copied);
+ assert.equal((copied.match(/^## (User|Assistant)/gm)||[]).length,141,'All native pages and the voice bubble are included');
+ assert.ok(await preview.evaluate(el=>el.scrollHeight>el.clientHeight),'Long preview has bounded scrollable viewport');
+ await preview.focus();await preview.press('Control+End');await expect.poll(()=>preview.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+ assert.deepEqual(await inspect(),beforeExport,'Full preview and clipboard do not mutate resident/native history or activate runtime');
  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Download Markdown',exact:true}).click();
  const download=await pending;assert.match(download.suggestedFilename(),/\.md$/);
  assert.equal(await readFile(await download.path(),'utf8'),copied);
@@ -49,6 +57,7 @@ try{
  await page.getByRole('button',{name:'Preview Markdown',exact:true}).click();
  await expect(page.getByLabel('Reviewed Markdown')).toBeVisible();
  const range=await page.getByLabel('Reviewed Markdown').inputValue();
+ assert.ok(!range.includes(beforeExport.sessionId));assert.ok(!range.includes('Conversation: `'));
  assert.ok(!range.includes('The earliest question'));assert.ok(range.includes('exact α'));assert.ok(range.includes('Spoken follow-up'));assert.ok(range.includes('saved-diagram'));
  await page.getByRole('button',{name:'Copy Markdown',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(range);
@@ -56,9 +65,12 @@ try{
  await page.request.post(new URL('/api/fixture/exportAppend',page.url()).href);
  await page.getByRole('button',{name:'Copy Markdown',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(range);
+ const beforeFailure=await inspect();
  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw Error('Fixture clipboard denied')}}}));
  await page.getByRole('button',{name:'Copy Markdown',exact:true}).click();
  await expect(page.getByRole('alert').filter({hasText:'Fixture clipboard denied'})).toBeVisible();
+ assert.deepEqual(await inspect(),beforeFailure,'Denied delivery cannot change canonical or resident messages or activate runtime');
+ assert.equal(await preview.inputValue(),range,'Failed delivery preserves the exact reviewed bytes');
  await page.setViewportSize({width:390,height:844});
  await page.getByRole('button',{name:'Download Markdown',exact:true}).scrollIntoViewIfNeeded();
  assert.ok(await page.locator('.a-dialog').evaluate(element=>element.scrollWidth<=element.clientWidth));
