@@ -881,6 +881,19 @@ class Collaboration:
     def observe(self, session, kind, payload):
         """Host event linkage, never prose classification or semantic success."""
         changed = self.watches.observe(session, kind, payload)
+        if (kind == 'runtime.ended' and not payload.get('backgroundOnly')
+                and payload.get('sessionId') is not None
+                and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')}
+                and payload.get('rootSessionId', session['id']) == session['id']):
+            # Confirmed process exit ends routing authority even when the worker
+            # could not flush its terminal generation event. It proves neither
+            # successful completion nor a staged reply: keep those outcomes
+            # unqualified and never replay any previously accepted input.
+            active = session.get('collaborationGeneration') or {}
+            if active and not active.get('terminal'):
+                active.update(terminal=True, completed=False,
+                              detail='Worker exited before terminal generation evidence was received.')
+            return changed
         if kind == "runtime.collaboration_checkpoint":
             active = session.get("collaborationGeneration") or {}
             if (payload.get("sessionId") == session["id"] and payload.get("rootSessionId") == session["id"]

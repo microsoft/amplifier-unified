@@ -77,6 +77,17 @@ async def main(args):
     app['control_token'] = 'fixture-real-worker-benchmark'
     service = app['service']
     runtime.app_bridge = service.app_bridge
+    if args.abrupt_stop:
+        ordinary_stop = runtime.stop
+        async def abrupt_stop(sid, **kwargs):
+            # Recovery-only fault injection: terminate the actual worker before
+            # it can flush a generation terminal event; host exit proof remains
+            # the real RuntimeManager protocol/process cleanup path.
+            row = runtime.workers.get(sid)
+            if row and row['process'].returncode is None:
+                row['process'].kill()
+            return await ordinary_stop(sid, **kwargs)
+        runtime.stop = abrupt_stop
     ids = []
     for index in range(14):
         created = await service.dispatch('session.create', {'title':f'Concurrency {index:02}',
@@ -101,7 +112,8 @@ async def main(args):
         if request.query.get('reset') == '1': loop_lag.clear()
         sessions = service._state['sessions']
         worker_rows = [{'id':sid,'pid':row['process'].pid,'returncode':row['process'].returncode,
-                        'parked':bool(row.get('parked'))} for sid,row in runtime.workers.items()]
+                        'parked':bool(row.get('parked')), 'closing':bool(row.get('closing')),
+                        'stopping':bool(row.get('stop_task'))} for sid,row in runtime.workers.items()]
         rss = {}
         for pid in [os.getpid(), *(row['pid'] for row in worker_rows)]:
             try:
@@ -110,7 +122,8 @@ async def main(args):
             except (OSError, StopIteration): pass
         return web.json_response({'at':time.time(),'hostPid':os.getpid(),'workers':worker_rows,
             'sessions':[{'id':row['id'],'title':row.get('title'),'status':row.get('status'),
-                         'error':row.get('error'),'streamingBytes':len(row.get('streaming','').encode()),
+                         'error':row.get('error'),'generation':row.get('collaborationGeneration'),
+                         'latestInput':next(({k:m.get(k) for k in ('inputId','text','delivery','steering')} for m in reversed(row.get('messages',[])) if m.get('role')=='user'),None),'streamingBytes':len(row.get('streaming','').encode()),
                          'messageCount':len(row.get('messages',[]))} for row in sessions],
             'residentSessions':len(sessions),'residentMessages':sum(len(row.get('messages',[])) for row in sessions),
             'residentJsonBytes':len(json.dumps(sessions,default=str).encode()),'rssKiB':rss,
@@ -136,4 +149,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--home',required=True)
     parser.add_argument('--worker-python',required=True)
+    parser.add_argument('--abrupt-stop',action='store_true')
     asyncio.run(main(parser.parse_args()))
