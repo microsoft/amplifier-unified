@@ -40,6 +40,17 @@ try{
  assert.match(await tool.innerText(),/RESULT-END/);
  assert.equal(await tool.getByRole('link',{name:'https://example.com/artifact',exact:true}).getAttribute('href'),'https://example.com/artifact');
  await tool.getByRole('button',{name:'Copy file content',exact:true}).click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/RESULT-END/);
+ // A browser clipboard denial must retain the readable full result and offer
+ // an honest fallback; it must not refetch the record or claim another copy.
+ await page.evaluate(()=>{window.savedClipboardWrite=navigator.clipboard.writeText.bind(navigator.clipboard);navigator.clipboard.writeText=async()=>{throw new DOMException('Fixture clipboard denied','NotAllowedError')}});
+ await tool.getByRole('button',{name:'Copy file content',exact:true}).click();
+ await expect(tool.getByRole('status')).toHaveText('Select the text to copy it manually.');
+ await expect(tool.getByRole('button',{name:'Copy file content',exact:true})).toHaveText('Copy');
+ assert.match(await tool.locator('.a-execution-payload').filter({hasText:'File content'}).locator('pre').innerText(),/RESULT-END/);
+ await page.evaluate(()=>{navigator.clipboard.writeText=window.savedClipboardWrite;delete window.savedClipboardWrite});
+ await tool.getByRole('button',{name:'Copy file content',exact:true}).click();
+ await expect(tool.getByRole('status')).toHaveText('Copied');
+ assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/RESULT-END/);
  assert.equal(detailReads.filter(url=>url.searchParams.get('field')==='output').length,2);
  await control({op:'inspection-finish'});await expect(modelLine).toContainText('120 tokens');
  assert.match(await page.locator('[data-group-id="inspect@question"] > .a-execution-turn-line').innerText(),/120 tokens · \$0.004/);
@@ -48,5 +59,5 @@ try{
  await page.reload();await model.waitFor();assert.equal(await modelLine.innerText(),finalTimer);
  await answer.scrollIntoViewIfNeeded();await page.getByRole('button',{name:'Retry loading full text'}).click();await page.getByText('COMPLETE-RESPONSE-END',{exact:false}).waitFor();
  await tool.getByRole('link',{name:'https://example.com/artifact',exact:true}).waitFor();
- assert.deepEqual(errors,[]);console.log('Canonical owner content loads once with retry and full-copy support; long fences preview 10 lines; model one-liners stay visible; live timing and usage settle across reload.');
+ assert.deepEqual(errors,[]);console.log('Canonical owner content loads once with retry and full-copy support; clipboard denial retains selectable full content and explicit retry succeeds without another detail read; long fences preview 10 lines; model one-liners stay visible; live timing and usage settle across reload.');
 }catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}
