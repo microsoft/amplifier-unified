@@ -288,10 +288,13 @@ try{
  // Steady progress retains the loaded order, scroll and active control.
  const steady=await order(),toggle=sidebar().getByRole('button',{name:'Load older chats',exact:true});
  await toggle.scrollIntoViewIfNeeded();await toggle.focus();
+ const geometry=()=>page.evaluate(()=>{const rail=document.querySelector('.a-nav-content');const box=n=>{const r=n.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height}};return {scrollTop:rail.scrollTop,scrollHeight:rail.scrollHeight,clientHeight:rail.clientHeight,rail:box(rail),focus:document.activeElement?.textContent,sections:[...rail.querySelectorAll('[data-sidebar-section]')].map(n=>({section:n.dataset.sidebarSection,...box(n)})),statuses:[...rail.querySelectorAll('[role=status],[role=alert]')].map(n=>({text:n.textContent,...box(n)})),rows:[...rail.querySelectorAll('[data-sidebar-section=recent] [data-session-id]')].map(n=>({id:n.dataset.sessionId,...box(n)}))}});
+ const beforeGeometry=await geometry();
  const scrollBefore=await page.locator('.a-nav-content').evaluate(node=>node.scrollTop);
  await control({progress:true});
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.status)).toBe('working');
  assert.deepEqual(await order(),steady);await expect(toggle).toBeFocused();
+ if(evidence)await writeFile(evidence+'.progress-geometry.json',JSON.stringify({before:beforeGeometry,after:await geometry()},null,2)+'\n');
  assert.equal(await page.locator('.a-nav-content').evaluate(node=>node.scrollTop),scrollBefore);
  await control({ready:true});await control({attention:true});
  await expect.poll(async()=>(await order())[0]).toBe(initial.selected);
