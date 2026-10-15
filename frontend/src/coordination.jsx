@@ -107,21 +107,38 @@ function ResultFileStatus({response}){
 }
 
 export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorkspace,onScopeReady,scopeInvalid=false}){
- const visit=useRef(0),openingRef=useRef(false),sectionRef=useRef(null);
+ const visit=useRef(0),openingRef=useRef(false),sectionRef=useRef(null),refreshFocus=useRef(null);
  const [review,setReview]=useState(false);
  const [opening,setOpening]=useState(null);
+ const [refreshing,setRefreshing]=useState(false);
  const [next,setNext]=useState(null),[recap,setRecap]=useState(false);
  const [items,setItems]=useState([]),[context,setContext]=useState({requests:[]}),[error,setError]=useState(''),[inspected,setInspected]=useState({}),[original,setOriginal]=useState(null);
+ useEffect(()=>{
+  if(refreshing)return;
+  const focused=refreshFocus.current;refreshFocus.current=null;
+  if(focused?.visit===visit.current&&sectionRef.current?.contains(focused.element)&&document.activeElement===document.body)focused.element.focus({preventScroll:true});
+ },[refreshing]);
  const refresh=async()=>{
-  const current=++visit.current;setError('');
-  if(expectedWorkspace){onScopeReady?.(false);setContext({requests:[]});setItems([]);setNext(null);setInspected({});setOriginal(null);setReview(false);setRecap(false)}
-  const state=await dispatch('coordination.context',{sessionId},{feedback:false});
-  if(current!==visit.current)return;
-  if(!state.result.workspace)throw Error('The workspace is unavailable.');
-  if(expectedWorkspace&&state.result.workspace!==expectedWorkspace)throw Error('This chat no longer belongs to the workspace being reviewed. Refresh the chat list.');
-  const peers=await dispatch('coordination.list',{workspace:state.result.workspace,limit:20,includeWorkers:false},{feedback:false});
-  if(current!==visit.current)return;
-  setContext(state.result);setInspected({});setItems(peers.result.items);setNext(peers.result.nextOffset??null);onScopeReady?.(true);
+  const current=++visit.current;setError('');setRefreshing(true);
+  refreshFocus.current=sectionRef.current?.contains(document.activeElement)?{visit:current,element:document.activeElement}:null;
+  // Keep the verified view mounted while checking again. Unmounting discards
+  // child acknowledgments and disclosure state after their own save/refresh.
+  // The region is inert until verified; a failed read discards stale scope.
+  if(expectedWorkspace)onScopeReady?.(false);
+  try{
+   const state=await dispatch('coordination.context',{sessionId},{feedback:false});
+   if(current!==visit.current)return;
+   if(state?.accepted!==true||!state.result)throw Error(state?.error||'Workspace work could not be read. Refresh to try again.');
+   if(!state.result.workspace)throw Error('The workspace is unavailable.');
+   if(expectedWorkspace&&state.result.workspace!==expectedWorkspace)throw Error('This chat no longer belongs to the workspace being reviewed. Refresh the chat list.');
+   const peers=await dispatch('coordination.list',{workspace:state.result.workspace,limit:20,includeWorkers:false},{feedback:false});
+   if(current!==visit.current)return;
+   if(peers?.accepted!==true||!Array.isArray(peers.result?.items))throw Error(peers?.error||'Workspace chats could not be read. Refresh to try again.');
+   setContext(state.result);setInspected({});setItems(peers.result.items);setNext(peers.result.nextOffset??null);onScopeReady?.(true);
+  }catch(error){
+   if(current===visit.current&&expectedWorkspace){setContext({requests:[]});setItems([]);setNext(null);setInspected({});setOriginal(null);setReview(false);setRecap(false)}
+   throw error;
+  }finally{if(current===visit.current)setRefreshing(false)}
  };
  useEffect(()=>{setInspected({});setOriginal(null);setContext({requests:[]});setItems([]);setNext(null);setError('');refresh().catch(error=>{if(visit.current===current)setError(error.message)});const current=visit.current;return()=>{visit.current++}},[sessionId,expectedWorkspace]);
  const more=async()=>{const current=visit.current;try{const response=await dispatch('coordination.list',{workspace:context.workspace,offset:next,limit:20,includeWorkers:false},{feedback:false});if(current!==visit.current)return;setItems(previous=>[...new Map([...previous,...response.result.items].map(row=>[row.target.sessionId,row])).values()]);setNext(response.result.nextOffset??null)}catch(error){if(current===visit.current)setError(error.message)}};
@@ -143,7 +160,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
  const name=sid=>memberLabels[sid]||'Related chat';
  const attention=items.filter(row=>row.attention);
  const showSection=name=>{const target=sectionRef.current?.querySelector('[data-review-target="'+name+'"]');if(target){target.open=true;target.scrollIntoView?.({block:'nearest'})}};
- return <section ref={sectionRef} className="a-coordination-related" aria-label="Workspace work overview">
+ return <section ref={sectionRef} className="a-coordination-related" aria-label="Workspace work overview" inert={refreshing}>
   <p>See what is happening around this chat. Inspecting keeps your conversation and draft in place.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh workspace work</button>
