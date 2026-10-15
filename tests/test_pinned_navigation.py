@@ -72,6 +72,25 @@ def test_workspace_pins_are_not_limited_to_shortcuts_or_explorer_search():
     assert value == before
 
 
+async def test_scoped_shortcuts_retain_pinned_alias_of_same_registered_path(app, tmp_path):
+    path = str(tmp_path / 'project')
+    app.state['workspaces'] = [
+        {'id': identity, 'path': path, 'name': 'Project', 'available': True}
+        for identity in ['legacy', 'current']]
+    app.state['selectedWorkspaceId'] = 'current'
+    app.state['pinnedWorkspaceIds'] = ['legacy']
+    app.projections.invalidate()
+    rows = app.projections.workspace_shortcuts(app.state, workspace_id='current')
+    assert [(row['workspaceId'], row['path'], row['pinned']) for row in rows] == [('legacy', path, True)]
+    client = app.shell.client('alias-reader')
+    instance = {'id': 'alias-chats', 'package': 'builtin.chats', 'slot': 'navigation',
+                'scope': {'mode': 'pinned', 'workspaceId': 'current'}}
+    result = app.shell.snapshot(client, instance, identity='alias-reader',
+                               navigation_resources=frozenset({'workspaceShortcuts'}))
+    assert result['workspaceShortcuts'] == rows
+    assert result['selectedWorkspaceId'] == 'current'
+
+
 async def populate(app, tmp_path):
     ids = []
     for name in ('one', 'two'):

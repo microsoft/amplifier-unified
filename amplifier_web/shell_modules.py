@@ -459,7 +459,10 @@ class ShellModules:
         if recent_navigation is not None:
             result.update(recentShortcuts=recent_shortcuts, recentNavigation=recent_navigation)
         if wants('workspaceShortcuts'):
-            result['workspaceShortcuts'] = [row for row in shortcuts if not pinned_scope or row.get('workspaceId') == workspace_id][:6]
+            # The projection fences registered paths before paging. A path can
+            # carry another pinned registration ID; retain it so unpin targets
+            # that saved identity rather than hiding the same folder.
+            result['workspaceShortcuts'] = shortcuts[:6]
             if requested is None:
                 # Explicit/full APIs include the independent custom-module field.
                 # The bundled client consumes only inclusive workspaceShortcuts.
