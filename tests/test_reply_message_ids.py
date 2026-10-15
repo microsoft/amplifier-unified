@@ -91,7 +91,8 @@ async def test_current_checkpoint_link_does_not_load_transcript_during_declarati
 async def test_discovered_schema_and_skill_explain_incoming_id_repair(app):
     from amplifier_web.builtin_behaviors import resource_root
     source = app.state['sessions'][0]
-    action, = await app.app_bridge('list_actions', {'prefix': 'coordination.reply'}, source['id'])
+    page = await app.app_bridge('list_actions', {'prefix': 'coordination.reply'}, source['id'])
+    action, = page['items']
     description = action['inputSchema']['properties']['messageIds']['description']
     assert 'current generation' in description and "incoming request's messageId" in description
     assert 'Omit messageIds' in description

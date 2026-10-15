@@ -5,7 +5,10 @@ description: Discover peers, consult bounded history, create durable root task c
 
 # Coordinate work
 
-Use `app_control` and its discovered `coordination.*` schemas. Never read private
+Use `app_control` and its discovered `coordination.*` schemas.
+`list_actions` returns bounded `items` pages: follow `nextOffset` with the same
+`prefix` and `revision`. If an action has `schemaRead`, use those list arguments,
+follow `nextSchemaOffset`, concatenate `schemaText` and parse the complete schema. Never read private
 host databases or native storage to emulate a missing capability.
 Agent coordination dispatch returns the full domain receipt/result plus compact
 state metadata, not the app overview. Use explicit `get_state` with a JSON Pointer
@@ -191,6 +194,25 @@ authorized generation can inspect `coordination.result` and submit a corrected
 reply with a new command ID and the current `expectedResponseRevision`, preserving
 the earlier reply. Do not retry an acknowledged command expecting different bytes,
 overwrite unrelated work, or start another generation yourself to bypass Stop.
+
+## Keep independent work moving
+
+A test waiting for resource capacity blocks that dependency, not unrelated
+implementation, review or documentation. Use the host-owned allocation queue when
+available and retain its request identity; automatic resumption must respect Stop
+and the original task. If that capability is absent, report the limitation rather
+than claiming an automatic wake. Never raise infrastructure limits, reuse a peer's
+environment or delete retained work merely to obtain capacity.
+
+Peer messages should resolve concrete technical overlap, dependencies or decisions,
+not repeatedly ask who can free a slot. Keep waiting, prepared, tested and completed
+separate. Use shared task claims when chats share responsibility for a deliverable;
+independent chats do not need an assignment hierarchy or mandatory task board.
+
+Programmatic `output_limit` reports failed selected-output delivery. Check the
+actual child receipts: confirmed completed effects remain completed, while unknown
+effects remain unknown. For reads, select needed fields or use catalog/state pages.
+Do not repeat a mutation merely to obtain smaller printed output.
 
 ## Optional shared task list
 
