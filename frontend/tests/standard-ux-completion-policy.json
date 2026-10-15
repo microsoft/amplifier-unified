@@ -1053,6 +1053,55 @@
       "limits": [
         "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
       ]
+    },
+    {
+      "workflow": "messages.native-alternate",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open View saved runtime history from retained web chat",
+        "Load explicit older source page",
+        "Return to latest and compare canonical messages/draft"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Desktop synthetic140-row native transcript; display-only authority and unknown totals explicitly retained."
+      ]
+    },
+    {
+      "workflow": "canvas.files-path",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open real workspace text file through Canvas",
+        "Expand File path and copy exact absolute/relative paths",
+        "Read named host and unavailable server reveal explanation"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic Linux server without desktop file manager; no OS reveal or remote browser/server pair."
+      ]
+    },
+    {
+      "workflow": "canvas.files",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Open public Canvas file form",
+        "Read actual file bytes and exact named host/path"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Local owned synthetic filesystem; URL/credential policy remain separate required outcomes."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
