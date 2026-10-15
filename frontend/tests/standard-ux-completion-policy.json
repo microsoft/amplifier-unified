@@ -2454,6 +2454,41 @@
       "limits": [
         "Exact named proof context only; unsupported generic external effects or syscall-level hidden-read assertions remain unqualified."
       ]
+    },
+    {
+      "workflow": "smart-tools.connection",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open Settings Smart Tools Installed and real setup instructions",
+        "Validate exact connection then explicitly connect/disconnect/reconnect a local MCP child",
+        "Refuse dependent uninstall; remove connection then exact owned package"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Seeded package and local MCP only; no package installer/network authentication."
+      ]
+    },
+    {
+      "workflow": "smart-tools.remove",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Settings Smart Tools Installed and real setup instructions",
+        "Validate exact connection then explicitly connect/disconnect/reconnect a local MCP child",
+        "Refuse dependent uninstall; remove connection then exact owned package"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Seeded package and local MCP only; no package installer/network authentication."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
