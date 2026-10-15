@@ -504,8 +504,9 @@ async def test_older_creation_metadata_still_preserves_lower_authority_ancestry(
         await agent(app, source, 'permissions.save', {'scope':'local','allowed':[],'denied':[]}, 'creation-borrow')
 
 
-@pytest.mark.parametrize('ancestry', ['human', 'unprivileged-peer', 'missing'])
-async def test_actual_handoff_return_retains_original_configuration_authority(app, ancestry):
+@pytest.mark.parametrize('ancestry', ['human', 'unprivileged-peer', 'missing', 'empty'])
+@pytest.mark.parametrize('origin', ['agent', 'ui'])
+async def test_actual_handoff_return_retains_original_configuration_authority(app, ancestry, origin):
     from unittest.mock import AsyncMock
     source, peer = app.state['sessions']
     await grant(app, ['file_access'], ['local'])
@@ -519,12 +520,13 @@ async def test_actual_handoff_return_retains_original_configuration_authority(ap
         source['collaborationGeneration'] = {'id':'peer-woken','inputIds':[incoming['requestId']],'terminal':False}
     original_inputs = source['collaborationGeneration']['inputIds'][:]
     original_generation = source['collaborationGeneration']['id']
-    receipt = (await agent(app, source, 'worktree.handoff', {'sessionId':source['id'],
-        'id':None, 'expectedExecutionRevision':0}, 'move'))['result']
+    move = {'sessionId':source['id'], 'id':None, 'expectedExecutionRevision':0}
+    receipt = ((await agent(app, source, 'worktree.handoff', move, 'move'))['result'] if origin == 'agent'
+        else (await app.dispatch('worktree.handoff', move, command_id='move'))['result'])
     await asyncio.gather(*list(app.worktrees.jobs))
     saved = app.worktrees.read(source['id'], receipt['id'])
     original = app.collaboration.receipt(saved['continuation']['requestId'])
-    assert original['origin'] == 'agent'
+    assert original['origin'] == origin
     assert original['sourceInputIds'] == original_inputs
     assert original['sourceGenerationId'] == original_generation
     assert original['sourceInterruptionRevision'] == 0
@@ -538,6 +540,10 @@ async def test_actual_handoff_return_retains_original_configuration_authority(ap
         # empty, human-originated authority merely because its move succeeded.
         for key in ('sourceInputIds', 'sourceGenerationId', 'sourceInterruptionRevision'):
             original.pop(key)
+        app.collaboration.save(original['requestId'], original)
+        app.db.commit()
+    if ancestry == 'empty':
+        original['sourceInputIds'] = []
         app.collaboration.save(original['requestId'], original)
         app.db.commit()
     source['collaborationGeneration'] = {'id':'continued','inputIds':[returned['requestId']],'terminal':False}

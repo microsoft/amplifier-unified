@@ -167,7 +167,7 @@ class ConfigurationAuthority:
                 or not isinstance(inputs, list) or len(inputs) > 128
                 or any(not isinstance(item, str) or not item for item in inputs)
                 or type(lineage.get('sourceInterruptionRevision')) is not int
-                or original.get('origin') not in {'ui', 'user'} and (
+                or (kind == 'worktree.handoff' or original.get('origin') not in {'ui', 'user'}) and (
                     not lineage.get('sourceGenerationId') or not inputs)):
             self.error('The saved return has no verified original input lineage. Ask the user to authorize this current request before changing configuration.')
         return inputs

@@ -1249,6 +1249,8 @@ The return retains its original transport-bound input lineage and causal depth.
 Configuration authorization follows that ancestry through the existing grant
 checks; missing lineage stays unverified and an unprivileged peer cannot borrow
 the moved conversation's grants. Backpressured returns retain an inbox slot.
+A UI move preserves the active host generation's ancestry too; placement consent
+alone does not elevate a running peer request or replace missing input lineage.
 
 Focused regression coverage includes pending native tools/children, goal progress,
 Stop before and after release, positive-release restart gaps, later placement,

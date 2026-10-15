@@ -475,9 +475,14 @@ class Worktrees:
             if record['resumeRequested']:
                 # Capture the authenticated calling input now. Neither a later
                 # worker generation nor the completion text creates authority.
-                lineage = self.app.collaboration.lineage(session, origin)
+                lineage = (self.app.collaboration.lineage(session, origin) if origin not in {'ui', 'user'} else {
+                    'sourceGenerationId': active['id'],
+                    'sourceInputIds': copy.deepcopy(active.get('inputIds', [])),
+                    'sourceInterruptionRevision': session.get('interruptionRevision', 0)})
                 record.update(lineage)
-                record['causalDepth'] = self.app.collaboration.causal_depth(session, lineage, origin)
+                # A UI placement choice does not elevate the running task's
+                # peer inputs or reset their retained causal chain.
+                record['causalDepth'] = self.app.collaboration.causal_depth(session, lineage, 'agent')
             self.save(record)
             session['configurationBusy'] = True
             self.changed()
