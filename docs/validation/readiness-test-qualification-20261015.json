@@ -107,8 +107,39 @@
         "Failed Smart Tool stage cleanup and current-installation preservation"
       ],
       "passed": true
+    },
+    {
+      "source": "ed8dc6482",
+      "receipt": "queued-check-qualification-20261015.json",
+      "checks": [
+        "123 source-bound main integration backend checks",
+        "22 final bounded metadata backend checks",
+        "33 affected frontend component checks",
+        "Public queued-check controls and held-plan read browser journeys"
+      ],
+      "passed": true,
+      "build": "5f136e8e69c99e41"
+    },
+    {
+      "source": "0701c94cb5c9eae983b87005ca8f9b08a70d1184",
+      "receipt": "bounded-workspace-metadata-20261015.json",
+      "checks": [
+        "Copied-scale workspace navigation with 1/6/12 real workers",
+        "No dormant-owner admission across both 40-row pages"
+      ],
+      "workspaceTargetsMet": true,
+      "warmSendTargetMet": false
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
-  "remaining": "The exact ordinary-UX ledger and paired completed-corpus performance report govern final readiness. This test rollup does not declare every issue resolved."
+  "remaining": "Warm send acknowledgment exceeds the desired target; current cold-composition timing and device/account-specific acceptance remain explicit limits. All70 open issue dispositions are recorded in closing-issue-dispositions-20261015.json. This audit does not declare every issue resolved.",
+  "coverage": {
+    "workflows": 199,
+    "outcomes": 669,
+    "observedInNamedContexts": 607,
+    "partial": 44,
+    "notRun": 18,
+    "explicitResidualDispositions": 62,
+    "receipt": "standard-ux-completion-20261015.md"
+  }
 }
