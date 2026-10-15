@@ -94,15 +94,19 @@ async def main(home):
             'controls': runtime.controls, 'savedSelection': json.loads(control.read_text())['selection'],
             'messages': [{'id': row['id'], 'role': row['role'], 'inputId': row.get('inputId'), 'delivery': row.get('delivery')} for row in session['messages']]})
     app.router.add_get('/fixture', inspect)
+    import socket
+    sock = socket.socket(); sock.bind(('127.0.0.1', 0))
+    url = 'http://127.0.0.1:' + str(sock.getsockname()[1])
+    app['allowed_origins'] = app['allowed_origins'] | {url}
     runner = web.AppRunner(app); await runner.setup()
-    site = web.TCPSite(runner, '127.0.0.1', 0); await site.start()
-    url = 'http://127.0.0.1:' + str(site._server.sockets[0].getsockname()[1])
-    app['allowed_origins'].add(url)
+    site = web.SockSite(runner, sock); await site.start()
     stopped = asyncio.Event()
     for sig in (signal.SIGINT, signal.SIGTERM): asyncio.get_running_loop().add_signal_handler(sig, stopped.set)
     print(json.dumps({'url': url}), flush=True)
     try: await stopped.wait()
-    finally: await runner.cleanup()
+    finally:
+        await runner.cleanup()
+        sock.close()
 
 
 if __name__ == '__main__':
