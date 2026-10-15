@@ -957,14 +957,27 @@ try{
      await expect(client.page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(text);
     }
     for(const p of [page,peer.page])await readyFigure(p,saved.id);
-    const scrolls=await Promise.all([page,peer.page].map(p=>p.locator('.a-messages').evaluate(node=>node.scrollTop)));
+    const readingPosition=p=>p.locator('.a-messages').evaluate((node,{messageId,mediaId})=>{
+     const pane=node.getBoundingClientRect(),message=[...node.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===messageId),
+      media=[...node.querySelectorAll('[data-media-id]')].find(row=>row.dataset.mediaId===mediaId);
+     return {scrollTop:node.scrollTop,message:message?message.getBoundingClientRect().top-pane.top:null,
+      media:media?media.getBoundingClientRect().top-pane.top:null};
+    },{messageId:boot.messageId,mediaId:saved.id});
+    const positions=await Promise.all([page,peer.page].map(readingPosition)),afterPositions=[];
+    const scrolls=positions.map(row=>row.scrollTop);
     const item=await attach(page,'gif',1);
     // Publication/readiness only: do NOT move either reader to the new figure.
     await expect(figureFor(page,item.id)).toHaveAttribute('data-media-state','ready');
     await expect(figureFor(peer.page,item.id)).toHaveAttribute('data-media-state','ready');
     for(const [index,p,text] of [[0,page,'Unsent draft A'],[1,peer.page,'Unsent draft B']]){
      await expect(p.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(text);
-     assert.ok(Math.abs(await p.locator('.a-messages').evaluate(node=>node.scrollTop)-scrolls[index])<3);
+     const current=await readingPosition(p);afterPositions.push(current);
+     // Preserve the actual reading anchor. Raw scrollTop may compensate for
+     // content growth above this message while its screen position stays fixed.
+     for(const anchor of ['message','media']){
+      assert.equal(typeof positions[index][anchor],'number');assert.equal(typeof current[anchor],'number');
+      assert.ok(Math.abs(current[anchor]-positions[index][anchor])<3,JSON.stringify({index,anchor,before:positions[index],after:current}));
+     }
      assert.equal(await p.evaluate(()=>window.amplifier.getState().canvas.open),false);
     }
     await phase('worker-history-descriptor',()=>workerHistoryDescriptor(primary,peer,saved));
@@ -976,7 +989,7 @@ try{
     const evidence=await (await page.request.get(boot.url+'/api/fixture/evidence',{headers:privateHeaders})).json();
     assert.deepEqual(evidence.errors,[]);
     assert.ok(!Object.keys(evidence.counters).some(key=>key.startsWith('unexpected:')));
-    return {twoClients:true,drafts:['Unsent draft A','Unsent draft B'],scrolls,sourceRemoved:true,reloaded:true,reopened:true,
+    return {twoClients:true,drafts:['Unsent draft A','Unsent draft B'],scrolls,positions,afterPositions,sourceRemoved:true,reloaded:true,reopened:true,
      automaticRuntimeCalls:0,counters:evidence.counters,peerCleanup:await unmountAndClose(peer)};
    }finally{if(!peer.page.isClosed())await unmountAndClose(peer)}
   });

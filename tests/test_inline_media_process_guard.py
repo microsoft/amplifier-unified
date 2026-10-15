@@ -94,7 +94,8 @@ async def test_authorized_spawn_does_not_grant_other_tasks_or_direct_popen(tmp_p
 
 
 @pytest.mark.parametrize('module', ['amplifier_web.history_projection_worker',
-                                   'amplifier_web.shell_query_worker'])
+                                   'amplifier_web.shell_query_worker',
+                                   'amplifier_web.event_window_worker'])
 async def test_real_owned_projector_starts_and_closes_without_runtime(tmp_path, module):
     from amplifier_web.history_projection_process import ProcessProjector
     observed = []

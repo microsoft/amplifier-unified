@@ -1,4 +1,4 @@
-"""Fixture-only subprocess guard: exact, owned display readers is allowed."""
+"""Fixture-only subprocess guard: exact, owned display readers are allowed."""
 import asyncio
 from contextvars import ContextVar
 from pathlib import Path
@@ -16,7 +16,8 @@ def install(cache_home, forbidden, observed):
     def valid(args, kwargs):
         if (len(args) != 9 or args[:2] != (sys.executable, '-m')
                 or args[2] not in {'amplifier_web.history_projection_worker',
-                                   'amplifier_web.shell_query_worker'}):
+                                   'amplifier_web.shell_query_worker',
+                                   'amplifier_web.event_window_worker'}):
             return False
         if args[3] != '--spool' or args[5] != '--cache-home' or args[7:] != ('--memory-limit', '805306368'):
             return False
