@@ -221,6 +221,7 @@ class HistoryDirectory:
         self._live_values = {}
         self._live_notices = []
         self._live_revision = 0
+        self._encoded_overlay = None
         self._native_revision = None
         self._read_frame = ContextVar('directory_read_frame', default=None)
 
@@ -487,6 +488,23 @@ class HistoryDirectory:
         if frame is not None:
             frame['owner'] = (owner, boundary)
 
+    def _overlay_parameters(self):
+        """Encode only a changed admitted overlay, never history or query fences.
+
+        Live preparation replaces both containers on change; snapshot readers
+        also install their own frozen containers. Their scalar rows and notice
+        tuples are never edited after installation. Retain one pair of encodings,
+        not per-page results or mutable application state. Read receipts and
+        native/durable generations remain current on every query.
+        """
+        prior = self._encoded_overlay
+        if prior is None or prior[0] is not self._live_values or prior[1] is not self._live_notices:
+            prior = (self._live_values, self._live_notices,
+                     json.dumps(list(self._live_values.values()), separators=(',', ':')),
+                     json.dumps(self._live_notices, separators=(',', ':')))
+            self._encoded_overlay = prior
+        return prior[2:]
+
     def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None):
         """Return effective rows with optional alias, exact-ID or child scope.
 
@@ -595,8 +613,7 @@ class HistoryDirectory:
                 f"CASE WHEN {quiet} THEN CASE WHEN ns.unread THEN 'New response' ELSE 'Idle' END ELSE l.base_activity_label END" if name == 'activity_label' else f'l.{name}')
             expressions.append(expression + ' AS ' + name)
         local += ', local_rows AS (SELECT ' + ','.join(expressions) + ' FROM raw_local_rows l LEFT JOIN notice_status ns ON ns.owner=l.id)'
-        parameters = scope_params + [json.dumps(list(self._live_values.values()), separators=(',', ':')),
-                      json.dumps(self._live_notices, separators=(',', ':')),
+        parameters = scope_params + [*self._overlay_parameters(),
                       json.dumps(state.get('attentionRead', {}), separators=(',', ':'))]
         if self._native_path:
             parameters.append(self._native_namespace)
