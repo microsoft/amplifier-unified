@@ -601,7 +601,8 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
                 if previous and (install_dir / "venv" / "bin" / "python").exists():
                     return copy.deepcopy(previous)
                 if install_dir.exists():
-                    shutil.rmtree(install_dir)
+                    from .task_environments import remove_installation
+                    await asyncio.to_thread(remove_installation, self.service.data_dir, identity, install_dir)
                 install_dir.mkdir(parents=True, mode=0o700)
                 source = install_dir / "source"
                 shutil.move(str(checkout), source)
@@ -619,7 +620,8 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
                 return row
             except BaseException:
                 if install_dir and not any(row["id"] == install_dir.name for row in self.state["installations"]):
-                    shutil.rmtree(install_dir, ignore_errors=True)
+                    from .task_environments import remove_installation
+                    await asyncio.to_thread(remove_installation, self.service.data_dir, install_dir.name, install_dir, ignore_errors=True)
                 raise
             finally:
                 shutil.rmtree(checkout, ignore_errors=True)
