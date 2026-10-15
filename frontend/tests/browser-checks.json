@@ -42,6 +42,7 @@
     {"id": "interim-replies", "command": ["node", "tests/interim-replies-browser.mjs"]},
     {"id": "tool-outcomes", "command": ["node", "tests/tool-outcomes-browser.mjs"]},
     {"id": "navigation", "command": ["node", "tests/navigation-browser.mjs"]},
+    {"id": "archive-feedback", "command": ["node", "tests/archive-feedback-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/archive-feedback"}},
     {"id": "pin-retention", "command": ["node", "tests/pin-retention-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/pin-retention"}},
     {"id": "workspace-shortcuts", "command": ["node", "tests/workspace-shortcuts-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/workspace-shortcuts"}},
     {"id": "chat-title", "command": ["node", "tests/chat-title-browser.mjs"]},

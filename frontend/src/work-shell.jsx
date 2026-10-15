@@ -1,4 +1,5 @@
 import {WorkspaceWork} from './workspace-work';
+import {ArchiveButton} from './archive-feedback.jsx';
 import {WorkspaceConfiguration} from './workspace-configuration';
 import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
@@ -68,7 +69,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
     <button onClick={()=>open('chat-help')}><Bug/>Help &amp; diagnostics</button>
     <button onClick={()=>open('chat-advanced')}><Settings/>Advanced<ChevronRight/></button>
     <hr/>
-    <button data-action={Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'session.restore':'session.archive'} onClick={()=>act(Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'session.restore':'session.archive',{id:session.id})}><Archive/>{Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'Restore':'Archive'}</button>
+    <ArchiveButton chat={session} archived={Object.hasOwn(state.conversationOrganization?.archived||{},session.id)}/>
     {session.location?.kind==='managed'&&isTopLevelChat(session)&&<button className="a-danger" onClick={()=>open('delete-session')}><Trash2/>Delete</button>}
    </ActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
   </div>
