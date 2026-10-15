@@ -36,8 +36,15 @@
       {
         "name": "normal-runtime-manager-worker-ready",
         "status": "passed"
+      },
+      {
+        "name": "actual-worker-bash-source-identity",
+        "status": "passed"
       }
-    ]
+    ],
+    "actualWorkerBashSourceObserved": true,
+    "workerProcessId": 87,
+    "processLauncherId": 84
   },
   "installedProof": {
     "passed": true,
@@ -116,17 +123,19 @@
     }
   ],
   "evidence": {
-    "dtu-evidence/evidence/qualification.json": "4e404c4a050a0c639af3403daa92a4987256c5a5c5a62be443ba98fbead43bfe",
-    "dtu-evidence/evidence/installed-proof.json": "6f40659f733a75a9e5baa8be34f06f43d7cc8f47306cba85555549e52edea82b",
-    "dtu-evidence/evidence/work-probe.log": "f622b35401632355b9028784ee337e6e681d4976d7c6e12f4c3d77753ff8de6b",
-    "dtu-evidence/evidence/worker-events.jsonl": "9c74615ea16d9cff9f0003c7196846768f6bf77570a76093a984fdd06bc3e30c",
-    "prepare.py": "9ac0377961deeb2cc0a7dc8fc5bd9046b25268d7e474811642ef1868e7499df1",
-    "namespace.py": "699e2a00f175f76a3c68bc0da6417485c73ca3f4f6bc2f75c54b24fe36cfbbd0"
+    "mounted-source-evidence/evidence/qualification.json": "07696f1cf181fd1b10851ac4541146d0f51e26456fc034ec6851ed03611b7747",
+    "mounted-source-evidence/evidence/worker-events.jsonl": "34fb4558a4758fc35cf9ceeab8483071f1414a8f18100fc48f5ba6fe6f5279ce",
+    "mounted-source-evidence/evidence/installed-proof.json": "6f40659f733a75a9e5baa8be34f06f43d7cc8f47306cba85555549e52edea82b",
+    "mounted-source-evidence/evidence/work-probe.log": "a290a30b5dfbaae6b06333d68ab9fc17cbb15d4be8b6022856ed7d01d2f9c3cd",
+    "prepare.py": "0a1a673b2840ac86f38b2479d4790babd76da9ee3aefff62c58005329809e9fb",
+    "namespace.py": "231ff952256290a5dc7b3cb621dccfb2a7d6a39057e364e060be0b7edecb6fcb",
+    "sitecustomize.py": "4b764956b51ef555f1791d24341a8fc5b4f9dc66b755cfe68532ec092e679702"
   },
   "preparationNotes": [
     "Missing python-xlib wheel and universal-lock registry metadata were staged in private prerequisites before the network-disabled acceptance.",
     "Fixture errors (private release name, cache directory ownership and omitted read-only source-store bindings) were corrected; failed attempts remain separate receipts. No product source was changed for this acceptance.",
-    "Exact candidate wheels were installed into a new private graph, then the canonical freeze/verify_recorded path qualified it. The existing q638 interpreter and preview active pointer were unchanged."
+    "Exact candidate wheels were installed into a new private graph, then the canonical freeze/verify_recorded path qualified it. The existing q638 interpreter and preview active pointer were unchanged.",
+    "Post-qualification source observation found installed-wheel/source-cache divergence. The original receipt is preserved as installed-only proof; the explicit private source mapping and actual worker import proof supersede its activation interpretation."
   ],
   "limits": [
     "These single-run functional durations are not comparative performance claims.",
@@ -136,6 +145,54 @@
   "integrationOrder": [
     "Review and merge the canonical Bash24 change before a production dependency refresh. Do not treat separate source tests as an installed fix.",
     "Review computer-use29 as qualification tooling; retain its separate Windows/platform acceptance limits.",
-    "After dependency merges, create and qualify a new Unified generation using the accepted source commits; never mutate an in-use generation. The private candidate above proves the combined dependency graph can start normally."
-  ]
+    "After dependency merges, create and qualify a new Unified generation using accepted source commits; verify actual mounted module identity as well as installed wheels. The private source override is a candidate-only staging measure, not a change to production defaults."
+  ],
+  "actualWorkerBashImports": [
+    {
+      "phase": "bash.module.imported",
+      "at": 5558238.937935651,
+      "pid": 87,
+      "case": "37a68b6f-06df-435f-be3a-bdfceb403bc7",
+      "module": "amplifier_module_tool_bash.safety",
+      "file": "/var/lib/unified-dev/dependency-activation-20261015/app/updates/releases/ded15b45a24c002963871d4691d44bac/candidate-sources/bash/amplifier_module_tool_bash/safety.py",
+      "sha256": "7cd7c0ccf634d0ffed37e7d024e2177430faf8e6dea13e031ca2097360fa33d5"
+    },
+    {
+      "phase": "bash.module.imported",
+      "at": 5558238.9380593,
+      "pid": 87,
+      "case": "37a68b6f-06df-435f-be3a-bdfceb403bc7",
+      "module": "amplifier_module_tool_bash",
+      "file": "/var/lib/unified-dev/dependency-activation-20261015/app/updates/releases/ded15b45a24c002963871d4691d44bac/candidate-sources/bash/amplifier_module_tool_bash/__init__.py",
+      "sha256": "073e86bee3e7018f386eefbde708c444287febc0422b1a56380c3316130c2a3d"
+    },
+    {
+      "phase": "bash.module.imported",
+      "at": 5558238.941580581,
+      "pid": 87,
+      "case": "37a68b6f-06df-435f-be3a-bdfceb403bc7",
+      "module": "amplifier_module_tool_bash.managed",
+      "file": "/var/lib/unified-dev/dependency-activation-20261015/app/updates/releases/ded15b45a24c002963871d4691d44bac/candidate-sources/bash/amplifier_module_tool_bash/managed.py",
+      "sha256": "3fe0fb8a9abe39f57bc8db1ac7af766765c8f5147bd1770b1400d06a59f12773"
+    }
+  ],
+  "correction": {
+    "priorReceiptCommit": "e4b2b954d",
+    "priorEvidenceScope": "Installed candidate package identity and normal Work ready only; actual worker source identity was not observed.",
+    "discovery": "The normal worker selected an older source from the private Foundation cache despite the candidate wheel being installed.",
+    "originalActualSafetySha256": "cee59e5f1c87c73911559104f00891ba68ea91e07c2628867294c872428c477a",
+    "resolution": "A source override maps tool-bash to the exact copied candidate inside the private generation. Full Work prepare/create_session and the normal worker were requalified offline; instrumentation records the actual worker import path and bytes.",
+    "candidateSourcePath": "/var/lib/unified-dev/dependency-activation-20261015/app/updates/releases/ded15b45a24c002963871d4691d44bac/candidate-sources/bash",
+    "failedIntermediateAttemptsRetained": true,
+    "productChanges": 0,
+    "sharedOrProductionChanges": 0
+  },
+  "priorEvidence": {
+    "dtu-evidence/evidence/qualification.json": "4e404c4a050a0c639af3403daa92a4987256c5a5c5a62be443ba98fbead43bfe",
+    "dtu-evidence/evidence/installed-proof.json": "6f40659f733a75a9e5baa8be34f06f43d7cc8f47306cba85555549e52edea82b",
+    "dtu-evidence/evidence/work-probe.log": "f622b35401632355b9028784ee337e6e681d4976d7c6e12f4c3d77753ff8de6b",
+    "dtu-evidence/evidence/worker-events.jsonl": "9c74615ea16d9cff9f0003c7196846768f6bf77570a76093a984fdd06bc3e30c",
+    "prepare.py": "9ac0377961deeb2cc0a7dc8fc5bd9046b25268d7e474811642ef1868e7499df1",
+    "namespace.py": "699e2a00f175f76a3c68bc0da6417485c73ca3f4f6bc2f75c54b24fe36cfbbd0"
+  }
 }
