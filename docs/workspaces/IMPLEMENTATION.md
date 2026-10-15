@@ -984,6 +984,29 @@ The projection is read-only. The owned-storage actions below add specific local
 allocations; arbitrary dynamic preview ports, operation cwd missing from its
 owner, remote targets and external processes remain explicit limits.
 
+## Workspace-local task storage correction — 2026-10-14
+
+New ordinary task storage follows the chat's actual execution folder and existing
+file-tool policy, so routine workspace writes need no configuration approval.
+The private resource ledger retains original placement and root identity. An agent
+must have observed access for newly created paths; existing unchanged parents
+and ignore files are identity-checked without requiring broader write access.
+Explicit denials and narrower policies remain enforced. Direct user allocation never starts a worker. A local
+ignore file excludes storage from ordinary Git/DTU source snapshots. Managed
+checkout archive/restore follows verified worktree move records and retains bytes.
+Existing external allocations and retries keep their original placement; no
+permissions, pending requests or retained files are silently migrated. The DTU
+backend's own state remains app-private. This supersedes the outside-repository
+placement described in the original slice below.
+
+Focused acceptance: 129 backend tests, six client tests and 15 browser scenarios
+passed in an isolated qualifier. Actual Core/Foundation root, fresh-child and
+resumed-child writes exercised both patch engines without approval, including
+denied, narrower and read-only policy cases. Browser checks used real allocation
+and receipts with a scripted conversation runtime; no provider call was made.
+Live adoption by previously running workers and old pending approvals remain
+separate boundaries.
+
 ## Owned task storage — 2026-10-14
 
 The existing workspace-resource ledger now owns explicit scratch directories,
