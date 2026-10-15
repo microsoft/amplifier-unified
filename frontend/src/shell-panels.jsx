@@ -1,3 +1,4 @@
+import {conversationHistoryPending} from './history-window.js';
 import {OutputSettings} from './outputs';
 import {PublishingSettings} from './publishing';
 import {ChatOverview} from './work-overview';
@@ -46,7 +47,7 @@ export function WorkspaceRail({state,session,act,selectSession,newSession,shell,
 export function SessionHistoryControls({session,act,onLoadEarlier,hideEarlier=false}){
  if(!session)return null;
  const unavailable=session.workspaceAvailable===false,readOnly=session.historyReadOnlyReason;
- const pending=!!session.historyLoading||session.historyLoaded===false&&!session.historyError,earlier=!hideEarlier&&Number(session.sharedHistoryOffset)>0;
+ const pending=conversationHistoryPending(session),earlier=!hideEarlier&&Number(session.sharedHistoryOffset)>0;
  const notices=session.historyActivity?.diagnostics||[],partial=notices.some(item=>['activity_scan_limit','scan_limit','invalid_event','incomplete_event','unreadable_file'].includes(item.code)),recovered=notices.some(item=>item.code==='recovered_backup');
  const retry=()=>act('session.select',{id:session.id});
  const loadEarlier=()=>{onLoadEarlier?.();return act('session.history',{id:session.id,before:session.sharedHistoryOffset,limit:100})};

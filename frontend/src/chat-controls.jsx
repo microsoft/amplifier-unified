@@ -1,3 +1,4 @@
+import {conversationHistoryPending} from './history-window.js';
 import {delegationRoutingLabel} from './delegation-routing.js';
 import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useEffect,useState,useRef} from 'react';
@@ -33,7 +34,7 @@ export function ModelControl({state,session,act,working,embedded=false}){
  if(isDraft&&defaults.phase==='ready')previousDefaults.current={context:defaultsContext,value:defaults};
  const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.context===defaultsContext?previousDefaults.current.value:defaults;
  const checkingDefaults=isDraft&&defaults.phase!=='ready'&&defaults.phase!=='error';
- const unavailable=!!state.navigationPending||session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||session?.historyLoaded===false;
+ const unavailable=!!state.navigationPending||session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||conversationHistoryPending(session);
  const shared=state.view?.composerModel||EMPTY,[draft,setDraft]=useState(shared),[error,setError]=useState(''),effortPending=useRef(null);
  useEffect(()=>{
   const pending=effortPending.current;

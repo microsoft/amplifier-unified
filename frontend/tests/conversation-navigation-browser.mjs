@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
 const full=Array.from({length:791},(_,i)=>({id:'m'+i,role:i%10===0?'user':'assistant',text:'Message '+i,createdAt:1000+i}));
 const messageWindow={mode:'cursor',offset:null,total:null,before:'older-731',hasEarlier:true,windowKey:'latest-731',coverage:{kind:'saved-web',historyComplete:false}};
-let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{setupJourney:'done',navPinned:true},sessions:[{id:'chat',sessionKind:'root',title:'Long chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:false,historyLoaded:true,messages:full.slice(-60),messageWindow,execution:{nodes:[],turns:[]}}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',canvas:{open:false}};
+let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{setupJourney:'done',navPinned:true},sessions:[{id:'chat',sessionKind:'root',title:'Long chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:false,historyLoaded:false,historyLoading:false,messages:full.slice(-60),messageWindow,execution:{nodes:[],turns:[]}}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',canvas:{open:false}};
 const previews=[],indexes=[],windows=[],earlier=[];let restoring=false;
 let browser,vite,page;const errors=[],calls=[];
 const shell=createShellHttpFixture(()=>state);
@@ -150,6 +150,11 @@ try{
  }
  await page.screenshot({path:'/tmp/conversation-navigation-narrow.png'});
  await page.setViewportSize({width:390,height:844});await expect(rail).toBeHidden();
+ await page.getByRole('button',{name:'Chat options',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();
+ await expect(page.getByRole('region',{name:'Conversation model',exact:true})).toBeVisible();
+ await expect(page.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeEnabled();
+ await page.getByRole('button',{name:'Close chat options',exact:true}).click();
  await page.setViewportSize({width:1440,height:900});await expect(rail).toBeVisible();
  // New input leaves an older reading window; arrival alone did not.
  await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();

@@ -21,3 +21,11 @@ export function validateHistoryPage(result,window){
   throw Error('The saved history page did not advance. Return to latest and try again.');
  return result;
 }
+
+// A bounded display page is ready independently of canonical execution hydration.
+export function conversationHistoryPending(session,navigationPending=false,messages=session?.messages){
+ if(navigationPending)return true;
+ if(session?.messageWindow?.mode==='cursor'||session?.messageWindow?.status==='ready')
+  return !session.historyError&&!!session.historyLoading&&!messages?.length;
+ return !session?.historyError&&(session?.historyLoaded===false||!!session?.historyLoading&&!messages?.length);
+}

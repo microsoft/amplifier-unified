@@ -58,8 +58,8 @@ export function useConversationDetail(source,beforeApply){
   executionWindow:{...source.executionWindow,...extra.groupWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected,[source,extra,projected,expandedMessages]);
  const focusedHere=focused?.sessionId===source?.id?focused:null;
  const nativeHere=nativeView?.id===source?.id?nativeView:null;
- const session=useMemo(()=>nativeHere?{...projected,messages:nativeHere.messages,messageWindow:nativeHere.window,workProjection:undefined,streaming:'',execution:{nodes:[],turns:[],segments:[]},executionWindow:null}:focusedHere?{...projected,messages:focusedHere.messages,workProjection:undefined,streaming:'',execution:focusedHere.execution,
-  sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular,[nativeHere,focusedHere,projected,regular]);
+ const session=useMemo(()=>nativeHere?{...projected,messages:nativeHere.messages,historyLoading:false,historyError:null,messageWindow:nativeHere.window,workProjection:undefined,streaming:'',execution:{nodes:[],turns:[],segments:[]},executionWindow:null}:focusedHere?{...projected,messages:focusedHere.messages,historyLoading:false,historyError:null,workProjection:undefined,streaming:'',execution:focusedHere.execution,
+  sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:{mode:'focus',status:'ready'},executionWindow:undefined}:regular,[nativeHere,focusedHere,projected,regular]);
  async function around(messageId,{jump=true,isCurrent=()=>true}={}){
   if(paging.current||!originalSource)return false;
   const id=originalSource.id,token=beginRead(id);setBusy('conversation');setError('');
