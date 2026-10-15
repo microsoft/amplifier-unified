@@ -162,3 +162,17 @@ new integration workflows are recorded separately in
 [the delta ledger](../../frontend/tests/standard-ux-inventory-deltas.json).
 The first delta covers #635's controlled per-tool Retry/Skip flow at its exact
 integration source, including the narrower evidence limits of that browser test.
+
+The functional execution ledger maps unchanged original browser assertions to
+zero-based expected-result indices, exact script hashes, layout/input contexts,
+and retained run logs. A result can be covered in one context while its other
+variants remain untested. Compound outcomes receive partial credit where an
+assertion proves only part of the sentence. API fixture setup is distinguished
+from a visible action under test; synthetic transport/media does not qualify a
+real provider, physical device, or external publication.
+
+The second inventory delta clarifies composer acceptance: the submitted text can
+clear into the durable local outbox before host acknowledgement. Its exact intent
+must remain recoverable, and an older receipt must never overwrite a newer draft.
+The frozen wording remains recorded beside the clarification. This aligns the
+checklist with the existing pending-message contract; it is not a product change.

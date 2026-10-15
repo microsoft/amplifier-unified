@@ -210,6 +210,45 @@
           ]
         }
       ]
+    },
+    {
+      "id": "delta.composer-local-acceptance",
+      "reason": "Root approved clarification after actual pending-send browser proof. Acceptance means durable local intent/outbox admission; it is not the later host acknowledgement. No production change.",
+      "sourceCommit": "1d993e0bb32bc90b75fc66f56f1b9014c2d63f87",
+      "expectedResultChanges": [
+        {
+          "workflow": "composer.send",
+          "expectedIndex": 2,
+          "previous": "Draft clears only on acceptance",
+          "current": "Submitted draft clears after durable local outbox acceptance; its exact intent remains recoverable while host acknowledgement is pending, and a newer draft is never overwritten.",
+          "supportingAssertions": [
+            {
+              "path": "frontend/tests/empty-host-browser.mjs",
+              "lines": [
+                84,
+                86,
+                91,
+                93,
+                97,
+                121,
+                127,
+                130
+              ]
+            },
+            {
+              "path": "frontend/tests/message-outbox-browser.mjs",
+              "lines": [
+                58,
+                69,
+                190,
+                192,
+                197
+              ]
+            }
+          ]
+        }
+      ],
+      "claims": []
     }
   ]
 }
