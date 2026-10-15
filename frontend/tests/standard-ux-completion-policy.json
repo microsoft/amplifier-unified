@@ -1102,6 +1102,320 @@
       "limits": [
         "Local owned synthetic filesystem; URL/credential policy remain separate required outcomes."
       ]
+    },
+    {
+      "workflow": "nav.refresh",
+      "expectedIndices": [
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Create one saved native record in the owned fixture",
+        "Activate public Refresh workspaces and chats",
+        "Observe named new chat without execution"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Pending/readable retained state is a separate partial outcome."
+      ]
+    },
+    {
+      "workflow": "nav.filters",
+      "expectedIndices": [
+        1,
+        3
+      ],
+      "browserSteps": [
+        "Open Search Filters",
+        "Choose archive/status/location filters and Sort",
+        "Compare exact canonical membership/counts and selected chat"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Every select value exercised; precise created/activity ordering remains partial in the all-choices outcome."
+      ]
+    },
+    {
+      "workflow": "nav.workspace-pin",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open workspace Details and Pin workspace",
+        "Use keyboard and pointer mixed chat/workspace reorder",
+        "Reload and compare exact pin order and selected chat"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Desktop controls only; touch pin reorder remains separately partial."
+      ]
+    },
+    {
+      "workflow": "delivery.outbox",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Submit input through controlled first-create refusal",
+        "Inspect retained outbox and retry original identity",
+        "Discard separate failed local intent without undoing accepted work"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic runtime and controlled transport failures."
+      ]
+    },
+    {
+      "workflow": "delivery.unknown",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Inspect unknown delivery",
+        "Check original input identity",
+        "Review or cancel explicit resend and reconcile after reload"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Controlled lost acknowledgements; no live provider."
+      ]
+    },
+    {
+      "workflow": "messages.share",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Share or save and review paged preview",
+        "Publish one-day local bearer share",
+        "Verify immutable bytes then revoke and controlled expiry"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Local synthetic share host; controlled elapsed time, no external distribution."
+      ]
+    },
+    {
+      "workflow": "starters.browse",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open workspace starter collection",
+        "Inspect protected built-in starter",
+        "Duplicate to editable custom identity and return through narrow Back"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "support.submit",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Submit reviewed report to synthetic service",
+        "Inspect accepted or unknown receipt without duplicate publication",
+        "Follow up on exact report and retain private draft"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Mocked GitHub destination; no external publication."
+      ]
+    },
+    {
+      "workflow": "smart-tools.auth",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open exact connection and review local consent",
+        "Inspect verified account and access",
+        "Disconnect/reconnect and explicitly review changed principal"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Local synthetic OAuth issuer; no real account."
+      ]
+    },
+    {
+      "workflow": "outputs.target",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open publishing targets",
+        "Save and inspect exact target identity",
+        "Confirm configuration alone does not deploy"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic deployment target."
+      ]
+    },
+    {
+      "workflow": "outputs.capture-preview",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Capture selected output",
+        "Inspect immutable reviewed version",
+        "Open owned loopback preview without publishing"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Owned local preview only."
+      ]
+    },
+    {
+      "workflow": "outputs.deploy",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Review captured release and explicit target",
+        "Deploy once and inspect exact receipt",
+        "Reconcile controlled unknown outcome and retain rollback target"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic deployment service; no external site publication."
+      ]
+    },
+    {
+      "workflow": "settings.destinations",
+      "expectedIndices": [
+        0,
+        1,
+        3
+      ],
+      "browserSteps": [
+        "Open public Settings navigation",
+        "Visit every inventoried standard destination",
+        "Close with selected chat and private draft retained"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Scope and effective-boundary assertions remain separately unrun."
+      ]
+    },
+    {
+      "workflow": "appearance.gallery",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Open public Appearance gallery",
+        "Apply offered appearance",
+        "Reload and inspect accepted saved selection"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Every palette readability and style-leak outcome remains separately required."
+      ]
+    },
+    {
+      "workflow": "appearance.library",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Save exact appearance copy",
+        "Change to a distinct baseline",
+        "Restore saved appearance explicitly"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Advanced CSS editing is supplemental, not standard-path credit."
+      ]
+    },
+    {
+      "workflow": "connections.signin",
+      "expectedIndices": [
+        0,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open connection and choose Sign in",
+        "Review synthetic issuer consent",
+        "Inspect account and explicit changed-account review"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Local fake OAuth issuer; expiry and denial remain separate gaps."
+      ]
+    },
+    {
+      "workflow": "smart-tools.invoke",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Open exact connected tool",
+        "Load current fields and enter arguments",
+        "Choose Run tool and inspect returned exact result"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic MCP server; invalid-input and unknown-outcome states remain separate gaps."
+      ]
+    },
+    {
+      "workflow": "nav.workspace-archive",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open exact workspace details",
+        "Archive then inspect Archived filter and reload",
+        "Restore while preserving original selected chat and saved files/history"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic saved owners; no running worker."
+      ]
+    },
+    {
+      "workflow": "nav.workspace-remove",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Review exact workspace registration removal",
+        "Cancel then explicitly remove intended registrations",
+        "Reload and verify originals survive and last registration removal is disabled"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Unavailable-path failure remains separately unrun."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
@@ -1199,6 +1513,12 @@
       "reason": "Individually map newly qualified root Work/support and actual workspace/decision public paths. Partial workspace identity remains partial; API-only storage entry and Advanced screen capture are not counted as ordinary entry completion.",
       "previousOrdinaryPaths": 44,
       "ordinaryPaths": 67
+    },
+    {
+      "at": "2026-10-15T17:48:59.893519+00:00",
+      "reason": "Map named passed ordinary delivery/share/appearance/publishing/authentication and settings-destination paths after exact assertions review. Unrun scope, error, capability and layout outcomes remain explicit. Advanced screen controls remain supplemental.",
+      "previousOrdinaryPaths": 73,
+      "ordinaryPaths": 87
     }
   ]
 }
