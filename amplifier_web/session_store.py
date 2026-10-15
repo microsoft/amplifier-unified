@@ -351,6 +351,7 @@ def _media_fork_bindings(messages, visible, source):
         descriptor = canonical.get(index)
         valid = bool(descriptor and claims == {index} and valid_id(row.get('id'))
                      and row.get('role') == 'assistant'
+                     and not row.get('displayOnly')
                      and not row.get('observation') and not row.get('observation_id')
                      and row.get('text') == descriptor['text']
                      and row.get('nativeMessageId') in (None, descriptor['id'])

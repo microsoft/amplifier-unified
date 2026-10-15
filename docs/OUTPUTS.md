@@ -18,8 +18,8 @@ Forks copy only linked outputs anchored to retained message IDs, reuse immutable
 
 `outputs.attachMedia` still requires current canonical assistant identity, exact
 workspace bytes/hash, structural media validation and fresh write authority after
-worker awaits. Resident browser `displayOnly` identities are rejected; the same
-exclusion in detached saved-alias qualification remains an open dependency.
+worker awaits. Resident and detached saved-alias `displayOnly` identities are
+rejected, including marker changes observed after qualification awaits.
 A saved output's historical origin is provenance, not a continuing
 live-transcript requirement: later append, rewrite, truncation, display eviction
 or source-file removal does not revoke the saved version.
@@ -32,16 +32,24 @@ device/inode/size/modification/change signature. HEAD checks indexed metadata
 without opening or decoding media. Registry/resource replacement or revoked
 client/conversation scope fails rather than borrowing another source.
 
-`outputs.read` returns bounded metadata, real historical origin and paged comments
-without hydrating display/execution or selecting a browser. Agent reads remain
+`outputs.list` and retained-media `outputs.read` resolve current scalar ownership
+through the existing history directory, including project/alias ambiguity,
+suppression, deletion and live owner changes. They do not admit a dormant owner
+or load its saved presentation/control body. The latter returns bounded metadata,
+real historical origin and paged comments without selecting a browser. Agent reads remain
 caller-conversation owned; an unbound read reports `unbound`, not playback evidence
 from another browser. Reports and `canvas.openGif` remain authenticated UI-only.
+Discovery uses the saved scalar media revision; an older summary without a
+recoverable keyed scalar reports revision unavailable rather than inventing zero.
+Exact retained metadata and byte access do not require that discovery revision.
 The existing Outputs detail uses the existing media viewer/download controls;
 only GIF has the existing Open in Canvas action.
 
 Unlink suppresses automatic discovery but retains exact authorized library/byte
 access. Relink changes only the relationship revision, not bytes, IDs or playback.
 Forks still require linked outputs and surviving origins at the existing cutoff.
+Display-only rows cannot establish new fork media ownership; invalid competing
+claims remain refusals rather than being silently dropped to admit a fallback.
 Existing GIF wrappers are remapped only to exact surviving output clones;
 malformed or cutoff wrappers are skipped before copying. Signed/reviewed transfer
 routes validate output ownership, bytes/structure and exact GIF references without

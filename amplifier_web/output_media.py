@@ -490,7 +490,9 @@ class Media:
     async def describe(self, sid, message_id):
         async with self.app.lock:
             self.client_scope(sid)
-            session = self.app._session(sid, hydrate=False)
+            session = self.outputs._owner(sid)
+            if session['mediaRevision'] is None:
+                raise ValueError('Saved media revision is unavailable; open the conversation to refresh its metadata.')
             if session.get('sessionKind', 'root') in ('worker', 'internal'):
                 # Discovery is empty for explicit host-classified non-roots.
                 # Identity, attachment, bytes and reports remain root-only.
@@ -616,13 +618,15 @@ class Media:
         record = self.app.clients.records.get(client)
         if not record or record.get('selectedSessionId') != sid:
             raise ValueError('This media requires its originating attached client conversation.')
-        self.app._session(sid, hydrate=False)
+        self.outputs._owner(sid)
         return client
 
     def descriptors(self, sid, message_id, proof=None):
         self.client_scope(sid)
-        session = self.app._session(sid, hydrate=False)
+        session = self.outputs._owner(sid)
         self.authority(session, 'ui')
+        if session['mediaRevision'] is None:
+            raise ValueError('Saved media revision is unavailable; open the conversation to refresh its metadata.')
         if (not isinstance(message_id, str) or not 0 < len(message_id) <= 200
                 or not message_id.strip() or any(ord(char) < 32 for char in message_id)):
             raise ValueError('Choose an exact stored media message ID.')
@@ -640,7 +644,7 @@ class Media:
     def guard(self, values, proof=None):
         sid = values['sessionId']
         self.client_scope(sid)
-        session = self.app._session(sid, hydrate=False)
+        session = self.outputs._owner(sid)
         self.authority(session, 'ui')
         record = self.outputs.record(sid, values['id'])
         retained_facts(record, sid)
@@ -655,20 +659,26 @@ class Media:
         return record
 
     def snapshot(self, values):
-        """Under the owner lock: registry, detached index and exact client."""
+        """Read-only scalar snapshot; publication still requires the owner lock."""
         from .resource_files import detach
         record = self.guard(values)
+        owner = self.outputs._owner(values['sessionId'])
         return (retained_facts(record, values['sessionId']),
                 detach(self.app.db, record['body']['$resource']),
-                self.client_scope(values['sessionId']))
+                self.client_scope(values['sessionId']),
+                {key: owner[key] for key in
+                 ('id', 'sessionKind', 'nativeProject', 'workspace', 'workingDirectory')})
 
     def metadata_snapshot(self, sid, identity):
         from .resource_files import detach
-        self.authority(self.app._session(sid, hydrate=False), 'ui')
+        owner = self.outputs._owner(sid)
+        self.authority(owner, 'ui')
         record = self.outputs.record(sid, identity)
         if record.get('id') != identity:
             raise ValueError('Retained media registry identity changed.')
-        return retained_facts(record, sid), detach(self.app.db, record['body']['$resource'])
+        return (retained_facts(record, sid), detach(self.app.db, record['body']['$resource']),
+                {key: owner[key] for key in
+                 ('id', 'sessionKind', 'nativeProject', 'workspace', 'workingDirectory')})
 
     async def metadata(self, sid, identity, args):
         """Agent ownership is caller-conversation scoped, not browser-bound."""
@@ -734,10 +744,17 @@ class Media:
         from .resource_files import settle_worker
         async with self.app.lock:
             before = self.snapshot(values)
-            record, source, _client = before
+            record, source, _client, _owner = before
+        def recheck():
+            # Nonpublishing metadata checks run synchronously on the DB owner
+            # thread. Never wait for app.lock while retaining a worker permit:
+            # canonical attachment can own that lock while awaiting a worker.
+            if self.snapshot(values) != before:
+                raise ValueError('Media source authority changed during read.')
         # Bounded workers also serialize cache decisions: no durable byte store.
         async with self.workers:
             signature = await settle_worker(_signature, source)
+            recheck()
             # _signature has just qualified the index. In-memory index identity
             # is its content digest; do not hash a body-sized Python key on-loop.
             key = (source.directory, source.identity,
@@ -750,16 +767,18 @@ class Media:
             else:
                 self.cache.pop(key, None)
                 data, signature = await settle_worker(_saved_bytes, source, record['sha256'])
+                recheck()
                 await settle_worker(_validate_retained_source, source, signature, data, record)
-                self.cache[key] = (data, signature, time.monotonic())
-                while len(self.cache) > 2 or sum(len(row[0]) for row in self.cache.values()) > 64 * 1024 * 1024:
-                    self.cache.popitem(last=False)
+                recheck()
             if await settle_worker(_signature, source) != signature:
                 self.cache.pop(key, None)
                 raise ValueError('Media backing file changed during read.')
+            recheck()
         async with self.app.lock:
-            if self.snapshot(values) != before:
-                raise ValueError('Media source authority changed during read.')
+            recheck()
+            self.cache[key] = (data, signature, time.monotonic())
+            while len(self.cache) > 2 or sum(len(row[0]) for row in self.cache.values()) > 64 * 1024 * 1024:
+                self.cache.popitem(last=False)
         return data
 
     async def head(self, values):
@@ -767,7 +786,7 @@ class Media:
         from .resource_files import settle_worker
         async with self.app.lock:
             before = self.snapshot(values)
-            record, source, _client = before
+            record, source, _client, _owner = before
         async with self.workers:
             await settle_worker(_signature, source)
         async with self.app.lock:

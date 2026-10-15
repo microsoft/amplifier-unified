@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import copy
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -71,6 +72,48 @@ class Outputs:
         self.store=OutputRegistry(app.db)
         from .output_media import Media
         self.media=Media(self)
+        self._owner_project = ContextVar('output_owner_project', default=None)
+
+    def _owner(self, sid, native_project=None):
+        """Current scalar owner facts, without admitting a saved view/control."""
+        if not isinstance(sid, str) or not sid.strip():
+            raise ValueError('Choose an explicit registered output conversation.')
+        owner = self.app.directory.resolve(sid, native_project if native_project is not None
+                                           else self._owner_project.get())
+        if owner is None:
+            raise ValueError('The output conversation is no longer registered in this project.')
+        live = next((row for row in self.app._state['sessions'] if row['id'] == owner['id']), None)
+        if owner.get('_deleting') or live is not None and dict.get(live, '_deleting'):
+            raise ValueError('This output conversation is being deleted.')
+        # Directory classification normalizes legacy kinds. A current explicit
+        # kind (including an invalid one) must not acquire root authority.
+        facts = {key: owner.get(key) for key in
+                 ('id', 'sessionKind', 'nativeProject', 'workspace', 'workingDirectory', 'mediaRevision')}
+        if live is not None:
+            facts['sessionKind'] = dict.get(live, 'sessionKind', 'root')
+            facts['mediaRevision'] = dict.get(live, 'mediaRevision', 0)
+        elif 'mediaRevision' not in owner:
+            # Older summaries may omit the scalar. Read only a keyed saved
+            # scalar, never load_owner's control or the $viewPayload body.
+            row = self.app.db.execute("""SELECT json_extract(value,'$.mediaRevision'),
+                json_type(value,'$.mediaRevision')
+                FROM state_records WHERE kind='session' AND id=?""", (owner['id'],)).fetchone()
+            facts['mediaRevision'] = row[0] if row and row[1] == 'integer' else None
+        revision = facts['mediaRevision']
+        if type(revision) is not int or revision < 0:
+            facts['mediaRevision'] = None  # unavailable, not an invented current zero
+        return facts
+
+    def metadata_action(self, action, args):
+        """Only registry-proven media reads bypass ordinary session admission."""
+        if action in {'outputs.list', 'outputs.mediaReport'}:
+            return True
+        if action == 'outputs.read' and isinstance(args.get('id'), str):
+            try:
+                return self.record(args.get('sessionId'), args['id']).get('kind') == 'media'
+            except ValueError:
+                pass
+        return False
 
     def record(self,sid,identity):
         record=self.store.read(identity)
@@ -161,6 +204,7 @@ class Outputs:
                         continue
                 elif not any(row.get('id') == message_id and row.get('role') == 'assistant'
                              and not row.get('observation') and not row.get('observation_id')
+                             and not row.get('displayOnly')
                              for row in target.get('messages', [])):
                     continue
             elif message_id not in kept:
@@ -182,8 +226,11 @@ class Outputs:
                 self.store.comment(clone['id'],{**comment,'forkSourceCommentId':comment['id']})
         return media_clones
 
-    async def dispatch(self,action,args,origin,command_id,*,image_identity=None):
+    async def dispatch(self,action,args,origin,command_id,*,image_identity=None,native_project=None):
         from .service import AppError
+        # Keep the validated project through every downstream metadata recheck.
+        # This is request context, never a cached owner or selected-chat scope.
+        token = self._owner_project.set(native_project)
         try:
             if action == 'outputs.attachMedia':
                 return await self.media.attach(args, origin, command_id)
@@ -191,17 +238,20 @@ class Outputs:
                 return await self.media.observe(args, origin)
             # Metadata needs only the owning registry and index, not a hydrated
             # display/execution snapshot or a selected browser.
+            if action == 'outputs.list':
+                async with self.app.lock:
+                    owner = self._owner(args['sessionId'])
+                    return {'accepted': True, 'result': self.store.list(owner['id'],
+                        include_unlinked=args.get('includeUnlinked', False),
+                        offset=args.get('offset', 0), limit=args.get('limit', 20))}
             if action == 'outputs.read':
                 async with self.app.lock:
-                    self.app._session(args['sessionId'], hydrate=False)
                     is_media = self.record(args['sessionId'], args['id']).get('kind') == 'media'
                 if is_media:
                     result = await self.media.metadata(args['sessionId'], args['id'], args)
                     return {'accepted': True, 'result': result}
             async with self.app.lock:
                 session=copy.deepcopy(self.app._session(args['sessionId']))
-                if action=='outputs.list':
-                    return {'accepted':True,'result':self.store.list(session['id'],include_unlinked=args.get('includeUnlinked',False),offset=args.get('offset',0),limit=args.get('limit',20))}
                 if action=='outputs.image':
                     result=self.image(session['id'],args['id'],args['sha256']);result.pop('_image')
                     result['imageDelivery']='Agent requests receive typed pixels at the next supported model boundary; this receipt is not pixels.'
@@ -351,3 +401,5 @@ class Outputs:
                 return {'accepted':True,'result':result}
         except (ValueError,KeyError,OSError) as exc:
             raise AppError(str(exc),409) from exc
+        finally:
+            self._owner_project.reset(token)

@@ -65,7 +65,7 @@ export function SessionHistoryControls({session,act,onLoadEarlier,hideEarlier=fa
 }
 
 export {A2UISurface} from './a2ui';
-export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSurface}){
+export function AgentCanvas({state,act,dispatch,suppressed=false,settingsSurface}){
  const settings=!!state.view?.settingsCanvas;
  const canvas=state.canvas||{},view=state.view||{},draft=view.canvasDraft||{},layout=usePanelLayout(state,act),panel=useRef(null),actRef=useRef(act);
  actRef.current=act;
@@ -107,7 +107,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
    {settings&&<div className="a-settings-canvas">{settingsSurface}</div>}
    <div key={state.selectedSessionId??'draft'} hidden={settings} style={{height:'100%'}}>
    {canvas.kind!=='settings'&&!!state.canvasWorkspace?.views?.length&&<McpAppVisibilityProvider visible={!suppressed&&!!canvas.open&&!draft.library&&!settings}><CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/></McpAppVisibilityProvider>}
-   <div className="a-canvas-overview-page" hidden={!draft.library&&hasContent}>{(draft.library||!hasContent)&&<ChatOverview state={state} act={act} changeDraft={changeDraft}/>}<section className="a-canvas-delivery" hidden={!draft.library&&hasContent} aria-label="Output actions"><details data-canvas-delivery="outputs" tabIndex={-1} open={draft.delivery==='outputs'} onToggle={event=>{if(event.currentTarget.open!==(draft.delivery==='outputs'))changeDraft({delivery:event.currentTarget.open?'outputs':null})}}><summary>Outputs &amp; review</summary><OutputSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={act}/></details><details data-canvas-delivery="publishing" tabIndex={-1} open={draft.delivery==='publishing'} onToggle={event=>{if(event.currentTarget.open!==(draft.delivery==='publishing'))changeDraft({delivery:event.currentTarget.open?'publishing':null})}}><summary>Publishing</summary><PublishingSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={dispatch}/></details></section></div>
+   <div className="a-canvas-overview-page" hidden={!draft.library&&hasContent}>{(draft.library||!hasContent)&&<ChatOverview state={state} act={act} changeDraft={changeDraft}/>}<section className="a-canvas-delivery" hidden={!draft.library&&hasContent} aria-label="Output actions"><details data-canvas-delivery="outputs" tabIndex={-1} open={draft.delivery==='outputs'} onToggle={event=>{if(event.currentTarget.open!==(draft.delivery==='outputs'))changeDraft({delivery:event.currentTarget.open?'outputs':null})}}><summary>Outputs &amp; review</summary><OutputSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={act} dispatch={dispatch}/></details><details data-canvas-delivery="publishing" tabIndex={-1} open={draft.delivery==='publishing'} onToggle={event=>{if(event.currentTarget.open!==(draft.delivery==='publishing'))changeDraft({delivery:event.currentTarget.open?'publishing':null})}}><summary>Publishing</summary><PublishingSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={dispatch}/></details></section></div>
 
   </div>
   </div>

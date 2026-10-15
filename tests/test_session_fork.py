@@ -60,6 +60,128 @@ async def test_fork_retained_gif_wrapper_remaps_only_exact_surviving_output(medi
     assert app.outputs.record(sid, saved['id'])['id'] == saved['id']
 
 
+@pytest.mark.parametrize('canonical', [False, True], ids=['legacy', 'canonical'])
+async def test_fork_excludes_new_display_only_origin_but_keeps_original_media_readable(
+        media_app, canonical):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    from test_output_media import media_args, gif
+    app = media_app
+    session = app._session()
+    sid = session['id']
+    native = [{'role': 'user', 'content': 'Keep the original animation'},
+              {'role': 'assistant', 'content': session['messages'][-1]['text']}]
+    store = SessionStore.for_app(app.data_dir, session['workspace'])
+    store.save(sid, native, {'bundle_name': session['bundle']}, preserve_system=True)
+    if canonical:
+        session.update(nativeProject=project_slug(session['workspace']), nativeIdentity=sid,
+                       runtimeSessionId=sid, historyManaged=False, historyLoaded=True)
+        session['nativeRevision'] = revision(session)
+        # Keep the real runtime-allocated UI ID with an exact saved binding.
+        session['messages'][-1].update(
+            nativeIndex=1, nativeMessageId=display_message(native[1], 1, session)['id'],
+            source='amplifier')
+    args = media_args(app)
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    original_record = copy.deepcopy(app.outputs.record(sid, saved['id']))
+    Path(session['workspace'], args['path']).unlink()
+    session['messages'][-1]['displayOnly'] = True
+    before_messages = copy.deepcopy(session['messages'])
+    raw = (store.directory(sid) / 'transcript.jsonl').read_bytes()
+    app.clients.attach('display-only-original')
+    values = {**saved, 'messageId': args['messageId']}
+    with app.clients.bind('display-only-original'):
+        assert await app.outputs.media.bytes(values) == gif()
+    await app.dispatch('session.fork', {'id': sid})
+    target = app._session()
+    assert target['id'] != sid
+    assert not any(row['kind'] == 'media'
+                   for row in app.outputs.store.list(target['id'])['items'])
+    assert any(row.get('displayOnly') and row['id'] == args['messageId']
+               for row in target['messages'])
+    assert app._session(sid)['messages'] == before_messages
+    assert app.outputs.record(sid, saved['id']) == original_record
+    assert (store.directory(sid) / 'transcript.jsonl').read_bytes() == raw
+    with app.clients.bind('display-only-original'):
+        assert await app.outputs.media.bytes(values) == gif()
+
+
+async def test_resident_canonical_tail_fork_keeps_target_media_owner_after_history_and_reload(
+        media_app):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    from test_output_media import media_args, gif
+    from test_service import Runtime
+    app = media_app
+    source = app._session()
+    sid = source['id']
+    native = [{'role': 'user', 'content': 'Earlier request'},
+              {'role': 'assistant', 'content': 'Earlier answer'},
+              {'role': 'user', 'content': 'Tail animation request'},
+              {'role': 'assistant', 'content': 'Tail animation answer'}]
+    store = SessionStore.for_app(app.data_dir, source['workspace'])
+    store.save(sid, native, {'bundle_name': source['bundle']}, preserve_system=True)
+    source.update(nativeProject=project_slug(source['workspace']), nativeIdentity=sid,
+                  runtimeSessionId=sid, historyManaged=False, historyLoaded=True,
+                  sharedHistoryOffset=2, sharedHistoryUserTurnOffset=1, sharedHistoryTotal=4)
+    source['nativeRevision'] = revision(source)
+    source['messages'] = [display_message(native[index], index, source) for index in (2, 3)]
+    args = media_args(app)
+    saved = (await app.dispatch('outputs.attachMedia', args))['result']
+    Path(source['workspace'], args['path']).unlink()
+    source_bytes = (store.directory(sid) / 'transcript.jsonl').read_bytes()
+    source_messages = copy.deepcopy(source['messages'])
+    await app.dispatch('session.fork', {'id': sid})
+    target = app._session()
+    tid = target['id']
+    clone, = [row for row in app.outputs.store.list(tid)['items'] if row['kind'] == 'media']
+    mid = clone['origin']['messageId']
+    assert tid != sid and clone['id'] != saved['id']
+    assert clone['forkSource'] == {
+        'sessionId': sid, 'outputId': saved['id'], 'sha256': saved['sha256']}
+    assert clone['sessionId'] == tid and clone['sha256'] == saved['sha256']
+    # A retained exact UI alias may survive the fork; it is not required to
+    # change spelling to the new canonical ID to retain target ownership.
+    assert mid == args['messageId']
+    assert next(row for row in target['messages'] if row['id'] == mid)['nativeIndex'] == 3
+    assert store.load(tid)[0] == native
+    target_bytes = (store.directory(tid) / 'transcript.jsonl').read_bytes()
+
+    async def check_owner(owner):
+        owner.clients.attach('resident-tail-owner')
+        with owner.clients.bind('resident-tail-owner'):
+            await owner.dispatch('session.select', {'id': tid})
+            # Exercise the canonical history owner, not an unchanged-stamp
+            # refresh that could skip its reader or a display-window fixture.
+            await owner.history.load(tid, canonical=True)
+            assert not owner._session(tid).get('historyError')
+            assert next(row for row in owner._session(tid)['messages']
+                        if row['id'] == mid)['nativeIndex'] == 3
+            items = (await owner.outputs.media.describe(tid, mid))['items']
+            item, = items
+            assert item['sessionId'] == tid and item['id'] == clone['id']
+            assert item['sha256'] == saved['sha256']
+            values = {**item, 'messageId': mid}
+            assert await owner.outputs.media.bytes(values) == gif()
+            with pytest.raises(ValueError):
+                await owner.outputs.media.bytes({**values, 'sessionId': sid})
+            with pytest.raises(ValueError):
+                await owner.outputs.media.bytes({**values, 'id': saved['id']})
+        assert owner.outputs.record(tid, clone['id'])['origin']['messageId'] == mid
+        assert (store.directory(tid) / 'transcript.jsonl').read_bytes() == target_bytes
+        assert (store.directory(sid) / 'transcript.jsonl').read_bytes() == source_bytes
+
+    await check_owner(app)
+    assert app._session(sid)['messages'] == source_messages
+    directory, workspace = app.data_dir, source['workspace']
+    await app.close()
+    reopened = AppService(directory, workspace=workspace, runtime=Runtime())
+    try:
+        await check_owner(reopened)
+    finally:
+        await reopened.close()
+
+
 def transcript():
     return [
         {'role':'system','content':'Original system context'},
@@ -482,7 +604,7 @@ def test_media_origin_map_tracks_receipt_insert_before_identical_assistant_rows(
     assert (store.directory(item['id']) / 'transcript.jsonl').read_bytes() == raw
 
 
-@pytest.mark.parametrize('conflict', ['text', 'role', 'observation', 'duplicate'])
+@pytest.mark.parametrize('conflict', ['text', 'role', 'observation', 'display-only', 'duplicate'])
 def test_media_origin_map_keeps_surviving_conflict_evidence(tmp_path, conflict):
     from amplifier_web.automatic_history import display_message
     rows = [{'role': 'user', 'content': 'First request'},
@@ -499,6 +621,8 @@ def test_media_origin_map_keeps_surviving_conflict_evidence(tmp_path, conflict):
         claimant['role'] = 'user'
     elif conflict == 'observation':
         claimant['observation'] = {'source': 'synthetic'}
+    elif conflict == 'display-only':
+        claimant['displayOnly'] = True
     else:
         claimant['id'] = 'proven-alias'
     # Claimant is after the edit cut: full copy must refuse the ambiguous

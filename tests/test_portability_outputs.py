@@ -478,11 +478,20 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         await target.close()
 
 
-@pytest.mark.parametrize('defect', ['bytes', 'dimensions', 'structure', 'wrapper-owner', 'wrapper-version', 'snapshot-owner'])
+@pytest.mark.parametrize(('defect', 'rejection'), [
+    ('bytes', 'Media body differs from its saved metadata or hash'),
+    ('dimensions', 'Media body differs from its saved metadata or hash'),
+    ('structure', 'GIF trailer is missing'),
+    ('wrapper-owner', 'Invalid retained media record or historical provenance'),
+    ('wrapper-version', 'Media reference must match its exact owning GIF output, version and hash'),
+    ('snapshot-owner', 'Invalid retained media record or historical provenance'),
+])
 async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_install(
-        tmp_path, monkeypatch, defect):
+        tmp_path, monkeypatch, defect, rejection):
     import base64
-    from amplifier_web import portability_data, resource_files
+    from unittest.mock import AsyncMock, Mock
+    from amplifier_portability.capsule import read_capsule, write_capsule
+    from amplifier_web import portability, portability_data, resource_files
     from amplifier_worktrees.git import digest
     app, target, source, destination, root, destrepo, sid, *_ = await setup_hosts(tmp_path, monkeypatch)
     try:
@@ -496,7 +505,13 @@ async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_insta
         wrapper = next(row for row in app.state['canvasArtifacts'] if row['kind'] == 'gif')
         snapshot = (await app.dispatch('outputs.attach', {'sessionId': sid, 'kind': 'canvas',
             'canvasId': wrapper['id'], 'title': 'GIF snapshot'}))['result']
-        payload = portability_data.capture(app, app._session(sid))
+        # Start with the ordinary locally paired, synthetic-host export. Only
+        # then change its media binding and sign with the same real fixture key.
+        # Authentication, task lineage and source authority are not stubbed.
+        receipt, _ = await export(app, target, sid, root)
+        envelope = read_capsule(Path(receipt['package']))
+        capsule_body = envelope['body']
+        payload = capsule_body['payload']
         record = next(row for row in payload['outputs'] if row['id'] == saved['id'])
         if defect == 'bytes':
             record['bytes'] += 1
@@ -531,11 +546,50 @@ async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_insta
             prepared = resource_files.prepare(body)
             payload['resources'][prepared.identity] = body
             row['body'] = {'$resource': prepared.identity, 'bytes': prepared.size}
-        before = target.db.execute('SELECT * FROM output_records').fetchall()
-        with pytest.raises(ValueError):
-            portability_data.validate(payload)
-        assert target.db.execute('SELECT * FROM output_records').fetchall() == before
-        assert target.state['canvasArtifacts'] == []
+        package = tmp_path / 'synthetic-malformed-media.json'
+        write_capsule(package, app.portability.node.sign(capsule_body))
+        host_env(monkeypatch, destination)
+        # Prove that this is a correctly signed malformed payload, rather than
+        # a signature rejection accidentally satisfying the negative test.
+        assert target.portability.node.verify(read_capsule(package), kind='capsule') == capsule_body
+        assert capsule_body['source'] == app.portability.node.identity['id']
+        assert capsule_body['destination'] == target.portability.node.identity['id']
+        assert capsule_body['sessionId'] == sid and capsule_body['generation'] == 1
+        tables = ('output_records', 'output_comments', 'output_receipts', 'state_resources')
+        before = {table: target.db.execute('SELECT * FROM ' + table + ' ORDER BY id').fetchall()
+                  for table in tables}
+        sessions = copy.deepcopy(target.state['sessions'])
+        canvas = copy.deepcopy(target.state['canvasArtifacts'])
+        receive = Mock(side_effect=AssertionError('Media validation must precede node.receive'))
+        restore = Mock(side_effect=AssertionError('Media validation must precede checkout creation'))
+        preflight = Mock(side_effect=AssertionError('Rejected media cannot reach installation'))
+        install = Mock(side_effect=AssertionError('Rejected media cannot install outputs'))
+        receipts = Mock(side_effect=AssertionError('Rejected media cannot install receipts'))
+        policy = Mock(side_effect=AssertionError('Rejected media cannot derive destination policy'))
+        checks = AsyncMock(side_effect=AssertionError('Rejected media cannot probe runtime/accounts'))
+        monkeypatch.setattr(target.portability.node, 'receive', receive)
+        monkeypatch.setattr(portability, 'restore_workspace', restore)
+        monkeypatch.setattr(portability_data, 'preflight_install', preflight)
+        monkeypatch.setattr(portability_data, 'install_outputs', install)
+        monkeypatch.setattr(portability_data, 'install_receipts', receipts)
+        monkeypatch.setattr(target.portability, 'destination_policy', policy)
+        monkeypatch.setattr(target.portability, 'destination_checks', checks)
+        with pytest.raises(AppError, match=rejection):
+            await target.dispatch('portability.stage', {
+                'path': str(package), 'repository': str(destrepo)}, include_state=False)
+        for effect in (receive, restore, preflight, install, receipts, policy):
+            effect.assert_not_called()
+        checks.assert_not_awaited()
+        assert {table: target.db.execute('SELECT * FROM ' + table + ' ORDER BY id').fetchall()
+                for table in tables} == before
+        assert target.state['sessions'] == sessions
+        assert target.state['canvasArtifacts'] == canvas
+        assert not target.portability.node.records(sid)
+        assert not target.portability.node.path(capsule_body['id']).exists()
+        assert not (target.portability.node.directory / 'checkouts' / capsule_body['id']).exists()
+        assert not (target.portability.node.directory / 'packages' / (capsule_body['id'] + '.json')).exists()
+        assert not list((destination / 'native').glob('projects/*/sessions/' + sid + '/transcript.jsonl'))
+        assert not app.runtime.workers and not target.runtime.workers
     finally:
         host_env(monkeypatch, source)
         await app.close()

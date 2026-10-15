@@ -1732,7 +1732,13 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
-        if resolved_target is not None:
+        output_metadata = self.outputs.metadata_action(action, args)
+        if output_metadata:
+            try:
+                self.outputs._owner(args['sessionId'], scope)
+            except ValueError as exc:
+                raise AppError(str(exc), 409) from None
+        elif resolved_target is not None:
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -1971,7 +1977,7 @@ class AppService:
         if action.startswith("voice.visual."):
             return await self.voice_visual.dispatch(action, args, command_id, origin)
         if action.startswith("outputs."):
-            return await self.outputs.dispatch(action,args,origin,command_id)
+            return await self.outputs.dispatch(action,args,origin,command_id,native_project=scope)
         if action.startswith('publishing.'):
             if origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
                 raise AppError('Publishing actions must target the calling conversation.', 409)
@@ -4420,7 +4426,14 @@ class AppService:
                 action_args.setdefault('id', session_id)
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
-                action_args.setdefault('nativeProject', native_project(self._session(session_id, hydrate=False)))
+                if self.outputs.metadata_action(args['action'], action_args):
+                    try:
+                        owner = self.outputs._owner(session_id, action_args.get('nativeProject'))
+                    except ValueError as exc:
+                        raise AppError(str(exc), 409) from None
+                    action_args.setdefault('nativeProject', owner['nativeProject'])
+                else:
+                    action_args.setdefault('nativeProject', native_project(self._session(session_id, hydrate=False)))
             if args['action'] == 'canvas.views.command' and action_args.get('action') == 'canvas.reference':
                 if action_args.get('args', {}).get('sessionId') != session_id:
                     raise AppError('References must target the calling conversation.', 409)
@@ -4429,6 +4442,7 @@ class AppService:
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
+            compact_output_metadata = self.outputs.metadata_action(args['action'], action_args)
             compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.environments.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
@@ -4483,12 +4497,12 @@ class AppService:
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
-                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_domain_receipt))
-            if args['action'] == 'outputs.read' and result.get('result', {}).get('kind') == 'media':
+                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_domain_receipt or compact_output_metadata))
+            if compact_output_metadata:
                 # A retained-media metadata read must not append an overview
                 # that hydrates unrelated cold messages/execution.
                 return {**result, 'state': {'revision': self.state['revision'], 'sessionId': session_id,
-                    '_stateAccess': {'note': 'Retained media metadata is complete. Use get_state explicitly for other app state.'}}}
+                    '_stateAccess': {'note': 'The output metadata receipt is complete. Use get_state explicitly for other app state.'}}}
             await self._flush_pending_progress()
             if compact_domain_receipt:
                 # The exact domain receipt already carries admission, correlation

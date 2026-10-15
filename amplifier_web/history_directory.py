@@ -27,7 +27,7 @@ COLUMNS = ('id', 'native_id', 'native_project', 'parent_id', 'native_parent_id',
 FIELDS = {
     'id', 'title', 'titleSource', 'nativeNameSource', 'nativeNameRevision', 'nativeNamePolicyRevision', 'autoName', 'naming',
     'description', 'bundle', 'workspace', 'workspaceId', 'workspaceAvailable',
-    'workingDirectory', 'executionRevision', 'executionHost', 'assignmentId', 'interruptionRevision',
+    'workingDirectory', 'executionRevision', 'executionHost', 'assignmentId', 'interruptionRevision', 'mediaRevision',
     'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt',
     'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
     'nativeRevision', 'turnCount', 'shared', 'historyManaged', 'historyLoaded',
