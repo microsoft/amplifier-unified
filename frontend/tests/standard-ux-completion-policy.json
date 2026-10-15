@@ -2489,6 +2489,155 @@
       "limits": [
         "Seeded package and local MCP only; no package installer/network authentication."
       ]
+    },
+    {
+      "workflow": "composer.bundle-unavailable",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Conversation bundle with retained unavailable selection",
+        "Observe delayed/error catalog",
+        "Retry explicitly and verify exact retained configuration"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "bundles.catalog",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open public bundle picker",
+        "Inspect explicit catalog failure",
+        "Retry without selecting another bundle"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "composer.removed-provider",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Remove saved provider through Settings",
+        "Open model controls and choose exact available replacement",
+        "Reload and verify no input or worker starts"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "appearance.layout",
+      "expectedIndices": [
+        2
+      ],
+      "browserSteps": [
+        "Change Plan location through Appearance",
+        "Open Canvas Chat overview",
+        "Inspect same plan and return to composer"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "settings.help",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Review actual Settings attention notice",
+        "Close or keep private edits",
+        "Verify only exact reviewed notice acknowledged"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "workspace.storage",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Request owned task storage",
+        "Inspect placement and real permission refusal",
+        "Reconcile lost acknowledgement and retire storage"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "support.attachments",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Stage local feedback attachment",
+        "Review exact pending content",
+        "Check unknown attachment using identical request identity"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.delete-managed",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open exact visible managed-chat deletion review",
+        "Cancel or confirm exact target",
+        "Reconcile lost result and refuse active ownership"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "workspace.cleanup",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open workspace deletion review",
+        "Confirm exact workspace path or cancel",
+        "Verify active and unowned data preserved"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "privacy.cleanup",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Review eligible saved work",
+        "Confirm exact selected cleanup",
+        "Verify active and native work preserved"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
