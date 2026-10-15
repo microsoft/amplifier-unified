@@ -829,6 +829,14 @@ class AppService:
 
     @measured('browser.snapshot')
     def browser_state(self, session_id=None):
+        # Full/session and non-web reads may hydrate an existing owner in place
+        # midway through projection. Only the bound web display is read-only.
+        client = self.clients.record()
+        if session_id is not None or client is None or client['kind'] != 'web':
+            return self._browser_state(session_id)
+        return self.directory.read_frame(self._browser_state, session_id)
+
+    def _browser_state(self, session_id=None):
         self._refresh_shared_preferences()
         client_id = self.clients.current.get()
         selected = session_id or self.state.get('selectedSessionId')

@@ -143,6 +143,14 @@ across selection and text updates; native/local generations, exact query inputs
 and database versions retain invalidation. Mutable transactions bypass reuse,
 while read snapshots keep their pinned view. Counts and first-page filtering can
 still inspect scalar directory rows; these are not constant-work queries.
+The bound web display prepares admitted scalar overlays once within each
+synchronous browser projection. Nested queries share that preparation only
+until the projection returns or raises; no scope survives an event-loop yield.
+The next frame observes in-place changes again. Different owner inputs, new
+admissions and durable writes invalidate preparation within the frame, while
+native/query generation checks remain active. Explicit hydrating session reads
+and non-web/full projections retain ordinary fresh preparation. Read callbacks
+must not mutate existing admitted rows inside a frame.
 Dedicated exact-summary and child-scope tests compare 270 and 27,000 native rows
 with local overlays, and separately 27,000 local owners. SQL instruction budgets
 and poisoned unrelated payloads verify that small requested sets do not traverse
