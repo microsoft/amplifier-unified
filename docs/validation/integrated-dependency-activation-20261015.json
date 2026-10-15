@@ -127,9 +127,9 @@
     "mounted-source-evidence/evidence/worker-events.jsonl": "34fb4558a4758fc35cf9ceeab8483071f1414a8f18100fc48f5ba6fe6f5279ce",
     "mounted-source-evidence/evidence/installed-proof.json": "6f40659f733a75a9e5baa8be34f06f43d7cc8f47306cba85555549e52edea82b",
     "mounted-source-evidence/evidence/work-probe.log": "a290a30b5dfbaae6b06333d68ab9fc17cbb15d4be8b6022856ed7d01d2f9c3cd",
-    "prepare.py": "0a1a673b2840ac86f38b2479d4790babd76da9ee3aefff62c58005329809e9fb",
     "namespace.py": "231ff952256290a5dc7b3cb621dccfb2a7d6a39057e364e060be0b7edecb6fcb",
-    "sitecustomize.py": "4b764956b51ef555f1791d24341a8fc5b4f9dc66b755cfe68532ec092e679702"
+    "sitecustomize.py": "4b764956b51ef555f1791d24341a8fc5b4f9dc66b755cfe68532ec092e679702",
+    "mounted-source-evidence/prepare.py": "0a1a673b2840ac86f38b2479d4790babd76da9ee3aefff62c58005329809e9fb"
   },
   "preparationNotes": [
     "Missing python-xlib wheel and universal-lock registry metadata were staged in private prerequisites before the network-disabled acceptance.",

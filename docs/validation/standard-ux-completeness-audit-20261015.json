@@ -9,12 +9,12 @@
     "workflows": 199,
     "outcomes": 669,
     "outcomeStatus": {
-      "covered-in-context": 614,
+      "covered-in-context": 615,
       "partially-observed": 37,
-      "not-run": 18
+      "not-run": 17
     },
     "workflowsWithOutcomeEvidence": 197,
-    "workflowsAllOutcomesObservedInContext": 164,
+    "workflowsAllOutcomesObservedInContext": 165,
     "ordinaryPathStatus": {
       "observed-in-context": 189,
       "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
@@ -455,5 +455,31 @@
       "privacy.file-policy:1"
     ],
     "remainingOutcomes": 55
+  },
+  "previousNamedWorkSnapshot": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 614,
+      "partially-observed": 37,
+      "not-run": 18
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 164,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "namedWorkOutcomeDelta": {
+    "receipt": "docs/validation/work-required-modules-20261015.json",
+    "resolvedOutcomes": [
+      "bundles.selection:2"
+    ],
+    "remainingOutcomes": 54
   }
 }
