@@ -484,6 +484,8 @@ class UpdateManager:
             self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
         else:
             service._save_changes(globals={'updates'})
+        from .update_restart import target
+        state['forceRestartTarget'] = target(self)
 
     async def confirm_readiness(self, health, expected=None):
         from .update_readiness import confirm_readiness
@@ -503,6 +505,8 @@ class UpdateManager:
             self.service.state['updates'].update(values)
             state = self.service.state['updates']
             state['blockers'] = self.blockers() if any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools')) else []
+            from .update_restart import target
+            state['forceRestartTarget'] = target(self)
             self.service._publish_changes(globals={'updates','settings'})
 
     def notify_idle(self):
@@ -601,10 +605,13 @@ class UpdateManager:
         return classify(self.home, rows)
 
     async def command(self, action, args=None, command_id=None):
-        if self.awaiting_restart() and action != 'featureInstall':return
+        if self.awaiting_restart() and action not in {'featureInstall', 'forceRestart'}:return
         previous_error=self.service.state['updates'].get('error')
         try:
-            if action == 'featureInstall':
+            if action == 'forceRestart':
+                from .app_updates import activate
+                await activate(self, force=args)
+            elif action == 'featureInstall':
                 await self.featureInstall(args['feature'], args['hostInstanceId'], command_id)
             elif action == 'smartToolRollback':
                 await self.smartToolRollback(args['id'])
@@ -623,6 +630,10 @@ class UpdateManager:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise
         except Exception as error:
+            from .update_restart import RestartRejected
+            if action == 'forceRestart' and isinstance(error, RestartRejected):
+                await self.publish(forceRestartResult={'requestId': command_id, 'status': 'rejected', 'detail': str(error)})
+                return
             # Feature requests own a durable per-request result. A rejected
             # concurrent request must not change an active update's work gate.
             if action == 'featureInstall':return

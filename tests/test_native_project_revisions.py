@@ -7,7 +7,7 @@ import pytest
 from amplifier_web.native_catalog import NativeCatalog, CatalogRows, CatalogPatchRows
 from amplifier_web.performance_diagnostics import PerformanceDiagnostics
 from amplifier_web.shell_resources import scope_for
-from test_shell_modules import service
+from test_shell_modules import service, settled_resources
 
 
 def project(path, *, identity='project', rows=()):
@@ -154,6 +154,7 @@ def test_repeated_probe_metadata_notifications_do_not_invalidate_chat_facts(tmp_
 async def test_empty_project_changes_reuse_root_pages_but_registered_workspace_changes_refresh(service, tmp_path, monkeypatch):
     assert service.history.index.diagnostics is service.performance_diagnostics
     catalog = NativeCatalog(tmp_path / 'native.sqlite3', tmp_path / 'home')
+    catalog.save({}, {}, {}, ())  # Establish the canonical writer receipt before measuring reuse.
     service._save_changes(sessions={'alpha', 'beta'})
     service.directory.bind(catalog)
     service.clients.attach('project-pages')
@@ -167,7 +168,7 @@ async def test_empty_project_changes_reuse_root_pages_but_registered_workspace_c
         owner = service.shell.resources
         owner.register('project-pages', 1, ['recentNavigation', 'pinnedNavigation', 'workspaceShortcuts',
                                           'workspaceExplorer'], scope_for(service.state))
-        first = owner.snapshot('project-pages')
+        first = await settled_resources(service, 'project-pages')
         frozen = deepcopy(first)
         prior = {}
         empty = project(tmp_path / 'new-workspace')
@@ -185,7 +186,7 @@ async def test_empty_project_changes_reuse_root_pages_but_registered_workspace_c
         calls.clear()
         service.state['workspaces'].append(deepcopy(empty['workspace']))
         service._publish_changes(globals={'workspaces'})
-        following = owner.snapshot('project-pages')
+        following = await settled_resources(service, 'project-pages')
         assert following != first
         assert any('workspaceExplorer' in call for call in calls)
         assert (following['instances']['workspaces']['resources']['workspaceExplorer']['value'] !=

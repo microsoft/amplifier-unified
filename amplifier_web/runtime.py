@@ -93,6 +93,10 @@ class SessionInUseError(RuntimeError):
         )
 
 
+class HandoffNotStartedError(SessionInUseError):
+    """The initial writer check refused handoff before any release effect."""
+
+
 def _worker_error(data):
     if data.get("code") == "session_busy":
         return SessionInUseError(data.get("owner"))
@@ -1099,7 +1103,10 @@ class RuntimeManager:
                 held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
             except SessionBusyError as busy:
                 if not row or busy.owner.get('app') != 'amplifier-unified' or busy.owner.get('pid') != row['process'].pid:
-                    raise SessionInUseError(busy.owner) from None
+                    # No release request, Stop or placement mutation occurred.
+                    # Later failures must remain uncertain, even if they also
+                    # report a busy writer after the release boundary.
+                    raise HandoffNotStartedError(busy.owner) from None
                 released_owner = {key: busy.owner[key] for key in ('hostname', 'app', 'pid', 'acquisition_id') if key in busy.owner}
                 result = await request_release(store, expected_owner=busy.owner, request_id=request_id, requester_app='Unified checkout handoff', timeout=30)
                 if result.status != 'released':

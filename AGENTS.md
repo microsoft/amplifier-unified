@@ -59,3 +59,5 @@ with their owners instead of silently changing their promised behavior.
 Keep archive feedback/navigation in the bundled interactive controls, not the
 public `session.archive` action. Qualify late-response navigation races, the
 noncurrent-chat path, Undo, and the raw action's selection-preserving behavior.
+Release the interactive mutation lock on its confirmed receipt, independently of
+navigation. Qualify stalled navigation with usable Undo and superseding intent.

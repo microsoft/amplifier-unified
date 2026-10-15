@@ -9,6 +9,7 @@ import {RefreshCw,Download,Undo2,Check,ArrowUpCircle,AlertCircle,Pin,Clock3,Load
 import './updates.css';
 import {UpdateDiagnostics,UpdateIssueSummary} from './update-diagnostics.jsx';
 import {UpdateSupport} from './update-support.jsx';
+import {UpdateRestart} from './update-restart.jsx';
 import {ReleaseHistory,ReleaseNotices} from './release-notes.jsx';
 const sourceName=row=>row.label.split('/').pop().replace(/^amplifier-(bundle-|module-)/,'');
 const alphabetical=(a,b)=>sourceName(a).localeCompare(sourceName(b),undefined,{sensitivity:'base',numeric:true})||a.label.localeCompare(b.label)||String(a.ref||'').localeCompare(String(b.ref||''))||String(a.current||'').localeCompare(String(b.current||''));
@@ -66,7 +67,7 @@ export function UpdateSettings({state,act}){
    <p className="a-update-version-line">Amplifier {application.current||'version not reported'}{application.latest&&application.latest.replace(/^v/,'')!==application.current?.replace(/^v/,'')?' · Latest '+application.latest:''}{updates.lastCheck?' · Checked '+new Date(updates.lastCheck*1000).toLocaleString():''}</p>
 
   </div>
-   {overview.waiting&&!!updates.blockers?.length&&<details className="a-update-work" data-part="update-blockers"><summary>View active work ({updates.blockers.length})</summary><ul>{updates.blockers.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul><p className="a-caption">Idle chats alone don’t hold up the update. Background workers, calls, and tools may still need to finish.</p></details>}
+   {overview.waiting&&!!updates.blockers?.length&&<details className="a-update-work" data-part="update-blockers"><summary>View active work ({updates.blockers.length})</summary><ul>{updates.blockers.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul><p className="a-caption">Idle chats alone don’t hold up the update. Background workers, calls, and tools may still need to finish.</p><UpdateRestart updates={updates} act={act}/></details>}
   {overview.tone!=='working'&&<ReadWhenVisible item={unread.find(item=>item.id==='updates:error')} act={act}><ResultNotice phase={resultPhase} message={resultPhase==='error'?resultMessage:''}/></ReadWhenVisible>}
   <AppReloadNotice/>
   {application.canInstall===false&&<p className="a-ai-hint" role="status">This is a development preview. App updates are deployed by its owner; this preview cannot replace the installed app.</p>}

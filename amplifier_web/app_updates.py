@@ -284,17 +284,25 @@ async def _stage(manager, *, selected=None):
                      generation=generation, componentDigest=components.digest(graph),
                      detail='Same app and existing components preserved. Waiting for idle guarded activation.')
 
-async def activate(manager):
+async def activate(manager, *, force=None):
     async with manager.service.runtime_lifecycle():
-        await _activate_serialized(manager)
+        await _activate_serialized(manager, force=force)
 
 
-async def _activate_serialized(manager):
+async def _activate_serialized(manager, *, force=None):
+    if force is not None:
+        from .update_restart import require, RestartRejected
+        require(manager, force)
+        if manager.lock.locked():
+            raise RestartRejected('An update operation is already running. Review it before confirming again.')
     if manager.lock.locked() or manager.closed:return
     async with manager.lock:
         selected = (manager.service.state['updates'].get('pendingApp') or {}).get('featureSelection')
-        try:await _activate(manager)
+        try:await _activate(manager, force=force)
         except Exception as error:
+            from .update_restart import RestartRejected
+            if isinstance(error, RestartRejected):
+                raise
             if isinstance(selected,dict) and isinstance(selected.get('requestId'),str):
                 from .app_features import record
                 await record(manager, selected['requestId'], 'error', detail='Feature activation failed validation. No installation was replayed; inspect the update diagnostics.')
@@ -345,7 +353,7 @@ async def installed_target():
         pass
     return uv,str(public_launcher),python,previous
 
-async def _activate(manager):
+async def _activate(manager, *, force=None):
     release=manager.service.state['updates'].get('pendingApp')
     if not release:return
     revision=release.get('revision','')
@@ -400,7 +408,7 @@ async def _activate(manager):
             from .app_features import require_preserved_components
             require_preserved_components(graph, host_graph)
     async with manager.service.lock:
-        if manager.busy():return
+        if force is None and manager.busy():return
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
     uv,executable,installed_python,previous=await manager.diagnostics.run('target-discovery',installed_target)
     helper_python=marker.parent/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
@@ -410,8 +418,15 @@ async def _activate(manager):
         candidate_graph=await manager.diagnostics.run('candidate-components-recheck',components.read_graph,process,helper_python)
         if candidate_graph!=graph:
             raise ValueError('The candidate components changed after validation; stage a new update')
+    if force is not None:
+        from .application_generations import supports
+        if not generation or not supports(Path(previous['installation'])):
+            raise ValueError('Force restart requires a qualified immutable application generation. Wait for work to finish on this installation.')
     async with manager.service.lock:
-        if manager.busy():return
+        if force is not None:
+            from .update_restart import require
+            require(manager, force)
+        if force is None and manager.busy():return
         if selected:
             # Candidate and target probes await external processes. Recheck the
             # serving baseline after those waits, at final activation admission.
@@ -426,11 +441,22 @@ async def _activate(manager):
                 'extras':extras, 'dependencyDigest':components.digest([row for row in graph if row['name']!='amplifier-unified'])}
         if selected:
             replacement.update(featureSelection=selected, dependencyDigest=replacement['qualification']['dependencyDigest'])
+        if force is not None:
+            replacement['forceRestart'] = {key: force[key] for key in ('hostInstanceId', 'revision', 'generation', 'attemptId')}
         # Persist this marker before uv can change the active environment. Every
         # error, cancellation and process exit must retain the admission fence.
         manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
         manager.service._publish_changes(globals={'updates'})
     try:
+        if force is not None:
+            # The durable replacement gate precedes interruption. Runtime.close
+            # fences preparations, drains owned workers and records shutdown; it
+            # never clears checkout uncertainty or resubmits accepted inputs.
+            await manager.diagnostics.run('forced-runtime-stop', manager.service.runtime.close)
+            runtime = manager.service.runtime
+            if (getattr(runtime, 'workers', None) or getattr(runtime, '_preparations', None)
+                    or getattr(runtime, 'has_pending_operations', lambda: False)()):
+                raise RuntimeError('Runtime shutdown was not confirmed; the update remains fenced.')
         if selected:
             from .app_features import record
             await record(manager, selected['requestId'], 'activating', detail='Installing the qualified same-app feature addition.')
@@ -476,6 +502,7 @@ async def _activate(manager):
     await manager.publish(phase='activating',pendingApp=None,pendingReplacement=None,appAvailable=False,error=None,
         pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId'],
                         'sourceInstanceId':manager.running_identity['instanceId'],'requestedAt':time.time(),
+                        **({'forceRestart':replacement['forceRestart']} if 'forceRestart' in replacement else {}),
                         **({'qualification':replacement['qualification']} if 'qualification' in replacement else {}),
                         **({'featureSelection':selected,'dependencyDigest':components.digest([row for row in graph if row['name']!='amplifier-unified'])} if selected else {})},detail='Application installed. Restarting the local host…')
     if selected:

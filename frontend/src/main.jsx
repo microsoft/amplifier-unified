@@ -546,14 +546,15 @@ function App(){
  if(!archiveAction.current)archiveAction.current=createArchiveAction({
   getState:()=>pendingView.current.apply(latest.current),getRevision:()=>archiveRevision.current,dispatch,
   onChange:setArchiveFeedback,
-  navigate:async(patch,isCurrent)=>{
+  navigate:async(patch,isCurrent,isActive)=>{
    if(!isCurrent()||settingsNavigation.current?.hasUnsaved())return {accepted:false};
    const revision=archiveRevision.current,id=latest.current?.selectedSessionId;
    // The browse itself paints an optimistic surface, so its queued guard uses
    // intent revision rather than comparing that surface with the old chat.
-   const result=await dispatch('view.update',{patch},{archiveIsCurrent:()=>archiveRevision.current===revision&&latest.current?.selectedSessionId===id});
-   if(result.accepted&&archiveRevision.current===revision)requestAnimationFrame(()=>{
-    if(archiveRevision.current!==revision)return;
+   const ownsNavigation=()=>isActive()&&archiveRevision.current===revision&&latest.current?.selectedSessionId===id;
+   const result=await dispatch('view.update',{patch},{archiveIsCurrent:ownsNavigation});
+   if(result.accepted&&ownsNavigation())requestAnimationFrame(()=>{
+    if(!ownsNavigation())return;
     const heading=root.current?.querySelector('[data-part="work-browser"] h1');
     if(heading){heading.tabIndex=-1;heading.focus()}
    });

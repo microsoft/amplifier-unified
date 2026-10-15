@@ -17,7 +17,7 @@ export function createArchiveAction({getState,getRevision,dispatch,navigate,onCh
   const id=chat.id;if(pending.size)return;
   const operation=++sequence,state=getState(),visit=archiveVisit(state,getRevision());
   const leaving=archive&&state?.selectedSessionId===id&&(state?.view?.workSurface||'chat')==='chat';
-  const destination=archiveDestination(state,chat),isCurrent=()=>operation===sequence&&archiveVisit(getState(),getRevision())===visit;
+  const destination=archiveDestination(state,chat),isActive=()=>operation===sequence,isCurrent=()=>isActive()&&archiveVisit(getState(),getRevision())===visit;
   pending.add(id);update(operation,{id,title:chat.title||'Untitled chat',phase:'pending',text:archive?'Archiving…':'Restoring…'});
   let receipt;
   try{
@@ -31,21 +31,19 @@ export function createArchiveAction({getState,getRevision,dispatch,navigate,onCh
   }catch(error){
    const rejected=error.status>=400&&error.status<500&&error.status!==408;
    update(operation,{id,phase:rejected?'error':'unknown',text:rejected?error.message:'Could not confirm the change. Check Archived chats before trying again.'});return;
-  }finally{
-   if(receipt?.accepted!==true||receipt.result?.id!==id||receipt.result?.archived!==archive){pending.delete(id);publish()}
-  }
-  try{
-   update(operation,{id,title:chat.title||'Untitled chat',phase:'success',archive,text:archive?'Chat archived':'Chat restored'});
-   if(leaving&&isCurrent()){
-    // Navigation is a separate outcome: a failed browse must not claim archive failed.
-    try{
-     const result=await navigate(destination,isCurrent);
-     if(result?.accepted===false)update(operation,{...notice,text:'Chat archived. Your current view was kept.'});
-    }catch{
-     update(operation,{...notice,text:'Chat archived. Could not open the chat list.'});
-    }
-   }
   }finally{pending.delete(id);publish()}
+  // The mutation is finished. Navigation must never hold Undo or other changes.
+  const success={id,title:chat.title||'Untitled chat',phase:'success',archive,text:archive?'Chat archived':'Chat restored'};
+  update(operation,success);
+  if(leaving&&isCurrent()){
+   // Navigation is a separate outcome: a failed browse must not claim archive failed.
+   try{
+    const result=await navigate(destination,isCurrent,isActive);
+    if(result?.accepted===false)update(operation,{...success,text:'Chat archived. Your current view was kept.'});
+   }catch{
+    update(operation,{...success,text:'Chat archived. Could not open the chat list.'});
+   }
+  }
  }
  return {run,dismiss:()=>{sequence++;notice=null;publish()}};
 }

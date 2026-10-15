@@ -3,6 +3,7 @@ import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {openSettingsPage} from './browser-settings.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/archive-feedback';
@@ -70,6 +71,49 @@ try{
  await action('session.select',{id:sid});
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveText('Draft is preserved');
  await expect(page.locator('[data-part="composer"]')).toContainText('draft.txt');
+ // A renderer's edit exists only in component memory, not a saved artifact.
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
+ await action('canvas.show',{kind:'markdown',title:'Editable archive example',content:'# Original source'});
+ const manifest={id:'example.archive-dirty-editor',label:'Unsaved archive editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
+ const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");return React.createElement("label",null,"Unsaved archive edit",React.createElement("input",{value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
+ const digest=(await action('shell.packages.stage',{manifest,source})).result.digest;
+ assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
+ await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
+ const canvasEdit=page.locator('[data-canvas-view="primary"]').getByLabel('Unsaved archive edit');
+ await canvasEdit.fill('UNSAVED CANVAS ARCHIVE INPUT');
+ const inspectViews=async()=>(await action('canvas.views.inspect')).result.views;
+ await expect.poll(async()=>(await inspectViews()).find(v=>v.viewId==='primary')?.dirty).toBe(true);
+ const viewTarget=v=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,v[key]]));
+ const originalViews=(await inspectViews()).map(viewTarget);
+ await headerArchive();await page.waitForFunction(()=>window.amplifier.getState().view.workSurface==='workspace');
+ await expect(canvasEdit).toBeHidden();
+ await page.locator('[data-archive-notice]').getByRole('button',{name:'Undo',exact:true}).click();
+ await expect(page.locator('[data-archive-notice]')).toContainText('Chat restored');
+ await action('session.select',{id:sid});
+ await expect(canvasEdit).toHaveValue('UNSAVED CANVAS ARCHIVE INPUT');
+ assert.deepEqual((await inspectViews()).map(viewTarget),originalViews);
+ assert.equal((await state()).canvas.content,'# Original source');
+ await page.screenshot({path:output+'/unsaved-canvas.png'});
+ // Explicit fixture cleanup only after proving the input survived the round trip.
+ await action('canvas.views.recover',viewTarget((await inspectViews()).find(v=>v.viewId==='primary')));
+ await action('canvas.close');
+ // A private invalid JSON edit must stay in the existing Settings mount.
+ await openSettingsPage(page,'providers');
+ const settings=page.locator('.a-settings-experience[data-settings-page="providers"]');
+ await settings.getByRole('button',{name:'Add provider',exact:true}).click();
+ await settings.getByRole('button',{name:'Show advanced configuration',exact:true}).click();
+ const settingsEdit=settings.locator('[id$="provider-config"]');
+ await settingsEdit.fill('{"unsaved-archive-input":');
+ await headerArchive();
+ await expect(page.locator('[data-archive-notice]:visible')).toContainText('Chat archived. Your current view was kept.');
+ await expect(settings).toBeVisible();await expect(settingsEdit).toHaveValue('{"unsaved-archive-input":');
+ assert.equal((await state()).view.workSurface||'chat','chat');
+ assert.ok(!JSON.stringify(await state()).includes('{"unsaved-archive-input":'));
+ await page.screenshot({path:output+'/unsaved-settings.png'});
+ // Restore the synthetic invalid draft before continuing independent cases.
+ await settingsEdit.fill('{}');
+ await action('session.restore',{id:sid});
+ await action('canvas.close');
  mode='reject';await headerArchive();
  await expect(page.locator('[data-archive-notice]')).toContainText('Synthetic archive rejection');
  assert.equal((await state()).view.workSurface||'chat','chat');
@@ -91,6 +135,12 @@ try{
  const workspaceBefore=workspaceRequests;
  await headerArchive();
  await expect(page.locator('[data-archive-notice]')).toContainText('Chat archived');
+ // The confirmed mutation cannot be locked behind a queued, stalled browse.
+ const restoresBefore=restoreCalls;
+ await page.locator('[data-archive-notice]').getByRole('button',{name:'Undo',exact:true}).click();
+ await expect(page.locator('[data-archive-notice]')).toContainText('Chat restored');
+ assert.equal(restoreCalls,restoresBefore+1);
+ await page.getByRole('button',{name:'Dismiss archive notification'}).click();
  await page.evaluate(()=>{window.newerNavigation=window.amplifier.dispatch('view.update',{patch:{workSurface:'chats'}})});
  releaseNavigation();releaseNavigation=null;
  await page.evaluate(()=>Promise.all([window.heldNavigation,window.newerNavigation]));
@@ -98,6 +148,7 @@ try{
  await action('session.restore',{id:sid});
  // A row action for another chat doesn't leave the current conversation.
  await action('session.select',{id:sid});await action('session.pin',{id:other,pinned:true});
+ await page.getByRole('button',{name:'Other example',exact:true}).first().hover();
  await page.getByRole('button',{name:'Details and actions for Other example',exact:true}).first().click();
  await page.getByRole('button',{name:'Archive Other example',exact:true}).click();
  await expect(page.locator('[data-archive-notice]')).toContainText('Chat archived');
@@ -118,5 +169,5 @@ try{
  const after=await page.request.get(url+'/fixture').then(r=>r.json());
  assert.deepEqual(after.started,before.started);assert.deepEqual(after.stopped,before.stopped);assert.deepEqual(after.sent,before.sent);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,archiveCalls,restoreCalls,pending:true,workspaceAndManagedDestination:true,undo:true,explicitRejection:true,http200Rejection:true,roundtripRace:true,queuedNavigationRace:true,noncurrentRow:true,rawApiUnchanged:true,peerUnchanged:true,draftAndAttachmentPreserved:true,narrow:true,noRuntimeLifecycleChanges:true}));
+ console.log(JSON.stringify({passed:true,archiveCalls,restoreCalls,pending:true,workspaceAndManagedDestination:true,undo:true,explicitRejection:true,http200Rejection:true,roundtripRace:true,queuedNavigationRace:true,stalledNavigationUndo:true,unsavedCanvasRetained:true,unsavedSettingsRetained:true,noncurrentRow:true,rawApiUnchanged:true,peerUnchanged:true,draftAndAttachmentPreserved:true,narrow:true,noRuntimeLifecycleChanges:true}));
 }finally{release?.();releaseNavigation?.();await browser?.close();fixture.kill()}

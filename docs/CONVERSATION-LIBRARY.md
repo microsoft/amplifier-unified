@@ -17,7 +17,10 @@ The previously selected chat remains retained behind the list; drafts and
 attachments are not cleared. Archiving from a list does not change that view.
 If the person navigates while archiving, a late response never redirects them.
 Unsaved Settings edits keep that view open with an explicit archive confirmation.
-Only one interactive archive or restore runs at a time so its outcome is not hidden.
+Only one interactive archive or restore mutation runs at a time so its outcome is
+not hidden. A confirmed mutation releases that lock before navigating: Undo and
+other archive controls remain usable even if opening the list stalls. A later
+operation or notice dismissal invalidates the old browse and its focus change.
 Undo restores only the archived chat; it does not reopen it. Rejections stay
 in place with an error; an unconfirmed outcome is not retried automatically.
 Raw `session.archive` calls, including `app_control` and browser integrations,

@@ -6,7 +6,7 @@ import pytest
 from amplifier_web.performance_diagnostics import PerformanceDiagnostics
 from amplifier_web.shell_resources import scope_for
 from test_shell_resources import owner, register
-from test_shell_modules import service
+from test_shell_modules import service, settled_resources
 
 
 def observe(owner):
@@ -88,7 +88,7 @@ async def test_only_actual_changed_globals_report_resource_invalidations(service
     with service.clients.bind('diagnostic-client'):
         owner = service.shell.resources
         owner.register('diagnostic-client', 1, ['sidebarRecent'], scope_for(service.state))
-        first = owner.snapshot('diagnostic-client')
+        first = await settled_resources(service, 'diagnostic-client')
         before = service.performance_diagnostics.snapshot()['shellResourceRebuilds']['total']
         service._publish_changes(globals={'workspaces', 'sharedHistory'})
         assert owner.snapshot('diagnostic-client') is first

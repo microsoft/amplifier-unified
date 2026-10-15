@@ -4,12 +4,12 @@ import {archiveDestination,createArchiveAction} from '../src/archive-action.js';
 
 const chat={id:'a',title:'Example',workspace:'/example',workspaceId:'w'};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
-function fixture(dispatch){
+function fixture(dispatch,navigate){
  let state={selectedSessionId:'a',selectedWorkspaceId:'w',workspaces:[{id:'w',path:'/example'}],view:{workSurface:'chat',draft:'kept'}},revision=0,feedback;
  const calls=[],navigations=[];
  const action=createArchiveAction({getState:()=>state,getRevision:()=>revision,onChange:value=>{feedback=value},
   dispatch:async(name,args)=>{calls.push([name,args]);return dispatch?dispatch(name,args):{accepted:true,result:{id:args.id,archived:name==='session.archive'}}},
-  navigate:async(patch,isCurrent)=>{assert.ok(isCurrent());navigations.push(patch);return {accepted:true}}});
+  navigate:async(patch,isCurrent,isActive)=>{assert.ok(isCurrent());navigations.push(patch);return navigate?navigate(patch,isCurrent,isActive):{accepted:true}}});
  return {action,calls,navigations,get feedback(){return feedback},get state(){return state},set state(value){state=value},move:()=>revision++};
 }
 test('pending is immediate, guards repeats across archive/restore, then navigates after exact receipt',async()=>{
@@ -79,3 +79,26 @@ test('dismiss does not resurrect a pending result or redirect',async()=>{
  wait.resolve({accepted:true,result:{id:'a',archived:true}});await run;
  assert.equal(f.feedback.notice,null);assert.equal(f.navigations.length,0);
 });
+for(const next of ['undo','other','dismiss'])for(const outcome of ['rejected','thrown']){
+ test(`held navigation releases mutation lock; ${next} supersedes late ${outcome} browse`,async()=>{
+  const held=deferred(),entered=deferred();let ownsNavigation;
+  const f=fixture(undefined,(patch,isCurrent,isActive)=>{ownsNavigation=isActive;entered.resolve();return held.promise});
+  const first=f.action.run(chat);await entered.promise;
+  assert.equal(f.feedback.notice.text,'Chat archived');assert.deepEqual(f.feedback.pending,[]);
+  assert.equal(ownsNavigation(),true);
+  if(next==='undo')await f.action.run(chat,false);
+  if(next==='other')await f.action.run({...chat,id:'b'});
+  if(next==='dismiss')f.action.dismiss();
+  assert.equal(ownsNavigation(),false);
+  const latest=f.feedback.notice;
+  if(next==='undo')assert.deepEqual(f.calls.at(-1),['session.restore',{id:'a'}]);
+  if(next==='other')assert.deepEqual(f.calls.at(-1),['session.archive',{id:'b'}]);
+  if(next==='dismiss')assert.equal(latest,null);
+  assert.deepEqual(f.feedback.pending,[]);
+  f.move(); // A newer view cannot be overwritten by the old navigation.
+  if(outcome==='thrown')held.reject(Error('Late navigation failure'));else held.resolve({accepted:false});
+  await first;
+  assert.deepEqual(f.feedback.notice,latest);assert.deepEqual(f.feedback.pending,[]);
+  assert.equal(f.calls.length,next==='dismiss'?1:2); // No mutation replay.
+ });
+}
