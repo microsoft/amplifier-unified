@@ -65,7 +65,7 @@ def configuration(app):
             raise ValueError('The operator configuration must be an object.')
         if value.get('enabled') is not True:
             return None, 'disabled', 'Test environments are disabled on this host.'
-        if set(value) - {'enabled', 'installationId', 'commit', 'dockerHost', 'image'}:
+        if set(value) - {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost', 'image', 'maxRunning', 'maxInstances', 'minFreeBytes'}:
             raise ValueError('The operator configuration contains unsupported settings.')
         if not DTU_COMMIT or value.get('commit') != DTU_COMMIT:
             raise ValueError('The managed backend is not pinned to this app’s qualified revision.')
@@ -80,13 +80,26 @@ def configuration(app):
         python = root / 'venv' / 'bin' / 'python'
         if installation.get('python') != str(python) or not python.is_file() or root.is_symlink() or (root / 'venv').is_symlink():
             raise ValueError('The exact managed backend interpreter is unavailable.')
+        backend = value.get('backend', 'docker')
+        if backend == 'incus':
+            if any(key in value for key in ('dockerHost', 'image', 'maxRunning', 'maxInstances', 'minFreeBytes')):
+                raise ValueError('Incus settings belong in its explicit backend configuration.')
+            from .incus_environment_worker import validate_configuration
+            incus = validate_configuration(value.get('incus'))
+            return {**value, 'backend': 'incus', 'incus': incus, 'python': str(python)}, 'ready', 'Isolated Linux environment on the configured Incus host; offline network and no host source mounts.'
+        if backend != 'docker' or 'incus' in value:
+            raise ValueError('Choose one explicitly configured test backend.')
         docker = value.get('dockerHost', '')
         if not isinstance(docker, str) or not docker.startswith('unix:///') or '\x00' in docker or '..' in Path(docker[7:]).parts:
             raise ValueError('Only an explicitly configured local Docker Unix socket is supported.')
         image = value.get('image', APPROVED_IMAGE)
         if image != APPROVED_IMAGE:
             raise ValueError('Only the app’s approved Python image digest is supported.')
-        return {**value, 'image': image, 'python': str(python)}, 'ready', 'Isolated Linux Python environment; offline network and no host source mounts.'
+        for key in ('maxRunning', 'maxInstances', 'minFreeBytes'):
+            if key in value and (type(value[key]) is not int or value[key] < 0):
+                raise ValueError('Capacity policy values must be nonnegative integers.')
+        return {**value, 'image': image, 'python': str(python),
+            'admissionRoot': str(Path.home() / '.cache' / 'amplifier-test-admission')}, 'ready', 'Isolated Linux Python environment; offline network and no host source mounts.'
     except (OSError, ValueError, KeyError, TypeError):
         return None, 'unavailable', 'The managed Linux test host needs setup, or its approved backend configuration changed.'
 
@@ -141,7 +154,15 @@ def remove_installation(home, identity, folder, *, ignore_errors=False):
 def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None):
     with installation_lock(home, installation) if installation else nullcontext(), closing(storage.connect(home)) as db, db:
         db.execute('BEGIN IMMEDIATE')
-        if db.execute("SELECT 1 FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=? LIMIT 1", (sid, KIND)).fetchone():
+        prior = db.execute("SELECT body FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=? LIMIT 1", (sid, KIND)).fetchone()
+        if prior:
+            row = json.loads(prior[0])
+            # A crash can occur after reserving local storage but before the
+            # queue links it. Only the same unadmitted intent may recover it.
+            if (not row.get('backendAdmitted') and row.get('commandId') == request_id
+                    and row['owner'] == actor and row['source'] == source
+                    and row['backendKey'] == backend_key and row['workspaceId'] == workspace):
+                return row
             raise ValueError('This task already owns an environment. Inspect or remove it before starting another.')
         if db.execute("SELECT COUNT(*) FROM allocations WHERE status!='retired'").fetchone()[0] >= storage.MAX_ACTIVE:
             raise ValueError('The resource owner capacity has been reached.')
@@ -157,20 +178,28 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
 
 def invoke(config, home, row, action, args):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
-    folder = storage.directory(home, row)
-    payload = {'action': action, 'root': str(folder), 'source': row['source'],
+    folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
+              if action == 'capacity' else storage.directory(home, row))
+    if action == 'capacity':
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = {'action': action, 'root': str(folder), 'source': row.get('source'),
                'snapshot': row.get('snapshot'),
-               'operationId': row['launchOperationId'], 'universeId': row.get('universeId'),
-               'dockerHost': config['dockerHost'], 'image': config['image'],
+               'operationId': row.get('launchOperationId'), 'universeId': row.get('universeId'),
+               'dockerHost': config.get('dockerHost'), 'image': config.get('image'),
+               'rootOwner': row.get('sessionId'),
                'requestId': args.get('requestId'), 'command': args.get('command'),
-               'timeoutSeconds': args.get('timeoutSeconds', 60)}
+               'timeoutSeconds': args.get('timeoutSeconds', 60),
+               **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
     helper = Path(__file__).with_name('test_environment_worker.py')
+    if config.get('backend') == 'incus':
+        helper = Path(__file__).with_name('incus_environment_worker.py')
+        payload['incus'] = config['incus']
     environment = {'PATH': os.defpath, 'HOME': str(folder), 'LANG': 'C.UTF-8'}
     process = subprocess.Popen([config['python'], '-I', str(helper)], stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     output, errors = bytearray(), bytearray()
     drained = False
-    deadline = time.monotonic() + (650 if action == 'start' else 300 if action == 'prepare' else 30 if action == 'read' else args.get('timeoutSeconds', 60) + 150)
+    deadline = time.monotonic() + (650 if action == 'start' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity'} else args.get('timeoutSeconds', 60) + 150)
     try:
         process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
@@ -209,6 +238,36 @@ def invoke(config, home, row, action, args):
         process.stderr.close()
 
 
+def capacity(app, config):
+    try:
+        result = invoke(config, app.data_dir, {}, 'capacity', {})
+        return result['capacity'] if result.get('ok') else {'available': False, 'blockers': [{'code': 'backend_unavailable'}]}
+    except (OSError, ValueError, TimeoutError):
+        return {'available': False, 'blockers': [{'code': 'capacity_unknown'}]}
+
+
+def confirmed_result(row, request):
+    return (request.get('state') in {'completed', 'failed'}
+            and request.get('resourceId') == row['id']
+            and request.get('sessionId') == row['sessionId']
+            and request.get('action') in {'workspace.environments.' + action for action in ('start', 'execute', 'stop', 'remove')}
+            and isinstance(request.get('result'), dict))
+
+
+def project_result(home, row, request):
+    """Rebuild resource metadata from its exact receipt without another effect."""
+    result = request['result']
+    action = request['action'].rsplit('.', 1)[-1]
+    changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
+    if action == 'start' and (result.get('admissionDenied') or result.get('effectAdmitted') is False):
+        changes['backendAdmitted'] = False
+    environment_state = ('running' if result.get('ok') else 'unknown') if action == 'execute' else result.get('status', 'unknown')
+    if action == 'remove' and result.get('ok') and environment_state == 'removed':
+        changes['status'] = 'retired'
+    changes.update(pendingRequest=None, environmentState=environment_state, lastOperation=request, reason=result.get('message'))
+    return save(home, row, **changes)
+
+
 def effect(app, row, action, args, config, request, admit):
     home, sid = app.data_dir, row['sessionId']
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
@@ -220,6 +279,10 @@ def effect(app, row, action, args, config, request, admit):
         row = get(home, sid, row['id'])
         if action != 'start' and row['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
+        if row.get('pendingRequest') and row['pendingRequest'] != request['requestId']:
+            prior = app.operations.requests.read(sid, row['pendingRequest'])
+            if confirmed_result(row, prior):
+                row = project_result(home, row, prior)
         if row['backendKey'] != config_key(config):
             raise ValueError('The approved backend changed. Restore its exact configuration before managing this environment.')
         if action == 'start':
@@ -251,24 +314,34 @@ def effect(app, row, action, args, config, request, admit):
         else:
             admitted = True
             result = invoke(config, home, row, action, args)
-        changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
-        state = 'completed' if result.get('ok') else 'outcome_unknown' if admitted else 'failed'
-        if action == 'execute':
-            environment_state = 'running' if result.get('ok') else 'unknown'
-            if result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
-                state = 'failed'
-        else:
-            environment_state = result.get('status', 'unknown')
-        if action == 'remove' and result.get('ok') and environment_state == 'removed':
-            changes['status'] = 'retired'
+        not_admitted = result.get('admissionDenied') or result.get('effectAdmitted') is False
+        state = 'completed' if result.get('ok') else 'failed' if not_admitted else 'outcome_unknown' if admitted else 'failed'
+        if action == 'execute' and result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
+            state = 'failed'
         request = app.operations.requests.finish(request, state, resourceId=row['id'], result=result,
             message=result.get('message', 'The result is retained; this request will not replay.'))
-        row = save(home, row, **changes, pendingRequest=None, environmentState=environment_state,
-                   lastOperation=request, reason=result.get('message'))
+        row = project_result(home, row, request)
         return {'resource': public(home, row), 'request': request}
     except BaseException as exc:
         # Hold the physical owner lock through final persistence. A rejected
         # competing request must never change the active owner's resource.
+        try:
+            recorded = app.operations.requests.read(sid, request['requestId'])
+        except (OSError, ValueError, sqlite3.Error):
+            recorded = {}
+        if confirmed_result(row, recorded):
+            # The receipt and resource projection have separate commit points.
+            # Retry only the projection; never downgrade or replay a known effect.
+            request = recorded
+            try:
+                if locked:
+                    row = project_result(home, get(home, sid, row['id']), request)
+            except (OSError, ValueError, sqlite3.Error):
+                row = {**row, 'observation': {'status': 'unverified'},
+                       'reason': 'The operation result is saved, but environment metadata could not be updated. Inspect again to repair the metadata; the operation will not replay.'}
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            return {'resource': public(home, row), 'request': request}
         request = app.operations.requests.finish(request, 'outcome_unknown' if admitted else 'failed', resourceId=row['id'],
             message=('The operation did not finish with a confirmed result. Inspect retained state; do not repeat it automatically.'
                      if admitted else 'The operation was not admitted. Read the current environment and authority before trying a new request.'))
@@ -305,12 +378,18 @@ def read(app, sid, config):
                                 reason='Preparation ended before any environment launch. Local source and evidence are retained.')
                     if row.get('pendingRequest'):
                         request = app.operations.requests.read(sid, row['pendingRequest'])
-                        if request['state'] == 'admitting':
-                            request = app.operations.requests.finish(request, 'outcome_unknown',
-                                message='The operation owner stopped before recording completion. Nothing was replayed.')
-                        row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
-                            lastOperation=request,
-                            reason='The operation owner stopped before recording completion. Nothing was replayed.')
+                        if confirmed_result(row, request):
+                            row = project_result(home, row, request)
+                        else:
+                            if request['state'] == 'admitting':
+                                request = app.operations.requests.finish(request, 'outcome_unknown',
+                                    message='The operation owner stopped before recording completion. Nothing was replayed.')
+                            row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
+                                lastOperation=request,
+                                reason='The operation owner stopped before recording completion. Nothing was replayed.')
+                    if row['status'] == 'retired':
+                        result.append(public(home, row))
+                        continue
                     if config and row.get('backendAdmitted') and row['backendKey'] == config_key(config) and storage.observe(home, row)['observation'] == 'present':
                         try:
                             observed = invoke(config, home, row, 'read', {})
@@ -369,7 +448,8 @@ async def dispatch(app, action, args, origin, caller, authority):
                 raise AppError('The task moved; refresh its environments.', 409)
             return {'accepted': True, 'result': {'capability': {'status': availability, 'reason': reason,
                 'profiles': [{'id': PROFILE, 'label': 'Offline Linux Python'}],
-                'source': source.get('workingDirectory') or source['workspace']}, 'items': items, 'nextOffset': None}}
+                'source': source.get('workingDirectory') or source['workspace']}, 'items': items, 'nextOffset': None,
+                'checks': [app.test_queue.public(item) for item in app.test_queue.rows(sid=sid, limit=20)]}}
         guard()
         if config is None:
             raise AppError(reason, 409)

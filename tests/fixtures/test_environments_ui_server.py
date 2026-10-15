@@ -40,7 +40,7 @@ async def main(home, port):
     workspace = home / 'workspace'
     workspace.mkdir()
     (workspace / 'check.py').write_text("print('workspace check passed')\n")
-    calls, states, mode = [], {}, {'executeTimeout': False}
+    calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True}
     lock = threading.Lock()
     config = {'python': '/fixture/managed/python', 'dockerHost': 'unix:///fixture/docker.sock', 'image': environments.APPROVED_IMAGE}
     environments.configuration = lambda app: (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.')
@@ -66,6 +66,9 @@ async def main(home, port):
                 value['result'] = {'exit_code': 0, 'stdout': 'workspace check passed\n', 'stderr': '', 'stdout_truncated': False, 'stderr_truncated': False}
             return value
     environments.invoke = invoke
+    environments.capacity = lambda app, config: {'available': mode['capacityAvailable'],
+        'counts': {'active': 0 if mode['capacityAvailable'] else 1}, 'limits': {'max_running': 1},
+        'blockers': [] if mode['capacityAvailable'] else [{'code': 'execution_capacity'}]}
     app = await create_app(home, workspace=workspace, runtime=Runtime(), voice=False, background_updates=False)
     app['control_token'] = TOKEN
     app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
@@ -88,6 +91,10 @@ async def main(home, port):
         value = await request.json()
         with lock:
             mode['executeTimeout'] = bool(value.get('executeTimeout', value.get('mode') == 'execute-timeout'))
+            if 'capacityAvailable' in value:
+                mode['capacityAvailable'] = bool(value['capacityAvailable'])
+        service.test_queue.backoff.clear()
+        service.test_queue.wakeup.set()
         return web.json_response(mode)
     app.router.add_get('/fixture/environments', observations)
     app.router.add_post('/fixture/environment-mode', change_mode)
@@ -112,6 +119,12 @@ async def serve(home, port):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=0)
+    parser.add_argument('--interactive', action='store_true', help='Enable fixture-only login for manual browser acceptance on loopback.')
     options = parser.parse_args()
+    if options.interactive:
+        # This disposable fixture has no real account, provider or backend data.
+        # Preserve the real login/cookie/CSRF flow for computer-use acceptance.
+        from amplifier_web import auth
+        auth.authenticate_pam = lambda username, password: username == 'fixture' and password == TOKEN
     with tempfile.TemporaryDirectory(prefix='amplifier-environments-ui-') as temporary:
         asyncio.run(serve(Path(temporary), options.port))

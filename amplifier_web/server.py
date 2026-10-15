@@ -128,6 +128,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service.schedules.start()
     service.collaboration.start()
     service.worktrees.start()
+    service.test_queue.start()
     service.history.start()
     service.event_log_view.start()
     service.performance_diagnostics.start()

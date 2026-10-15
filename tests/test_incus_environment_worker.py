@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from amplifier_web import incus_environment_worker as worker
+from amplifier_web.incus_environment_worker import cli as qualified_cli
 
 
 def payload(tmp_path, action='read'):
@@ -105,6 +106,76 @@ def test_capacity_refusal_is_definitive_without_source_attempt(tmp_path, backend
     assert result['admissionDenied']
     assert not (tmp_path / 'source-attempt.json').exists()
     assert not any(args[0] in {'exec','file'} for kind,args in backend[0] if kind == 'incus')
+
+
+@pytest.mark.parametrize('code', ['approved_image_missing', 'approved_image_unavailable'])
+def test_image_prerequisite_refusal_is_known_and_not_capacity_retry(tmp_path, backend, monkeypatch, code):
+    original_cli = worker.cli
+    # Exercise the actual CLI receipt classifier even though other backend
+    # calls use the fixture. No raw backend diagnostic is exposed to the model.
+    monkeypatch.setattr(worker, 'run', lambda *args, **kwargs: {
+        'exit_code': 1, 'truncated': False, 'stdout': json.dumps({'error': code}), 'stderr': 'private backend diagnostic'})
+    def cli(config, env, args, timeout=30):
+        if args[0] == 'launch':
+            return qualified_cli(config, env, args, timeout)
+        return original_cli(config, env, args, timeout)
+    monkeypatch.setattr(worker, 'cli', cli)
+    result = worker.execute_call(payload(tmp_path, 'start'))
+    assert result['code'] == code and result['status'] == 'not-started'
+    assert not result['effectAdmitted'] and not result['admissionDenied']
+    assert 'approved local image' in result['message']
+    assert 'private backend diagnostic' not in json.dumps(result)
+    assert not (tmp_path / 'source-attempt.json').exists()
+    assert not any(args[0] in {'exec', 'file'} for kind, args in backend[0] if kind == 'incus')
+
+
+@pytest.mark.parametrize('observation,code', [([], 'approved_image_missing'), (None, 'approved_image_unavailable'), ('timeout', 'approved_image_unavailable'), ([{'fingerprint': 'a' * 64}], None)])
+def test_old_qualified_backend_checks_exact_image_before_fresh_launch(tmp_path, backend, monkeypatch, observation, code):
+    value = payload(tmp_path, 'start')
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES['0.4.0']
+    backend[1]['launch'] = 'not_recorded'
+    original = worker.incus
+    def incus(config, env, args, *extra, **kwargs):
+        if args[0] == 'image':
+            backend[0].append(('incus', args))
+            assert args == ['image', 'list', 'local:', 'a' * 64, '--format=json']
+            if observation == 'timeout':
+                raise worker.BackendFailure('timeout', 'The image lookup timed out.')
+            return {'exit_code': 0, 'stdout': json.dumps(observation), 'truncated': False}
+        return original(config, env, args, *extra, **kwargs)
+    monkeypatch.setattr(worker, 'incus', incus)
+    result = worker.execute_call(value)
+    launches = [args for kind, args in backend[0] if kind == 'cli' and args[0] == 'launch']
+    if code:
+        assert result['code'] == code and not result['effectAdmitted'] and not result['admissionDenied']
+        assert not launches
+    else:
+        assert result['ok'] and len(launches) == 1
+
+
+def test_old_unknown_launch_is_not_reclassified_by_missing_image(tmp_path, backend, monkeypatch):
+    value = payload(tmp_path, 'start')
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES['0.4.0']
+    backend[1]['launch'] = 'unknown'
+    original = worker.cli
+    def cli(config, env, args, timeout=30):
+        if args[0] == 'launch':
+            raise worker.BackendFailure('launch_unknown', 'Original launch remains uncertain.')
+        return original(config, env, args, timeout)
+    monkeypatch.setattr(worker, 'cli', cli)
+    result = worker.execute_call(value)
+    assert result['code'] == 'launch_unknown' and result['effectAdmitted']
+    assert not any(args[0] == 'image' for _, args in backend[0])
+
+
+@pytest.mark.parametrize('action', ['read', 'stop', 'remove'])
+def test_old_owner_inspection_and_cleanup_do_not_require_base_image(tmp_path, backend, action):
+    value = payload(tmp_path, action)
+    value['incus']['packageSha256'] = worker.QUALIFIED_PACKAGES['0.4.0']
+    if action == 'remove':
+        backend[1].update(instance='Stopped', launch='stopped')
+    assert worker.execute_call(value)['ok']
+    assert not any(args[0] == 'image' for _, args in backend[0])
 
 
 def test_partial_source_is_not_installed_again(tmp_path, backend):
@@ -204,7 +275,8 @@ def test_package_digest_changes_and_rejects_symlink(tmp_path):
         worker.package_digest(package)
 
 
-def test_configuration_binds_exact_code_and_preserves_operator_total(tmp_path, monkeypatch):
+@pytest.mark.parametrize('version', ['0.4.0', '0.4.1'])
+def test_configuration_binds_exact_code_and_preserves_operator_total(tmp_path, monkeypatch, version):
     package = tmp_path / 'installed'
     package.mkdir()
     (package / '__init__.py').write_text('# qualified source')
@@ -220,12 +292,17 @@ def test_configuration_binds_exact_code_and_preserves_operator_total(tmp_path, m
         'packageSha256': worker.package_digest(package), 'incusExecutable': str(incus),
         'project': 'qualified', 'image': 'a' * 64, 'configDir': str(tmp_path / 'config'),
         'admissionDir': str(tmp_path / 'admission')}
-    monkeypatch.setattr(worker, 'QUALIFIED_PACKAGE_SHA256', config['packageSha256'])
+    monkeypatch.setattr(worker, 'QUALIFIED_PACKAGES', {version: config['packageSha256']})
     monkeypatch.setattr(worker, 'run', lambda *args, **kwargs: {
         'exit_code': 0, 'truncated': False,
-        'stdout': json.dumps({'version': '0.4.0', 'directory': str(package)})})
+        'stdout': json.dumps({'version': version, 'directory': str(package)})})
     monkeypatch.setenv('AMPLIFIER_DTU_MAX_INSTANCES', '15')
-    assert worker.validate_configuration(config)['maxInstances'] == 15
+    qualified = worker.validate_configuration(config)
+    assert qualified == {**config, 'maxInstances': 15, 'interpreter': sys.executable, 'packageDirectory': str(package)}
+    monkeypatch.setattr(worker, 'QUALIFIED_PACKAGES', {'other-version': config['packageSha256']})
+    with pytest.raises(ValueError, match='qualified generation'):
+        worker.validate_configuration(config)
+    monkeypatch.setattr(worker, 'QUALIFIED_PACKAGES', {version: config['packageSha256']})
     (package / '__init__.py').write_text('# changed source')
     with pytest.raises(ValueError, match='qualified generation'):
         worker.validate_configuration(config)

@@ -298,7 +298,7 @@ class Collaboration:
         session = self.service._session(sid)
         task = session.get('task') or self.service.coordination.task(sid)
         waiting = self.service.db.execute("""SELECT count(*) FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','workspace.tests.submit','worktree.handoff')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND (json_extract(receipt,'$.subscription.status') IN ('waiting','reserved','backpressured')
                 OR json_extract(receipt,'$.subscription.open')=1)
@@ -642,6 +642,9 @@ class Collaboration:
                     return reason
             if receipt.get('dependencyRequestId'):
                 dependency = self.receipt(receipt['dependencyRequestId'])
+                if dependency.get('commandAction') == 'workspace.tests.submit':
+                    if reason := self.service.test_queue.continuation_guard(dependency):
+                        return reason
                 if dependency.get('commandAction') == 'worktree.handoff':
                     reason = self.service.worktrees.continuation_guard(dependency)
                     if reason:

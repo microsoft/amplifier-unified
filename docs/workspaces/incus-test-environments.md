@@ -24,17 +24,40 @@ Its `incus` object contains:
 | `daemonFingerprint` | Optional exact server certificate fingerprint; when supplied, every action verifies it. |
 | `maxRunning`, `maxInstances`, `minFreeBytes` | Optional nonnegative operator limits. An omitted value preserves the operator environment policy, then the legacy default. |
 
-The app qualifies legacy version `0.4.0` from bundle PR
-[#37](https://github.com/microsoft/amplifier-bundle-digital-twin-universe/pull/37).
-The reviewed Python package digest is
-`5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39`.
+The app accepts these exact reviewed version and Python package digest pairs:
+
+| Version | Package digest |
+| --- | --- |
+| `0.4.0` | `5875826fc5f7dcb3eb70709b20043cb5b7ee6632bbb7c471246013e42cbe7f39` |
+| `0.4.1` | `b70849c08aff3b8103e078ecf99d25180ac2afe0330ee7d44f72f88e7538df06` |
+
+Version `0.4.0` introduced capacity admission in bundle
+[PR #37](https://github.com/microsoft/amplifier-bundle-digital-twin-universe/pull/37).
+Version `0.4.1` adds an exact offline image check before launch admission in
+[PR #38](https://github.com/microsoft/amplifier-bundle-digital-twin-universe/pull/38).
 `package_digest()` in the adapter calculates it from sorted package-relative
-Python paths and their content hashes. The app verifies both this fixed pin and
+Python paths and their content hashes. The app verifies the exact version/pin pair and
 the installed bytes on every helper invocation. The launcher must use an explicit
 Python interpreter; normal virtual-environment interpreter symlinks are accepted.
 Operators retain and protect that exact installation, its dependencies, client
 configuration and admission directory while any owned resource remains.
 Validation does not create instances or alter the daemon.
+
+Updating Unified preserves the normalized configuration and ownership identity of
+an existing qualified `0.4.0` installation. Stop and remove its owned environments
+before changing that installation or switching the operator configuration to a
+new backend generation. An app upgrade does not authorize substituting a new
+backend configuration for an existing owner's recorded configuration.
+
+An auto-updating cached image can disappear when Incus refreshes its cache. Use
+an explicitly approved, task-owned local image copy with `cached: false` and
+`auto_update: false`, and pin its exact fingerprint. Do not change shared cache
+policy. A missing or unobservable approved image fails before a new launch; it
+does not consume an active slot or trigger capacity retries. The adapter supplies
+this preflight for older qualified backends. Existing uncertain launch receipts
+remain uncertain, and inspection, stop and removal do not depend on the base image
+remaining available. Selecting a replacement image requires explicit operator
+configuration and a new request; the adapter never substitutes one automatically.
 
 The legacy defaults separate 15 active/starting instances, 256 total retained
 instances, and a 10 GiB storage-pool free-space floor. An explicit existing
