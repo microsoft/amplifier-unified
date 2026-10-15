@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 import empty_host_ui_server as fixture
 from amplifier_web.setup import SetupManager
@@ -57,6 +58,20 @@ def prepare(home):
             raise ValueError('Local fixture import failed') from error
 
     workspace_provisioning._git = local_clone
+
+    original_reconcile = workspace_provisioning.reconcile
+
+    def delayed_reconcile(*args):
+        if (home / 'hold-inspection').exists():
+            (home / 'inspection-entered').write_text('entered')
+            deadline = time.monotonic() + 5
+            while not (home / 'release-inspection').exists():
+                if time.monotonic() > deadline:
+                    raise ValueError('Synthetic inspection release was not supplied')
+                time.sleep(.01)
+        return original_reconcile(*args)
+
+    workspace_provisioning.reconcile = delayed_reconcile
 
 
 # Synthetic retained authority is prepared explicitly; the production review

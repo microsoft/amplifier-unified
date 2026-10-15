@@ -59,10 +59,26 @@ export function StarterSettings({state,act,navigate}){
 }
 
 export function WorkspaceReadiness({state,act,workspaceId}){
- const workspace=state.workspaces?.find(row=>row.id===(workspaceId||state.selectedWorkspaceId)),setup=workspace?.setup;
- const [error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const workspace=state.workspaces?.find(row=>row.id===(workspaceId||state.selectedWorkspaceId)),projected=workspace?.setup;
+ const [error,setError]=useState(''),[busy,setBusy]=useState(false),[observed,setObserved]=useState(null);
+ const visit=useRef(0),busyRef=useRef(false);
+ useEffect(()=>{visit.current++;busyRef.current=false;setBusy(false);setError('');setObserved(null);return()=>{visit.current++}},[workspace?.id]);
+ // The command receipt can precede its subscription projection. Keep the
+ // newest exact setup observation, scoped to this workspace, for explicit Retry.
+ const setup=observed&&projected&&observed.workspaceId===workspace?.id&&observed.setup.id===projected.id&&observed.setup.revision>projected.revision?observed.setup:projected;
+ const perform=async action=>{
+  if(busyRef.current||!setup)return;
+  busyRef.current=true;setBusy(true);setError('');const current=visit.current,owner=workspace.id;
+  try{
+   const value=await run(act,action,{workspaceId:owner,...(action==='workspace.setup.retry'?{expectedRevision:setup.revision}:{})});
+   if(current!==visit.current)return;
+   if(action==='workspace.setup.reconcile'&&value?.inspectionStatus!=='complete')throw Error('Inspection is not confirmed. Inspect retained imports again before retrying setup.');
+   if(value?.id!==setup.id||!Number.isInteger(value.revision))throw Error('The setup observation changed. Inspect this workspace again.');
+   setObserved({workspaceId:owner,setup:value});
+  }catch(err){if(current===visit.current)setError(err.message)}
+  finally{if(current===visit.current){busyRef.current=false;setBusy(false)}}
+ };
+ const retry=()=>perform('workspace.setup.retry'),inspect=()=>perform('workspace.setup.reconcile');
  if(!setup)return null;
- const retry=async()=>{setBusy(true);setError('');try{await run(act,'workspace.setup.retry',{workspaceId:workspace.id,expectedRevision:setup.revision})}catch(err){setError(err.message)}finally{setBusy(false)}};
- const inspect=async()=>{setBusy(true);setError('');try{await run(act,'workspace.setup.reconcile',{workspaceId:workspace.id})}catch(err){setError(err.message)}finally{setBusy(false)}};
  return <section className="a-workspace-setup" aria-label="Workspace readiness"><h3>{setup.starter?.name||'Workspace'} setup</h3><p role="status">{setup.status==='ready'?'Ready to work':setup.status==='pending'||setup.status==='running'?'Preparing workspace…':'Some setup steps need attention. Successful work is retained.'}</p>{setup.error&&<p role="alert">{setup.error}</p>}<ul>{setup.rootGit&&<li>Local workspace Git: {setup.rootGit.status}{setup.rootGit.note&&' · '+setup.rootGit.note}</li>}{setup.files?.map(row=><li key={row.path}>{row.path}: {row.status}</li>)}{setup.repositories?.map(row=><li key={row.directory}><strong>{row.directory}</strong>: {row.status}{row.sha&&' · '+row.sha.slice(0,8)}{row.error&&<p>{row.error}</p>}</li>)}</ul>{['partial','failed','interrupted'].includes(setup.status)&&<><button type="button" disabled={busy} onClick={inspect}>Inspect retained imports</button><button type="button" disabled={busy} onClick={retry}>Retry unfinished setup</button></>}{error&&<p role="alert">{error}</p>}<p className="a-caption">No existing repository was updated or merged. Workspace files and chat history are retained.</p></section>;
 }

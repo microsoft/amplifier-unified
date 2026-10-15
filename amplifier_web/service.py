@@ -1664,7 +1664,7 @@ class AppService:
                 except (ValueError, OSError) as exc:
                     raise AppError(str(exc), 409) from None
         try:
-            if action in {'session.create', 'coordination.create'} and command_id:
+            if action in {'session.create', 'coordination.create', 'workspace.setup.reconcile'} and command_id:
                 lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
                 async with lock:
                     return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -2391,6 +2391,9 @@ class AppService:
                         if action == 'workspace.setup.retry' and diagnostic_result['status'] == 'pending':
                             pending.append((self._provision_workspace, (identity,)))
                         if action == 'workspace.setup.reconcile':
+                            # Admission is durable before yielding, but is not a
+                            # completed inspection or a usable retry revision.
+                            diagnostic_result = {**diagnostic_result, 'inspectionStatus': 'pending'}
                             pending.append((self._provision_workspace, (identity, True)))
                 except (ValueError, OSError) as exc:
                     raise AppError(str(exc), 409) from None
@@ -3330,7 +3333,27 @@ class AppService:
                 self._publish_changes(sessions=session_ids, globals=global_keys)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
-            if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current or action in {"question.answer", "worker.message", "conversation.delivery", "conversation.retry"}:
+            if action == 'workspace.setup.reconcile':
+                # Local Git inspection runs off-loop and outside self.lock.
+                # Return its final revision; queuing alone lets Retry race the
+                # later subscription projection and submit the obsolete one.
+                inspection_error = None
+                try:
+                    setup = await fn(*values)
+                    receipt['result'] = {**setup, 'inspectionStatus': 'complete'}
+                except Exception as exc:
+                    inspection_error = str(exc) or 'Retained workspace inspection failed.'
+                    receipt.update(accepted=False, error=inspection_error, status=409)
+                    receipt['result'] = {**diagnostic_result, 'inspectionStatus': 'failed'}
+                async with self.lock:
+                    receipt['revision'] = self.state['revision']
+                    if command_id:
+                        self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
+                        self.db.commit()
+                    result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
+                if inspection_error:
+                    raise AppError(inspection_error, 409)
+            elif action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current or action in {"question.answer", "worker.message", "conversation.delivery", "conversation.retry"}:
                 # Runtime progress callbacks acquire self.lock. Admission must
                 # run outside it, and the HTTP receipt waits for the actual ack.
                 try:
@@ -3385,7 +3408,7 @@ class AppService:
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
     async def _provision_workspace(self, identity, reconcile=False):
-        """Background completion updates facts only, never selection or drafts."""
+        """Provisioning or awaited inspection updates facts, never selection/drafts."""
         from . import workspace_provisioning
         try:
             if reconcile:
@@ -3404,8 +3427,11 @@ class AppService:
                     return not self.closed
                 setup = await asyncio.to_thread(workspace_provisioning.run, self.data_dir, identity, progress)
         except Exception:
+            if reconcile:
+                raise  # An acknowledged inspection must report its actual outcome.
             setup = workspace_provisioning.recover(self.data_dir, identity)
         await self._setup_progress(setup)
+        return setup
 
     async def _setup_progress(self, setup):
         async with self.lock:
