@@ -1,0 +1,312 @@
+{
+  "schemaVersion": 2,
+  "status": "root-approved-model-with-explicit-crosswalk",
+  "approvedBy": "root",
+  "approvedAt": "2026-10-15T16:32:34.561191+00:00",
+  "supersedesQualificationRuleOnly": true,
+  "frozenMatrix": "frontend/tests/standard-ux-inventory.json",
+  "retainedOriginalLedger": "output/readiness-day-20261015/ui-inventory/coverage-ledger-before-risk-based-policy.json",
+  "rationale": "Every reachable non-Advanced workflow and required outcome needs evidence. Repeating every outcome in all four input modes is not the default gate: shared interaction patterns can be qualified once with an explicit source/behavior crosswalk. Unrun behavior never becomes passed through reuse.",
+  "requiredGates": [
+    "Every workflow has actual ordinary-path browser evidence, or an explicit reviewed external capability/product limit.",
+    "All663 inventoried outcomes remain individually accountable; safety, failure, stale-owner and pending/unknown effects are targeted mandatory proofs where applicable.",
+    "Every unique input/navigation pattern has appropriate compact and keyboard/touch qualification.",
+    "A shared-pattern claim covers only its tested layout/input behavior, never the target workflow effect, scope, data identity or unrun state.",
+    "Keep source/build/fixture/provider/real-device limits attached to every observation."
+  ],
+  "ordinaryPaths": [
+    {
+      "workflow": "composer.text",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Type formatted text",
+        "Use newline and formatting controls",
+        "Inspect exact serialized draft"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.copy",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Choose a saved assistant message",
+        "Activate Copy message as Markdown",
+        "Read exact clipboard result"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.fork",
+      "expectedIndices": [
+        1
+      ],
+      "browserSteps": [
+        "Choose completed turn in a bounded saved page",
+        "Activate Fork after this turn",
+        "Observe distinct selected chat through exact user anchor"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "canvas.reference",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Select exact rendered Canvas passage",
+        "Activate Reference in chat",
+        "Observe version-bound appended draft without sending"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "canvas.versions",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Choose prior Artifact version",
+        "Reopen saved artifact",
+        "Restore as new version while retaining draft"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "settings.save",
+      "expectedIndices": [
+        1
+      ],
+      "browserSteps": [
+        "Open standard Settings",
+        "Change supported value",
+        "Reopen and inspect acknowledged saved value"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "appearance.mode",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Appearance",
+        "Choose presentation mode",
+        "Inspect actual selected mode and accessible standard actions"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "appearance.interim",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Change intermediate-reply preference",
+        "Read its scope",
+        "Observe final content and qualified intermediate folding"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "notifications.browser",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Notifications",
+        "Inspect saved preference independently of browser capability",
+        "Use explicit permission/recovery affordance"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "storage.delete",
+      "expectedIndices": [
+        0,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Review exact synthetic deletion scope",
+        "Confirm reviewed operation",
+        "Inspect truthful completion and preserved neighbors"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "updates.force",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Open Updates blockers",
+        "Review explicit interruption warning",
+        "Confirm exact staged target and inspect admission receipt"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Actual restart effect is not claimed; synthetic admission/refusal control workflow only."
+      ]
+    },
+    {
+      "workflow": "updates.tool-recovery",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "browserSteps": [
+        "Read named partial update results",
+        "Reload retained result",
+        "Explicitly retry only failed tool"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.archive-progress",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Archive the current saved chat",
+        "Observe its confirmed destination without selecting a replacement chat"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "support.report",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Prepare feedback",
+        "Review selected content and privacy",
+        "Inspect preview without external submission"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    }
+  ],
+  "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
+  "sharedPatterns": [
+    {
+      "id": "settings-navigation",
+      "sourceOwners": [
+        "frontend/src/settings-experience.jsx",
+        "frontend/src/settings-navigation.js"
+      ],
+      "candidateProofScripts": [
+        "frontend/tests/settings-completeness-browser.mjs",
+        "frontend/tests/standard-ux-preferences-browser.mjs"
+      ],
+      "permittedReuse": "Standard Settings destinations, compact Back and Close behavior. No save/effect credit for unrun destinations.",
+      "status": "source-and-assertion-crosswalk-required-before-reuse"
+    },
+    {
+      "id": "native-choice-inputs",
+      "sourceOwners": [
+        "frontend/src/settings-personal.jsx",
+        "frontend/src/notification-settings.jsx"
+      ],
+      "candidateProofScripts": [
+        "frontend/tests/standard-ux-preferences-browser.mjs"
+      ],
+      "permittedReuse": "Explicit focus+Space/Enter and touch/pointer activation of observed toggle/radio controls. Native OS select-popup gesture and full sequential Tab order remain unqualified.",
+      "status": "source-and-assertion-crosswalk-required-before-reuse"
+    },
+    {
+      "id": "pending-preference-save",
+      "sourceOwners": [
+        "frontend/src/notification-settings.jsx"
+      ],
+      "candidateProofScripts": [
+        "frontend/tests/standard-ux-preferences-browser.mjs"
+      ],
+      "permittedReuse": "Observed pending disabled/retained preference behavior only. Other saves require their own outcome assertions.",
+      "status": "source-and-assertion-crosswalk-required-before-reuse"
+    },
+    {
+      "id": "destructive-review",
+      "sourceOwners": [
+        "frontend/src/chat-delete.jsx"
+      ],
+      "candidateProofScripts": [
+        "frontend/tests/standard-ux-storage-controls-browser.mjs"
+      ],
+      "permittedReuse": "Observed review/Cancel/expired-token/confirm pattern in disposable history. No new data scope or active-owner exception inferred.",
+      "status": "source-and-assertion-crosswalk-required-before-reuse"
+    },
+    {
+      "id": "force-confirmation",
+      "sourceOwners": [
+        "frontend/src/update-restart.jsx"
+      ],
+      "candidateProofScripts": [
+        "frontend/tests/standard-ux-update-controls-browser.mjs"
+      ],
+      "permittedReuse": "Observed narrow/keyboard/touch focus, explicit target and warning pattern. Actual host restart remains separate.",
+      "status": "source-and-assertion-crosswalk-required-before-reuse"
+    },
+    {
+      "id": "diagram-navigation",
+      "sourceOwners": [
+        "frontend/src/diagram-navigation.js",
+        "frontend/src/canvas-viewer.jsx"
+      ],
+      "candidateProofScripts": [
+        "frontend/tests/diagram-navigation-browser.mjs"
+      ],
+      "permittedReuse": "Mermaid and DOT pointer/touch/keyboard navigation only; no other renderer equivalence.",
+      "status": "source-and-assertion-crosswalk-required-before-reuse"
+    },
+    {
+      "id": "archive-notice",
+      "sourceOwners": [
+        "frontend/src/archive-feedback.jsx"
+      ],
+      "candidateProofScripts": [
+        "frontend/tests/archive-feedback-browser.mjs"
+      ],
+      "permittedReuse": "Observed archive notice/navigation intent, unsaved Canvas/Settings and narrow layout only; unrelated operation notices remain unqualified.",
+      "status": "source-and-assertion-crosswalk-required-before-reuse"
+    }
+  ],
+  "summaryDefinitions": {
+    "ordinaryPathObserved": "All explicitly mapped ordinary indices have passed browser claims; remaining exceptional outcomes may still be open.",
+    "allOutcomesObservedInContext": "Every inventoried outcome has a passed browser claim in a named appropriate context; no claim of every provider/device/layout.",
+    "optionalVariants": "Original four-mode matrix is retained as discovery/risk guidance, not a Cartesian release or day-completion gate."
+  }
+}
