@@ -67,12 +67,12 @@ test('managed or missing workspace goes to existing all-chats surface',()=>{
  assert.equal(archiveDestination(state,{...chat,location:{kind:'managed'}}).workSurface,'chats');
  assert.equal(archiveDestination({workspaces:[]},chat).workSurface,'chats');
 });
-test('late earlier completion cannot replace newer notice or redirect',async()=>{
- const a=deferred(),b=deferred(),f=fixture((name,args)=>args.id==='a'?a.promise:b.promise);
- const first=f.action.run(chat),second=f.action.run({...chat,id:'b',title:'Other'});
- b.resolve({accepted:true,result:{id:'b',archived:true}});await second;
+test('another target cannot hide an in-flight archive outcome',async()=>{
+ const a=deferred(),f=fixture(()=>a.promise);
+ const first=f.action.run(chat);await f.action.run({...chat,id:'b',title:'Other'});
+ assert.equal(f.calls.length,1);assert.equal(f.feedback.notice.id,'a');
  a.resolve({accepted:true,result:{id:'a',archived:true}});await first;
- assert.equal(f.feedback.notice.id,'b');assert.equal(f.navigations.length,0);
+ assert.equal(f.feedback.notice.id,'a');assert.equal(f.navigations.length,1);
 });
 test('dismiss does not resurrect a pending result or redirect',async()=>{
  const wait=deferred(),f=fixture(()=>wait.promise),run=f.action.run(chat);f.action.dismiss();

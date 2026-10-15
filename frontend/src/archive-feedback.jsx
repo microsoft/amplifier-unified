@@ -3,8 +3,8 @@ import {Archive,ArchiveRestore,X} from 'lucide-react';
 
 export const ArchiveContext=createContext(null);
 export function ArchiveButton({chat,archived=false,children,...props}){
- const archive=useContext(ArchiveContext),busy=archive?.pending.includes(chat.id);
- return <button type="button" {...props} data-action={archived?'session.restore':'session.archive'} disabled={busy} aria-busy={busy||undefined} onClick={()=>archive.run(chat,!archived)}>{archived?<ArchiveRestore/>:<Archive/>}{busy?archived?'Restoring…':'Archiving…':children|| (archived?'Restore':'Archive')}</button>;
+ const archive=useContext(ArchiveContext),busy=archive?.pending.includes(chat.id),blocked=archive?.pending.length>0;
+ return <button type="button" {...props} data-action={archived?'session.restore':'session.archive'} aria-disabled={blocked||undefined} aria-busy={busy||undefined} onClick={()=>{if(!blocked)archive.run(chat,!archived)}}>{archived?<ArchiveRestore/>:<Archive/>}{busy?'Saving…':children|| (archived?'Restore':'Archive')}</button>;
 }
 export function ArchiveNotice({value}){
  const notice=value.notice;if(!notice)return null;

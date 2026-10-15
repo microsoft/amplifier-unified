@@ -16,7 +16,7 @@ test('shared button has pending label and same target for archive and restore',a
  assert.deepEqual(calls,[[chat,true]]);
  value.pending=['a'];await act(async()=>root.update(render()));
  const button=root.root.findByType('button');
- assert.equal(button.props.disabled,true);assert.ok(button.children.includes('Archiving…'));
+ assert.equal(button.props['aria-disabled'],true);assert.equal(button.props.disabled,undefined);assert.ok(button.children.includes('Saving…'));
  value.pending=[];await act(async()=>root.update(render(true)));
  await act(async()=>root.root.findByType('button').props.onClick());
  assert.deepEqual(calls.at(-1),[chat,false]);await act(async()=>root.unmount());

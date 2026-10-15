@@ -12,7 +12,9 @@ export function createArchiveAction({getState,getRevision,dispatch,navigate,onCh
  const publish=()=>onChange({notice,pending:[...pending]});
  const update=(operation,value)=>{if(operation===sequence){notice={operation,...value};publish()}};
  async function run(chat,archive=true){
-  const id=chat.id;if(pending.has(id))return;
+  // One interactive organization change at a time: never hide another target's
+  // rejection or replace an in-flight archive's Undo with a later operation.
+  const id=chat.id;if(pending.size)return;
   const operation=++sequence,state=getState(),visit=archiveVisit(state,getRevision());
   const leaving=archive&&state?.selectedSessionId===id&&(state?.view?.workSurface||'chat')==='chat';
   const destination=archiveDestination(state,chat),isCurrent=()=>operation===sequence&&archiveVisit(getState(),getRevision())===visit;
@@ -21,7 +23,7 @@ export function createArchiveAction({getState,getRevision,dispatch,navigate,onCh
   try{
    receipt=await dispatch(archive?'session.archive':'session.restore',{id});
    if(receipt?.accepted===false){
-    update(operation,{id,phase:'error',text:receipt.error||'The change was not saved.'});return;
+    update(operation,{id,phase:'error',text:typeof receipt.error==='string'?receipt.error:receipt.error?.message||'The change was not saved.'});return;
    }
    if(receipt?.accepted!==true||receipt.result?.id!==id||receipt.result?.archived!==archive){
     update(operation,{id,phase:'unknown',text:'Could not confirm the change. Check Archived chats before trying again.'});return;
@@ -29,17 +31,21 @@ export function createArchiveAction({getState,getRevision,dispatch,navigate,onCh
   }catch(error){
    const rejected=error.status>=400&&error.status<500&&error.status!==408;
    update(operation,{id,phase:rejected?'error':'unknown',text:rejected?error.message:'Could not confirm the change. Check Archived chats before trying again.'});return;
-  }finally{pending.delete(id);publish()}
-  update(operation,{id,title:chat.title||'Untitled chat',phase:'success',archive,text:archive?'Chat archived':'Chat restored'});
-  if(leaving&&isCurrent()){
-   // Navigation is a separate outcome: a failed browse must not claim archive failed.
-   try{
-    const result=await navigate(destination,isCurrent);
-    if(result?.accepted===false)update(operation,{...notice,text:'Chat archived. Your current view was kept.'});
-   }catch{
-    update(operation,{...notice,text:'Chat archived. Could not open the chat list.'});
-   }
+  }finally{
+   if(receipt?.accepted!==true||receipt.result?.id!==id||receipt.result?.archived!==archive){pending.delete(id);publish()}
   }
+  try{
+   update(operation,{id,title:chat.title||'Untitled chat',phase:'success',archive,text:archive?'Chat archived':'Chat restored'});
+   if(leaving&&isCurrent()){
+    // Navigation is a separate outcome: a failed browse must not claim archive failed.
+    try{
+     const result=await navigate(destination,isCurrent);
+     if(result?.accepted===false)update(operation,{...notice,text:'Chat archived. Your current view was kept.'});
+    }catch{
+     update(operation,{...notice,text:'Chat archived. Could not open the chat list.'});
+    }
+   }
+  }finally{pending.delete(id);publish()}
  }
  return {run,dismiss:()=>{sequence++;notice=null;publish()}};
 }

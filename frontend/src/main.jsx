@@ -547,7 +547,7 @@ function App(){
   getState:()=>pendingView.current.apply(latest.current),getRevision:()=>archiveRevision.current,dispatch,
   onChange:setArchiveFeedback,
   navigate:async(patch,isCurrent)=>{
-   if(!isCurrent()||settingsNavigation.current?.hasUnsaved()||latest.current?.canvasWorkspace?.views?.some(row=>row.dirty))return {accepted:false};
+   if(!isCurrent()||settingsNavigation.current?.hasUnsaved())return {accepted:false};
    const revision=archiveRevision.current,id=latest.current?.selectedSessionId;
    // The browse itself paints an optimistic surface, so its queued guard uses
    // intent revision rather than comparing that surface with the old chat.
