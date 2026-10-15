@@ -543,6 +543,43 @@ async def test_two_services_colliding_ids_clients_close_and_restart_are_isolated
                 await service.close()
 
 
+@pytest.mark.parametrize('cold', [False, True])
+@pytest.mark.parametrize('partial', [False, True])
+async def test_saved_window_attribution_requires_complete_bounded_uniqueness(tmp_path, monkeypatch, cold, partial):
+    from amplifier_web import cold_display
+    from amplifier_web.resource_files import put
+    service = AppService(tmp_path / 'app', NoModel(), workspace=tmp_path)
+    try:
+        row, _ = retained(service.db)
+        # A duplicate outside the latest page must not become a unique local
+        # match. Even its exact receipt cannot establish global uniqueness.
+        messages = ([copy.deepcopy(row)] + [
+            {'id': f'answer-{i}', 'role': 'assistant', 'text': 'Answer'}
+            for i in range(101)] if partial else []) + [row]
+        session = service._new_session({'title': 'Receiving'})
+        session.update(id='recipient', messages=messages, historyManaged=False)
+        if cold:
+            reference = put(service.db, messages)
+            session = cold_display.ColdRecord({**session, '_coldFields': {'messages': reference}}, service.db)
+            dict.pop(session, 'messages')
+        service.state['sessions'] = [session]
+        monkeypatch.setattr(cold_display, 'load', lambda *args: (_ for _ in ()).throw(
+            AssertionError('Attribution must not hydrate the full saved history')))
+        await service.history.windows.load('recipient')
+        projected = service.history.windows.project(session)
+        shown = next(item for item in projected['messages'] if item['id'] == row['id'])
+        assert shown['id'] == row['id'] and shown['text'] == TEXT
+        assert ('attribution' in shown) is not partial
+        if not partial:
+            assert shown['attribution'] == {'caption': AGENT}
+        else:
+            assert projected['messageWindow']['hasEarlier']
+        assert '_savedComplete' not in projected['messageWindow']
+        assert service.runtime.starts == service.runtime.sends == 0
+    finally:
+        await service.close()
+
+
 @pytest.mark.parametrize("options", [{}, {"minimal": True},
     {"scope": "range", "fromMessageId": "request-message", "throughMessageId": "request-message", "minimal": True}])
 def test_full_range_minimal_export_safe_caption_and_original_markdown(store, tmp_path, options):

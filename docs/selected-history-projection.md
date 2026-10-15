@@ -30,6 +30,12 @@ requested window, resource ownership and file identity, not an unread prefix or
 the complete content digest. It never hydrates a whole cold execution, message or
 configuration body. A changed runtime transcript is offered as a separate,
 explicit read-only history view; it is not silently merged into saved web rows.
+Receipt-derived sender captions require a complete, budget-admitted saved message
+set with no omitted ranges. Partial saved pages and native windows remain neutral:
+a matching row within one page cannot prove global message/input uniqueness.
+Long saved histories need a separate bounded uniqueness receipt/index before
+those captions can be restored without a whole-history read. Existing canonical
+saved IDs and message actions do not depend on a display caption.
 
 Message cursors are authenticated by a service-owned key and bound to exact
 source/resource identity, source stamps and the applicable published owner fence.
