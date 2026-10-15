@@ -21,20 +21,19 @@
     "Historical failures remain historical; source-bound current qualification is separate.",
     "Full Python9021/36skip/13warnings at e27593c67, canonical72 browsers at4801878aa, plus later focused evidence. No full suite is claimed at this later integration revision.",
     "Ordinary UX paths/outcomes are governed separately by standard-ux-completion-20261015.md; route visibility alone is not outcome coverage.",
-    "No main merge, release, dependency adoption or production restart is included."
+    "No main merge, release, production dependency adoption or production restart is included. Exact dependency candidates were staged only in a private review generation."
   ],
   "categoryCounts": {
+    "new-since-frozen-fixed-in-integration": 3,
+    "historical-automatic-release-report": 36,
     "qualified-or-disposed-current-contract": 8,
     "product-or-authority-decision": 12,
     "incident-acceptance-unavailable-or-incomplete": 2,
     "outside-Unified-runtime": 3,
-    "canonical-repair-pr-prepared-unmerged": 2,
+    "canonical-repair-pr-prepared-unmerged": 3,
     "measured-improvement-target-miss-remains": 1,
-    "canonical-owner-implementation-remaining": 1,
     "secondary-AHP-track": 1,
-    "dependency-contract-and-adoption-decision": 1,
-    "historical-automatic-release-report": 36,
-    "new-since-frozen-fixed-in-integration": 3
+    "dependency-contract-and-adoption-decision": 1
   },
   "issues": [
     {
@@ -707,9 +706,9 @@
       "title": "Computer-use release qualification omits the executable Windows bridge",
       "category": "canonical-repair-pr-prepared-unmerged",
       "canonicalOwner": "microsoft/amplifier-bundle-computer-use release tooling",
-      "disposition": "canonical_fix_PR_prepared_qualified_not_merged_or_adopted",
-      "currentEvidence": "Canonical source+installed runtime manifests repaired; parent recorded6 red controls,167+13 passing checks,2 real wheels/31 runtime files including both.ps1 with RECORD/source/installed equality;4 CI checks green.",
-      "remaining": "Canonical draft PR unmerged. Windows installed execution and optional Unified dependency adoption remain unqualified.",
+      "disposition": "canonical_fix_PR_prepared_private_qualified_not_merged_or_production_adopted",
+      "currentEvidence": "Canonical source+installed runtime manifests repaired; parent recorded6 red controls,167+13 passing checks,2 real wheels/31 runtime files including both.ps1 with RECORD/source/installed equality;4 CI checks green. Exact candidate63871d469 is also installed and asset-hash verified in the combined private generation. Ordinary Work does not enable computer-use; no desktop action was performed.",
+      "remaining": "Canonical draft PR unmerged; optional production adoption and installed Windows/desktop execution remain unqualified. Private package identity is qualified, not desktop behavior.",
       "requiresProductOrAuthorityDecision": false,
       "qualifiedChanges": [
         "63871d4691d44bac4bad25875f19e3909b79ffc7"
@@ -717,9 +716,13 @@
       "publicEvidence": [
         {
           "path": "readiness-decisions-20261015.md"
+        },
+        {
+          "path": "docs/validation/integrated-dependency-activation-20261015.json"
         }
       ],
-      "canonicalPR": "https://github.com/microsoft/amplifier-bundle-computer-use/pull/29"
+      "canonicalPR": "https://github.com/microsoft/amplifier-bundle-computer-use/pull/29",
+      "previousAdoptionFinding": "Canonical draft PR unmerged. Windows installed execution and optional Unified dependency adoption remain unqualified."
     },
     {
       "issue": 666,
@@ -867,9 +870,9 @@
       "title": "Bash safety parser can be bypassed with unrecognized execution wrappers",
       "category": "canonical-repair-pr-prepared-unmerged",
       "canonicalOwner": "microsoft/amplifier-module-tool-bash",
-      "disposition": "canonical_fix_PR_prepared_qualified_not_merged_or_adopted",
-      "currentEvidence": "Canonical wrapper parser repaired. Red51; package352 passed/10 Windows skips; final180 safety tests; all7 GitHub checks passed including6 platform/Python legs. No dangerous execution.",
-      "remaining": "Canonical PR remains unmerged; Unified dependency adoption/version-bound installed acceptance not performed.",
+      "disposition": "canonical_fix_PR_prepared_private_qualified_not_merged_or_production_adopted",
+      "currentEvidence": "Canonical wrapper parser repaired. Red51; package352 passed/10 Windows skips; final180 safety tests; all7 GitHub checks passed including6 platform/Python legs. No dangerous execution. Exact candidate63c92139 is now mounted by a normal Work worker in private generationded15b45; the observed safety module hash matches7cd7c0cc. Original installed-only/cache mismatch and corrected source mapping are preserved.",
+      "remaining": "Canonical PR remains unmerged. Private exact installed/mounted acceptance is qualified; production dependency adoption remains separate. CI and private Linux proof do not establish installed Windows or live-user acceptance.",
       "requiresProductOrAuthorityDecision": false,
       "qualifiedChanges": [
         "63c92139c735dc894467c9b74e2c4309413b7f3e"
@@ -877,9 +880,13 @@
       "publicEvidence": [
         {
           "path": "readiness-decisions-20261015.md"
+        },
+        {
+          "path": "docs/validation/integrated-dependency-activation-20261015.json"
         }
       ],
-      "canonicalPR": "https://github.com/microsoft/amplifier-module-tool-bash/pull/24"
+      "canonicalPR": "https://github.com/microsoft/amplifier-module-tool-bash/pull/24",
+      "previousAdoptionFinding": "Canonical PR remains unmerged; Unified dependency adoption/version-bound installed acceptance not performed."
     },
     {
       "issue": 648,
@@ -992,7 +999,7 @@
       "canonicalOwner": "Unified request scheduling / history / persistence",
       "disposition": "full_copy_workspace_targets_met_warm_send_target_still_missed",
       "currentEvidence": "All32 verified event shards;274-root workspace;15 actual workspace gestures at1/6/12 workers all meet their1000ms open/page or500ms filter targets. Resident owners stay16 before/after each sequence. Source0701c94cb;22 focused Python checks and real held-plan paging browser pass.",
-      "remaining": "Warm-send sampled p95 is671/786/844ms at1/6/12 workers versus desired300ms; current focused admission investigation remains open. Three warm samples/stage and one observation/gesture are early-warning measurements, not statistical tails. Deterministic local provider; copy is per-file verified, not globally atomic.",
+      "remaining": "The comparable one-worker delivery-publication follow-up reduces the largest of three warm acknowledgement samples from671ms to612ms (554\u2013612ms range); the desired300ms target remains unmet. Earlier six/twelve-worker sampled tails786/844ms were not repeated and retain their source boundaries. These finite samples are early-warning measurements, not population p95 estimates. Separate fresh-profile startup is7,729ms with dependency caches warm; it is not acknowledgement or first-token latency. No additional admission investigation is currently pending.",
       "requiresProductOrAuthorityDecision": false,
       "qualifiedChanges": [
         "db57273f7",
@@ -1007,32 +1014,52 @@
         },
         {
           "path": "combined-scale-concurrency-20261015.json"
+        },
+        {
+          "path": "docs/validation/profile-cold-worker-start-20261015.json"
         }
       ],
       "deliveryPublicationFollowup": {
         "source": "36ba434c475bc2f10c23fd0f9a7258bac27d0fc8",
         "integrationCommit": "989b57b1b",
         "receipt": "delivery-publication-20261015.json",
-        "observation": "Same-UI one-worker replay reduced warm p95 671\u2192612ms and shell page builds400\u2192323; desired300ms remains missed. Three samples, no new6/12 claim."
-      }
+        "observation": "Same-UI one-worker replay reduces the largest of three warm acknowledgement samples671\u2192612ms and shell page builds400\u2192323; desired300ms remains missed. Three samples, no population p95 or new6/12-worker claim."
+      },
+      "previousRemaining": "Warm-send sampled p95 is671/786/844ms at1/6/12 workers versus desired300ms; current focused admission investigation remains open. Three warm samples/stage and one observation/gesture are early-warning measurements, not statistical tails. Deterministic local provider; copy is per-file verified, not globally atomic."
     },
     {
       "issue": 630,
       "url": "https://github.com/microsoft/amplifier-unified/issues/630",
       "title": "Security: Recipes shell escaping is bypassed inside command substitution",
-      "category": "canonical-owner-implementation-remaining",
+      "category": "canonical-repair-pr-prepared-unmerged",
       "canonicalOwner": "microsoft/amplifier-bundle-recipes",
-      "disposition": "canonical_owner_implementation_environment_work_remaining",
-      "currentEvidence": "Original exact PR120 nested-expansion defect remains. Latest owner policy46e9c5f is ratified; private checker2c2047abb qualified for coding, not production. Owner has not built a production lowerer; isolated verification capacity/readiness is the current blocker.",
-      "remaining": "Canonical owner must implement admitted full compatibility/confinement design and qualify both engines, unchanged corpus/goldens, package isolation, activation and CLI. Private spark-2 environment offer recorded; no duplicate implementation or new product decision.",
+      "disposition": "canonical_fix_PR_prepared_qualified_not_merged_or_production_adopted",
+      "currentEvidence": "Canonical PR121 at8de062a implements the ratified source-confinement design in both engines. Immutable implementation620d786a passed1,646 module tests,590 native tests,19 conformance controls and5 unchanged goldens; three original skips have separate targeted supplements (22 portable diagram examples,1 cross-engine comparison,1 historical activation control). Actual CLI verifies exact engine identity;14 generated engine/checker pairs prove safe effects. All519 retained templates/1,227 rows receive6,984 both-engine source preparations, without executing arbitrary original recipes.",
+      "remaining": "Draft canonical PR121 awaits review/merge; no release or production adoption. Ordinary Work does not include recipes. Installed Windows/macOS and live-provider recipe execution remain unqualified. Immutable implementation evidence is620d786a; laterfc18ee4 changes only diagram test path and8de062a adds qualification documentation.",
       "requiresProductOrAuthorityDecision": false,
-      "qualifiedChanges": [],
+      "qualifiedChanges": [
+        "620d786a4379c936b0cf082bd66ad3faf5e910ee",
+        "fc18ee45f717b9d36e861a3e6f87734644d741df"
+      ],
       "publicEvidence": [
         {
           "path": "readiness-decisions-20261015.md"
+        },
+        {
+          "url": "https://github.com/microsoft/amplifier-bundle-recipes/blob/8de062a/docs/validation/shell-source-qualification-20261015.json"
+        },
+        {
+          "path": "docs/validation/recipe-cli-checker-acceptance-20261015.json"
         }
       ],
-      "canonicalPR": "https://github.com/microsoft/amplifier-bundle-recipes/pull/120"
+      "canonicalPR": "https://github.com/microsoft/amplifier-bundle-recipes/pull/121",
+      "previousFinding": {
+        "category": "canonical-owner-implementation-remaining",
+        "disposition": "canonical_owner_implementation_environment_work_remaining",
+        "currentEvidence": "Original exact PR120 nested-expansion defect remains. Latest owner policy46e9c5f is ratified; private checker2c2047abb qualified for coding, not production. Owner has not built a production lowerer; isolated verification capacity/readiness is the current blocker.",
+        "remaining": "Canonical owner must implement admitted full compatibility/confinement design and qualify both engines, unchanged corpus/goldens, package isolation, activation and CLI. Private spark-2 environment offer recorded; no duplicate implementation or new product decision.",
+        "canonicalPR": "https://github.com/microsoft/amplifier-bundle-recipes/pull/120"
+      }
     },
     {
       "issue": 629,
@@ -1338,10 +1365,20 @@
       ]
     },
     {
-      "kind": "cold-preparation-target-not-measured",
+      "kind": "cold-preparation-baseline-qualified",
       "issues": [],
-      "next": "Historical38.603s first-request delay was74% legitimate requalification after a behavior removal. Approximate8s worker mount remains unsegmented; repeated unchanged-input40s delay is unproven. Current full-composition cold target unmeasured.",
-      "evidence": "cold-preparation-investigation-20261015.json"
+      "next": "A fresh normal Work profile plus normal worker reached readiness in7,729.195ms (ensure5,874.407ms), below the provisional10s target in one dependency/source-cache-warm sample. Parent generation was unchanged; local-wheel naming conflict fixed at697fa66ac. Earlier profile-warm/worker-cold1.17\u20131.34s and historical38.603s remain distinct, not a matched speedup or p95 claim.",
+      "evidence": [
+        "profile-cold-worker-start-20261015.json",
+        "normal-runtime-worker-start-20261015.json",
+        "cold-preparation-investigation-20261015.json"
+      ],
+      "previousFinding": {
+        "kind": "cold-preparation-target-not-measured",
+        "issues": [],
+        "next": "Historical38.603s first-request delay was74% legitimate requalification after a behavior removal. Approximate8s worker mount remains unsegmented; repeated unchanged-input40s delay is unproven. Current full-composition cold target unmeasured.",
+        "evidence": "cold-preparation-investigation-20261015.json"
+      }
     },
     {
       "kind": "canonical-dependency-adoption",
@@ -1349,14 +1386,22 @@
         649,
         667
       ],
-      "next": "Review unmerged canonical repair PRs and qualify the exact installed dependency revision before any Unified adoption."
+      "next": "Review unmerged Bash24 and computer-use29. Their exact candidates have private combined-generation installed/mounted-source qualification; production adoption and optional desktop/platform acceptance remain separate.",
+      "evidence": [
+        "integrated-dependency-activation-20261015.json",
+        "work-required-modules-20261015.json"
+      ]
     },
     {
-      "kind": "canonical-owner-implementation",
+      "kind": "canonical-recipe-review-delivery",
       "issues": [
         630
       ],
-      "next": "Implement the already-ratified recipe compatibility/confinement design across both engines and qualify its canonical corpus; no production candidate exists."
+      "next": "Qualified canonical PR121 at8de062a awaits review/merge. Immutable implementation620d786a, exact CLI/checker proof, four gates plus targeted supplements and all retained-template preparation are complete; no recipe production adoption.",
+      "evidence": [
+        "https://github.com/microsoft/amplifier-bundle-recipes/pull/121",
+        "recipe-cli-checker-acceptance-20261015.json"
+      ]
     },
     {
       "kind": "unavailable-or-incomplete-incident-acceptance",
@@ -1398,5 +1443,7 @@
     "next": "Review within784; do not merge770 a second time. Main/release remain held."
   },
   "unassignedConfirmedUnifiedNonDecisionDefectsFound": [],
-  "allIssuesResolved": false
+  "allIssuesResolved": false,
+  "laterQualificationAt": "2026-10-15T23:44:18.478925+00:00",
+  "laterQualificationIntegration": "9e71e95c2097a84cb6163d3b9302fba24f9af40c"
 }

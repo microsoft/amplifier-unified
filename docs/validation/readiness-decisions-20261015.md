@@ -1,8 +1,9 @@
 # Readiness decisions and dependency findings — October 15, 2026
 
 This is the decision queue for the isolated standard-UX qualification. It does
-not approve new product behavior or claim that an external dependency is fixed.
-Confirmed Unified defects are being repaired on `integration/readiness-20261015`.
+not approve new product behavior or production adoption. Confirmed Unified fixes
+are integrated on `integration/readiness-20261015`; canonical dependency repairs
+have separate source-bound qualification and unmerged review PRs.
 Nothing in this document authorizes deployment, a main merge, or replay of saved
 work. Private captures and raw browser evidence stay outside this repository.
 
@@ -29,21 +30,39 @@ can be decided independently of the qualified fixes.
 ## Reproduced dependency defects
 
 The original probes ran inside the owned spark-2 DTU against exact public source
-revisions. Two canonical repairs are now prepared as unmerged PRs. Neither changes
-Unified dependency pins or qualifies live adoption. The recipe defect remains open.
+revisions. Three canonical repairs now have unmerged review PRs. Exact Bash and
+computer-use candidates were also staged in a private combined dependency
+generation; this did not change production dependency pins. Recipe source
+confinement is implemented and qualified in its canonical repository.
 
 | Unified report | Current canonical result | Remaining acceptance |
 | --- | --- | --- |
-| [649](https://github.com/microsoft/amplifier-unified/issues/649), shell safety wrappers | [Bash PR24](https://github.com/microsoft/amplifier-module-tool-bash/pull/24), commit `63c92139c735`, inspects `nice`, `setsid` and `stdbuf` options before applying existing effective-command checks. The original source failed 51 new controls. Candidate: 352 package tests passed, 10 Windows-specific tests skipped locally; final 180 safety tests passed. All six Linux/macOS/Windows Python CI legs and CLA passed. **No destructive test command executed.** | Unmerged; version-bound Unified adoption remains separate. CI is not installed Windows or live-user acceptance. Existing allowlists and unrestricted profiles retain their behavior. |
-| [630](https://github.com/microsoft/amplifier-unified/issues/630), recipe shell substitution | [Recipes PR120](https://github.com/microsoft/amplifier-bundle-recipes/pull/120) remains unchanged at `3a8a0915464f` and on Request Changes. The exact renderer-function probe still demonstrates nested-expansion injection. [Owner policy `46e9c5fb`](https://github.com/microsoft/amplifier-bundle-recipes/blob/46e9c5fb521bea07836d2eafb0c00bb6ac8658f6/contracts/recipe-dependency-manifest.v1.md) already requires benign-pattern compatibility and initial shell-source confinement. This is **implementation and environment-readiness work**, not a pending product decision. | Canonical owner must implement and qualify its admitted design across both engines, the unchanged compatibility corpus/goldens, package isolation, activation and sanctioned CLI proof. There is no production candidate to adopt. A private handoff records the available isolated spark-2 environment; no second Unified parser or partial quoting fix is proposed. |
-| [667](https://github.com/microsoft/amplifier-unified/issues/667), computer-use qualification | [Computer-use PR29](https://github.com/microsoft/amplifier-bundle-computer-use/pull/29), commit `63871d4691d4`, binds package runtime assets and packaging policy in source and installed identities. Six original regressions fail; 167 plus 13 focused checks pass. Two actual wheels contain 31 bound runtime files, including both PowerShell scripts; source, RECORD and installed identities agree, and harmless asset mutations are detected. Python 3.11/3.12, Ruff and CLA checks pass. | Draft PR remains unmerged. Installed Windows execution and optional Unified dependency adoption remain unqualified; package asset proof is not a desktop execution claim. |
+| [649](https://github.com/microsoft/amplifier-unified/issues/649), shell safety wrappers | [Bash PR24](https://github.com/microsoft/amplifier-module-tool-bash/pull/24), commit `63c92139c735`, inspects `nice`, `setsid` and `stdbuf` options before applying existing effective-command checks. The original source failed 51 new controls. Candidate: 352 package tests passed, 10 Windows-specific tests skipped locally; final 180 safety tests passed. All six Linux/macOS/Windows Python CI legs and CLA passed. **No destructive test command executed.** | Unmerged; exact private Work-worker import now matches the candidate safety hash. Production adoption remains separate. CI is not installed Windows or live-user acceptance. Existing allowlists and unrestricted profiles retain their behavior. |
+| [630](https://github.com/microsoft/amplifier-unified/issues/630), recipe shell substitution | [Recipes PR121](https://github.com/microsoft/amplifier-bundle-recipes/pull/121), head `8de062a`, implements the ratified design in both engines. Immutable implementation `620d786a` passed the repository gates with all three original skips separately closed, five unchanged goldens, exact actual-CLI identity, fourteen unchanged-checker safe-effect pairs, and 6,984 source preparations across all 519 retained templates. [Source-bound qualification](https://github.com/microsoft/amplifier-bundle-recipes/blob/8de062a/docs/validation/shell-source-qualification-20261015.json) separates source preparation from actual effects. | Draft review/merge and any production adoption remain. Ordinary Work does not include recipes. Historical PR120 injection remains preserved as the original finding; this successor supplies the implementation that was missing. No arbitrary retained recipes, live providers, or installed Windows/macOS acceptance are claimed. |
+| [667](https://github.com/microsoft/amplifier-unified/issues/667), computer-use qualification | [Computer-use PR29](https://github.com/microsoft/amplifier-bundle-computer-use/pull/29), commit `63871d4691d4`, binds package runtime assets and packaging policy in source and installed identities. Six original regressions fail; 167 plus 13 focused checks pass. Two actual wheels contain 31 bound runtime files, including both PowerShell scripts; source, RECORD and installed identities agree, and harmless asset mutations are detected. Python 3.11/3.12, Ruff and CLA checks pass. | Draft PR remains unmerged. Exact private installation/assets are verified, but ordinary Work does not enable computer-use. Installed Windows/desktop execution and optional production adoption remain unqualified. |
 
-The inspected qualified runtime had Core 2.0.1 and Foundation
-`85532ee4190c687dd7b582861a4c99c8323446ca`; recipes and computer-use were absent.
-Its bash metadata did not provide a source commit, so the upstream validator
-result is not represented as a verified installed-bash result. The repository's
-optional computer-use pin also differs from the latest audited upstream source.
-Each dependency requires its own version-bound adoption check.
+The initial inspected runtime had Core 2.0.1 and Foundation
+`85532ee4190c687dd7b582861a4c99c8323446ca`; recipes and computer-use were absent,
+and Bash metadata alone did not prove its source revision. That original finding
+is retained. Subsequent private generation `ded15b45` stages the exact Bash and
+computer-use candidates. An actual normal Work worker now imports the candidate
+Bash safety module; the earlier installed-only/cache mismatch and its source-map
+correction are preserved in
+[`integrated-dependency-activation-20261015.json`](integrated-dependency-activation-20261015.json).
+All thirteen required Work capabilities mount. Optional computer assets are
+installed but no desktop action runs, and recipes remain outside ordinary Work.
+Canonical merge order and production adoption remain separate from this private
+qualification.
+
+For [633](https://github.com/microsoft/amplifier-unified/issues/633), the comparable
+one-worker acknowledgement sample range improved to 554–612ms, from 632–671ms.
+The desired 300ms target remains unmet. These are three-sample early-warning
+measurements, not population p95 estimates; the earlier six/twelve-worker samples
+were not repeated. A separate fresh-profile plus normal-worker sample reached
+readiness in 7.729s with dependency caches warm, below the provisional 10s target.
+It is neither first-token latency nor a matched comparison to the historical 40s
+incident. Exact source and lifecycle boundaries are retained in
+[`profile-cold-worker-start-20261015.json`](profile-cold-worker-start-20261015.json).
 
 Other reports retain their canonical owners: [668](https://github.com/microsoft/amplifier-unified/issues/668)
 and [613](https://github.com/microsoft/amplifier-unified/issues/613) concern
