@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 1,
+  "frozenInventoryCommit": "9fdd6aeea",
+  "changes": [
+    {
+      "id": "delta.635",
+      "sourceCommit": "dab2a993e905e3d8cd6da761d282f7b9190abdb0",
+      "reason": "Integration adds standard per-tool update recovery after v1 freeze; original baseline remains unchanged.",
+      "workflowsAdded": [
+        {
+          "id": "updates.tool-recovery",
+          "family": "updates",
+          "title": "Recover an individual failed Smart Tool update",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Updates"
+          ],
+          "prerequisites": [
+            "Synthetic installers; completed healthy update and one failed tool",
+            "No production installation or restart"
+          ],
+          "steps": [
+            "Open Settings and Updates through visible controls",
+            "Inspect healthy and failed tool names",
+            "Reload and confirm failure remains",
+            "Activate Retry this tool",
+            "Show another failed tool and switch to390px",
+            "Activate Skip this version"
+          ],
+          "expectedResults": [
+            "Successful tools remain completed while a failed tool is named in standard Updates.",
+            "The failed-tool result survives a browser reload.",
+            "Retry this tool invokes only the failed tool and removes its resolved result.",
+            "Skip this version clears its pending result without an installer call.",
+            "No secret fixture value or browser error appears.",
+            "Named failure and Skip remain visible and usable at390px."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-touch",
+            "desktop-keyboard",
+            "narrow-keyboard"
+          ],
+          "sourceRefs": [
+            {
+              "path": "frontend/src/smart-tool-update-results.jsx",
+              "line": 1
+            },
+            {
+              "path": "frontend/src/updates.jsx",
+              "line": 1
+            }
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "relation": "exact-assertions-below"
+            }
+          ],
+          "performance": {
+            "current": null,
+            "desiredProfile": "standard-interaction",
+            "measurementStatus": "not_measured"
+          }
+        }
+      ],
+      "sourceHashes": {
+        "frontend/src/smart-tool-update-results.jsx": "cd4a7a1308b01c0a0e17154a7528aed6348e87cc12bab9fe578ffbfd23e0952c",
+        "frontend/src/updates.jsx": "0f2f6016226e78572031055d39f06fa28971c817c3707cc3fd265bafa4431a65",
+        "frontend/tests/smart-tool-updates-browser.mjs": "ffe65df2c7b1710bc7aad9b98ab7204fab0f3c627414688d863fd7545a1ffbe1",
+        "tests/fixtures/smart_tool_update_server.py": "524fad882825fa8ea57fb032f4e555c6c616718f178b6840e04b1d3b91e74c76"
+      },
+      "evidenceContext": "synthetic-capability; actualHTTP/SSE; fake installers; no external effects",
+      "claims": [
+        {
+          "workflow": "updates.tool-recovery",
+          "expectedIndices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "status": "passed",
+          "variantsByExpectedIndex": {
+            "0": [
+              "desktop-pointer"
+            ],
+            "1": [
+              "desktop-pointer"
+            ],
+            "2": [
+              "desktop-pointer"
+            ],
+            "3": [
+              "narrow-pointer"
+            ],
+            "4": [
+              "desktop-pointer",
+              "narrow-pointer"
+            ],
+            "5": [
+              "narrow-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 21,
+              "expectedIndices": [
+                0
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 22,
+              "expectedIndices": [
+                0
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 25,
+              "expectedIndices": [
+                0
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 27,
+              "expectedIndices": [
+                1
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 29,
+              "expectedIndices": [
+                1,
+                2
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 30,
+              "expectedIndices": [
+                2
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 31,
+              "expectedIndices": [
+                2
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 34,
+              "expectedIndices": [
+                5
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 37,
+              "expectedIndices": [
+                3,
+                5
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 38,
+              "expectedIndices": [
+                3
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 39,
+              "expectedIndices": [
+                3
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 23,
+              "expectedIndices": [
+                4
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 40,
+              "expectedIndices": [
+                4
+              ]
+            }
+          ],
+          "evidence": [
+            "output/readiness-day-20261015/update-repairs/browser2.json"
+          ],
+          "limits": [
+            "Touch events and keyboard activation were not exercised by this script; narrow viewport used pointer clicks.",
+            "Initial partial-update operation is fixture setup; browser asserts rendered result and explicit Retry/Skip.",
+            "No timing or physical-install acceptance claim."
+          ]
+        }
+      ]
+    }
+  ]
+}

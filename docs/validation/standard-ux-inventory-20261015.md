@@ -137,3 +137,28 @@ against their own source; do not relabel baseline observations as newer behavior
 Record every pass/failure/blocked/not-applicable result and its reason. Preserve
 failed-before evidence when a targeted correction passes. This document does not
 authorize another broad release gate or changes to existing product contracts.
+
+## First execution slice
+
+The owned `standard-ux-discovery-browser.mjs` runs 18 destination probes in four
+input/layout variants. It uses visible navigation and real disclosure controls;
+there is no hidden state-command shortcut for a destination. The evidence helper
+records each observed action, assertion, rendered control/options instance, ARIA
+snapshot and screenshot. Set `AMPLIFIER_TEST_ARTIFACTS` to an owned directory.
+`STANDARD_UX_VARIANTS` and `STANDARD_UX_ROUTES` restrict a focused rerun without
+changing its assertions. `DTU_CHROMIUM_SINGLE_PROCESS=1` is the qualified ARM DTU
+launch mode. The fixture uses an ephemeral loopback port and synthetic providers.
+
+The initial 72 unique probes passed after two harness corrections (the actual
+Settings footer entry and the finite release-disclosure count). Their original
+failures remain in the evidence. This is partial reachability/layout coverage,
+not 72 completed workflows. Per-control observations across several pages and
+variants contain repeated controls and must not be compared numerically with
+the lexical source census. Shared-load timings are observational only.
+
+Execution evidence and the per-expected-outcome ledger live at workspace-root
+`output/readiness-day-20261015/ui-inventory/`. The ledger has 649 baseline outcomes;
+new integration workflows are recorded separately in
+[the delta ledger](../../frontend/tests/standard-ux-inventory-deltas.json).
+The first delta covers #635's controlled per-tool Retry/Skip flow at its exact
+integration source, including the narrower evidence limits of that browser test.
