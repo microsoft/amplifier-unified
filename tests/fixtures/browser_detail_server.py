@@ -177,16 +177,29 @@ async def main():
             elif op in {'canonical-work','canonical-append'}:
                 from amplifier_web.event_log_view import event_path
                 row=service._session(aid);base=1700000000
-                def tool(call,name,arguments,result,start,end):
+                async def observed(kind, identity, start, end, **fields):
+                    # Model the host's current observations as well as the
+                    # native log. Historical-only events intentionally use a
+                    # separate bounded window and have no authoritative turns.
+                    await service.on_runtime_event('execution.event', {
+                        'id':identity,'kind':kind,'sessionId':aid,'rootSessionId':aid,
+                        'turnId':'canonical','producerId':'fixture-live','revision':2,
+                        'liveObservation':True,'phase':'completed','startedAt':base+start,
+                        'endedAt':base+end,**fields})
+                async def tool(call,name,arguments,result,start,end):
                     log_hook(aid,'tool:pre',{'tool_call_id':call,'tool_name':name,'tool_input':arguments},base+start)
                     log_hook(aid,'tool:post',{'tool_call_id':call,'tool_name':name,'result':result},base+end)
+                    await observed('tool',f'tool:{aid}:{call}',start,end,toolCallId=call,label=name)
                 if op=='canonical-work':
                     event_path(row,aid).unlink(missing_ok=True)
                     row.update(status='idle',workers=[],messages=[
                         {'id':'before','role':'user','text':'Review the change','createdAt':base},
                         {'id':'interim','role':'assistant','text':'The first check passed. I am inspecting the remaining files.','createdAt':base+10},
                         {'id':'final','role':'assistant','text':'The review is complete.','createdAt':base+20}],execution={'nodes':[],'turns':[]})
-                    tool('brief','bash',{'command':'git diff --check'},{'success':True,'output':{'stdout':'','stderr':'','returncode':0}},1,2)
+                    from amplifier_web.execution import ensure_turn
+                    ensure_turn(row,'canonical')
+                    row['execution']['turns'][0].update(startedAt=base,anchorMessageId='before',phase='completed')
+                    await tool('brief','bash',{'command':'git diff --check'},{'success':True,'output':{'stdout':'','stderr':'','returncode':0}},1,2)
                     raw={'model':'fixture','instructions':'Owner-recorded instructions',
                          'input':[{'role':'user','content':'Recorded message '+str(i)+' '+('content '*100)} for i in range(100)],
                          'tools':[{'name':'read_file'},{'name':'bash'}], 'reasoning':{'effort':'high'}, 'max_output_tokens':4096}
@@ -200,16 +213,22 @@ async def main():
                     log_hook(aid,'llm:request',{'request_id':'first','provider':'test','model':'fixture','message_count':100,'has_instructions':True,'raw':preview,'provider_payloads':{'raw':saved},'request_capture':{'redacted':True,'truncated':limited}},base+3)
                     log_hook(aid,'llm:response',{'request_id':'first','provider':'test','model':'fixture','duration_ms':1000,'raw_response':{'output':[{'type':'message','content':[{'type':'output_text','text':'Recorded response content'}]}],'status':'completed'},'usage':{'input_tokens':10,'output_tokens':2,'cost_usd':.001}},base+4)
                     log_hook(aid,'llm:response',{'kind':'llm','id':'model-first','sessionId':aid,'model':'fixture','provider':'test','startedAt':base+3,'endedAt':base+4,'phase':'completed','usage':{'inputTokens':10,'outputTokens':2,'totalTokens':12,'costUsd':.001,'costType':'reported'}},base+4)
+                    await observed('llm','model-first',3,4,label='Model call',provider='test',model='fixture',usage={'inputTokens':10,'outputTokens':2,'totalTokens':12,'costUsd':.001,'costType':'reported'})
                     for count,start in [(15,11),(16,13)]:
-                        tool('read'+str(count),'read_file',{'file_path':str(count)+'.txt'},
+                        await tool('read'+str(count),'read_file',{'file_path':str(count)+'.txt'},
                              {'success':True,'output':{'content':'\n'.join('Line '+str(i) for i in range(1,count+1))}},start,start+1)
-                    tool('owned','app_control',{'action':'inspect','authorization':'Bearer owner-recorded-value'},
+                    await tool('owned','app_control',{'action':'inspect','authorization':'Bearer owner-recorded-value'},
                          {'success':True,'output':{'value':'The full result is already here'}},15,16)
                     log_hook(aid,'llm:response',{'request_id':'second','model':'fixture','duration_ms':1000,'usage':{'input_tokens':20,'output_tokens':3,'cost_usd':.002}},base+18)
+                    log_hook(aid,'llm:response',{'kind':'llm','id':'model-second','sessionId':aid,'model':'fixture','startedAt':base+17,'endedAt':base+18,'phase':'completed','usage':{'inputTokens':20,'outputTokens':3,'totalTokens':23,'costUsd':.002,'costType':'reported'}},base+18)
+                    await observed('llm','model-second',17,18,label='Model call',model='fixture',usage={'inputTokens':20,'outputTokens':3,'totalTokens':23,'costUsd':.002,'costType':'reported'})
                 else:
-                    tool('after-final','bash',{'command':'git status --short'},{'success':True,'output':'Clean'},21,22)
+                    await tool('after-final','bash',{'command':'git status --short'},{'success':True,'output':'Clean'},21,22)
+                    log_hook(aid,'provider:request',{'kind':'llm','id':'model-small','sessionId':aid,'model':'fixture','startedAt':base+23,'phase':'running'},base+23)
                     log_hook(aid,'llm:request',{'request_id':'small','model':'fixture','raw':{'model':'fixture','input':'Small recorded request'}},base+23)
                     log_hook(aid,'llm:response',{'request_id':'small','model':'fixture','raw':'Small recorded response… [truncated]', 'request_capture':{'redacted':True,'truncated':True}},base+24)
+                    log_hook(aid,'llm:response',{'kind':'llm','id':'model-small','sessionId':aid,'model':'fixture','startedAt':base+23,'endedAt':base+24,'phase':'completed'},base+24)
+                    await observed('llm','model-small',23,24,label='Model call',model='fixture')
                 await service.event_log_view.refresh(aid)
             elif op=='chat-plan':
                 row=service._session(aid)
