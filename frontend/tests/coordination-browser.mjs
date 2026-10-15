@@ -480,4 +480,18 @@ try{
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await preserve();
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,noCoordinationForms:true,noGrantRequired:true,runtimeOwnedBindings:true,twoDistinctTaskRoots:true,twoArtifactRoundsPerRoot:true,firstRoundBytesRetained:true,laterReplyVersionsInspectable:true,malformedReferenceRepair:true,opaqueReferenceNotSaved:true,correctedRetentionRevision:true,latestOutcomeAfterRefresh:true,peerWokenGeneration:true,notifyNeverWakes:true,exactResultInspector:true,referencedArtifactOpen:true,qualifiedScriptedTerminal:true,continuationOncePerRequest:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false,outputDir}));
-}catch(error){await page?.screenshot({path:join(outputDir,'amplifier-coordination-failure.png')});console.error((await page?.locator("body").innerText())?.slice(-5000));throw error}finally{await browser?.close();fixture.kill()}
+}catch(error){
+ // Failure-only facts distinguish a replaced disclosure from a closed one or
+ // missing retained reports without retrying the interaction that failed.
+ try{console.error(JSON.stringify({coordinationFailure:await page?.evaluate(()=>{
+  const state=window.amplifier?.getState?.();let saved;try{saved=JSON.parse(sessionStorage.getItem('amplifier-coordination-v1')||'null')}catch{}
+  const dialog=document.querySelector('.a-overlay [role="dialog"]');
+  return {selectedSessionId:state?.selectedSessionId??null,sessionIds:(state?.sessions||[]).slice(0,12).map(row=>row.id),panel:state?.view?.panel??null,
+   bootVisible:!!document.querySelector('.boot'),dialogTitle:dialog?.querySelector('h2')?.textContent?.slice(0,100)??null,
+   disclosures:[...(dialog?.querySelectorAll('details')||[])].slice(0,32).map(row=>({summary:row.querySelector(':scope > summary')?.textContent?.slice(0,100),open:row.open,reportCount:row.querySelectorAll('[data-report-id]').length})),
+   targetCount:dialog?.querySelectorAll('.a-coordination-target').length??0,
+   reportIds:[...(dialog?.querySelectorAll('[data-report-id]')||[])].slice(0,16).map(row=>row.dataset.reportId),
+   savedWatchCount:saved?.selected?.length??0,savedCursorCount:Object.keys(saved?.cursors||{}).length,
+   savedReportCount:Object.values(saved?.results||{}).reduce((n,rows)=>n+(Array.isArray(rows)?rows.length:0),0)};
+ })}))}catch{}
+ await page?.screenshot({path:join(outputDir,'amplifier-coordination-failure.png')});console.error((await page?.locator("body").innerText())?.slice(-5000));throw error}finally{await browser?.close();fixture.kill()}
