@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 import yaml
 
+from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
 from amplifier_web.host.components import (
     ComponentResolver, HostComponentConflict, HostComponents, compose_bundles, merge_modules,
 )
@@ -37,6 +38,7 @@ async def test_actual_behavior_includes_choose_sources_and_namespace_roots(tmp_p
         'agents': {'worker': {'hooks': [{'module': 'hook-owned', 'source': source(ref='old'), 'config': {'child': True}}]}}}))
     registry = BundleRegistry(home=tmp_path / 'registry')
     config = HostConfig(tmp_path / 'app', tmp_path, {'bundle': {'app': [str(chosen / 'behavior.yaml')]},
+        'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
         'config': {'hooks': [{'module': 'hook-owned', 'config': {'scalar': 'settings'}}]}}, tmp_path / 'registry')
     loaded = await compose_configured_bundle(registry, await registry.load(str(root)), config)
     owned = next(row for row in loaded.hooks if row['module'] == 'hook-owned')
@@ -69,7 +71,6 @@ def test_named_instances_survive_host_composition_and_duplicates_merge():
 
 async def test_explicit_ci_root_is_chosen_without_adding_a_new_canonical_version(tmp_path):
     from amplifier_foundation import Bundle
-    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
     hook = 'hook-context-intelligence'
     chosen = source(repo='my-ci', ref='pinned', module=hook)
     sibling = 'tool-context-intelligence-transcript'
@@ -79,7 +80,7 @@ async def test_explicit_ci_root_is_chosen_without_adding_a_new_canonical_version
     # This ownership-only fixture has no registry; explicitly exclude defaults
     # instead of assuming an empty saved app list disables new capabilities.
     config = HostConfig(tmp_path / 'app', tmp_path, {'bundle': {'app': []},
-        'web_bundles': {'excluded': [IMAGEGEN_BEHAVIOR_URI]}}, tmp_path / 'registry')
+        'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}, tmp_path / 'registry')
     result = await compose_configured_bundle(None, loaded, config)
     assert result.hooks[0]['source'] == chosen
     assert result.tools[0]['source'] == source(repo='my-ci', ref='pinned', module=sibling)

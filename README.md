@@ -112,6 +112,31 @@ registration; the launcher separately checks that the app responds.
 
 The first message can take a few minutes while Unified prepares its runtime.
 
+## Default capabilities
+
+Ordinary conversations compose Unified shell, image generation, Computer Use,
+full Context Intelligence, and Model Routing over the selected root bundle.
+Existing explicit capability lists gain the latter four unless opted out;
+chosen source revisions and list order are retained. Saved snapshot bundles
+are complete plans and do not gain these additions.
+
+Use **Settings → Configured bundles** to disable or remove a default. A retained
+routing-matrix setting does not re-enable a disabled routing behavior. The
+Context Intelligence opt-out removes its analysis/navigation capabilities;
+Unified's existing local capture hook remains.
+
+New Computer Use access is read-only. It targets the **host computer**, not the
+browser's shared screen. Explicit module configuration can enable writes with
+`overrides.tool-computer-use.config.read_only: false`; existing explicit access
+settings remain authoritative. Child sessions cannot widen a parent's desktop
+restrictions.
+
+Context Intelligence forwarding requires explicit destination configuration;
+ambient server credentials alone do not enable it. Explicit routing matrices,
+agent provider choices, and per-delegation model pins take precedence over
+default role routing. Unavailable requested child routes fail visibly rather
+than silently substituting the session default.
+
 ## Create a dedicated desktop or mobile app
 
 You can add Unified to a desktop or mobile device as its own app-like window or home-screen icon. This does not install or move the Unified service; it opens the same workspace more directly.

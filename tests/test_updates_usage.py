@@ -8,6 +8,7 @@ import threading
 import pytest
 
 from test_updates_cache import cached, repository, service
+from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
 from amplifier_web.host import config
 from amplifier_web.shared_settings import settings_paths
 from amplifier_web.updates import configured_sources
@@ -210,6 +211,8 @@ async def test_cli_local_bundles_resolve_for_inventory_and_preparation(
     path.parent.mkdir(parents=True, exist_ok=True)
     document = 'bundle:\n  name: lane\n'
     path.write_text('---\n'+document+'---\nLocal instructions.\n' if path.suffix == '.md' else document)
+    (base / 'settings.yaml').write_text(json.dumps({
+        'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
     service.state['settings'].update(workspace=str(workspace), bundle='lane')
     service.state['workspaces'] = []
     before = path.read_bytes()

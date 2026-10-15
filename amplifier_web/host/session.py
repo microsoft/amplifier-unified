@@ -11,7 +11,7 @@ from pathlib import Path
 import stat
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private
-from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, installed_package_source
+from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
@@ -489,12 +489,39 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     root_identity = {key: getattr(loaded, key) for key in ('name', 'version') if hasattr(loaded, key)}
     components = required_components()
     if not snapshot:
-        from ..builtin_behaviors import IMAGEGEN_BEHAVIOR_URI, resolve_builtin_behavior
+        from ..builtin_behaviors import (
+            IMAGEGEN_BEHAVIOR_URI, COMPUTER_USE_BEHAVIOR_URI,
+            CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI,
+            default_behavior_uri, resolve_builtin_behavior,
+        )
+        from ..session_files import capture_dir, project_slug
+        context_defaults = set()
         for behavior in config.app_bundles:
             selected, _ = await load_configured_bundle(registry, config, resolve_builtin_behavior(behavior))
-            if behavior == IMAGEGEN_BEHAVIOR_URI:
+            canonical = default_behavior_uri(behavior)
+            if canonical == IMAGEGEN_BEHAVIOR_URI:
                 loaded, selected = imagegen_defaults(loaded, selected)
-            components.select_bundle(selected, config.module_sources)
+            elif canonical in {COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
+                if not any(row.get("module") == "hook-context-intelligence" for row in loaded.hooks):
+                    context_defaults.update(row.get("id") or row.get("instance_id") or row["module"]
+                                            for row in selected.hooks if row.get("module") == "hook-context-intelligence")
+                loaded, selected = capability_defaults(loaded, selected, {
+                    'tool-computer-use': {'read_only': True},
+                    'hook-context-intelligence': {
+                        # Merely installing the behavior must not adopt ambient
+                        # server credentials. Explicit scoped destinations win
+                        # later, while existing hook declarations stay intact.
+                        'destinations': {},
+                        'context_intelligence_server_url': '',
+                        'context_intelligence_api_key': '',
+                        'base_path': str(capture_dir(config.workspace, 'root').parents[3]),
+                        'project_slug': project_slug(config.workspace),
+                    },
+                })
+            if canonical in {COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
+                components.select_defaults(selected, loaded, config.module_sources)
+            else:
+                components.select_bundle(selected, config.module_sources)
             loaded = compose_bundles(loaded, selected)
         if not any(row.get('module') == 'hook-context-intelligence' for row in loaded.hooks):
             from ..session_files import capture_dir, project_slug
@@ -506,10 +533,10 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
                 'config': {'destinations': {}, 'base_path': str(capture_dir(config.workspace, 'root').parents[3]),
                            'project_slug': project_slug(config.workspace),
                            'additional_events': ['delegate:agent_spawned', 'delegate:agent_resumed', 'delegate:agent_completed', 'delegate:agent_cancelled', 'delegate:error']}})
-        if config.settings.get("routing") and not any(row.get("module") == "hooks-routing" for row in loaded.hooks):
-            selected, _ = await load_configured_bundle(registry, config, "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml")
-            components.select_bundle(selected, config.module_sources)
-            loaded = compose_bundles(loaded, selected)
+            context_defaults.add("hook-context-intelligence")
+        # Routing is now an ordinary opt-out-capable default. A retained matrix
+        # setting must not silently restore a behavior the user disabled.
+        explicit_context_forwarding(loaded, config.settings, context_defaults)
         loaded = _apply_settings(loaded, config)
         # Existing root defaults are explicit selections, not a new forced
         # version. Reuse their effective source for child/sibling declarations.
@@ -829,8 +856,12 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         for row in prepared.mount_plan.get('providers',[])}
     catalog_keys=mounted_catalog_keys(config.home,config.workspace,prepared.mount_plan.get('providers',[]),catalog_sources)
     try:
+        from .model_selection import prepare_default_routing
+        routing_policy = ({"before_initialize": prepare_default_routing}
+                          if not snapshot and any(row.get("module") == "hooks-routing" for row in loaded.hooks) else {})
         session = await prepared.create_session(session_id=runtime.session_id,
-            session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
+            session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
+            **routing_policy)
         coordinator = session.coordinator
         from ..provider_recording import install_request_redaction
         from ..session_files import capture_dir
