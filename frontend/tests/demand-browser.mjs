@@ -35,6 +35,10 @@ try{
  await toggle.click();await entered;await toggle.click();release();await page.waitForTimeout(200);
  assert.equal(await third.locator('.a-execution-node').count(),0);await page.unroute('**/api/conversation/detail?**');
  await toggle.click();await third.locator('[data-node-id="bulk-124"]').waitFor();assert.equal(await third.locator('.a-execution-node').count(),100,'reopening reads a bounded page');
+ await third.getByRole('button',{name:'Load earlier steps'}).click();
+ await third.locator('[data-node-id="bulk-0"]').waitFor();
+ assert.equal(await third.locator('.a-execution-node').count(),126,'explicitly loaded older page is present before sync');
+ const loadedStepIds=await third.locator('.a-execution-node').evaluateAll(nodes=>nodes.map(node=>node.dataset.nodeId));
  // Hold a delta response while two new revisions arrive. Existing DOM and
  // expanded tool details must remain mounted throughout, then catch up.
  await third.locator('[data-node-id="bulk-124"] button.a-execution-action-line').click();
@@ -50,12 +54,13 @@ try{
  const identities=await page.evaluate(async()=> (await fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'update-step'})})).json());
  await syncEntered;
  assert.equal(await third.getByText('Loading work details…',{exact:true}).count(),0);
- assert.equal(await third.locator('.a-execution-node').count(),100);
+ assert.equal(await third.locator('.a-execution-node').count(),126);
  assert.ok(await page.evaluate(()=>window.savedWorkRow.isConnected));
  await page.evaluate(async()=>fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'update-step',label:'Newest live step',phase:'running'})}));
  releaseSync();await third.getByText('Newest live step',{exact:true}).waitFor();
  assert.ok(await page.evaluate(()=>window.savedWorkRow===document.querySelector('[data-node-id="bulk-124"]')));
  assert.equal(await third.locator('[data-node-id="bulk-124"] button.a-execution-action-line').getAttribute('aria-expanded'),'true');
+ assert.deepEqual(await third.locator('.a-execution-node').evaluateAll(nodes=>nodes.map(node=>node.dataset.nodeId)),loadedStepIds,'live sync retains all explicitly loaded steps in order');
  await page.unroute('**/api/conversation/work-sync');
  // Visit a second chat, then delay returning to the cached first chat.
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),identities.second);
