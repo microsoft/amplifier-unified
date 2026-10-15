@@ -13,7 +13,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('..
  [fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls','--scoped-query-control'],{stdio:['ignore','pipe','pipe']});
 const base=['pinnedNavigation','recentNavigation','workspaceShortcuts'];
 const requested=extra=>[...base,...extra].sort();
-let browser,page,fixtureHome,allowSearch=()=>{},releaseSearch=()=>{},releaseReplacement=()=>{},primaryError;
+let browser,page,fixtureHome,fixtureUrl,queryProof=[],allowSearch=()=>{},releaseSearch=()=>{},releaseReplacement=()=>{},primaryError;
 let stderr='';fixture.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-16384)});
 const samples=[],checks=[],errors=[],responseTasks=[],frames=[];let bootstrapCount=0,subscriptionCount=0,expectRetryCooldown=false;
 function shape(shell,resources){
@@ -37,6 +37,7 @@ try{
   fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+'\n'+stderr))});
   fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}});
  });
+ fixtureUrl=url;
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
@@ -148,9 +149,9 @@ try{
  // an explicit retry settles through the normal resource owner and stream.
  const queryControl=async mode=>{
   const response=await page.request.post(url+'/fixture/scoped-query',{data:{mode,clientId:(await state()).client.id}});
-  assert.equal(response.status(),200);return response.json();
+  assert.equal(response.status(),200);const proof=await response.json();queryProof.push(proof);return proof;
  };
- await queryControl('hold');
+ assert.equal((await queryControl('hold')).catalogPaused,true);
  await act('session.rename',{id:chats[1],title:'Scoped B refreshed'});
  await expect.poll(async()=>(await (await page.request.get(url+'/fixture/scoped-query')).json()).entered).toBeGreaterThan(0);
  await expect(body.getByRole('status').filter({hasText:'Updating chat search'})).toBeVisible();
@@ -168,7 +169,9 @@ try{
  await queryControl('fail');
  await expect(body.getByRole('button',{name:'Retry chat search',exact:true})).toBeVisible();
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toBeVisible();
- const priorEntered=(await queryControl('hold')).entered;
+ const failedProof=await queryControl('hold'),priorEntered=failedProof.entered;
+ const failedKey=failedProof.events.findLast(event=>event.targeted&&event.failureFenceCurrent===true)?.key;
+ assert.ok(failedKey,'Record the exact failed current query before checking retry suppression');
  expectRetryCooldown=true;
  const rejectedRetry=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/shell/resources'&&response.request().postDataJSON()?.reason==='manual');
  await body.getByRole('button',{name:'Retry chat search',exact:true}).click();
@@ -181,12 +184,19 @@ try{
  await page.waitForTimeout(5100);
  assert.equal(subscriptionCount,beforeCooldownRequests);
  const heldProof=await (await page.request.get(url+'/fixture/scoped-query')).json();
+ queryProof.push(heldProof);
+ assert.equal(heldProof.catalogPaused,true);
+ assert.deepEqual(heldProof.currentFence,failedProof.currentFence,'Cooldown observes the same canonical query generation');
  assert.equal(heldProof.entered,priorEntered);
+ assert.equal(heldProof.events.filter(event=>event.key===failedKey).length,1,'The failed query must not execute automatically');
  assert.ok(heldProof.events.some(event=>event.targeted&&event.failureFenceCurrent===true),'The failed current query must belong to the visible Chats instance');
  expectRetryCooldown=false;
  await body.getByRole('button',{name:'Retry chat search',exact:true}).click();
  await expect.poll(async()=>(await (await page.request.get(url+'/fixture/scoped-query')).json()).entered).toBeGreaterThan(priorEntered);
- await queryControl('release');await waitCoverage(['sidebarSearch']);
+ const retriedProof=await queryControl('release');
+ assert.equal(retriedProof.catalogPaused,false);
+ assert.equal(retriedProof.events.filter(event=>event.key===failedKey).length,2,'The same query executes once more only after explicit Retry');
+ await waitCoverage(['sidebarSearch']);
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B refreshed',exact:true})).toBeVisible();
  await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toHaveCount(0);
  checks.push({heldQueryRetainsRows:true,queryFailureExplicitRetry:true,queryWaitKeepsVisibleControlsResponsive:true});
@@ -237,7 +247,7 @@ try{
  await Promise.all(responseTasks);assert.deepEqual(samples.filter(row=>!row.valid),[]);
  checks.push({reloadNewClient:true,reloadDraftAndCanonicalCanvasPreserved:true});
  console.log(JSON.stringify({passed:true,checks,requestCount:samples.length}));
-}catch(error){primaryError=error;console.error(error);if(page)await page.screenshot({path:path.join(output,'failure.png')}).catch(()=>{});throw error}
+}catch(error){if(page&&fixtureUrl)try{queryProof.push(await (await page.request.get(fixtureUrl+'/fixture/scoped-query',{timeout:2000})).json())}catch{};primaryError=error;console.error(error);if(page)await page.screenshot({path:path.join(output,'failure.png')}).catch(()=>{});throw error}
 finally{
  allowSearch();releaseSearch();releaseReplacement();
  await Promise.allSettled(responseTasks);
@@ -245,5 +255,5 @@ finally{
  try{await browser?.close()}catch(error){cleanupErrors.push(String(error));console.error('Browser cleanup failed',error)}
  try{if(fixture.exitCode===null&&fixture.signalCode===null){fixture.kill('SIGTERM');await new Promise(resolve=>{const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},5000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})})}}catch(error){cleanupErrors.push(String(error));console.error('Fixture cleanup failed',error)}
  if(cleanupErrors.length&&!primaryError)process.exitCode=1;
- await writeFile(path.join(output,'scoped-navigation.json'),JSON.stringify({passed:!primaryError&&!cleanupErrors.length,checks,samples,frames,bootstrapCount,subscriptionCount,pageErrors:errors,error:primaryError?.stack,cleanupErrors,fixtureHome,fixturePid:fixture.pid,fixtureStderr:stderr},null,2)).catch(error=>{console.error('Evidence write failed',error);if(!primaryError)process.exitCode=1});
+ await writeFile(path.join(output,'scoped-navigation.json'),JSON.stringify({passed:!primaryError&&!cleanupErrors.length,checks,samples,frames,queryProof,bootstrapCount,subscriptionCount,pageErrors:errors,error:primaryError?.stack,cleanupErrors,fixtureHome,fixturePid:fixture.pid,fixtureStderr:stderr},null,2)).catch(error=>{console.error('Evidence write failed',error);if(!primaryError)process.exitCode=1});
 }
