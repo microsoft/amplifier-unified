@@ -42,16 +42,47 @@
     {
       "source": "596a7ff08",
       "ui": "a8b8c4f8468eb04d",
-      "checks": ["14 ordinary workspace assertions", "4 Smart Canvas owner assertions"],
+      "checks": [
+        "14 ordinary workspace assertions",
+        "4 Smart Canvas owner assertions"
+      ],
       "passed": true
     },
     {
       "source": "17cdccdfd",
       "ui": "a8b8c4f8468eb04d",
-      "checks": ["Expired and denied sign-in with actual login lifecycle and disposable child", "Image preference inspection/configuration without model or image submission", "Badge preference changes preserve pending Activity, decisions and private draft"],
+      "checks": [
+        "Expired and denied sign-in with actual login lifecycle and disposable child",
+        "Image preference inspection/configuration without model or image submission",
+        "Badge preference changes preserve pending Activity, decisions and private draft"
+      ],
       "browserScenariosPassed": 3,
-      "seconds": [5.638, 7.252, 6.081],
-      "limits": ["Synthetic provider and shortened sign-in deadline", "No external account, image generation or OS notification acceptance"]
+      "seconds": [
+        5.638,
+        7.252,
+        6.081
+      ],
+      "limits": [
+        "Synthetic provider and shortened sign-in deadline",
+        "No external account, image generation or OS notification acceptance"
+      ]
+    },
+    {
+      "source": "ba4545fbd",
+      "ui": "a8b8c4f8468eb04d",
+      "checks": [
+        "Saved-version browse/reload and one explicit restore preserve exact runtime input receipts",
+        "All three ordinary layout values preserve the actual reading message and pixel offset, private draft and canonical conversation records"
+      ],
+      "browserScenariosPassed": 2,
+      "seconds": [
+        4.092,
+        4.066
+      ],
+      "limits": [
+        "Desktop pointer and synthetic history/runtime",
+        "Does not qualify universal external-effect replay or every narrow-layout reading position"
+      ]
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
