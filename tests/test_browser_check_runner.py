@@ -218,6 +218,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        'update-restart': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-restart-artifacts'},
         'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
@@ -229,7 +230,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row['env'] == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 69
+    assert len(original) == 65 and len(rows) == 70
     assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == 'ca60c5f5e0a9bf5fd94795d64ea6c8d9c286b2c5f481b7d3c07d5f32fb522173'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
@@ -271,5 +272,5 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     install = next(index for index, line in commands if 'uv pip install' in line and '--reinstall .' in line)
     for script in installed_overlap:
         assert any(index > install and f'node {script}' in line for index, line in commands)
-    # All 108 original scripts and the three added navigation regressions have a lane.
-    assert len(readiness_scripts | extended_scripts) == 111
+    # All 108 original scripts and the three added navigation regressions and confirmed restart journey have a lane.
+    assert len(readiness_scripts | extended_scripts) == 112
