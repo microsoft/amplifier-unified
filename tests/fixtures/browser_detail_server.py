@@ -106,6 +106,9 @@ async def main():
                 service.state.update(selectedSessionId=row['id'],selectedWorkspaceId=row['workspaceId'])
             elif op=='live-response':
                 row=service._session(args['id'])
+                # Match actual send admission: live callbacks belong to the
+                # active web conversation, not the passive native-file reader.
+                row['historyManaged']=False
                 await service.on_runtime_event('runtime.status',{'sessionId':row['id'],'status':'working'})
                 await service.on_runtime_event('assistant.message',{'sessionId':row['id'],'text':'A new live response.'})
                 await service.on_runtime_event('assistant.delta',{'sessionId':row['id'],'text':'Still writing...'})

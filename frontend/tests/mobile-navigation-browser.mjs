@@ -28,10 +28,10 @@ try{
   await page.setViewportSize({width,height:844});await page.waitForTimeout(150);
   const metrics=await page.evaluate(()=>{
    const box=s=>{const el=document.querySelector(s),b=el.getBoundingClientRect();return {x:b.x,width:b.width,height:b.height,display:getComputedStyle(el).display}};
-   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-top'),title:box('.a-mobile-chat-title'),nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-top button')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),width:b.getBoundingClientRect().width}))};
+   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),title:box('.a-work-heading strong'),nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),width:b.getBoundingClientRect().width}))};
   });
   results.push(metrics);assert.equal(metrics.body,width);assert.equal(metrics.font,'14px');
-  if(width<=760){assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');assert.ok(metrics.title.width>100);assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Send feedback','More app options','Open canvas']);assert.ok(metrics.actions.every(row=>row.width>=44))}
+  if(width<=760){assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');assert.ok(metrics.title.width>100);assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Chat','Open canvas']);assert.ok(metrics.actions.every(row=>row.width>=44))}
   await page.screenshot({path:`${out}/chat-${width}.png`});
   if(width<=760){
    await page.getByRole('button',{name:'Open navigation',exact:true}).tap();await drawer.waitFor();
@@ -56,7 +56,7 @@ try{
  assert.ok(await page.locator('.a-conversation').evaluate(el=>el.inert));
  await page.screenshot({path:`${out}/drawer.png`});assert.ok(await drawer.locator('input').evaluateAll(nodes=>nodes.filter(node=>node.getClientRects().length).every(node=>parseFloat(getComputedStyle(node).fontSize)>=16)));
  await page.keyboard.press('Shift+Tab');assert.ok(await drawer.evaluate(el=>el.contains(document.activeElement)));
- const details=drawer.locator('.a-navigation-more').first();await details.click();await page.locator('.a-navigation-flyout').waitFor();
+ const details=drawer.locator('.a-navigation-more').first();await details.focus();await details.click();await page.locator('.a-navigation-flyout').waitFor();
  await page.screenshot({path:`${out}/details.png`});
  await page.keyboard.press('Escape');assert.equal(await drawer.isVisible(),true);
  await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelector('.a-nav-slot').hidden);
@@ -65,10 +65,10 @@ try{
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await page.getByRole('button',{name:'Close navigation',exact:true}).tap();
  assert.equal(await drawer.isVisible(),false);
- await page.getByRole('button',{name:'More app options',exact:true}).click();
- await page.getByRole('button',{name:'Chat details and export',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Chat',exact:true}).click();
+ await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Chat info',exact:true}).waitFor();
  await page.screenshot({path:`${out}/more.png`});
- assert.ok(await page.getByRole('dialog',{name:'More app options',exact:true}).evaluate(el=>el.contains(document.activeElement)));
+ assert.ok(await page.getByRole('group',{name:'Chat',exact:true}).evaluate(el=>el.contains(document.activeElement)));
  await page.keyboard.press('Escape');
  for(const scheme of ['dark','light']){
   await patch({scheme});await page.setViewportSize({width:320,height:740});
@@ -100,7 +100,7 @@ try{
  await page.screenshot({path:`${out}/canvas.png`});
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.panes.conversation.interactive),false);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.controls.some(control=>control.label==='Message Amplifier')),false);
- await page.getByRole('button',{name:'Back to chat',exact:true}).click();
+ await page.getByRole('button',{name:'Close canvas',exact:true}).click();
  assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
  assert.equal(await page.locator('.a-messages').evaluate(el=>el.scrollTop),scrollBefore);
  await page.waitForTimeout(1500);
