@@ -18,10 +18,10 @@ export async function selectWorkspaceChat(dispatch,id,isCurrent){
  return response;
 }
 
-export function CoordinationPanel({dispatch,sessionId,session,onOpenChat}){
+export function CoordinationPanel({dispatch,sessionId,session,onOpenChat,expectedWorkspace}){
  const [controls,setControls]=useState(false);
  return <div className="a-coordination a-workspace-work">
-  {sessionId?<RelatedWork key={sessionId} dispatch={dispatch} sessionId={sessionId} session={session} onOpenChat={onOpenChat}/>:<p>Open a chat to inspect work in its workspace.</p>}
+  {sessionId?<RelatedWork key={sessionId} dispatch={dispatch} sessionId={sessionId} session={session} onOpenChat={onOpenChat} expectedWorkspace={expectedWorkspace}/>:<p>Open a chat to inspect work in its workspace.</p>}
   <details onToggle={event=>setControls(event.currentTarget.open)}><summary>Follow up or watch work</summary>
    {controls&&sessionId&&<CoordinationTargets dispatch={dispatch} sessionId={sessionId}/>}
   </details>
@@ -103,7 +103,7 @@ function ResultFileStatus({response}){
  return null;
 }
 
-export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
+export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorkspace}){
  const visit=useRef(0),openingRef=useRef(false),sectionRef=useRef(null);
  const [review,setReview]=useState(false);
  const [opening,setOpening]=useState(null);
@@ -114,6 +114,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat}){
   const state=await dispatch('coordination.context',{sessionId},{feedback:false});
   if(current!==visit.current)return;
   if(!state.result.workspace)throw Error('The workspace is unavailable.');
+  if(expectedWorkspace&&state.result.workspace!==expectedWorkspace)throw Error('This chat no longer belongs to the workspace being reviewed. Refresh the chat list.');
   const peers=await dispatch('coordination.list',{workspace:state.result.workspace,limit:20,includeWorkers:false},{feedback:false});
   if(current!==visit.current)return;
   setContext(state.result);setInspected({});setItems(peers.result.items);setNext(peers.result.nextOffset??null);

@@ -1,8 +1,9 @@
+import {WorkspaceWork} from './workspace-work';
 import {WorkspaceConfiguration} from './workspace-configuration';
 import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal,Users} from 'lucide-react';
+import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
 import {useNavigationController,ChatList,NavigationEditor,ChatSearch} from './shell/navigation-components';
 import {WorkspaceCleanup} from './storage-settings';
@@ -59,7 +60,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
-   {!browsing&&session&&<><button type="button" className="a-soft a-work-overview-entry" aria-label="Workspace work" onClick={()=>open('coordination')}><Users/><span className="a-work-overview-long">Workspace work</span><span className="a-work-overview-short" aria-hidden="true">Work</span></button><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>
+   {!browsing&&session&&<><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
     <button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin'}</button>
     <button onClick={()=>open('chat-share')}><Share2/>Share or save</button>
@@ -114,6 +115,7 @@ function WorkBrowser({host,workspaceHost,state,act}){
  </>}<WorkspaceResources state={state} act={act} workspaceId={surface==='workspace'&&tab==='details'?workspace?.id:undefined}/>{active&&<>
   {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceBundleDefault key={workspace.id} workspace={workspace} state={state} act={act}/>}
   {surface==='workspaces'?<><NavigationResourceStatus state={workspaceModel.state} resource="workspaceExplorer" label="workspaces" refresh={workspaceModel.refreshResources}/>{hasNavigationResource(workspaceModel.state,'workspaceExplorer')?<WorkspaceExplorer state={workspaceModel.state} act={workspaceModel.act} onEdit={workspaceModel.setDraft} heading={false} onSelect={row=>nav.browse('workspace',row.workspaceId)}/>:!workspaceModel.state.navigationResourcePending?.workspaceExplorer&&<p role="status">Loading workspaces…</p>}</>:<>
+   {surface==='workspace'&&workspace&&!workspacePending&&<WorkspaceWork key={workspace.id} workspace={workspace} session={state.sessions?.find(row=>row.id===state.selectedSessionId)} dispatch={act} onOpenChat={id=>act('session.select',{id})}/>}
    {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceReadiness state={state} act={act} workspaceId={workspace.id}/>}
    {surface==='workspace'&&workspace&&<><div className="a-work-tabs" role="group" aria-label="Workspace view">{['chats','files','details'].map(key=><button key={key} type="button" aria-pressed={tab===key} data-action="view.update" onClick={()=>setTab(key)}>{key[0].toUpperCase()+key.slice(1)}</button>)}</div>{tab==='details'&&<div className="a-work-details"><CopyDetail label="Folder" value={workspace.path}/><p>Chats are discovered from native Amplifier history for this folder. Files stay in place and are visible from your terminal.</p><button className="a-soft" onClick={()=>workspaceModel.setDraft({mode:'rename',id:workspace.id,name:workspace.name})}>Rename workspace</button><WorkspaceCleanup key={workspace.id} id={workspace.id} act={act}/><WorkspaceConfiguration key={workspace.id} workspace={workspace} state={state} act={act}/></div>}{tab==='files'&&<WorkspaceFiles key={workspace.id} workspace={workspace} state={state} act={act}/>}</>}
 
