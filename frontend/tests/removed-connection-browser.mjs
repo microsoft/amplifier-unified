@@ -16,6 +16,8 @@ try{
  const actions=[];page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
  const inspect=async()=>await(await page.request.get(url+'/fixture')).json();
  await page.goto(url);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ const composer=page.getByRole('textbox',{name:'Message Amplifier'}),retainedDraft='Keep this private draft while replacing the removed connection.';
+ await composer.fill(retainedDraft);await expect(composer).toHaveDraft(retainedDraft);
  const before=await inspect();
  await openSettingsPage(page,'ai-connections');
  const connections=page.locator('[data-part="ai-connections"]');
@@ -23,6 +25,7 @@ try{
  await connections.getByRole('button',{name:'Remove connection',exact:true}).click();
  await expect(connections.getByText('Connection removed. Chats that used it will need a replacement connection when resumed.',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(composer).toHaveDraft(retainedDraft);
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  const panel=page.getByRole('region',{name:'Conversation model',exact:true});
  await expect(panel.locator('#chat-provider')).toBeEnabled();
@@ -38,10 +41,10 @@ try{
  await panel.getByRole('button',{name:'Close model settings',exact:true}).click();
  await page.reload();
  await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toContainText('new-model');
+ await expect(composer).toHaveDraft(retainedDraft);
  const queued=await inspect();assert.deepEqual(queued.started,[]);assert.deepEqual(queued.sent,[]);
  assert.deepEqual(queued.messages,before.messages,'Selection must preserve the uncertain prior input');
  assert.equal(queued.savedSelection.instance,'removed-account','Only explicit Send may replace the saved runtime pin');
- const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await composer.fill('Only this new request is authorized');await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(page.getByText('Replacement received the new message.',{exact:true})).toBeVisible();
  const after=await inspect();assert.equal(after.started.length,1);assert.equal(after.sent.length,1);
@@ -49,5 +52,5 @@ try{
  assert.notEqual(after.sent[0].inputId,'uncertain-prior-input');
  assert.deepEqual(after.messages.find(row=>row.inputId==='uncertain-prior-input'),before.messages[0]);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,checks:['real Settings connection removal','real scoped settings and bundle catalog composition','missing saved provider retained until explicit replacement','replacement selection survives reload without starting worker','exact one new send without prior replay'],limits:['synthetic provider metadata and execution; native worker pin restoration is covered separately']}));
+ console.log(JSON.stringify({passed:true,checks:['real Settings connection removal','real scoped settings and bundle catalog composition','missing saved provider retained until explicit replacement','nonempty private draft and exact history survive removal, replacement and reload together','replacement selection survives reload without starting worker','exact one new send without prior replay'],limits:['synthetic provider metadata and execution; native worker pin restoration is covered separately']}));
 }finally{try{await browser?.close()}finally{fixture.kill('SIGTERM')}}
