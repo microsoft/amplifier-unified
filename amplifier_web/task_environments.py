@@ -28,8 +28,7 @@ from filelock import FileLock, Timeout as LockTimeout
 from . import task_resources as storage
 
 REPOSITORY = 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe'
-# Updated with the qualified core revision when the integration is finalized.
-DTU_COMMIT = ''
+DTU_COMMIT = 'a922fd3ccd10cc1e6f7b75b4e3fe544cfc90f8b1'
 APPROVED_IMAGE = 'docker.io/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f'
 KIND = 'test-environment'
 PROFILE = 'linux-python'
