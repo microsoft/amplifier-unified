@@ -248,8 +248,16 @@ requested `sessionId`, `filter`, and `index`; the page's own `index` is the
 clamped result index. Missing or mismatched coverage means not loaded, never an
 empty history. Closing the dialog retires its page from the next stream frame.
 
-The selected summary retains `subagentCount`, obtained by the canonical indexed
-parent predicate without decoding a child page. A selected child's exact parent
+The selected summary supplies `subagentCount` when a visible control can use it:
+Work & automation, its legacy runtime Direction view, the worker-history dialog,
+or an open non-settings Canvas while viewing a chat. An open Canvas is treated
+conservatively because its artifact views are projected separately. Ordinary
+chat streaming with those controls closed omits the count and performs no child
+history query. Opening a control reads current membership; omission is not an
+empty history. The open worker page supplies its own unfiltered total; other
+count consumers use the canonical indexed parent predicate without decoding a
+child page. Explicit and independent-reader contracts retain their count.
+A selected child's exact parent
 summary remains available for Open parent. Selected messages, Work details,
 approvals/questions, private drafts and Canvas, voice context, attention and
 receipts keep their existing behavior. Shell descriptor and resource revisions

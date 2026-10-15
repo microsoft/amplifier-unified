@@ -28,7 +28,9 @@ def setup(app_factory, *, roots=80, children=120):
 async def test_ordinary_web_publication_never_constructs_hidden_pages(app_factory, monkeypatch):
     app, rows = setup(app_factory)
     selected = app._session(rows[0]['id'], hydrate=False)
-    selected.update(historyLoaded=True,
+    # These are app-owned live bodies; native-managed fixtures instead read
+    # their separate disk window and intentionally ignore this messages list.
+    selected.update(historyLoaded=True, historyManaged=False,
         messages=[{'id': 'answer', 'role': 'assistant', 'text': 'Selected response'}],
         workers=[{'id': 'visible-work', 'status': 'complete', 'label': 'Work retained'}],
         approvals=[{'id': 'permission', 'status': 'pending', 'tool': 'filesystem'}],
@@ -53,13 +55,61 @@ async def test_ordinary_web_publication_never_constructs_hidden_pages(app_factor
         assert {row['id'] for row in public['sessions']} == {selected['id']}
         row = public['sessions'][0]
         assert {key: row[key] for key in expected} == expected
-        assert row['subagentCount'] == 120
+        assert 'subagentCount' not in row
         assert any(worker['id'] == 'visible-work' for worker in row['workers'])
         assert row['draft'] == f'Private {identity}'
         assert public['canvas']['content'] == f'Canvas {identity}'
         assert public['attention']['sessions'][selected['id']] > 0
         assert public['library'] == {'workspaceCount': 4, 'bounded': True, 'detailPath': '/api/state/detail'}
-    assert counts == [selected['id'], selected['id']]
+    assert counts == []
+    assert app.runtime.started == [] and app.runtime.sent == []
+
+
+@pytest.mark.parametrize('view,canvas,expected', [
+    ({'panel': 'chat-work'}, {}, True),
+    ({'panel': 'runtime', 'runtimeDraft': {'tab': 'direction'}}, {}, True),
+    ({'panel': 'runtime', 'runtimeDraft': {'tab': 'tools'}}, {}, False),
+    ({'panel': None}, {'open': True, 'placeholder': True}, True),
+    ({'panel': None}, {'open': False}, False),
+    ({'panel': None, 'settingsCanvas': True}, {'open': True}, False),
+    ({'panel': None, 'workSurface': 'workspace'}, {'open': True}, False),
+    ({'panel': None, 'workSurface': 'home'}, {'open': True}, False),
+])
+async def test_worker_count_follows_each_clients_visible_controls(app_factory, monkeypatch, view, canvas, expected):
+    app, rows = setup(app_factory, roots=3, children=2)
+    record = app.clients.records['web-a']
+    record['view'].update(view)
+    record['canvas'].update(canvas)
+    app._publish()
+    calls = []
+    original = app.directory.child_count
+    def count(state, parent):
+        calls.append(parent['id'])
+        return original(state, parent)
+    monkeypatch.setattr(app.directory, 'child_count', count)
+    selected = snapshot(app, 'web-a')['sessions'][0]
+    assert (selected.get('subagentCount') == 2) is expected
+    if not expected:
+        assert 'subagentCount' not in selected
+    assert calls == ([rows[0]['id']] if expected else [])
+    # Another client's hidden history is neither counted nor presented as empty.
+    assert 'subagentCount' not in snapshot(app, 'web-b')['sessions'][0]
+    assert calls == ([rows[0]['id']] if expected else [])
+
+
+async def test_reopening_worker_controls_reads_current_membership(app_factory, monkeypatch):
+    app, rows = setup(app_factory, roots=3, children=2)
+    await command(app, 'web-a', 'view.update', {'patch': {'panel': 'chat-work'}})
+    assert snapshot(app, 'web-a')['sessions'][0]['subagentCount'] == 2
+    await command(app, 'web-a', 'view.update', {'patch': {'panel': None}})
+    child = app._session(rows[-1]['id'], hydrate=False)
+    child.update(parentId=rows[1]['id'], nativeParentId=rows[1]['nativeIdentity'], historyManaged=False)
+    with monkeypatch.context() as patch:
+        patch.setattr(app.directory, 'child_count', lambda *a: pytest.fail('Hidden child history queried'))
+        app._publish(session_ids={child['id']})
+        assert 'subagentCount' not in snapshot(app, 'web-a')['sessions'][0]
+    await command(app, 'web-a', 'view.update', {'patch': {'panel': 'chat-work'}})
+    assert snapshot(app, 'web-a')['sessions'][0]['subagentCount'] == 1
     assert app.runtime.started == [] and app.runtime.sent == []
 
 
@@ -85,7 +135,7 @@ async def test_selected_context_never_counts_or_finds_an_unused_library_root(app
     monkeypatch.setattr(app.directory, 'decode', decode)
     with app.clients.bind('web-a'):
         queue = app.subscribe()
-    # A publication still carries current selection, exact child count and the
+    # A publication still carries current selection and the
     # workspace count used by removal controls; no library-wide read is needed.
     app._publish_changes(globals={'sharedHistory'})
     public = queue.get_nowait()
@@ -127,7 +177,7 @@ async def test_child_page_is_private_scoped_and_retired_on_close(app_factory, mo
     public = snapshot(app, 'web-a')
     assert public['browserResources'] == ['selectedContext'] and not PAGES.intersection(public)
     assert {row['id'] for row in public['sessions']} == {selected}
-    assert public['sessions'][0]['subagentCount'] == 119
+    assert 'subagentCount' not in public['sessions'][0]
     assert public['view']['draft'] == 'Private web-a'
     assert public['canvas']['content'] == 'Canvas web-a'
     app._publish()
@@ -142,6 +192,7 @@ async def test_selected_child_keeps_exact_dormant_parent_and_voice_context(app_f
     voice['messages'] = [{'id': 'voice-message', 'role': 'assistant', 'text': 'Voice conversation'}]
     child['messages'] = [{'id': 'child-message', 'role': 'assistant', 'text': 'Child conversation'}]
     child['historyLoaded'] = voice['historyLoaded'] = True
+    child['historyManaged'] = voice['historyManaged'] = False
     app.state['sessions'] = [child, voice]
     app.state['selectedSessionId'] = child['id']
     app.state['voice']['sessionId'] = voice['id']
@@ -155,7 +206,7 @@ async def test_selected_child_keeps_exact_dormant_parent_and_voice_context(app_f
     projected = {row['id']: row for row in public['sessions']}
     assert set(projected) == {child['id'], voice['id'], rows[0]['id']}
     assert projected[child['id']]['parentId'] == rows[0]['id']
-    assert projected[child['id']]['subagentCount'] == 0
+    assert 'subagentCount' not in projected[child['id']]
     assert projected[rows[0]['id']]['title'] == rows[0]['title']
     assert projected[rows[0]['id']]['messages'] == []
     assert projected[voice['id']]['messages'][0]['text'] == 'Voice conversation'
@@ -182,6 +233,7 @@ async def test_explicit_and_independently_released_client_reads_keep_contract(ap
     assert PAGES <= snapshot(app, 'terminal').keys()
     assert PAGES <= app.browser_state().keys()
     for public in (detail, snapshot(app, 'terminal'), app.browser_state()):
+        assert next(row for row in public['sessions'] if row['id'] == rows[0]['id'])['subagentCount'] == 2
         assert public['library']['sessionCount'] == 3
         assert public['library']['continueSessionId'] == rows[0]['id']
         assert public['library']['workspaceCount'] == 4
