@@ -10,6 +10,7 @@ import uuid
 # Only host code installs this callback; never accept it in action arguments.
 CURRENT = ContextVar('configuration_authority', default=None)
 EFFECTS = {
+    'test_environments': 'Copy this task’s current Git working area into an isolated test environment, run checks, stop it, and remove it after retaining source and artifacts',
     'file_access': 'Change file-access settings',
     'connections': 'Change provider connections, executable sources and credentials',
     'host_defaults': 'Change app-wide defaults, update automation and background preparation policy',
@@ -50,6 +51,8 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
+    if action in {'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove'}:
+        return 'test_environments', 'session'
     if action in PERSISTENT:
         if 'scope' not in args:
             raise ValueError('Choose an explicit configuration scope: session, local, project, or global. No settings were changed.')

@@ -341,6 +341,8 @@ from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
 from .workspace_resources import definitions as resource_reservation_definitions
 ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
+from .task_environments import definitions as environment_definitions
+ACTION_DEFINITIONS.update(environment_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
@@ -406,6 +408,7 @@ for _access, _actions in {
         *canvas_version_definitions(schema, string),
         *publishing_definitions(schema, string),
         *resource_reservation_definitions(schema, string),
+        *environment_definitions(schema, string),
         *assignment_definitions(schema, string),
     },
 }.items():
@@ -1748,6 +1751,9 @@ class AppService:
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in environment_definitions(schema, string):
+            from .task_environments import dispatch as environment_dispatch
+            return await environment_dispatch(self, action, args, origin, caller_session_id, configuration_authority)
         if action in resource_reservation_definitions(schema, string):
             from .workspace_resources import dispatch_reservation
             return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
@@ -4376,7 +4382,7 @@ class AppService:
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.environments.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.

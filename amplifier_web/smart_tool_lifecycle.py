@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -321,6 +320,7 @@ class Lifecycle:
                     dependents.append(server["name"])
             if dependents:
                 raise ValueError("Remove these connection registrations before uninstalling: " + ", ".join(dependents)[:500])
-            await asyncio.to_thread(shutil.rmtree, folder)
+            from .task_environments import remove_installation
+            await asyncio.to_thread(remove_installation, self.service.data_dir, identity, folder)
             await self._change(lambda state: state.update(installations=[p for p in state["installations"] if p["id"] != identity]))
             return {"id": identity, "status": "uninstalled", "removedPath": str(folder), "externalToolWork": "unchanged"}
