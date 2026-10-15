@@ -23,7 +23,11 @@ def test_recent_threshold_includes_pins_before_paging(count, size, pages):
     state['view']['navChatPage'] = {**page['scope'], 'index': 999}
     final = snapshot(state, section='recent')
     assert final['index'] == pages - 1 and final['end'] == count + 1
-    assert 'pin' in ids(final)
+    all_ids = []
+    for index in range(pages):
+        state['view']['navChatPage'] = {**page['scope'], 'index': index}
+        all_ids.extend(ids(snapshot(state, section='recent')))
+    assert all_ids.count('pin') == 1 and len(all_ids) == count + 1
     if count:
         state['view']['navFilter'] = 'chat-0'
         filtered = snapshot(state, section='recent')

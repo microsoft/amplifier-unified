@@ -53,7 +53,7 @@ test('pin and unpin use shared actions without selecting chats or rewriting acti
  let root;const render=()=>React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]});
  await renderAct(async()=>{root=create(render())});
  const rows=()=>root.root.findAll(node=>node.type==='div'&&node.props['data-session-id']).map(node=>node.props['data-session-id']);
- assert.deepEqual(rows(),['b','a','c']);
+ assert.deepEqual(rows(),['b','a','c','b']);
  assert.equal(root.root.findByProps({'aria-label':'Pinned items'}).findAll(node=>node.type==='div'&&node.props['data-session-id']).length,1);
  let detail;const renderDetail=chat=>React.createElement(ChatDetails,{chat,model:{state,act,draft:{},choose:()=>{},setDraft:()=>{}},now:100,close:()=>{}});
  await renderAct(async()=>{detail=create(renderDetail({...state.sessions[1],pinned:true}))});
