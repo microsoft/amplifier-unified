@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-15T21:06:34.895670+00:00",
+  "sourceCommitBeforeSquash": "2639ecb7df253249cba6fa60500e05cfd6d21a4c",
+  "sourceSha256": {
+    "frontend/tests/standard-ux-final-settings-browser.mjs": "3d3286e6c471fbc77f888309b812b3723cb0b30ebc0f8c30f33aecde893966e7",
+    "frontend/tests/standard-ux-navigation-final-browser.mjs": "d65bc992062543dafd1a18f66c86bd7ddd6d73b5f7d054383959f5f962a7d4d2",
+    "frontend/tests/standard-ux-workspace-unavailable-browser.mjs": "1ad09b83a38cc224e25809bdc746f6c78d749b60da6d86ae1bc248f5e003e20f",
+    "tests/fixtures/standard_preferences_final_ui_server.py": "b2441329b4e5947a189ae4a198f42b28ff4b91096c32ff683daf5826cceb1a82",
+    "tests/fixtures/standard_navigation_ui_server.py": "23f645c288d0a683a64b3e67f3a95881b1b82d7de17b2508e7463c953511c31a"
+  },
+  "applicationContext": "Frozen1d993 baseline plus recorded product patches in execution-source; not a relabeled complete integration build.",
+  "checks": [
+    {
+      "batch": "33",
+      "scenario": "standard-ux-workspace-unavailable",
+      "status": "passed",
+      "seconds": 2.563,
+      "sourceSha256": "1ad09b83a38cc224e25809bdc746f6c78d749b60da6d86ae1bc248f5e003e20f",
+      "receipt": "output/readiness-day-20261015/ui-inventory/functional-33/results.json",
+      "build": {
+        "version": "0.20.165",
+        "id": "1621087b29168491"
+      },
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "33b",
+      "scenario": "standard-ux-navigation-final",
+      "status": "passed",
+      "seconds": 3.617,
+      "sourceSha256": "d65bc992062543dafd1a18f66c86bd7ddd6d73b5f7d054383959f5f962a7d4d2",
+      "receipt": "output/readiness-day-20261015/ui-inventory/functional-33b/results.json",
+      "build": {
+        "version": "0.20.165",
+        "id": "1621087b29168491"
+      },
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "33c",
+      "scenario": "standard-ux-final-settings",
+      "status": "passed",
+      "seconds": 8.078,
+      "sourceSha256": "3d3286e6c471fbc77f888309b812b3723cb0b30ebc0f8c30f33aecde893966e7",
+      "receipt": "output/readiness-day-20261015/ui-inventory/functional-33c/results.json",
+      "build": {
+        "version": "0.20.165",
+        "id": "1621087b29168491"
+      },
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    }
+  ],
+  "failuresPreserved": [
+    {
+      "receipt": "output/readiness-day-20261015/ui-inventory/functional-33/results.json",
+      "cause": "Theme sample selector included miniature decorative swatch text. Initial setup prefix and separate missing-path case passed; whole Settings case remains failed."
+    },
+    {
+      "receipt": "output/readiness-day-20261015/ui-inventory/functional-33b/results.json",
+      "cause": "Test expected previous entry Appearance instead of declared canonical parent Advanced. Exact labeled Back destination corrected; theme/scopes prefix and separate navigation passed."
+    }
+  ],
+  "limits": [
+    "Functional observations under shared DTU load, not latency benchmarks.",
+    "Named three appearances/two schemes use visibility/geometry/nontransparent text, not contrast compliance.",
+    "Settings Back uses declared parent hierarchy, not arbitrary prior-entry history.",
+    "Notification send boundary is observed and denied; no real phone/server or account acceptance.",
+    "Missing-path uses exact owned local folder parking; no external mount or running-worker outage.",
+    "Source discovery and shared pattern reuse do not grant unseen control/effect passes."
+  ],
+  "ledgerSummary": {
+    "workflows": 198,
+    "outcomes": 663,
+    "outcomeStatus": {
+      "covered-in-context": 601,
+      "partially-observed": 44,
+      "not-run": 18
+    },
+    "workflowsWithOutcomeEvidence": 196,
+    "workflowsAllOutcomesObservedInContext": 157,
+    "ordinaryPathStatus": {
+      "observed-in-context": 188,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  }
+}

@@ -53,6 +53,10 @@ async def main(home):
         await service.dispatch('view.update',{'patch':{'navPinned':True,'navChatScope':'all','panel':None}})
     service._publish()
     store=SessionStore.for_app(home/'app',str(workspace));new_id='navigation-native-new'
+    parked=home/'temporarily-unavailable-workspace'
+    def owned_folder(row):
+        path=Path(row['path'])
+        return parked if owned_workspaces and row['id']==owned_workspaces[-1]['id'] and not path.exists() and parked.exists() else path
     def auth(request):
         if request.headers.get('Authorization')!='Bearer fixture-browser-control-token':raise web.HTTPForbidden()
     async def inspect(request):
@@ -64,7 +68,7 @@ async def main(home):
                 'file':(workspace/'keep.txt').read_text(),'runtime':{'started':runtime.started,'sent':runtime.sent,'stopped':runtime.stopped},
                 'nativePresent':(store.directory(new_id)/'transcript.jsonl').exists(),
                 'registeredWorkspaces':[{'id':row['id'],'path':row['path'],'name':row['name'],'archived':row.get('archived',False)}for row in service.state['workspaces']],
-                'ownedFiles':{row['id']:(Path(row['path'])/'keep.txt').read_text()for row in owned_workspaces},
+                'ownedFiles':{row['id']:(owned_folder(row)/'keep.txt').read_text()for row in owned_workspaces},
                 'preservedNativeSha256':hashlib.sha256((native_store.directory('workspace-preserved-native')/'transcript.jsonl').read_bytes()).hexdigest() if owned_workspaces else None})
     async def seed_native(request):
         auth(request)
@@ -73,6 +77,17 @@ async def main(home):
         return web.json_response({'nativeId':new_id})
     app.router.add_get('/fixture/navigation',inspect)
     app.router.add_post('/fixture/seed-native',seed_native)
+    async def unavailable(request):
+        auth(request)
+        if not owned_workspaces:raise web.HTTPBadRequest()
+        body=await request.json()
+        if set(body)!={'available'} or type(body['available'])is not bool:raise web.HTTPBadRequest()
+        target=Path(owned_workspaces[-1]['path'])
+        if body['available']:
+            if parked.exists():parked.rename(target)
+        elif target.exists():target.rename(parked)
+        return web.json_response({'workspaceId':owned_workspaces[-1]['id'],'available':target.exists()})
+    app.router.add_post('/fixture/workspace-availability',unavailable)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
     url='http://127.0.0.1:'+str(site._server.sockets[0].getsockname()[1]);app['allowed_origins']|={url}
     stop=asyncio.Event();loop=asyncio.get_running_loop()

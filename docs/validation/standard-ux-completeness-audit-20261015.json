@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
   "reviewStatus": "scoped boundaries accepted by root; residual outcome dispositions require review; no outcome upgrade",
-  "sourceRevision": "8feae2e26c9b2c672606587cdf268d921bd7d098",
+  "sourceRevision": "2a5e42bb07e5b868914808f670a5b11ddca1e59c",
   "inventoryBaseline": "1d993e0bb32bc90b75fc66f56f1b9014c2d63f87",
-  "at": "2026-10-15T20:44:35.711031+00:00",
+  "at": "2026-10-15T21:06:00.336865+00:00",
   "policy": "All source candidates remain individually accountable. Source/file mapping and route discovery are not effect passes; ordinary alternates override Advanced labels. External capabilities and arbitrary extension authoring are not silently treated as standard built-in controls.",
   "ledgerSummary": {
     "workflows": 198,
     "outcomes": 663,
     "outcomeStatus": {
-      "covered-in-context": 581,
-      "not-run": 27,
-      "partially-observed": 55
+      "covered-in-context": 601,
+      "partially-observed": 44,
+      "not-run": 18
     },
     "workflowsWithOutcomeEvidence": 196,
-    "workflowsAllOutcomesObservedInContext": 142,
+    "workflowsAllOutcomesObservedInContext": 157,
     "ordinaryPathStatus": {
       "observed-in-context": 188,
       "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
@@ -201,12 +201,12 @@
     ],
     "build": {
       "version": "0.20.165",
-      "id": "e5d945c07be95ab7"
+      "id": "a8b8c4f8468eb04d"
     },
     "appAssets": [
       {
-        "path": "amplifier_web/static/assets/app-BA9ZNSbL.js",
-        "sha256": "83b6211da60d8e8dff8c60663383e571457b42edfc219fe2a4c514ec8c9aabf0"
+        "path": "amplifier_web/static/assets/app-BYyxLBwp.js",
+        "sha256": "70e64b588ba44893d233e476fd5c2b5579703035337e9bd64e26b4aa6c6de138"
       }
     ],
     "markers": [
