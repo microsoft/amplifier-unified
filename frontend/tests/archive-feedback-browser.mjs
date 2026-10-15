@@ -43,6 +43,7 @@ try{
   if(body?.action!=='session.archive'){await route.continue();return}
   archiveCalls++;
   if(mode==='reject'||mode==='reject200'){await route.fulfill({status:mode==='reject'?403:200,contentType:'application/json',body:JSON.stringify({accepted:false,error:'Synthetic archive rejection'})});return}
+  if(mode==='unknown'){await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic uncertain transport'})});return}
   const response=await route.fetch();
   if(mode==='hold')await new Promise(resolve=>{release=resolve});
   await route.fulfill({response});
@@ -87,32 +88,14 @@ try{
  const originalViews=(await inspectViews()).map(viewTarget);
  await headerArchive();await page.waitForFunction(()=>window.amplifier.getState().view.workSurface==='workspace');
  await expect(canvasEdit).toBeHidden();
- await page.locator('[data-archive-notice]').getByRole('button',{name:'Undo',exact:true}).click();
- await expect(page.locator('[data-archive-notice]')).toContainText('Chat restored');
  await action('session.select',{id:sid});
  await expect(canvasEdit).toHaveValue('UNSAVED CANVAS ARCHIVE INPUT');
  assert.deepEqual((await inspectViews()).map(viewTarget),originalViews);
  assert.equal((await state()).canvas.content,'# Original source');
  await page.screenshot({path:output+'/unsaved-canvas.png'});
  // Explicit fixture cleanup only after proving the input survived the round trip.
- await action('canvas.views.recover',viewTarget((await inspectViews()).find(v=>v.viewId==='primary')));
- await action('canvas.close');
- // A private invalid JSON edit must stay in the existing Settings mount.
- await openSettingsPage(page,'providers');
- const settings=page.locator('.a-settings-experience[data-settings-page="providers"]');
- await settings.getByRole('button',{name:'Add provider',exact:true}).click();
- await settings.getByRole('button',{name:'Show advanced configuration',exact:true}).click();
- const settingsEdit=settings.locator('[id$="provider-config"]');
- await settingsEdit.fill('{"unsaved-archive-input":');
- await headerArchive();
- await expect(page.locator('[data-archive-notice]:visible')).toContainText('Chat archived. Your current view was kept.');
- await expect(settings).toBeVisible();await expect(settingsEdit).toHaveValue('{"unsaved-archive-input":');
- assert.equal((await state()).view.workSurface||'chat','chat');
- assert.ok(!JSON.stringify(await state()).includes('{"unsaved-archive-input":'));
- await page.screenshot({path:output+'/unsaved-settings.png'});
- // Restore the synthetic invalid draft before continuing independent cases.
- await settingsEdit.fill('{}');
  await action('session.restore',{id:sid});
+ await action('canvas.views.recover',viewTarget((await inspectViews()).find(v=>v.viewId==='primary')));
  await action('canvas.close');
  mode='reject';await headerArchive();
  await expect(page.locator('[data-archive-notice]')).toContainText('Synthetic archive rejection');
@@ -121,6 +104,10 @@ try{
  mode='reject200';await headerArchive();
  await expect(page.locator('[data-archive-notice][role="alert"]')).toContainText('Synthetic archive rejection');
  assert.equal((await state()).view.workSurface||'chat','chat');
+ mode='unknown';const unknownBefore=archiveCalls;await headerArchive();
+ await expect(page.locator('[data-archive-notice][role="status"]')).toContainText('Could not confirm the change.');
+ assert.equal(archiveCalls,unknownBefore+1);assert.equal((await state()).view.workSurface||'chat','chat');
+ await expect(page.locator('[data-archive-notice]').getByRole('button',{name:'Undo',exact:true})).toHaveCount(0);
  // Same A -> B -> A identity is not authority for an old archive to redirect.
  mode='hold';await headerArchive();await expect.poll(()=>!!release).toBe(true);
  await action('session.select',{id:other});await action('session.select',{id:sid});
@@ -166,8 +153,24 @@ try{
  await action('session.create',{title:'Managed example',location:{kind:'managed'}});
  await headerArchive();await page.waitForFunction(()=>window.amplifier.getState().view.workSurface==='chats');
  await expect(page.getByRole('heading',{name:'Search chats',exact:true})).toBeVisible();
+ // Last case intentionally retains an unsaved private Settings draft until fixture teardown.
+ const managed=(await state()).selectedSessionId;
+ await action('session.select',{id:managed});await action('session.restore',{id:managed});
+ await page.setViewportSize({width:1440,height:1050});
+ await openSettingsPage(page,'providers');
+ const settings=page.locator('.a-settings-experience[data-settings-page="providers"]');
+ await settings.getByRole('button',{name:'Add provider',exact:true}).click();
+ await settings.getByRole('button',{name:'Show advanced configuration',exact:true}).click();
+ const settingsEdit=settings.locator('[id$="provider-config"]');
+ await settingsEdit.fill('{"unsaved-archive-input":');
+ await headerArchive();
+ await expect(page.locator('[data-archive-notice]:visible')).toContainText('Chat archived. Your current view was kept.');
+ await expect(settings).toBeVisible();await expect(settingsEdit).toHaveValue('{"unsaved-archive-input":');
+ assert.equal((await state()).view.workSurface||'chat','chat');
+ assert.ok(!JSON.stringify(await state()).includes('{"unsaved-archive-input":'));
+ await page.screenshot({path:output+'/unsaved-settings.png'});
  const after=await page.request.get(url+'/fixture').then(r=>r.json());
  assert.deepEqual(after.started,before.started);assert.deepEqual(after.stopped,before.stopped);assert.deepEqual(after.sent,before.sent);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,archiveCalls,restoreCalls,pending:true,workspaceAndManagedDestination:true,undo:true,explicitRejection:true,http200Rejection:true,roundtripRace:true,queuedNavigationRace:true,stalledNavigationUndo:true,unsavedCanvasRetained:true,unsavedSettingsRetained:true,noncurrentRow:true,rawApiUnchanged:true,peerUnchanged:true,draftAndAttachmentPreserved:true,narrow:true,noRuntimeLifecycleChanges:true}));
+ console.log(JSON.stringify({passed:true,archiveCalls,restoreCalls,pending:true,workspaceAndManagedDestination:true,undo:true,explicitRejection:true,http200Rejection:true,unknownOutcome:true,roundtripRace:true,queuedNavigationRace:true,stalledNavigationUndo:true,unsavedCanvasRetained:true,unsavedSettingsRetained:true,noncurrentRow:true,rawApiUnchanged:true,peerUnchanged:true,draftAndAttachmentPreserved:true,narrow:true,noRuntimeLifecycleChanges:true}));
 }finally{release?.();releaseNavigation?.();await browser?.close();fixture.kill()}
