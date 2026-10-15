@@ -421,7 +421,9 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
                    preserve_system=True)
         app.clients.attach('transfer-wrapper')
         with app.clients.bind('transfer-wrapper'):
-            await app.dispatch('canvas.openGif', {**media, 'messageId': mid}, include_state=False)
+            await app.dispatch('canvas.openGif', {
+                **{key: media[key] for key in ('sessionId', 'id', 'version', 'sha256')},
+                'messageId': mid}, include_state=False)
         wrapper = next(row for row in app.state['canvasArtifacts'] if row['sessionId'] == sid and row['kind'] == 'gif')
         snapshot = (await app.dispatch('outputs.attach', {'sessionId': sid, 'kind': 'canvas',
             'canvasId': wrapper['id'], 'title': 'Retained GIF adapter snapshot'}))['result']
@@ -488,7 +490,9 @@ async def test_transfer_rejects_exactly_hashed_but_malformed_media_without_insta
         saved, mid, raw = await attach_saved_media(app, sid, root)
         app.clients.attach('transfer-validation')
         with app.clients.bind('transfer-validation'):
-            await app.dispatch('canvas.openGif', {**saved, 'messageId': mid}, include_state=False)
+            await app.dispatch('canvas.openGif', {
+                **{key: saved[key] for key in ('sessionId', 'id', 'version', 'sha256')},
+                'messageId': mid}, include_state=False)
         wrapper = next(row for row in app.state['canvasArtifacts'] if row['kind'] == 'gif')
         snapshot = (await app.dispatch('outputs.attach', {'sessionId': sid, 'kind': 'canvas',
             'canvasId': wrapper['id'], 'title': 'GIF snapshot'}))['result']

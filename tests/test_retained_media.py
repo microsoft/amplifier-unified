@@ -69,7 +69,8 @@ async def test_real_saves_removed_origin_eviction_unlink_and_reopen(
                 'renderState': 'ready', 'playback': 'paused'}, 'ui')
             assert report['accepted']
             if format == 'gif':
-                assert (await service.dispatch('canvas.openGif', exact, include_state=False))['accepted']
+                opening = {key: exact[key] for key in ('sessionId', 'messageId', 'id', 'version', 'sha256')}
+                assert (await service.dispatch('canvas.openGif', opening, include_state=False))['accepted']
 
     from itertools import count
     sequence = count(1)

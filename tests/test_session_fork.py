@@ -18,7 +18,9 @@ async def test_fork_retained_gif_wrapper_remaps_only_exact_surviving_output(medi
     saved = (await app.dispatch('outputs.attachMedia', args))['result']
     app.clients.attach('fork-wrapper')
     with app.clients.bind('fork-wrapper'):
-        await app.dispatch('canvas.openGif', {**saved, 'messageId': args['messageId']}, include_state=False)
+        await app.dispatch('canvas.openGif', {
+            **{key: saved[key] for key in ('sessionId', 'id', 'version', 'sha256')},
+            'messageId': args['messageId']}, include_state=False)
     source_row = copy.deepcopy(next(row for row in app.state['canvasArtifacts'] if row['kind'] == 'gif'))
     snapshot = (await app.dispatch('outputs.attach', {'sessionId': args['sessionId'],
         'kind': 'canvas', 'canvasId': source_row['id'], 'title': 'Saved GIF adapter',
