@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "status": "passed-one-current-profile-cold-sample",
+  "source": {
+    "baseRevision": "3a50b226ad1f512587f3c94c4e166a120f85352e",
+    "overlayCommit": "73817d845",
+    "overlayFiles": {
+      "amplifier_web/runtime_qualification.py": "26311a69453f21a33acb274b1145fd3555732843daaa8d1d89b09ce20aa642ad"
+    },
+    "verifiedFiles": 409,
+    "mismatches": [],
+    "sourceManifestSHA256": "a2636b9330d06fd29a4592ce4442094a16cf9017cf53731a20cee9676c4da192"
+  },
+  "configuration": {
+    "runtimeManager": "normal RuntimeManager; command unset; real runtime_profiles.ensure and normal worker spawn",
+    "composition": "Full Work from owned qualified dependency candidate; local synthetic provider; computer-use not enabled",
+    "parentGeneration": "ded15b45a24c002963871d4691d44bac",
+    "parentQualification": "integrated-dependency-activation-20261015.json",
+    "newGeneration": "3d98001e4e584558be14ab4dbdde4ef7",
+    "newQualifiedProject": "q-4c44305b7f513f1b2929f5ebce49b74e",
+    "privateParentOfferedProfiles": [],
+    "privateProfileIndexBefore": [],
+    "dependencyAndSourceCaches": "warm, including preceding preserved failed prerequisites; read-only owned sources/wheels with private UV overlay",
+    "profile": "cold: normal ensure created a new profile generation and qualification",
+    "worker": "cold: newly spawned normal worker",
+    "network": "private namespace, loopback only; UV_OFFLINE=1; downloads disabled",
+    "concurrency": 1,
+    "samples": 1,
+    "providerCalls": 0,
+    "promptSubmitted": false,
+    "workersRemaining": 0,
+    "loadAverageAtStart": [
+      0.8994140625,
+      0.94482421875,
+      0.78515625
+    ]
+  },
+  "currentAndDesired": {
+    "runtimeReadyMs": 7729.195,
+    "desiredColdReadyMs": 10000,
+    "desiredTargetSource": "plans/2026-10-15-standard-ux-scale-readiness.md initial proposed targets",
+    "targetInterpretation": "This single cached-dependency profile-cold sample is below the provisional 10s target. It is not a p95, sustained-load result, fresh dependency download, or first-token latency.",
+    "normalEnsureMs": 5874.407,
+    "normalEnsureToReadyMs": 1828.581,
+    "actualWorkerFoundationPrepareMs": 68.093,
+    "actualWorkerCreateSessionMs": 787.678,
+    "profileAttemptElapsedMs": 5863.941,
+    "preflightMs": 5.012,
+    "lockWaitMs": 1.53,
+    "qualificationPhases": [
+      {
+        "phase": "source-snapshot",
+        "status": "succeeded",
+        "startedAt": 1792107269.0034795,
+        "elapsedMs": 240.522
+      },
+      {
+        "phase": "runtime-prepare",
+        "status": "succeeded",
+        "startedAt": 1792107269.260878,
+        "elapsedMs": 240.259
+      },
+      {
+        "phase": "installer-policy",
+        "status": "succeeded",
+        "startedAt": 1792107269.5088012,
+        "elapsedMs": 52.63
+      },
+      {
+        "phase": "dependency-prepare",
+        "status": "succeeded",
+        "startedAt": 1792107269.566261,
+        "elapsedMs": 1858.914
+      },
+      {
+        "phase": "runtime-freeze",
+        "status": "succeeded",
+        "startedAt": 1792107271.429564,
+        "elapsedMs": 1569.004
+      },
+      {
+        "phase": "ecosystem-runtime-freeze",
+        "status": "succeeded",
+        "startedAt": 1792107271.9966016,
+        "elapsedMs": 91.537
+      },
+      {
+        "phase": "ecosystem-runtime-freeze-install",
+        "status": "succeeded",
+        "startedAt": 1792107272.0949273,
+        "elapsedMs": 211.749
+      },
+      {
+        "phase": "ecosystem-runtime-policy",
+        "status": "succeeded",
+        "startedAt": 1792107272.8114347,
+        "elapsedMs": 53.13
+      },
+      {
+        "phase": "compatibility-probe",
+        "status": "succeeded",
+        "startedAt": 1792107273.0111294,
+        "elapsedMs": 1604.75
+      },
+      {
+        "phase": "recorded-verification",
+        "status": "succeeded",
+        "startedAt": 1792107274.628665,
+        "elapsedMs": 219.936
+      }
+    ],
+    "phaseCaveat": "Runtime-freeze entries contain nested phases; do not sum all rows."
+  },
+  "defectAndFix": {
+    "problem": "uv export can emit a local wheel without its package name. The inherited unnamed wheel then survives Foundation selected-source filtering and conflicts with the explicit current module source during fresh qualification.",
+    "fixCommit": "73817d845",
+    "canonicalOwner": "amplifier_web.runtime_qualification.prepare_overrides",
+    "behavior": "Use the exact locked package name for local wheel sources as well as directories/editables; retain URL and marker; reject unmatched or ambiguous local source names. Existing recorded policies are not regenerated.",
+    "regressionBefore": {
+      "passed": 6,
+      "failed": 4
+    },
+    "regressionAfter": {
+      "passed": 10,
+      "failed": 0,
+      "seconds": 0.17
+    },
+    "realPrerequisiteBefore": "Two separate fresh attempts stopped before ready with conflicting amplifier-module-tool-bash wheel/source URLs; original failed receipts retained. Diagnostic attempt observed installer stderr without changing its command or environment.",
+    "realPrerequisiteAfter": "Fresh child qualification succeeded. The final recorded policy names the selected local Bash source; existing parent policy bytes remained unchanged.",
+    "parentPolicyUnchanged": true,
+    "parentPolicySHA256": "4cf329294186e7513885b8fd83d04590257e70659c922eb3e00b2a255b9a1362",
+    "childPolicySHA256": "c5242337b06493b51e61b970416181d529fa4a7f81d33989a25823084a4e5d7b",
+    "adoptionBoundary": "Applies when preparing a new qualification. It does not rewrite previously recorded immutable runtime policies or adopt any dependency candidate in production."
+  },
+  "limits": [
+    "The historical38.603s first-request incident used a different composition/source/cache and included provider handoff; this is not a matched before/after speedup.",
+    "The earlier1.17\u20131.34s measurements are profile-warm/worker-cold, a distinct lifecycle.",
+    "Namespace/cache-permission setup is outside the measured application start; timing wrappers and no-inference guard are inside it.",
+    "Twenty-four installer child interpreters lacked Foundation and could not install optional timing wrappers. They retained their ordinary behavior; the actual preparation, compatibility and final worker interpreters were observed and the final provider guard was installed.",
+    "No external model request, user-history import, production restart, main merge or release occurred."
+  ],
+  "evidence": {
+    "output/readiness-day-20261015/archive-runtime/profile-cold-evidence/evidence/result.json": {
+      "sha256": "e60007b34ef2b2fd28a0f1ee7a9e39263dbafd98c56495bf428953cb28e2fa68"
+    },
+    "output/readiness-day-20261015/archive-runtime/profile-cold-evidence/evidence/worker-events.jsonl": {
+      "sha256": "9ddc128790166d0217d8185da12bffbab9398536f53c06b856e0aa87e25ee024"
+    },
+    "output/readiness-day-20261015/archive-runtime/profile-cold-evidence/evidence/diagnostic2-result.json": {
+      "sha256": "ee1615bc7e1af0884e15c114abd377ffd1cf75df459092d26e129978c5fa57f6"
+    },
+    "output/readiness-day-20261015/archive-runtime/profile-cold-evidence/evidence/diagnostic2-worker-events.jsonl": {
+      "sha256": "76b1a8f63e6cb384821863ce18e953ed54e3275d278e3139711e9f2723f469de"
+    },
+    "output/readiness-day-20261015/archive-runtime/profile-cold-evidence/evidence/attempt1-before-ready.json": {
+      "sha256": "2706d9e2e32e6c417871dc04d706999c37bfa1ceb686a20e9df0a79081fbeb06"
+    },
+    "output/readiness-day-20261015/archive-runtime/profile-cold-evidence/evidence/policy-verification.json": {
+      "sha256": "3826ece2801198a798aedf8e82429777b256a3c346f94cecdb0e15f6d8563180"
+    },
+    "output/readiness-day-20261015/archive-runtime/profile-cold-evidence/final-source-binding.json": {
+      "sha256": "85bfef6b19d0ebc192594e24734f7a8f67f63cea3a4849d89f7c17b59daa3d40"
+    },
+    "output/readiness-day-20261015/archive-runtime/profile-cold-evidence/qualified-generation.json": {
+      "sha256": "f81bc7d1a8f4d199e2c6795fa099e9d3dc6b81d02f938e5a704bad59dd1c28f1"
+    },
+    "output/readiness-day-20261015/archive-runtime/override-policy-evidence/evidence/red.log": {
+      "sha256": "4ce0f81b386880e58b44884cd4fd8dc70efac9b18ed5474ca77057c193332b2c"
+    },
+    "output/readiness-day-20261015/archive-runtime/override-policy-evidence/evidence/green.log": {
+      "sha256": "d74767fb7957c031b7ca6168720084c0cf7d3e95c67561734fda7491aef7be1f"
+    },
+    "output/readiness-day-20261015/archive-runtime/cold-probe.py": {
+      "sha256": "a96b2a5a6821e406959943862502d336e9d6bf7b9c42e721c97ae5c0303df9a2"
+    },
+    "output/readiness-day-20261015/archive-runtime/cold-namespace.py": {
+      "sha256": "62157402bd480427b17db92df029e4d00e98528f8b7a393ff4f9fdf419587a5a"
+    },
+    "output/readiness-day-20261015/archive-runtime/sitecustomize.py": {
+      "sha256": "9089bc202f724df503c024fd057bf8070523b050a833ab755bd173a10a248a74"
+    }
+  },
+  "cleanup": {
+    "status": "completed; five owned source/state paths removed after zero process/mount references",
+    "removedPaths": [
+      "/opt/unified-dev/checks/override-policy-20261015",
+      "/opt/unified-dev/checks/archive-runtime-20261015",
+      "/var/lib/unified-dev/archive-runtime-20261015",
+      "/opt/unified-dev/checks/profile-cold-20261015",
+      "/var/lib/unified-dev/profile-cold-20261015"
+    ],
+    "allocatedBytesBeforeRemoval": 922738688,
+    "hostTransferBytesRemoved": 6246400,
+    "retained": [
+      "/var/lib/unified-dev/dependency-activation-20261015",
+      "/opt/unified-dev/checks/readiness-qualification-env-20261015"
+    ],
+    "receiptSHA256": "e9e6e1915146c9022ecdf62d11c26d3ded851ca2fb97c1c1d74db002ba3f7579",
+    "precheckSHA256": "2d83f7fa2b1a6ea69e081129ed1a82a5b3f7c284bbf7db8cad409f2db198db9b"
+  }
+}
