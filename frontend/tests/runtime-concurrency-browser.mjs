@@ -16,7 +16,7 @@ const result={schemaVersion:1,startedAt:new Date().toISOString(),source:options.
  fixtureSha256:hash('tests/fixtures/runtime_concurrency_server.py'),providerSha256:hash('tests/fixtures/amplifier_module_provider_concurrency/__init__.py'),harnessSha256:hash('frontend/tests/runtime-concurrency-browser.mjs'),
  scope:{abruptStopFaultInjection:options['abrupt-stop']==='1',realRuntimeManager:true,realSubprocessWorkers:true,realLoopLive:true,provider:'local deterministic 250ms deltas',runtimeQualification:'bypassed explicit qualified interpreter',externalProvider:false,history:'14 synthetic top-level chats; scale replica acceptance is separate',timingContext:options.context||'functional calibration; shared host load'},
  desired:{healthP95Ms:100,selectionP95Ms:500,sendAckWarmMs:500,sendAckColdMs:3000,firstVisibleDeltaWarmMs:1000,firstVisibleDeltaColdMs:3000,streamLagP95Ms:250,stopIdleMs:1000},stages:[],failures:[]};
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/runtime_concurrency_server.py','--home',options.home,'--worker-python',options['worker-python'],...(options['abrupt-stop']==='1'?['--abrupt-stop']:[])],{cwd:root,stdio:['ignore','pipe','pipe']});
+const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/runtime_concurrency_server.py','--home',options.home,'--worker-python',options['worker-python'],...(options['abrupt-stop']==='1'?['--abrupt-stop']:[]),...(options.trace==='1'?['--trace']:[])],{cwd:root,stdio:['ignore','pipe','pipe']});
 let stderr='',stdout='',browser,page,ready;
 fixture.stderr.on('data',chunk=>{stderr+=chunk;});fixture.stdout.on('data',chunk=>{stdout+=chunk;});
 const fixtureExited=new Promise(resolve=>fixture.once('exit',(code,signal)=>resolve({code,signal})));
@@ -37,7 +37,7 @@ try{
  let phase=null;const requests=new Map();
  cdp.on('Network.requestWillBeSent',event=>requests.set(event.requestId,{url:event.request.url,start:event.timestamp,phase}));
  cdp.on('Network.loadingFinished',event=>{const r=requests.get(event.requestId);requests.delete(event.requestId);if(r?.phase&&r.url.startsWith(ready.url)){const path=new URL(r.url).pathname;r.phase.network.push({path,bytes:event.encodedDataLength,elapsedMs:(event.timestamp-r.start)*1000});}});
- cdp.on('Network.webSocketFrameReceived',event=>{if(phase){phase.socketFrames++;phase.socketBytes+=Buffer.byteLength(event.response.payloadData)}});
+ cdp.on('Network.webSocketFrameReceived',event=>{if(phase){phase.socketFrames++;phase.socketBytes+=Buffer.byteLength(event.response.payloadData);if(options.trace==='1'){const at=Date.now();for(const marker of event.response.payloadData.match(/\[BENCH:\d+:\d+:\d+\]/g)||[])phase.socketMarkers[marker]??=at}}});
  const inspect=async(reset=false)=>{const response=await page.request.get(ready.url+'/fixture/runtime'+(reset?'?reset=1':''));assert.equal(response.status(),200);return response.json()};
  const action=async(action,args)=>{const response=await page.request.post(ready.url+'/api/actions',{headers:{'X-Amplifier-State-Transport':'delta-v1'},data:{action,args}});const body=await response.json();assert.equal(response.status(),200,JSON.stringify(body));assert.equal(body.accepted,true);if(action==='conversation.send')assert.equal(body.delivery,'accepted',JSON.stringify(body));return body};
  const row=id=>page.locator(`.a-nav-chat[data-session-id="${id}"]`).first();
@@ -49,10 +49,10 @@ try{
  result.bootstrap=await inspect();
  for(const count of (options.stages?options.stages.split(',').map(Number):[0,6,12])){
   console.log('Starting real-worker stage',count);
-  const stage={activeTarget:count,baselineActive:count?count-1:0,measuredActive:Math.max(1,count),network:[],socketFrames:0,socketBytes:0,selectionMs:[],sidebar:[],foreground:[],streamSamples:[]};result.stages.push(stage);phase=stage;
+  const stage={activeTarget:count,baselineActive:count?count-1:0,measuredActive:Math.max(1,count),network:[],socketFrames:0,socketBytes:0,socketMarkers:{},selectionMs:[],sidebar:[],foreground:[],streamSamples:[]};result.stages.push(stage);phase=stage;
   const fg=count?ready.ids[count-1]:ready.ids[13],background=count?ready.ids.slice(0,count-1):[];
   if(count){await Promise.all(background.map((id,i)=>action('conversation.send',{sessionId:id,text:`Background stream ${count}/${i}`})));await expect.poll(async()=>{const s=await inspect();return background.filter(id=>s.workers.some(w=>w.id===id&&w.returncode===null)&&s.sessions.some(r=>r.id===id&&r.status==='working'&&r.streamingBytes>0)).length},{timeout:60000}).toBe(background.length);}
-  await inspect(true);stage.healthBefore=await health();
+  stage.before=await inspect(true);stage.healthBefore=await health();
   if(!count){for(const id of [ready.ids[0],ready.ids[1],fg])stage.selectionMs.push(await choose(id));stage.idle=await inspect();assert.equal(stage.idle.workers.filter(w=>w.returncode===null).length,0);}
   stage.foreground.push({kind:'cold worker first turn',...await send(fg,`Foreground ${count}: stream until I stop.`)});
   const expected=Math.max(1,count);

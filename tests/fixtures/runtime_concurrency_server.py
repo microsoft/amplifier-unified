@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import sys
@@ -88,6 +89,30 @@ async def main(args):
                 row['process'].kill()
             return await ordinary_stop(sid, **kwargs)
         runtime.stop = abrupt_stop
+    # Optional phase probes wrap existing boundaries; no event/publication is
+    # synthesized and EventSink batching semantics remain intact.
+    stream_trace, publications = {}, []
+    if args.trace:
+        single = service.on_runtime_event.single
+        async def traced_event(kind, payload):
+            if kind == 'assistant.delta':
+                for marker in re.findall(r'\[BENCH:\d+:\d+:\d+\]', payload.get('text', '')):
+                    stream_trace.setdefault(marker, {'hostReceivedAt': time.time_ns()//1000000})
+            return await single(kind, payload)
+        service.on_runtime_event.single = traced_event
+        publish = service._publish
+        def traced_publish(**kwargs):
+            before, cpu = time.time_ns()//1000000, time.process_time()
+            result = publish(**kwargs)
+            after = time.time_ns()//1000000
+            publications.append({'startedAt':before,'endedAt':after,
+                                 'cpuMs':(time.process_time()-cpu)*1000})
+            for row in service._state['sessions']:
+                for marker in re.findall(r'\[BENCH:\d+:\d+:\d+\]', row.get('streaming', '')):
+                    if marker in stream_trace:
+                        stream_trace[marker].setdefault('publishedAt', after)
+            return result
+        service._publish = traced_publish
     ids = []
     for index in range(14):
         created = await service.dispatch('session.create', {'title':f'Concurrency {index:02}',
@@ -127,7 +152,8 @@ async def main(args):
                          'messageCount':len(row.get('messages',[]))} for row in sessions],
             'residentSessions':len(sessions),'residentMessages':sum(len(row.get('messages',[])) for row in sessions),
             'residentJsonBytes':len(json.dumps(sessions,default=str).encode()),'rssKiB':rss,
-            'eventLoopLagMs':quantiles(loop_lag)})
+            'eventLoopLagMs':quantiles(loop_lag),'hostCpuSeconds':time.process_time(),
+            **({'streamTrace':stream_trace,'publications':publications} if args.trace else {})})
     app.router.add_get('/fixture/runtime',inspect)
     runner = web.AppRunner(app); await runner.setup()
     site = web.TCPSite(runner,'127.0.0.1',0); await site.start()
@@ -150,4 +176,5 @@ if __name__ == '__main__':
     parser.add_argument('--home',required=True)
     parser.add_argument('--worker-python',required=True)
     parser.add_argument('--abrupt-stop',action='store_true')
+    parser.add_argument('--trace',action='store_true')
     asyncio.run(main(parser.parse_args()))
