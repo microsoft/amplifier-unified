@@ -184,7 +184,6 @@ async def test_missing_prerequisite_is_known_failure_without_retry_or_retained_s
 
 async def test_restart_after_check_uses_journal_and_only_cleans_up(app, queue, backend, monkeypatch):
     await submit(app)
-    cleanup = queue.cleanup
     async def lost(*args, **kwargs):
         raise asyncio.CancelledError
     monkeypatch.setattr(queue, 'cleanup', lost)
