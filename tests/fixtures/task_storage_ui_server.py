@@ -1,6 +1,9 @@
 """Actual task-storage files and receipts in one disposable browser workspace."""
 import asyncio
+import hashlib
 import json
+import os
+import signal
 from pathlib import Path
 import tempfile
 
@@ -14,6 +17,19 @@ async def main(home):
     service = app['service']
     sid = service.state['selectedSessionId']
     workspace = Path(service._session(sid)['workspace'])
+    # Optional real OS denial at the first managed-path write. This is separate
+    # from agent file-policy admission, which human UI intent does not inherit.
+    deny = os.environ.get('TASK_STORAGE_DENY_WORKSPACE') == '1'
+    modes = {path: path.stat().st_mode & 0o777 for path in
+             [workspace, workspace / '.amplifier'] if path.is_dir()}
+    if deny:
+        assert not (workspace / '.amplifier' / 'task-storage').exists()
+        for path in modes:
+            path.chmod(0o500)
+
+    def contents():
+        return {str(path.relative_to(workspace)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in workspace.rglob('*') if path.is_file()}
 
     def authorized(request):
         if request.headers.get('Authorization') != 'Bearer ' + TOKEN:
@@ -23,6 +39,8 @@ async def main(home):
         authorized(request)
         rows = task_resources.read(home, sid, {'limit': 32})['items']
         return web.json_response({'sessionId': sid, 'workspace': str(workspace),
+            'files': contents(), 'writeDenied': deny,
+            'managedPathExists': (workspace / '.amplifier' / 'task-storage').exists(),
             'workspaceId': next(row['id'] for row in service.state['workspaces'] if row['path'] == str(workspace)),
             'items': [{**row, 'exists': Path(row['path']).exists(),
                 'marker': (Path(row['directory']) / 'retained.txt').read_text()
@@ -46,9 +64,14 @@ async def main(home):
     url = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins'] = app['allowed_origins'] | {url}
     print(json.dumps({'url': url}), flush=True)
+    stopped = asyncio.Event()
+    for event in (signal.SIGTERM, signal.SIGINT):
+        asyncio.get_running_loop().add_signal_handler(event, stopped.set)
     try:
-        await asyncio.Event().wait()
+        await stopped.wait()
     finally:
+        for path, mode in modes.items():
+            path.chmod(mode)
         await runner.cleanup()
 
 
