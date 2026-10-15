@@ -22,6 +22,8 @@ for(const transition of ['selected task','inactive workspace','closed panel'])fo
   const calls=[];
   const dispatch=(action,args)=>{
    calls.push({action,args});
+   if(action==='workspace.environments.read')return Promise.resolve({accepted:true,result:{items:[],capability:{status:'unavailable'}}});
+   assert.equal(action,'workspace.resources.managed','inspection only reads resource owners');
    if(calls.length===1)return new Promise((resolve,reject)=>{release=()=>fail?reject(Error('STALE ERROR')):resolve(result('STALE'))});
    return Promise.resolve(result(args.sessionId));
   };
@@ -39,7 +41,13 @@ for(const transition of ['selected task','inactive workspace','closed panel'])fo
    if(transition==='selected task'){
     assert.match(visible,/Owner B/);assert.match(visible,/outcome unknown/);assert.match(visible,/Task storage/);
    }
-   assert.ok(calls.every(row=>row.action==='workspace.resources.managed'));
+   assert.deepEqual(calls,[
+    {action:'workspace.resources.managed',args:{workspaceId:'w',sessionId:'a',limit:25}},
+    ...(transition==='selected task'?[
+     {action:'workspace.resources.managed',args:{workspaceId:'w',sessionId:'b',limit:25}},
+     {action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'b'}},
+    ]:[]),
+   ],'only the current page mounts its environment reader; no mutations or stale-owner reads');
   }finally{await act(async()=>root.unmount())}
  });
 }
