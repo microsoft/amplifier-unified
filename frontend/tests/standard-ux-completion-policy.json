@@ -2684,6 +2684,442 @@
       ],
       "status": "requires-exact-ledger-claims",
       "limits": []
+    },
+    {
+      "workflow": "coordination.scope",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable."
+      ]
+    },
+    {
+      "workflow": "coordination.files",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable."
+      ]
+    },
+    {
+      "workflow": "coordination.requests",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable."
+      ]
+    },
+    {
+      "workflow": "coordination.assignment",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable."
+      ]
+    },
+    {
+      "workflow": "coordination.limits",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable."
+      ]
+    },
+    {
+      "workflow": "coordination.candidate",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable."
+      ]
+    },
+    {
+      "workflow": "coordination.tasks",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable.",
+        "Public entry witness and previously qualified effect assertions are separately identified; no automatic effect pass from entry alone."
+      ],
+      "entryEvidence": {
+        "path": "frontend/tests/ordinary-workspace-work-browser.mjs",
+        "line": 132,
+        "description": "Normal Workspace work > Shared tasks and assignment > Shared task list; existing task lifecycle assertions remain the effect proof.",
+        "sourceCommit": "112eea26b87d5622ebc81499c55c168c45e41a00",
+        "evidence": "output/readiness-day-20261015/ordinary-coordination/receipt.json"
+      }
+    },
+    {
+      "workflow": "coordination.completion",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable.",
+        "Public entry witness and previously qualified effect assertions are separately identified; no automatic effect pass from entry alone."
+      ],
+      "entryEvidence": {
+        "path": "frontend/tests/ordinary-workspace-work-browser.mjs",
+        "line": 132,
+        "description": "Same ordinary task-board owner, whose completion lifecycle is separately covered by standard-ux-shared-tasks-browser.",
+        "sourceCommit": "112eea26b87d5622ebc81499c55c168c45e41a00",
+        "evidence": "output/readiness-day-20261015/ordinary-coordination/receipt.json"
+      }
+    },
+    {
+      "workflow": "coordination.validation",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable.",
+        "Public entry witness and previously qualified effect assertions are separately identified; no automatic effect pass from entry alone."
+      ],
+      "entryEvidence": {
+        "path": "frontend/tests/ordinary-workspace-work-browser.mjs",
+        "line": 171,
+        "description": "Normal Workspace work > Combine and check work > Run checks and collect results; existing validation fixture owns execution effects.",
+        "sourceCommit": "112eea26b87d5622ebc81499c55c168c45e41a00",
+        "evidence": "output/readiness-day-20261015/ordinary-coordination/receipt.json"
+      }
+    },
+    {
+      "workflow": "coordination.observations",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable.",
+        "Public entry witness and previously qualified effect assertions are separately identified; no automatic effect pass from entry alone."
+      ],
+      "entryEvidence": {
+        "path": "frontend/tests/ordinary-workspace-work-browser.mjs",
+        "line": 186,
+        "description": "Normal Workspace work > Changes since your last view and diagnostics; real recap requested and visible.",
+        "sourceCommit": "112eea26b87d5622ebc81499c55c168c45e41a00",
+        "evidence": "output/readiness-day-20261015/ordinary-coordination/receipt.json"
+      }
+    },
+    {
+      "workflow": "outputs.managed",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable.",
+        "Public entry witness and previously qualified effect assertions are separately identified; no automatic effect pass from entry alone."
+      ],
+      "entryEvidence": {
+        "path": "frontend/tests/ordinary-workspace-work-browser.mjs",
+        "line": 189,
+        "description": "Same publicly opened workspace > Details > Managed resources; exact selected workspace/session read observed and no provision/retire/stop.",
+        "sourceCommit": "112eea26b87d5622ebc81499c55c168c45e41a00",
+        "evidence": "output/readiness-day-20261015/ordinary-coordination/receipt.json"
+      }
+    },
+    {
+      "workflow": "smart-tools.canvas",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable."
+      ]
+    },
+    {
+      "workflow": "connections.message-test",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Use the actual public ordinary entry",
+        "Perform or inspect the exact named control",
+        "Compare the canonical owner/result and preserved neighboring state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named context only; remaining capability and exceptional outcomes remain accountable."
+      ]
+    },
+    {
+      "workflow": "outputs.unknown",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Admit local publishing with unknown recorded outcome",
+        "Retry exact original request and inspect",
+        "Acknowledge unknown without Stop/cancel/replay",
+        "Observe exact durable site unchanged until explicit Stop"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Local synthetic-owned publishing; no remote SSH acceptance."
+      ]
+    },
+    {
+      "workflow": "composer.provider",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Exact chosen provider/model reaches a synthetic runtime; real remote-provider transport and credentials are outside this UI acceptance."
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact chosen provider/model reaches a synthetic runtime; real remote-provider transport and credentials are outside this UI acceptance."
+      ],
+      "scopeReview": {
+        "workflow": "composer.provider",
+        "disposition": "ordinary-observed-with-external-limit",
+        "rationale": "Exact chosen provider/model reaches a synthetic runtime; real remote-provider transport and credentials are outside this UI acceptance.",
+        "sourceRefs": [],
+        "reviewer": "root",
+        "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+      }
+    },
+    {
+      "workflow": "composer.stop",
+      "expectedIndices": [
+        1
+      ],
+      "browserSteps": [
+        "Actual worker Stop terminates the exact generation without phantom completion; service-restart durability and external tool replay remain unqualified."
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Actual worker Stop terminates the exact generation without phantom completion; service-restart durability and external tool replay remain unqualified."
+      ],
+      "scopeReview": {
+        "workflow": "composer.stop",
+        "disposition": "ordinary-observed-with-durability-limit",
+        "rationale": "Actual worker Stop terminates the exact generation without phantom completion; service-restart durability and external tool replay remain unqualified.",
+        "sourceRefs": [],
+        "reviewer": "root",
+        "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+      }
+    },
+    {
+      "workflow": "delivery.ownership",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Explicit Take over/refusal keeps history and draft. A competing live CLI worker and replay prevention are not exercised."
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Explicit Take over/refusal keeps history and draft. A competing live CLI worker and replay prevention are not exercised."
+      ],
+      "scopeReview": {
+        "workflow": "delivery.ownership",
+        "disposition": "ordinary-observed-with-authority-limit",
+        "rationale": "Explicit Take over/refusal keeps history and draft. A competing live CLI worker and replay prevention are not exercised.",
+        "sourceRefs": [],
+        "reviewer": "root",
+        "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+      }
+    },
+    {
+      "workflow": "delivery.context",
+      "expectedIndices": [
+        0,
+        1,
+        3
+      ],
+      "browserSteps": [
+        "Actual recovery controls preserve the original transcript and expose the new copy/active guard. Prior external tool replay is untested."
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Actual recovery controls preserve the original transcript and expose the new copy/active guard. Prior external tool replay is untested."
+      ],
+      "scopeReview": {
+        "workflow": "delivery.context",
+        "disposition": "ordinary-observed-with-replay-limit",
+        "rationale": "Actual recovery controls preserve the original transcript and expose the new copy/active guard. Prior external tool replay is untested.",
+        "sourceRefs": [],
+        "reviewer": "root",
+        "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+      }
+    },
+    {
+      "workflow": "canvas.dirty",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Native/app viewers retain dirty work and offer targeted recovery or direct explicit discard. Inventory outcome2 assumes a generic Cancel/discard-confirmation dialog that does not exist; propose scoped not-applicable, not passed."
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Native/app viewers retain dirty work and offer targeted recovery or direct explicit discard. Inventory outcome2 assumes a generic Cancel/discard-confirmation dialog that does not exist; propose scoped not-applicable, not passed."
+      ],
+      "scopeReview": {
+        "workflow": "canvas.dirty",
+        "disposition": "ordinary-observed-nonexistent-outcome-proposed",
+        "rationale": "Native/app viewers retain dirty work and offer targeted recovery or direct explicit discard. Inventory outcome2 assumes a generic Cancel/discard-confirmation dialog that does not exist; propose scoped not-applicable, not passed.",
+        "sourceRefs": [
+          "frontend/src/canvas-workspace.jsx:77",
+          "frontend/src/canvas-app-viewer.jsx:118"
+        ],
+        "reviewer": "root",
+        "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+      }
+    },
+    {
+      "workflow": "voice.fallback",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Actual Settings displays the saved fallback and explicit preview. Real provider/audio fallback behavior is outside synthetic presentation acceptance."
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Actual Settings displays the saved fallback and explicit preview. Real provider/audio fallback behavior is outside synthetic presentation acceptance."
+      ],
+      "scopeReview": {
+        "workflow": "voice.fallback",
+        "disposition": "ordinary-observed-runtime-capability-partial",
+        "rationale": "Actual Settings displays the saved fallback and explicit preview. Real provider/audio fallback behavior is outside synthetic presentation acceptance.",
+        "sourceRefs": [],
+        "reviewer": "root",
+        "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+      }
+    },
+    {
+      "workflow": "privacy.capture",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Public Privacy explains capture scope and explicit forwarding. Arbitrary diagnostic payload secret redaction is not established by this navigation proof."
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Public Privacy explains capture scope and explicit forwarding. Arbitrary diagnostic payload secret redaction is not established by this navigation proof."
+      ],
+      "scopeReview": {
+        "workflow": "privacy.capture",
+        "disposition": "ordinary-observed-payload-audit-partial",
+        "rationale": "Public Privacy explains capture scope and explicit forwarding. Arbitrary diagnostic payload secret redaction is not established by this navigation proof.",
+        "sourceRefs": [],
+        "reviewer": "root",
+        "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+      }
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
@@ -2809,5 +3245,97 @@
       "reason": "Reconcile delivered PR770 archive intent against preserved frozen baseline wording. Import exact older canonical reply/reaction browser evidence without adding native Fork credit.",
       "ordinaryPaths": 120
     }
-  ]
+  ],
+  "scopeDispositions": [
+    {
+      "workflow": "workspace.environment",
+      "disposition": "ordinary-ui-observed-platform-acceptance-partial",
+      "rationale": "Public workspace test-environment create/start/execute/cancel/retire controls are browser-qualified through a synthetic manager. Actual allocation of a nested platform environment and real retained-file lifecycle are separate capability acceptance, not claimed.",
+      "sourceRefs": [],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "bundles.advanced-boundary",
+      "disposition": "advanced-boundary-proposed",
+      "rationale": "Boundary audit row, not compact picker: authoring/composition internals require explicit Settings/Chat Advanced. Standard compact picker, catalog failure/retry and workspace default remain ordinary and qualified.",
+      "sourceRefs": [
+        "frontend/src/chat-pages.jsx:88",
+        "frontend/src/settings-experience.jsx:75"
+      ],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "voice.screen",
+      "disposition": "advanced-only-proposed",
+      "rationale": "Computer access and screen capture controls are behind Chat Advanced; supplemental actual browser proof retained. Ordinary Privacy desktop-readiness links remain separately included.",
+      "sourceRefs": [
+        "frontend/src/chat-pages.jsx:85",
+        "frontend/src/chat-pages.jsx:89"
+      ],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "accessibility.keyboard",
+      "disposition": "crosscutting-audit-not-destination",
+      "rationale": "Named witnesses and limits are in shared-control-evidence-audit.json and completeness-audit.json. No universal claim is inferred; untested per-instance behavior remains explicitly partial/not-run.",
+      "sourceRefs": [],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "accessibility.responsive",
+      "disposition": "crosscutting-audit-not-destination",
+      "rationale": "Named witnesses and limits are in shared-control-evidence-audit.json and completeness-audit.json. No universal claim is inferred; untested per-instance behavior remains explicitly partial/not-run.",
+      "sourceRefs": [],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "accessibility.async",
+      "disposition": "crosscutting-audit-not-destination",
+      "rationale": "Named witnesses and limits are in shared-control-evidence-audit.json and completeness-audit.json. No universal claim is inferred; untested per-instance behavior remains explicitly partial/not-run.",
+      "sourceRefs": [],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "accessibility.privacy",
+      "disposition": "crosscutting-audit-not-destination",
+      "rationale": "Named witnesses and limits are in shared-control-evidence-audit.json and completeness-audit.json. No universal claim is inferred; untested per-instance behavior remains explicitly partial/not-run.",
+      "sourceRefs": [],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "accessibility.performance",
+      "disposition": "crosscutting-audit-not-destination",
+      "rationale": "Named witnesses and limits are in shared-control-evidence-audit.json and completeness-audit.json. No universal claim is inferred; untested per-instance behavior remains explicitly partial/not-run.",
+      "sourceRefs": [],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "updates.rollback",
+      "disposition": "advanced-only-proposed",
+      "rationale": "Restore previous components is inside Advanced details; synthetic lifecycle/history preservation proof retained. Target/limitation presentation remains unasserted.",
+      "sourceRefs": [
+        "frontend/src/updates.jsx:83",
+        "frontend/src/updates.jsx:103"
+      ],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    },
+    {
+      "workflow": "accessibility.dynamic-discovery",
+      "disposition": "crosscutting-audit-not-destination",
+      "rationale": "Named witnesses and limits are in shared-control-evidence-audit.json and completeness-audit.json. No universal claim is inferred; untested per-instance behavior remains explicitly partial/not-run.",
+      "sourceRefs": [],
+      "reviewer": "root",
+      "review": "Accepted as scoped navigation accounting only, not full outcome completion."
+    }
+  ],
+  "scopeReviewAt": "2026-10-15T20:33:22.367032+00:00"
 }

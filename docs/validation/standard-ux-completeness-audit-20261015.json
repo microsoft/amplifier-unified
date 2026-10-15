@@ -1,0 +1,372 @@
+{
+  "schemaVersion": 1,
+  "reviewStatus": "scoped boundaries accepted by root; residual outcome dispositions require review; no outcome upgrade",
+  "sourceRevision": "8feae2e26c9b2c672606587cdf268d921bd7d098",
+  "inventoryBaseline": "1d993e0bb32bc90b75fc66f56f1b9014c2d63f87",
+  "at": "2026-10-15T20:44:35.711031+00:00",
+  "policy": "All source candidates remain individually accountable. Source/file mapping and route discovery are not effect passes; ordinary alternates override Advanced labels. External capabilities and arbitrary extension authoring are not silently treated as standard built-in controls.",
+  "ledgerSummary": {
+    "workflows": 198,
+    "outcomes": 663,
+    "outcomeStatus": {
+      "covered-in-context": 581,
+      "not-run": 27,
+      "partially-observed": 55
+    },
+    "workflowsWithOutcomeEvidence": 196,
+    "workflowsAllOutcomesObservedInContext": 142,
+    "ordinaryPathStatus": {
+      "observed-in-context": 188,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "sourceCandidates": {
+    "total": 1666,
+    "dispositions": {
+      "dynamic-pattern-required": 5,
+      "ordinary-or-mixed-required": 1497,
+      "advanced-route-proposed": 138,
+      "not-reachable-built-in-proposed": 26
+    },
+    "missingAccountability": 0,
+    "baselineFiles": 126,
+    "currentCandidates": 1671,
+    "currentFiles": 128,
+    "currentMissingAccountability": 0,
+    "currentCountDelta": [
+      {
+        "path": "frontend/src/archive-feedback.jsx",
+        "before": 0,
+        "current": 3,
+        "workflowCandidates": [
+          "nav.archive-progress",
+          "nav.archive"
+        ]
+      },
+      {
+        "path": "frontend/src/chat-delete.jsx",
+        "before": 3,
+        "current": 4,
+        "workflowCandidates": [
+          "storage.inventory",
+          "storage.review",
+          "storage.delete",
+          "nav.delete-managed"
+        ]
+      },
+      {
+        "path": "frontend/src/conversation-detail.jsx",
+        "before": 7,
+        "current": 8,
+        "workflowCandidates": [
+          "messages.history-pages",
+          "messages.native-alternate",
+          "messages.rail",
+          "messages.copy",
+          "messages.reply",
+          "messages.reaction",
+          "messages.edit",
+          "messages.fork",
+          "messages.fold",
+          "messages.export",
+          "messages.share"
+        ]
+      },
+      {
+        "path": "frontend/src/conversation-library.jsx",
+        "before": 17,
+        "current": 16,
+        "workflowCandidates": [
+          "messages.history-pages",
+          "messages.native-alternate",
+          "messages.rail",
+          "messages.copy",
+          "messages.reply",
+          "messages.reaction",
+          "messages.edit",
+          "messages.fork",
+          "messages.fold",
+          "messages.export",
+          "messages.share"
+        ]
+      },
+      {
+        "path": "frontend/src/settings-ui.jsx",
+        "before": 19,
+        "current": 20,
+        "workflowCandidates": [
+          "bundles.catalog",
+          "composer.bundle-unavailable",
+          "configuration.registry",
+          "configuration.routing",
+          "configuration.routing-config",
+          "configuration.sources"
+        ]
+      },
+      {
+        "path": "frontend/src/shell/navigation-components.jsx",
+        "before": 64,
+        "current": 63,
+        "workflowCandidates": [
+          "nav.drawer",
+          "nav.sections",
+          "nav.select",
+          "nav.details",
+          "nav.activity",
+          "nav.recent-pages",
+          "nav.recent-retry",
+          "nav.search",
+          "nav.filters",
+          "nav.search-pages",
+          "nav.pin",
+          "nav.pin-order",
+          "nav.rename",
+          "nav.mark-unread",
+          "nav.archive",
+          "nav.workspace-pin",
+          "nav.workspace-browse",
+          "nav.workspace-archive",
+          "nav.workspace-remove",
+          "nav.refresh",
+          "nav.delete-managed"
+        ]
+      },
+      {
+        "path": "frontend/src/smart-tool-update-results.jsx",
+        "before": 0,
+        "current": 2,
+        "workflowCandidates": [
+          "updates.tool-recovery"
+        ]
+      },
+      {
+        "path": "frontend/src/work-shell.jsx",
+        "before": 29,
+        "current": 28,
+        "workflowCandidates": [
+          "create.draft",
+          "create.suggestion",
+          "create.workspace-new",
+          "create.workspace-existing",
+          "create.workspace-fault",
+          "create.starter-result",
+          "create.picker",
+          "workspace.tabs",
+          "workspace.files",
+          "workspace.details",
+          "workspace.config",
+          "workspace.review",
+          "workspace.resources",
+          "workspace.storage",
+          "workspace.environment",
+          "workspace.cleanup",
+          "voice.setup",
+          "voice.fallback",
+          "voice.call",
+          "voice.screen"
+        ]
+      }
+    ]
+  },
+  "renderedDiscovery": {
+    "probes": 72,
+    "instances": 1742,
+    "uniqueInstanceIds": 1742,
+    "missingWorkflowCandidates": 0,
+    "effectAssertionPerInstanceComplete": false,
+    "reason": "The 204 discovery assertions qualify route rendering and containment, not 1742 action effects. Exact effects are linked separately by workflow ledger."
+  },
+  "unreachableBuiltIn": {
+    "scope": "Current built-in client only; arbitrary external shell packages are not asserted unreachable.",
+    "method": "Lexical local import graph from main.jsx plus exact marker search of current compiled app and retained actual rendered route snapshots. This is source/evidence audit, not a browser effect pass.",
+    "entry": "frontend/src/main.jsx",
+    "reachableLocalModules": 233,
+    "files": [
+      {
+        "path": "frontend/src/computation.jsx",
+        "sha256": "269839b6a3bf57aa0d584374049b1ffaad834291ba43e33a0ae5f22e7bceca1e",
+        "reachableFromMain": false,
+        "importers": []
+      },
+      {
+        "path": "frontend/src/operations.jsx",
+        "sha256": "0dd8b140d1a7be51d33b04a3d069a36b350c3a958cfa74140fbaf9129b2d95b2",
+        "reachableFromMain": false,
+        "importers": []
+      }
+    ],
+    "build": {
+      "version": "0.20.165",
+      "id": "e5d945c07be95ab7"
+    },
+    "appAssets": [
+      {
+        "path": "amplifier_web/static/assets/app-BA9ZNSbL.js",
+        "sha256": "83b6211da60d8e8dff8c60663383e571457b42edfc219fe2a4c514ec8c9aabf0"
+      }
+    ],
+    "markers": [
+      {
+        "label": "Computation language",
+        "inCompiledApp": false,
+        "inRenderedDiscovery": false
+      },
+      {
+        "label": "Create runtime",
+        "inCompiledApp": false,
+        "inRenderedDiscovery": false
+      },
+      {
+        "label": "Start command",
+        "inCompiledApp": false,
+        "inRenderedDiscovery": false
+      },
+      {
+        "label": "Refresh operations",
+        "inCompiledApp": false,
+        "inRenderedDiscovery": false
+      }
+    ],
+    "dynamicImports": [
+      {
+        "path": "frontend/src/canvas-workspace.jsx",
+        "line": 21,
+        "expression": "if(!factoryCache.has(url))factoryCache.set(url,import(/* @vite-ignore */ url).then(module=>{"
+      },
+      {
+        "path": "frontend/src/shell/runtime.jsx",
+        "line": 280,
+        "expression": "import(/* @vite-ignore */ metadata.url).then(module=>{"
+      },
+      {
+        "path": "frontend/src/shell/validation.jsx",
+        "line": 31,
+        "expression": "const factory=(await import(/* @vite-ignore */ moduleUrl)).default;"
+      }
+    ],
+    "renderedEvidence": "output/readiness-day-20261015/ui-inventory/discovery-summary.json",
+    "disposition": "not-reachable-in-built-in-client-proposed-review; not browser-passed"
+  },
+  "advancedRoutes": {
+    "frontend/src/artifact-runtime.jsx": [
+      "Chat \u2192 Advanced \u2192 Model & tools",
+      "frontend/src/runtime-settings.jsx:45"
+    ],
+    "frontend/src/chat-file-access.jsx": [
+      "Chat \u2192 Advanced \u2192 Files this chat can edit",
+      "frontend/src/chat-pages.jsx:83",
+      "frontend/src/chat-pages.jsx:85"
+    ],
+    "frontend/src/configuration-grants.jsx": [
+      "Chat \u2192 Advanced \u2192 Model & tools \u2192 Agent permissions for settings",
+      "frontend/src/runtime-settings.jsx:40"
+    ],
+    "frontend/src/portability.jsx": [
+      "Chat \u2192 Advanced \u2192 Work & automation \u2192 Move task between hosts",
+      "frontend/src/runtime-settings.jsx:41"
+    ],
+    "frontend/src/recall.jsx": [
+      "Chat \u2192 Advanced \u2192 Memory & past work",
+      "frontend/src/chat-pages.jsx:82",
+      "frontend/src/chat-pages.jsx:85"
+    ],
+    "frontend/src/schedules.jsx": [
+      "Chat \u2192 Advanced \u2192 Work & automation \u2192 Scheduled work",
+      "frontend/src/runtime-settings.jsx:41"
+    ],
+    "frontend/src/task-continuity.jsx": [
+      "Chat \u2192 Advanced \u2192 Work & automation \u2192 Saved task",
+      "frontend/src/runtime-settings.jsx:41"
+    ],
+    "frontend/src/worker-retention.jsx": [
+      "Settings \u2192 Advanced \u2192 Performance & runtime \u2192 Ready conversations",
+      "frontend/src/settings-everyday.jsx:23",
+      "frontend/src/settings-experience.jsx:75"
+    ],
+    "frontend/src/worktrees.jsx": [
+      "Chat \u2192 Advanced \u2192 Work & automation \u2192 Task execution folder",
+      "frontend/src/runtime-settings.jsx:41"
+    ]
+  },
+  "advancedRenderedWitnesses": [
+    {
+      "probe": "desktop-pointer.settings.advanced-boundary",
+      "evidence": "output/readiness-day-20261015/ui-inventory/discovery/evidence/discovery-updates-v3/observations.json",
+      "assertions": [
+        "Active Settings content is visible",
+        "Dialog has no horizontal overflow",
+        "Settings content has no horizontal overflow"
+      ]
+    },
+    {
+      "probe": "narrow-touch.settings.advanced-boundary",
+      "evidence": "output/readiness-day-20261015/ui-inventory/discovery/evidence/discovery-inputs-v3/observations.json",
+      "assertions": [
+        "Active Settings content is visible",
+        "Dialog has no horizontal overflow",
+        "Settings content has no horizontal overflow"
+      ]
+    },
+    {
+      "probe": "desktop-keyboard.settings.advanced-boundary",
+      "evidence": "output/readiness-day-20261015/ui-inventory/discovery/evidence/discovery-inputs-v3/observations.json",
+      "assertions": [
+        "Active Settings content is visible",
+        "Dialog has no horizontal overflow",
+        "Settings content has no horizontal overflow"
+      ]
+    },
+    {
+      "probe": "narrow-keyboard.settings.advanced-boundary",
+      "evidence": "output/readiness-day-20261015/ui-inventory/discovery/evidence/discovery-inputs-v3/observations.json",
+      "assertions": [
+        "Active Settings content is visible",
+        "Dialog has no horizontal overflow",
+        "Settings content has no horizontal overflow"
+      ]
+    }
+  ],
+  "ordinaryAlternatesRetained": [
+    "Workspace Work exposes coordination/assignment/task/validation controls despite other Advanced entry points.",
+    "Privacy exposes Backups & recovery and screen-readiness controls.",
+    "Workspace Details exposes routing/sources/bundle; Smart Tools exposes tool connections.",
+    "Composer reasoning/options and actual custom appearance entries remain ordinary."
+  ],
+  "universalClaimsNotMade": [
+    "Every pointer action traversed by sequential Tab",
+    "Every external provider/device/extension account accepted",
+    "All dynamic renderer instances activated",
+    "Arbitrary payload redaction or external-effect exactly-once behavior",
+    "Every route has the same performance characteristics"
+  ],
+  "artifacts": {
+    "sourceCandidates": "source-control-accountability.json",
+    "renderedInstances": "rendered-control-accountability.json",
+    "sharedPatternCrosswalk": "shared-control-evidence-audit.json"
+  },
+  "mandatoryActions": [
+    {
+      "owner": "root",
+      "action": "Review explicit per-outcome dispositions and mandatory actions in residual-outcome-dispositions.json; scoped path accounting is already accepted and is not full completion."
+    },
+    {
+      "owner": "root",
+      "action": "Review26 unreachable built-in candidates and nonexistent Canvas Cancel using source plus rendered evidence and independent review."
+    },
+    {
+      "owner": "build_qualify145",
+      "action": "Retain every current partial/not-run outcome from the ledger; complete ordinary checks and separately identify external/runtime/universal acceptance limits."
+    }
+  ],
+  "finalControlWitness": "final-controls-qualification.json",
+  "finalDispositionArtifact": "final-completion-dispositions.json",
+  "independentBoundaryReview": {
+    "reviewer": "issue_validation_day",
+    "verdict": "Advanced route boundaries and nonexistent generic dirty Cancel confirmed; ordinary Workspace RelatedWork retained."
+  },
+  "compiledArtifactLimit": "Compiled app identity is recorded separately; current source census does not assert that the recorded asset contains every newer integration change."
+}
