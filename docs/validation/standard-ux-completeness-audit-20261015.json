@@ -9,12 +9,12 @@
     "workflows": 199,
     "outcomes": 669,
     "outcomeStatus": {
-      "covered-in-context": 609,
-      "partially-observed": 42,
+      "covered-in-context": 614,
+      "partially-observed": 37,
       "not-run": 18
     },
     "workflowsWithOutcomeEvidence": 197,
-    "workflowsAllOutcomesObservedInContext": 160,
+    "workflowsAllOutcomesObservedInContext": 164,
     "ordinaryPathStatus": {
       "observed-in-context": 189,
       "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
@@ -425,5 +425,35 @@
         "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
       }
     ]
+  },
+  "previousWorkerClosureSnapshot": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 609,
+      "partially-observed": 42,
+      "not-run": 18
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 160,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "normalWorkerOutcomeDelta": {
+    "receipt": "docs/validation/standard-ux-worker-outcome-delta-20261015.json",
+    "resolvedOutcomes": [
+      "composer.stop:0",
+      "composer.stop:2",
+      "configuration.sources:2",
+      "connections.default-model:1",
+      "privacy.file-policy:1"
+    ],
+    "remainingOutcomes": 55
   }
 }
