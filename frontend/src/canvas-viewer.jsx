@@ -9,6 +9,7 @@ import {Markdown} from './markdown';
 import {FormattedCopy} from './formatted-copy';
 import {BlockCopy,CopyControl} from './block-copy.js';
 import {MediaFigure,validateMediaMetadata} from './inline-media';
+import {useDiagramNavigation} from './diagram-navigation';
 
 const PdfPreview=lazy(()=>import('./pdf-preview'));
 const viewAction=(canvas,act,patch)=>act('canvas.view',{id:canvas.id,patch});
@@ -50,8 +51,11 @@ function cleanSvg(svg){
 }
 let mermaidPromise;
 export function Diagram({kind,source,canvas,act,part='preview',embedded=false}){
- const id=useId().replace(/[^a-zA-Z0-9]/g,''),report=useReport(canvas,act,part),[result,setResult]=useState({}),drag=useRef(null),frame=useRef(null);
- const view=canvas.view||{},zoom=view.zoom||1,panX=view.panX||0,panY=view.panY||0;
+ return <DiagramView key={[canvas.id,canvas.selectedVersion,canvas.resourceRevision,canvas.generation,kind,part].join(':')} {...{kind,source,canvas,act,part,embedded}}/>;
+}
+function DiagramView({kind,source,canvas,act,part,embedded}){
+ const id=useId().replace(/[^a-zA-Z0-9]/g,''),report=useReport(canvas,act,part),[result,setResult]=useState({}),[natural,setNatural]=useState(null);
+ const view=canvas.view||{},navigation=useDiagramNavigation(view,patch=>viewAction(canvas,act,patch),!embedded),{zoom,panX,panY}=navigation.value;
  useEffect(()=>{
   let active=true,worker,timer;setResult({});report('pending');
   const complete=value=>{if(!active)return;clearTimeout(timer);worker?.terminate();setResult(value);report(value.error?'error':'ready',value.error||'Diagram rendered')};
@@ -69,14 +73,16 @@ export function Diagram({kind,source,canvas,act,part='preview',embedded=false}){
  },[kind,source,view.engine,id,report]);
  const uri=useMemo(()=>result.svg?'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(cleanSvg(result.svg)):null,[result.svg]);
  const set=patch=>viewAction(canvas,act,patch),selected=result.nodes?.find(n=>n.name===view.node);
+ const fit=natural&&navigation.size.width?Math.min(navigation.size.width/natural.width,navigation.size.height/natural.height):null;
  return <div className={`a-diagram ${embedded?'embedded':''}`}>
   {!embedded&&<CanvasControl><div className="a-canvas-toolbar">
-   <button type="button" className="a-icon" aria-label="Zoom out" data-action="canvas.view" onClick={()=>set({zoom:Math.max(.2,zoom-.2)})}><ZoomOut/></button><span>{Math.round(zoom*100)}%</span>
-   <button type="button" className="a-icon" aria-label="Zoom in" data-action="canvas.view" onClick={()=>set({zoom:Math.min(4,zoom+.2)})}><ZoomIn/></button>
-   <button type="button" className="a-soft" data-action="canvas.view" onClick={()=>set({zoom:1,panX:0,panY:0})}><Maximize/>Fit</button>
+   <button type="button" className="a-icon" aria-label="Zoom out" data-action="canvas.view" onClick={()=>navigation.zoom(1/1.2)}><ZoomOut/></button><span>{Math.round(zoom*100)}%</span>
+   <button type="button" className="a-icon" aria-label="Zoom in" data-action="canvas.view" onClick={()=>navigation.zoom(1.2)}><ZoomIn/></button>
+   <button type="button" className="a-soft" data-action="canvas.view" onClick={navigation.fit}><Maximize/>Fit</button>
    {kind==='dot'&&<select aria-label="Graph layout" data-action="canvas.view" value={view.engine||'dot'} onChange={e=>set({engine:e.target.value,node:''})}>{['dot','neato','fdp','sfdp','circo','twopi'].map(engine=><option key={engine}>{engine}</option>)}</select>}
   </div></CanvasControl>}
-  {result.error?<div className="a-canvas-result error" role="alert"><AlertCircle/><span>{result.error}</span></div>:uri?<div ref={frame} className="a-diagram-stage" tabIndex={0} aria-label={embedded?'Diagram. Scroll to explore; arrow keys scroll.':'Diagram. Drag to pan; arrow keys move the view.'} onKeyDown={e=>{if(embedded)return;const moves={ArrowLeft:[-30,0],ArrowRight:[30,0],ArrowUp:[0,-30],ArrowDown:[0,30]};if(moves[e.key]){e.preventDefault();set({panX:panX+moves[e.key][0],panY:panY+moves[e.key][1]})}}} onPointerDown={e=>{if(embedded)return;drag.current={x:e.clientX,y:e.clientY};e.currentTarget.setPointerCapture(e.pointerId)}} onPointerUp={e=>{if(embedded)return;if(!drag.current)return;set({panX:Math.max(-10000,Math.min(10000,panX+e.clientX-drag.current.x)),panY:Math.max(-10000,Math.min(10000,panY+e.clientY-drag.current.y))});drag.current=null}}><img alt={canvas.title||'Diagram'} draggable="false" src={uri} style={{transform:embedded?undefined:`translate(${panX}px,${panY}px) scale(${zoom})`}}/></div>:<p role="status">Drawing diagram…</p>}
+  {result.error?<div className="a-canvas-result error" role="alert"><AlertCircle/><span>{result.error}</span></div>:uri?<div ref={navigation.ref} className="a-diagram-stage" tabIndex={0} aria-label={embedded?'Diagram. Scroll to explore; arrow keys scroll.':'Diagram. Drag to pan; scroll to zoom. Arrow keys move; plus and minus zoom; zero fits.'} {...navigation.events}><img alt={canvas.title||'Diagram'} draggable="false" src={uri} onLoad={event=>setNatural({width:event.currentTarget.naturalWidth,height:event.currentTarget.naturalHeight})} style={embedded?undefined:{width:fit?natural.width*fit:undefined,height:fit?natural.height*fit:undefined,visibility:fit?'visible':'hidden',transform:`translate(${panX}px,${panY}px) scale(${zoom})`}}/></div>:<p role="status">Drawing diagram…</p>}
+  {navigation.error&&<p role="status">{navigation.error}</p>}
   {!embedded&&result.nodes?.length>0&&<div className="a-node-inspector"><label>Inspect a node<select aria-label="Inspect graph node" data-action="canvas.view" value={view.node||''} onChange={e=>set({node:e.target.value})}><option value="">Choose a node…</option>{result.nodes.map(n=><option key={n.name} value={n.name}>{n.name}</option>)}</select></label>{selected&&<dl>{Object.entries(selected).map(([key,value])=><React.Fragment key={key}><dt>{key}</dt><dd>{typeof value==='object'?JSON.stringify(value):String(value)}</dd></React.Fragment>)}</dl>}</div>}
  </div>;
 }
