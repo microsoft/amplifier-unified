@@ -7,7 +7,9 @@ import {workspaceContext,parentPath} from './navigation-presentation';
 import {movePin} from './chat-navigation';
 
 export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compact=false,pinnedShortcut=false,handle,floating=false}){
- const workspace=!!row.workspaceId,selected=workspace&&row.workspaceId===(state.view?.workWorkspaceId||state.selectedWorkspaceId);
+ const workspace=!!row.workspaceId;
+ const selectedWorkspace=state.view?.workSurface==='workspace'?state.view.workWorkspaceId||state.selectedWorkspaceId:state.selectedWorkspaceId;
+ const selected=workspace&&row.workspaceId===selectedWorkspace;
  const canDraft=workspace&&row.available!==false&&typeof row.path==='string'&&row.path.length>0&&row.path.length<=4000&&!row.path.includes('\0')&&(/^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(row.path))&&!row.path.split(/[\\/]/).includes('..');
  const browseLabel='Browse '+row.path,pinKey='workspace:'+row.workspaceId;
  const mixed=state.pinnedItemIds, pins=mixed||state.pinnedWorkspaceIds||[],key=mixed?pinKey:row.workspaceId,index=pins.indexOf(key),orderAction=mixed?'navigation.pinOrder':'workspace.pinOrder';
