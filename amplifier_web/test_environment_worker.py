@@ -24,6 +24,67 @@ def docker_json(payload, *args):
     return json.loads(value.stdout)
 
 
+def admission_directory(payload, daemon):
+    root = Path(payload['admissionRoot'])
+    if not root.is_absolute() or '..' in root.parts or any(p.is_symlink() for p in (root, *root.parents)):
+        raise ValueError('The admission directory cannot traverse symlinks.')
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    paths = [root, root / hashlib.sha256(daemon.encode()).hexdigest()]
+    for path in paths:
+        path.mkdir(mode=0o700, exist_ok=True)
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError('The admission directory must be private and owner-controlled.')
+    return paths[-1]
+
+
+def pending_admissions(directory):
+    for path in directory.glob('*.json'):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd) as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > 4096:
+                raise ValueError('An admission receipt is unsafe.')
+            row = json.load(stream)
+        if not isinstance(row.get('universeId'), str) or path.name != hashlib.sha256(row['universeId'].encode()).hexdigest()+'.json':
+            raise ValueError('An admission receipt identity is invalid.')
+        yield row
+
+
+def reserve_admission(payload, capacity):
+    directory = admission_directory(payload, capacity['scope']['daemon'])
+    identity = payload['universeId']
+    path = directory / (hashlib.sha256(identity.encode()).hexdigest()+'.json')
+    value = {'universeId': identity, 'root': payload['root'], 'operationId': payload['operationId']}
+    # An existing uncertain launch is never re-admitted, even under the same ID.
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'w') as stream:
+        json.dump(value, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return path
+
+
+def release_admission(payload, identity):
+    daemon = docker_json(payload, 'info', '--format', '{{json .}}')['ID']
+    directory = admission_directory(payload, daemon)
+    for row in pending_admissions(directory):
+        if row['universeId'] == identity:
+            if row.get('root') != payload['root'] or row.get('operationId') != payload['operationId']:
+                raise ValueError('The uncertain admission belongs to a different owner.')
+            (directory / (hashlib.sha256(identity.encode()).hexdigest()+'.json')).unlink()
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+
 def docker_capacity(payload):
     """Observe the actual daemon, including stopped and externally launched DTUs."""
     daemon = docker_json(payload, 'info', '--format', '{{json .}}')
@@ -41,19 +102,22 @@ def docker_capacity(payload):
         identity = labels.get('com.docker.compose.project', '')
         if identity.startswith('dtu-'):
             projects.setdefault(identity, []).append(row['State'])
-    active = sum(any(state not in {'exited', 'dead'} for state in states) for states in projects.values())
+    pending = sum(row['universeId'] not in projects for row in pending_admissions(admission_directory(payload, daemon['ID'])))
+    retained_count = sum(all(state in {'exited', 'dead'} for state in states) for states in projects.values())
+    active = len(projects)-retained_count+pending
+    total = len(projects)+pending
     disk = os.statvfs(daemon['DockerRootDir'])
     free = disk.f_bavail * disk.f_frsize
     maximum, retained, minimum = payload.get('maxRunning', 15), payload.get('maxInstances', 256), payload.get('minFreeBytes', 10*1024**3)
     blockers = []
     if maximum and active >= maximum:
         blockers.append({'code': 'execution_capacity'})
-    if retained and len(projects) >= retained:
+    if retained and total >= retained:
         blockers.append({'code': 'retained_capacity'})
     if free < minimum:
         blockers.append({'code': 'storage_pressure'})
     return {'schema_version': 1, 'scope': {'daemon': daemon['ID'], 'backend': 'docker'},
-        'coordination': 'same_host_user', 'counts': {'active': active, 'stopped_retained': len(projects)-active, 'total': len(projects)},
+        'coordination': 'same_host_user', 'counts': {'active': active, 'stopped_retained': retained_count, 'pending_unobserved': pending, 'total': total},
         'limits': {'max_running': maximum, 'max_instances': retained, 'min_free_bytes': minimum},
         'storage': {'free_bytes': free}, 'blockers': blockers, 'available': not blockers}
 
@@ -63,14 +127,12 @@ def docker_admission(payload):
     """Serialize cooperating local callers by daemon identity, not socket alias."""
     import fcntl
     observed = docker_capacity(payload)
-    root = Path(payload['admissionRoot'])
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError('The admission directory must be private and owner-controlled.')
-    name = hashlib.sha256(observed['scope']['daemon'].encode()).hexdigest()+'.lock'
-    fd = os.open(root/name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    root = admission_directory(payload, observed['scope']['daemon'])
+    fd = os.open(root/'admission.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1:
+            raise ValueError('The admission lock must be a private regular file.')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield docker_capacity(payload)
     finally:
@@ -183,7 +245,9 @@ def execute_call(payload):
                     if not capacity['available']:
                         return {'ok': False, 'admissionDenied': True, 'status': 'not-started', 'capacity': capacity,
                             'message': 'Capacity changed before launch. No backend effect was admitted.'}
+                    reservation = reserve_admission(payload, capacity)
                     universe = lib.launch(compose, operation_id=payload['operationId'], timeout_seconds=600, config=config)
+                    reservation.unlink()
             except BlockingIOError:
                 return {'ok': False, 'admissionDenied': True, 'status': 'not-started',
                     'message': 'Another cooperating launch owns admission. No environment was started.'}
@@ -217,6 +281,8 @@ def execute_call(payload):
             return {'ok': True, 'universeId': identity, 'result': serialize(result)}
         if action == 'stop':
             result = lib.stop(identity, config=config)
+            if result.complete:
+                release_admission(payload, identity)
             return {'ok': result.complete, 'universeId': identity,
                     'status': 'stopped' if result.complete else 'unknown', 'result': serialize(result),
                     'message': 'Containers stopped; source and artifacts are retained.' if result.complete else 'Stop was requested but not confirmed. Inspect current state.'}
@@ -230,6 +296,8 @@ def execute_call(payload):
                         for source, name in [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]]
             retain_manifest(destination, archives)
             result = lib.destroy(identity, config=config)
+            if result.complete:
+                release_admission(payload, identity)
             return {'ok': result.complete, 'universeId': identity,
                     'status': 'removed' if result.complete else 'unknown', 'result': serialize(result),
                     'archives': archives, 'message': 'Source and artifacts were retained before removal.' if result.complete else 'Artifacts were retained; teardown is not confirmed.'}

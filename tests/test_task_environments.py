@@ -262,6 +262,15 @@ def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatc
     value = {'enabled': True, 'installationId': identity, 'commit': pin, 'dockerHost': 'unix:///var/run/docker.sock'}
     target.write_text(json.dumps(value)); target.chmod(0o600)
     assert owner.configuration(app)[1] == 'ready'
+    from amplifier_web import incus_environment_worker
+    incus = {'qualified': 'explicit fixture'}
+    monkeypatch.setattr(incus_environment_worker, 'validate_configuration', lambda v: {**v, 'validated': True})
+    alternate = {key: item for key, item in value.items() if key != 'dockerHost'}
+    target.write_text(json.dumps({**alternate, 'backend': 'incus', 'incus': incus}))
+    configured, status, _ = owner.configuration(app)
+    assert status == 'ready' and configured['incus']['validated'] and configured['python'] == str(python)
+    target.write_text(json.dumps({**value, 'backend': 'incus', 'incus': incus}))
+    assert owner.configuration(app)[1] == 'unavailable'  # No mixed/implicit backend selection.
     for bad in [{**value, 'image': 'arbitrary-image'}, {**value, 'commit': 'c' * 40}, {**value, 'dockerHost': 'tcp://remote:2375'}]:
         target.write_text(json.dumps(bad))
         assert owner.configuration(app)[1] == 'unavailable'

@@ -198,9 +198,15 @@ overwrite unrelated work, or start another generation yourself to bypass Stop.
 ## Keep independent work moving
 
 A test waiting for resource capacity blocks that dependency, not unrelated
-implementation, review or documentation. Use the host-owned allocation queue when
-available and retain its request identity; automatic resumption must respect Stop
-and the original task. If that capability is absent, report the limitation rather
+implementation, review or documentation. For a bounded isolated check, discover
+`workspace.tests.submit`, save one request identity and let the host wait, run the
+check once and preserve evidence before cleanup. The working folder is snapshotted
+when admitted, so finish relevant source edits before submitting. Continue useful
+independent work and inspect `workspace.tests.read` or `workspace.tests.result` for
+bounded retained output. Automatic resumption must respect Stop and the original
+task. Use `workspace.tests.cancel` to withdraw a pending check. Manual
+`workspace.environments.*` controls remain for interactive environments whose
+caller owns cleanup. If the queued capability is absent, report the limitation rather
 than claiming an automatic wake. Never raise infrastructure limits, reuse a peer's
 environment or delete retained work merely to obtain capacity.
 

@@ -11,7 +11,10 @@ const fixture=process.env.AMPLIFIER_TEST_BASE_URL?null:spawn(process.env.AMPLIFI
 let browser,page;
 try{
  const url=process.env.AMPLIFIER_TEST_BASE_URL||await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),30000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
- browser=await chromium.launch({headless:true});
+ // Some isolated ARM64 Linux hosts have no usable GPU child process. Opt in
+ // explicitly; keep the default browser profile for ordinary environments.
+ const software=process.env.AMPLIFIER_BROWSER_PROFILE==='linux-software';
+ browser=await chromium.launch({headless:true,...(software?{channel:'chromium',args:['--disable-gpu','--disable-gpu-compositing','--in-process-gpu']}: {})});
  const context=await browser.newContext({viewport:{width:1280,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();

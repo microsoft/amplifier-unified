@@ -27,6 +27,7 @@ class Failure(Exception):
 @pytest.fixture
 def library(monkeypatch):
     monkeypatch.setattr(worker, 'docker_capacity', lambda payload: {'available': True, 'scope': {'daemon': 'fixture-daemon'}})
+    monkeypatch.setattr(worker, 'docker_json', lambda *args: {'ID': 'fixture-daemon'})
     calls = []
     def record(name, value):
         def call(*args, **kwargs):
@@ -224,3 +225,14 @@ def test_real_helper_output_is_bounded_and_stopped_on_overflow(tmp_path, monkeyp
     (tmp_path / 'test_environment_worker.py').write_text("import sys\nsys.stdout.write('x' * 1048576)\nsys.stdout.flush()\n")
     with pytest.raises(ValueError, match='exceeded its bound'):
         owner.invoke({'python': sys.executable, 'image': owner.APPROVED_IMAGE, 'dockerHost': 'unix:///socket'}, home, row, 'read', {})
+
+
+def test_incus_helper_selection_preserves_exact_root_and_request(tmp_path, monkeypatch):
+    home, row = allocated(tmp_path)
+    monkeypatch.setattr(owner, '__file__', str(tmp_path/'owner.py'))
+    (tmp_path/'test_environment_worker.py').write_text("raise RuntimeError('wrong backend')\n")
+    (tmp_path/'incus_environment_worker.py').write_text(
+        "import json,sys\np=json.load(sys.stdin)\nprint(json.dumps({'ok':True,'owner':p['rootOwner'],'incus':p['incus'],'request':p['requestId']}))\n")
+    value = owner.invoke({'python': sys.executable, 'backend': 'incus', 'incus': {'project':'owned'}},
+        home, row, 'read', {'requestId':'same-request'})
+    assert value == {'ok':True, 'owner':'root', 'incus':{'project':'owned'}, 'request':'same-request'}

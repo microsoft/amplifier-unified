@@ -20,7 +20,7 @@ def test_stopped_environments_do_not_consume_execution_slots(monkeypatch, tmp_pa
     payload = observation(monkeypatch, tmp_path, ['running'] + ['exited']*15)
     result = worker.docker_capacity(payload)
     assert result['available']
-    assert result['counts'] == {'active': 1, 'stopped_retained': 15, 'total': 16}
+    assert result['counts'] == {'active': 1, 'stopped_retained': 15, 'pending_unobserved': 0, 'total': 16}
 
 
 @pytest.mark.parametrize('change,code', [({'maxRunning': 1}, 'execution_capacity'),
@@ -52,3 +52,38 @@ def test_capacity_is_rechecked_under_lock(monkeypatch, tmp_path):
     with worker.docker_admission(payload) as result:
         assert not result['available']
     assert len(reads) == 2
+
+
+def test_interrupted_launch_keeps_slot_until_exact_owner_cleanup(monkeypatch, tmp_path):
+    payload = {**observation(monkeypatch, tmp_path, []), 'maxRunning': 1,
+        'universeId': 'dtu-0', 'operationId': 'launch', 'root': str(tmp_path/'owner')}
+    worker.reserve_admission(payload, worker.docker_capacity(payload))
+    result = worker.docker_capacity(payload)
+    assert not result['available'] and result['counts']['pending_unobserved'] == 1
+    with pytest.raises(FileExistsError):
+        worker.reserve_admission(payload, result)
+    with pytest.raises(ValueError, match='different owner'):
+        worker.release_admission({**payload, 'root': '/another-owner'}, 'dtu-0')
+    # Once the same physical project appears it is counted only once.
+    observation(monkeypatch, tmp_path, ['running'])
+    result = worker.docker_capacity(payload)
+    assert result['counts']['active'] == 1 and result['counts']['pending_unobserved'] == 0
+    worker.release_admission(payload, 'dtu-0')
+    observation(monkeypatch, tmp_path, [])
+    assert worker.docker_capacity(payload)['available']
+
+
+def test_admission_rejects_symlinked_ancestor_and_public_lock(monkeypatch, tmp_path):
+    payload = observation(monkeypatch, tmp_path, [])
+    target = tmp_path/'real'
+    target.mkdir()
+    (tmp_path/'alias').symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match='symlinks'):
+        worker.docker_capacity({**payload, 'admissionRoot': str(tmp_path/'alias'/'state')})
+    directory = worker.admission_directory(payload, 'same-daemon')
+    lock = directory/'admission.lock'
+    lock.write_text('')
+    lock.chmod(0o644)
+    with pytest.raises(ValueError, match='private regular'):
+        with worker.docker_admission(payload):
+            pytest.fail('public lock admitted')

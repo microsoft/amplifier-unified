@@ -5,8 +5,10 @@ host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
 command once, stops the exact owned environment, exports source and artifacts,
 then removes the environment. Export or removal uncertainty preserves ownership
-and evidence. Files outside the working folder and artifact directory are not
-included in the export. Do not put unique output elsewhere.
+and evidence. Docker exports the working folder and artifact directory; do not
+put unique output elsewhere. The first Incus adapter retains a bounded complete
+instance archive, with its storage cost described in
+[Incus test environments](workspaces/incus-test-environments.md).
 
 The user and agent use the same actions. The workspace's existing test section
 shows waiting and completed checks; there is no new chat-header control. User
@@ -22,6 +24,8 @@ The result does not satisfy a shared-task dependency or prove product acceptance
 - `workspace.tests.read` returns bounded pages of compact outcomes. Full check
   output stays in the existing environment operation receipt. It is not copied
   into every queue row or workspace catalog.
+- `workspace.tests.result` pages that exact recorded output after cleanup,
+  preserving the exit code and any capture-limit indicator.
 - Cancellation before admission starts no command. An already admitted command
   may run until its specified timeout, at most five minutes. The host then stops
   its exact environment and preserves evidence. Cancelling a model alone does
@@ -48,6 +52,9 @@ but not running slots. Unknown/paused/starting physical instances remain active.
 Docker admission is serialized for cooperating processes of one host user,
 keyed by the actual daemon identity rather than socket spelling. It does not
 enforce a limit on old tools or unrelated callers that bypass this admission.
+An interrupted launch retains a pending reservation until its exact physical
+owner is observed or confirmed cleanup releases it. Missing acknowledgements
+do not make capacity free, and a visible project is counted only once.
 
 Docker storage is observed at the explicit local daemon's data directory. An
 unreadable daemon/storage observation waits with a distinct blocker; it is not
