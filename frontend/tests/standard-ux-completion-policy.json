@@ -2104,6 +2104,22 @@
       "limits": [
         "Synthetic fixture/private filesystem only; repository definitions are not clone/network acceptance."
       ]
+    },
+    {
+      "workflow": "storage.inventory",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open Settings Privacy Storage",
+        "Inspect six returned measurement categories then sort/filter/page workspace files",
+        "Open exact nested folder, refresh and return by breadcrumb"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Underlying no-hidden-traversal outcome2 stays partial; no filesystem traversal spy."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
