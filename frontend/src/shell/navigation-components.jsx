@@ -2,6 +2,7 @@ import {WorkspacePlans,WorkspacePlan} from '../workspace-plans';
 import {revealNavigationTitles} from '../navigation-title';
 import {useChatTitle} from '../use-chat-title';
 import {WorkNavigationContext} from '../work-navigation';
+import {ArchiveButton} from '../archive-feedback.jsx';
 import React,{useEffect,useLayoutEffect,useRef,useState,useContext} from 'react';
 import {MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Folder,MoreHorizontal,ArrowUp,ArrowDown,Plus} from 'lucide-react';
 import {chatPage,visibleWorkspaces,movePin,recentLimit,recentPageMatches} from '../chat-navigation';
@@ -138,7 +139,7 @@ export function ChatDetails({chat,model,now,close}){
    {chat.pinned&&<><button type="button" aria-label={'Move '+title+' up'} data-action={orderAction} disabled={pinIndex<1} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" aria-label={'Move '+title+' down'} data-action={orderAction} disabled={pinIndex<0||pinIndex===pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{pinError&&<span role="alert">{pinError}</span>}</>}
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
    <button type="button" data-action="session.markUnread" onClick={()=>{act('session.markUnread',{id:chat.id});close()}}>Mark unread</button>
-   <button type="button" aria-label={(chat.archived?'Restore ':'Archive ')+title} data-action={chat.archived?'session.restore':'session.archive'} onClick={()=>act(chat.archived?'session.restore':'session.archive',{id:chat.id})}>{chat.archived?'Restore':'Archive'}</button>
+   <ArchiveButton aria-label={(chat.archived?'Restore ':'Archive ')+title} chat={chat} archived={chat.archived}/>
    {managed&&!chat.parentId&&<button type="button" className="a-danger" aria-label={'Delete '+title} data-action="view.update" onClick={()=>{close();setDraft({mode:'chat-delete',id:chat.id,name:title})}}><Trash2/>Delete</button>}
   </div>}
  </>;

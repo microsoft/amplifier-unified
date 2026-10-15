@@ -1,3 +1,5 @@
+import {createArchiveAction} from './archive-action.js';
+import {ArchiveContext,ArchiveNotice} from './archive-feedback.jsx';
 import {createStateStream} from './state-stream.js';
 import {recordActionTiming} from './api.js';
 import {useConnectionSetup} from './setup-journey';
@@ -92,6 +94,7 @@ const icons={call:Phone,text:Bell,chat:MessageCircle};
 const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
 function App(){
+ const archiveRevision=useRef(0),archiveAction=useRef(null),[archiveFeedback,setArchiveFeedback]=useState({notice:null,pending:[]});
  const narrow=useNarrowScreen();
  const [creatingWorkspace,setCreatingWorkspace]=useState(false);
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null);
@@ -180,6 +183,8 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return Promise.resolve({accepted:false});
+  if(!meta.archiveIsCurrent&&(isNavigationAction(action,args)||action==='session.create'||action==='view.update'&&['panel','workWorkspaceTab'].some(key=>Object.hasOwn(args.patch||{},key))))archiveRevision.current++;
   if(meta.chatLink&&!meta.chatLinkIsCurrent())return Promise.resolve({accepted:false});
   const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action);
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,error:'Settings changes were kept.'});
@@ -216,6 +221,7 @@ function App(){
    // Chat navigation has its own queue; it must not overtake a declared edit.
    if(navigation&&dirtyBarrier)await dirtyBarrier;
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
+   if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return {accepted:false};
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(result.state)acceptState(result.state);
    else await awaitState(result);
@@ -537,16 +543,35 @@ function App(){
  const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} name={themeName} css={themeDraft} preview={preview} setName={setThemeName} setCss={setThemeDraft} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
  const browsing=workSurface(state)!=='chat';
  const browse=(surface,id=null)=>act('view.update',{patch:{...browsePatch(surface,id),navExpanded:false}});
+ if(!archiveAction.current)archiveAction.current=createArchiveAction({
+  getState:()=>pendingView.current.apply(latest.current),getRevision:()=>archiveRevision.current,dispatch,
+  onChange:setArchiveFeedback,
+  navigate:async(patch,isCurrent)=>{
+   if(!isCurrent()||settingsNavigation.current?.hasUnsaved()||latest.current?.canvasWorkspace?.views?.some(row=>row.dirty))return {accepted:false};
+   const revision=archiveRevision.current,id=latest.current?.selectedSessionId;
+   // The browse itself paints an optimistic surface, so its queued guard uses
+   // intent revision rather than comparing that surface with the old chat.
+   const result=await dispatch('view.update',{patch},{archiveIsCurrent:()=>archiveRevision.current===revision&&latest.current?.selectedSessionId===id});
+   if(result.accepted&&archiveRevision.current===revision)requestAnimationFrame(()=>{
+    if(archiveRevision.current!==revision)return;
+    const heading=root.current?.querySelector('[data-part="work-browser"] h1');
+    if(heading){heading.tabIndex=-1;heading.focus()}
+   });
+   return result;
+  },
+ });
+ const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss};
  const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat};
  const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:settingsState;
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
- return <WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
+ return <ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
   {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
   <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style><style>{mainRefreshCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
 
   <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>
   <AppReloadNotice/>
+  {!panel&&<ArchiveNotice value={archiveValue}/>}
   {chatLink?.status==='failed'&&<div className="a-alert" role="alert" data-chat-link-failure><span>Couldn’t open chat: {actionErrorMessage(chatLink.error)}</span><button type="button" onClick={()=>chatLinkReceiver.current.retry()}>Retry opening chat</button><button type="button" aria-label="Dismiss chat link" onClick={()=>chatLinkReceiver.current.dismiss()}><X/></button></div>}
   <ConnectionNotice connected={connected} updates={state.updates} failure={connectionFailure} onRetry={()=>setBootAttempt(value=>value+1)} onDismiss={()=>setConnectionFailure(null)}/>
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
@@ -575,6 +600,7 @@ function App(){
   {creatingWorkspace&&<WorkspaceCreation state={state} act={act} onClose={()=>setCreatingWorkspace(false)}/>}
   <FeedbackNotice state={state} act={act}/>
   {panel&&<div className={`a-overlay ${(panel==='settings'||panel==='appearance')?'a-settings-overlay a-settings-redesign-overlay':''}`} data-part="overlay" onPointerDown={e=>{outsidePointer.current=e.target===e.currentTarget}} onClick={e=>{if(outsidePointer.current&&e.target===e.currentTarget)close()}}><section role="dialog" aria-modal="true" aria-labelledby="panel-title" className={`a-dialog ${panel==='appearance'||panel==='agent'||panel==='runtime'||panel==='coordination'||Object.hasOwn(chatPageTitles,panel)||panel==='settings'?'wide':''}`} data-part="dialog"><div className="a-dialog-head"><h2 id="panel-title">{{appearance:'Settings',agent:'What the agent sees',settings:'Settings',activity:'Ready for you',feedback:'Send feedback',worker:'Give it a worker lane','delete-session':'Delete chat?',runtime:'Advanced',...chatPageTitles,'subagent-history':'Subagent history',coordination:'Workspace work'}[panel]||panel}</h2>{(panel==='settings'||panel==='appearance')&&<div className="a-settings-header-assistance" data-settings-help/>}<button className="a-icon" data-action="view.update" aria-label="Close panel" onClick={close}><X/></button></div>
+   <ArchiveNotice value={archiveValue}/>
    {error&&<div className="a-alert" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={()=>setError('')}><X/></button></div>}
    {(Object.hasOwn(chatPageTitles,panel)||panel==='runtime')&&<ChatPages key={session?.id||'draft'} page={panel} state={state} session={session} act={act} dispatch={dispatch} open={open} working={working} computerControls={<VoiceVisualControls sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/>}/>}
     {panel==='coordination'&&<CoordinationPanel key={session?.id} dispatch={dispatch} sessionId={session?.id} session={session} onOpenChat={id=>selectWorkspaceChat(dispatch,id,target=>latest.current?.selectedSessionId===target&&latest.current?.view?.panel==='coordination')}/>}
@@ -587,6 +613,6 @@ function App(){
    {panel==='agent'&&<><p>Every app control uses the same action interface. The agent can read the selected conversation, worker lanes, open panels, and nonprivate controls. Unsent messages, message edits and attachments are excluded from ordinary readback. When you ask for help with a draft, the agent can inspect that draft in this chat by explicitly selecting its browser.</p><div className="a-form-grid"><div><label>Local browser state (includes private input)</label><pre data-private="true" className="a-state-view">{pretty({...state,devices:Object.fromEntries(Object.entries(state.devices||{}).map(([id,device])=>[id,{clientId:device.clientId,viewport:device.viewport,controls:device.controls?.length,visibleTextLength:device.visibleText?.length,voice:device.voice,notificationPermission:device.notificationPermission}])),deviceCommands:(state.deviceCommands||[]).map(({id,type,origin,createdAt})=>({id,type,origin,createdAt})),theme:{name:state.theme?.name,css:`${state.theme?.css?.length||0} characters`},view:{...view,themeDraft:view.themeDraft?`${view.themeDraft.length} characters`:undefined}})}</pre></div><div><label>Visible controls</label><pre data-private="true" className="a-state-view">{pretty(visibleView(root.current,clientId).controls?.map(c=>({label:c.label,action:c.action,disabled:c.disabled})))}</pre></div></div><label htmlFor="agent-action">Run an app action</label><select id="agent-action" value={agentAction} data-action="view.update" onChange={e=>{setAgentAction(e.target.value);act('view.update',{patch:{agentAction:e.target.value}})}}>{catalog.map(a=><option key={a.name||a.action} value={a.name||a.action}>{a.name||a.action}</option>)}</select><label htmlFor="agent-args">Arguments (JSON)</label><textarea id="agent-args" className="a-css-editor" style={{minHeight:100}} value={agentArgs} data-action="view.update" onChange={e=>{setAgentArgs(e.target.value);act('view.update',{patch:{agentArgs:e.target.value}})}}/><div className="a-dialog-actions"><button className="a-primary" data-action={agentAction} onClick={()=>{try{act(agentAction,JSON.parse(agentArgs))}catch(e){reportError(e)}}}>Run action</button><button className="a-soft" data-action="state.export" onClick={()=>act('state.export')}><Download/>Export app state</button></div><p className="a-caption">Also available to integrations as window.amplifier.getState(), getActions(), and dispatch().</p></>}
    {panel==='delete-session'&&<ChatDelete key={session?.id} id={session?.id} act={dispatch} cancel={close}/>}{(panel==='settings'||panel==='appearance')&&settingsSurface }
   </section></div>}
- </div></AppReloadContext.Provider></ShellContext.Provider></WorkNavigationContext.Provider>;
+ </div></AppReloadContext.Provider></ShellContext.Provider></WorkNavigationContext.Provider></ArchiveContext.Provider>;
 }
 createRoot(document.getElementById('root')).render(<App/>);
