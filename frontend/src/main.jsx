@@ -57,6 +57,8 @@ import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraft
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
 import {createConversationNavigation,isNavigationAction} from './conversation-navigation';
+import {createDestinationHistory,destinationCommand} from './destination-history';
+import {onAuthenticationChange} from './api';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';
 import {VoiceClient} from './voice';
@@ -97,6 +99,9 @@ function App(){
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null);
  const dictationControl=useRef(null);
  const [streamClient,setStreamClient]=useState(null);
+ const [destinationTrail,setDestinationTrail]=useState(null),destinationHistory=useRef(null);
+ if(!destinationHistory.current)destinationHistory.current=createDestinationHistory({changed:setDestinationTrail});
+ useEffect(()=>onAuthenticationChange(scope=>{destinationHistory.current.invalidate(scope);setBootAttempt(value=>value+1)}),[]);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
  const startingCall=useRef(false),[voiceStarting,setVoiceStarting]=useState(false);
@@ -148,7 +153,7 @@ function App(){
  effectHandler.current=handleEffects;
  const stateWaiters=useRef(new Set()),stateRecovery=useRef(null);
  const enqueueSettings=useRef(createSettingsActionQueue()),providerReadQueue=useRef(Promise.resolve()),handledActionResults=useRef(new WeakSet());
- const acceptState=useCallback(next=>{
+ const acceptState=useCallback((next,historyOptions={})=>{
   if(!next||typeof next!=='object')return;
   if(serverState.current && next.client?.hostInstanceId===serverState.current.client?.hostInstanceId && next.revision<serverState.current.revision)return;
   if(!latest.current){for(const effect of next.deviceCommands||[])if(effect.id)seenEffects.current.add(effect.id);for(const m of notificationMessages(next))lastNotify.current.add(m.id)}
@@ -159,6 +164,7 @@ function App(){
    if(anchor){historyScrollAnchor.current={sessionId:nextSession.id,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top};stickToBottom.current=false}
   }
   serverState.current=next;conversationNavigation.current.remember(next);
+  destinationHistory.current.observe(next,historyOptions);
   for(const wake of stateWaiters.current)wake(next);
   latest.current=conversationNavigation.current.apply(next);if(!document.hidden)setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
@@ -181,7 +187,7 @@ function App(){
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
   if(meta.chatLink&&!meta.chatLinkIsCurrent())return Promise.resolve({accepted:false});
-  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action);
+  const leavingSettings=!!meta.historyVisit||['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment','canvas.openGif'].includes(action);
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,error:'Settings changes were kept.'});
   if(!meta.chatLink&&(['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='shell.command'&&['session.select','session.draft','workspace.select','session.create'].includes(args.action)))chatLinkReceiver.current?.dismiss();
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
@@ -216,10 +222,24 @@ function App(){
    // Chat navigation has its own queue; it must not overtake a declared edit.
    if(navigation&&dirtyBarrier)await dirtyBarrier;
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
-   const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
-   if(result.state)acceptState(result.state);
-   else await awaitState(result);
-   return result;
+   // Begin only when this queued command executes, after local/settings guards.
+   // No file-open/create action is replayed by a history traversal.
+   const historyVisit=meta.historyVisit?destinationHistory.current.begin(meta.historyVisit):null;
+   if(meta.historyVisit&&!historyVisit)return {accepted:false};
+   try{
+    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+    if(historyVisit)destinationHistory.current.finish(result);
+    if(result.state)acceptState(result.state);
+    else await awaitState(result);
+    if(historyVisit){
+     // awaitState's recovery may return without the receipt's revision. The
+     // history model requires its own exact route/host/revision evidence.
+     if(destinationHistory.current.snapshot().pending)destinationHistory.current.finish(null);
+     const confirmed=await historyVisit.confirmed;
+     if(!confirmed)throw Error('Navigation was not confirmed. History was kept; no action was retried.');
+    }
+    return result;
+   }catch(error){if(historyVisit)destinationHistory.current.finish(null);throw error}
   };
   // Browse and chat selections share intent order. A later optimistic browse
   // stays pending until an earlier selection can no longer replace its scope.
@@ -293,11 +313,11 @@ function App(){
    // The stream supplies the authoritative baseline. A separate state GET would
    // duplicate it and race it; explicit recovery still uses /api/state.
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
-   let streamState;
-   setFeedbackEventStream('connecting');source=createStateStream(clientUrl('/api/events?transport=delta-v1'),attachment.transports);source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);setStreamClient(streamState.client?.id===clientId?streamState.client:null);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
+   let streamState,historyBaseline=true;
+   setFeedbackEventStream('connecting');source=createStateStream(clientUrl('/api/events?transport=delta-v1'),attachment.transports);source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState,{baseline:historyBaseline});historyBaseline=false;setStreamClient(streamState.client?.id===clientId?streamState.client:null);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
    source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);setStreamClient(streamState.client?.id===clientId?streamState.client:null);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setStreamClient(null);setBootAttempt(value=>value+1)}});
    source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
-   source.onopen=()=>{setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
+   source.onopen=()=>{historyBaseline=true;setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
     if(!alive||restarting)return;
     setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false);setStreamClient(null);
     // CONNECTING is owned by EventSource's native retry. CLOSED cannot recover
@@ -537,7 +557,13 @@ function App(){
  const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} name={themeName} css={themeDraft} preview={preview} setName={setThemeName} setCss={setThemeDraft} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
  const browsing=workSurface(state)!=='chat';
  const browse=(surface,id=null)=>act('view.update',{patch:{...browsePatch(surface,id),navExpanded:false}});
- const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat};
+ const visitHistory=async key=>{
+  const entry=destinationHistory.current.snapshot().entries.find(row=>row.key===key);
+  if(!entry||destinationHistory.current.snapshot().pending)return;
+  const [action,args]=destinationCommand(entry);
+  try{await dispatch(action,args,{historyVisit:key})}catch(error){reportError(error)}
+ };
+ const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,history:destinationTrail,visitHistory};
  const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:settingsState;
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
  return <WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">

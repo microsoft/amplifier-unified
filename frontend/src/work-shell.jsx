@@ -22,6 +22,7 @@ import {sessionStatus} from './session-status';
 import {ownershipState} from './ownership';
 import {hasNavigationResource} from './shell/navigation-demand';
 import {NavigationResourceStatus} from './shell/navigation-resource-status';
+import {DestinationHistory} from './destination-history';
 
 export function WorkDialog({label,onClose,children,initialFocus}){
  const ref=useRef(null);useModalFocus(ref,true,onClose);
@@ -58,6 +59,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
  return <header className="a-work-header" data-part="header" inert={!!state.view?.panel}>
   <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
   {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
+  <DestinationHistory history={nav.history} onVisit={nav.visitHistory} disabled={!!state.navigationPending}/>
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
    {!browsing&&session&&<><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>

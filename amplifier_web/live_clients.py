@@ -6,6 +6,7 @@ import json
 from aiohttp import web
 
 from .service import AppError
+from .auth import with_history_scope
 
 
 @web.middleware
@@ -50,10 +51,11 @@ def setup_routes(app, streams):
                 from .client_observations import discovery
                 return web.json_response({"clientId": identity, "protocolVersion": 1,
                     "hostInstanceId": service.instance_id, "reconnect": "snapshot",
+                    "historyScope": request.get("history_scope"),
                     **discovery(service),
                     "transports": ["http", "sse", "websocket"],
                     **({} if payload.get('includeState') is False or request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
-                       else {"state": service.browser_state()})})
+                       else {"state": with_history_scope(request, service.browser_state())})})
 
     def session_snapshot(identity, snapshot=None):
         snapshot = snapshot or service.session_state(identity)
