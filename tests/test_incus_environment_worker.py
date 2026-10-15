@@ -273,3 +273,11 @@ def test_control_output_has_separate_bound(monkeypatch):
     worker.incus(config, {}, ['query', '/1.0'])
     worker.cli(config, {}, ['capacity'])
     assert all(call['output_bytes'] == worker.CONTROL_BYTES for call in calls)
+
+
+def test_capacity_probe_needs_no_launch_identity(tmp_path, backend):
+    value = payload(tmp_path, 'capacity')
+    value.update(rootOwner=None, operationId=None, requestId=None)
+    result = worker.execute_call(value)
+    assert result['ok'] and result['available']
+    assert backend[0] == [('cli', ['capacity'])]

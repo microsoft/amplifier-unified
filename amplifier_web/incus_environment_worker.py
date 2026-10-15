@@ -274,7 +274,7 @@ def execute_call(payload):
     config = validate_configuration(payload['incus'])
     env = environment(config, root)
     action = payload['action']
-    name = identity(payload)
+    name = None if action == 'capacity' else identity(payload)
     if payload.get('universeId') and payload['universeId'] != name:
         raise ValueError('The retained environment identity changed.')
     snapshot = payload.get('snapshot')
