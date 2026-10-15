@@ -1,8 +1,9 @@
 # Combined copied-history and synthetic-runtime acceptance
 
-Status: proposal only. No service, mount, database, or workload in this proposal
-has been created. Implementation and startup require the parent review. The
-existing read-only-execution replica and persistent development instance stay
+Status: implemented after parent review, with a qualified first combined run.
+The proposed design below is retained as design history; the measured
+implementation and its deviations are recorded in the final section. The
+existing read-only-execution replica and persistent development instance remain
 available and unchanged.
 
 ## Purpose and boundaries
@@ -172,7 +173,7 @@ visits per stage. Cold-process send acknowledgements were 1.46/1.76/2.09 seconds
 first visible response was 1.78/2.27/2.55 seconds. Stop returned the UI in
 895/872/865 ms. These satisfy the existing cold-send/first-visible three-second
 and selection/stream/Stop targets in this short run. They do not establish the
-500 ms retained-worker send target, sustained stability, or external-provider
+governing 300 ms retained-worker send target, sustained stability, or external-provider
 behavior. Whole-service memory peak was about 1.52 GiB and includes startup and
 all stages; no per-stage resource attribution is claimed.
 
@@ -184,3 +185,10 @@ large workspace's cold open/filter/explicit pagination under 12 workers, with
 request acknowledgement, query settlement and visible paint separated. The
 previous approximately 1.44-second workspace observation is not resolved by
 these chat-navigation samples. No broad rerun is needed to answer that question.
+
+The containing DTU is limited to four CPUs (effective cpuset `0,9,16-17`) and
+8 GiB memory, verified from Incus configuration and its cgroup. The sibling
+service requests a six-CPU quota and 12 GiB memory limit, but those cannot expand
+the parent allowance: effective ceilings are four CPUs and 8 GiB shared by the
+DTU. Peer test/browser jobs were idle during measurement; retained idle services
+share that parent. The parent CPU cgroup has no additional time quota.

@@ -48,10 +48,23 @@
     "runtimeQualification": "bypassed through previously qualified immutable worker interpreter",
     "resourceLimits": {
       "memoryBytes": 12884901888,
-      "cpuQuotaPercent": 600
+      "cpuQuotaPercent": 600,
+      "scope": "requested sibling service limits, further restricted by parent DTU"
     },
     "wholeServiceCgroupMemoryPeakBytes": 1629425664,
-    "memoryPeakIncludesSetupAndAllStages": true
+    "memoryPeakIncludesSetupAndAllStages": true,
+    "parentDtuLimits": {
+      "cpuCount": 4,
+      "effectiveCpuSet": "0,9,16-17",
+      "memoryBytes": 8589934592,
+      "cpuMax": "max 100000",
+      "verification": "Incus limits.cpu/limits.memory plus parent cgroup cpuset.cpus.effective/memory.max/cpu.max"
+    },
+    "effectiveCeilings": {
+      "cpuCount": 4,
+      "memoryBytes": 8589934592,
+      "sharedWithIdleRetainedServices": true
+    }
   },
   "stages": [
     {
@@ -184,5 +197,13 @@
     "scripts/scale_runtime_prepare.py": "d1b1f08101c8b34bd73f766988081749f27d88129c3c4c28d30e4b36a500a01c",
     "scripts/scale_runtime_derived.py": "a497a0f349bd1359249cf1d4e42349a51efa42a5ab38d63acf2cdd5735e99b88"
   },
-  "privateReceiptSha256": "159a0a20e010b5c62bea472c55e36cae5ff601c2ceddfb27eab83254ef185bcd"
+  "privateReceiptSha256": "159a0a20e010b5c62bea472c55e36cae5ff601c2ceddfb27eab83254ef185bcd",
+  "desired": {
+    "coldWorkerSendAckMs": 3000,
+    "coldWorkerFirstVisibleMs": 3000,
+    "retainedWorkerSendAckMs": 300,
+    "chatSelectionMs": 500,
+    "visibleStreamLagP95Ms": 250,
+    "stopUiMs": 1000
+  }
 }
