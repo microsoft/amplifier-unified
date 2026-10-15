@@ -1,0 +1,1393 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "issueSnapshotAt": "2026-10-15T21:05:26.723916+00:00",
+  "integrationRevision": "882d19ddd4a2b615b3be6d76f7b3b8ec58dc4c05",
+  "integrationBranch": "integration/readiness-20261015",
+  "integrationPR": "https://github.com/microsoft/amplifier-unified/pull/784",
+  "scope": {
+    "frozenManualIssues": 31,
+    "frozenAutomaticReports": 36,
+    "newIssuesSinceFrozenSnapshot": [
+      782,
+      783,
+      785
+    ],
+    "closingOpenIssuesAccountedFor": 70
+  },
+  "status": "reviewable integration; remaining targets, dependencies, decisions and unavailable acceptance are explicit",
+  "qualificationPolicy": [
+    "Open at the snapshot is a GitHub state, not evidence that no repair exists. No issue was closed by this review.",
+    "Historical failures remain historical; source-bound current qualification is separate.",
+    "Full Python9021/36skip/13warnings at e27593c67, canonical72 browsers at4801878aa, plus later focused evidence. No full suite is claimed at this later integration revision.",
+    "Ordinary UX paths/outcomes are governed separately by standard-ux-completion-20261015.md; route visibility alone is not outcome coverage.",
+    "No main merge, release, dependency adoption or production restart is included."
+  ],
+  "categoryCounts": {
+    "qualified-or-disposed-current-contract": 8,
+    "product-or-authority-decision": 12,
+    "incident-acceptance-unavailable-or-incomplete": 2,
+    "outside-Unified-runtime": 3,
+    "canonical-repair-pr-prepared-unmerged": 2,
+    "measured-improvement-target-miss-remains": 1,
+    "canonical-owner-implementation-remaining": 1,
+    "secondary-AHP-track": 1,
+    "dependency-contract-and-adoption-decision": 1,
+    "historical-automatic-release-report": 36,
+    "new-since-frozen-fixed-in-integration": 3
+  },
+  "issues": [
+    {
+      "issue": 785,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/785",
+      "title": "Skipping a failed Smart Tool update leaves its staged install hidden on disk",
+      "category": "new-since-frozen-fixed-in-integration",
+      "disposition": "confirmed_defect_fixed_focused_qualified_unmerged",
+      "integrationCommit": "df245e270",
+      "currentEvidence": "Exact immutable staged owner/revision is recovered after restart and removed on explicit Skip. Real persistence/connection/removal tests preserve current connection, cancellation, rollback and dependent resources; all10 new cleanup controls and3 affected adjacency controls passed after retained red/initial failures.",
+      "remaining": "No real package download, tool activation replay or production update. Later focused qualification does not relabel the earlier full suite.",
+      "publicEvidence": [
+        {
+          "path": "docs/validation/smart-tool-cleanup-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 783,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/783",
+      "title": "Sequential TLS cert/key configuration rejects a safe intermediate loopback state",
+      "category": "new-since-frozen-fixed-in-integration",
+      "disposition": "confirmed_defect_fixed_focused_qualified_unmerged",
+      "integrationCommit": "9e8ae072f",
+      "currentEvidence": "Individual cert/key staging is allowed only for CA mode on loopback. Actual CLI/real-certificate checks retain strict remote/origin guards and incomplete-pair startup refusal;8 new plus38 adjacent controls passed.",
+      "remaining": "No externally reachable TLS deployment or installed client certificate acceptance performed.",
+      "publicEvidence": [
+        {
+          "path": "tests/test_tls_config_sequence.py"
+        }
+      ]
+    },
+    {
+      "issue": 782,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/782",
+      "title": "Second foreground serve reports a traceback while the state folder already has an owner",
+      "category": "new-since-frozen-fixed-in-integration",
+      "disposition": "confirmed_defect_fixed_focused_qualified_unmerged",
+      "integrationCommit": "95d64c532",
+      "currentEvidence": "Actual separate Publisher process retains its lock; duplicate CLI exits nonzero with concise configured-address/status guidance, no traceback, no bind/takeover.16 focused/adjacent checks passed; final3 affected checks passed.",
+      "remaining": "Configured address is not a health claim. No service restart or ownership bypass.",
+      "publicEvidence": [
+        {
+          "path": "tests/test_cli_existing_owner.py"
+        }
+      ]
+    },
+    {
+      "issue": 777,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/777",
+      "release": "v0.20.165",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 771,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/771",
+      "release": "v0.20.164",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 765,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/765",
+      "release": "v0.20.163",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 756,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/756",
+      "release": "v0.20.162",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 750,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/750",
+      "title": "Can't change my model provider after deleting one it was assigned to",
+      "category": "qualified-or-disposed-current-contract",
+      "canonicalOwner": "Unified provider configuration / runtime recovery",
+      "disposition": "current_path_qualified_historical_not_reproduced",
+      "currentEvidence": "Actual Settings removal, explicit replacement, retained reload selection and fresh send pass;17 backend recovery controls pass. No new fallback or replay.",
+      "remaining": "Historical incident not independently reconstructed; deterministic provider execution, not live account acceptance.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "90347868d"
+      ],
+      "publicEvidence": []
+    },
+    {
+      "issue": 746,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/746",
+      "release": "v0.20.161",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 745,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/745",
+      "title": "let amplifier react to my messages",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified assistant reactions",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "New assistant interaction behavior needs product decision; existing user reactions do not authorize assistant-turn replacement.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 744,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/744",
+      "release": "v0.20.160",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 737,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/737",
+      "release": "v0.20.159",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 735,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/735",
+      "release": "v0.20.158",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 732,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/732",
+      "release": "v0.20.157",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 727,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/727",
+      "release": "v0.20.156",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 726,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/726",
+      "release": "v0.20.155",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 724,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/724",
+      "release": "v0.20.154",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 719,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/719",
+      "release": "v0.20.153",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 714,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/714",
+      "release": "v0.20.152",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 712,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/712",
+      "title": "Smart Tool workflow blocked: approved task-owned storage remains unwritable in active session",
+      "category": "incident-acceptance-unavailable-or-incomplete",
+      "canonicalOwner": "Unified file-policy and task storage",
+      "disposition": "current_policy_controls_pass_workflow_acceptance_partial",
+      "currentEvidence": "Actual mounted filesystem/Core narrow-save/reset and active-owner deferred-refresh controls pass. Saved settings become active at a safe boundary.",
+      "remaining": "Exact Stories import/native review/export after approved allocation has not been executed; no current policy defect reproduced.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "305cebb30"
+      ],
+      "publicEvidence": []
+    },
+    {
+      "issue": 709,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/709",
+      "release": "v0.20.151",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 703,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/703",
+      "release": "v0.20.150",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 696,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/696",
+      "release": "v0.20.149",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 693,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/693",
+      "release": "v0.20.148",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 691,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/691",
+      "release": "v0.20.147",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 689,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/689",
+      "release": "v0.20.146",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 687,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/687",
+      "release": "v0.20.145",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 683,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/683",
+      "release": "v0.20.144",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 682,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/682",
+      "title": "Worktree handoff does not revalidate the source repository binding",
+      "category": "qualified-or-disposed-current-contract",
+      "canonicalOwner": "Unified worktree handoff",
+      "disposition": "fixed_integrated_focused_qualified",
+      "currentEvidence": "Live source Git identity now revalidated before handoff; substitution regression fails before fix and passes after;57 focused worktree checks passed.",
+      "remaining": "Not a full all-platform/workspace-runtime qualification.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "9684f9c55"
+      ],
+      "publicEvidence": []
+    },
+    {
+      "issue": 681,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/681",
+      "title": "some new feature for the \"conversation disconnected\" \"error\" message is causing a new turn to run",
+      "category": "qualified-or-disposed-current-contract",
+      "canonicalOwner": "Unified conversation error / attention",
+      "disposition": "current_dismiss_control_qualified_historical_not_reproduced",
+      "currentEvidence": "Exact Dismiss acknowledgement does not send; saved error remains and read receipt hides its banner.12 conversation-health controls pass.",
+      "remaining": "Original140 interaction not independently reconstructed; current error fixtures also pass repaired browser flows.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [],
+      "publicEvidence": []
+    },
+    {
+      "issue": 679,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/679",
+      "title": "Recurring new-task schedules stop again after rebind; exited owner blocks authorized repair",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified scheduling / repair handoff",
+      "disposition": "confirmed_recovery_gap_requires_authority_decision",
+      "currentEvidence": "Four current controls confirm stopped/error owner suppresses peer repair; five unchanged real RuntimeControls checkpoints preserve configuration and next due admission.",
+      "remaining": "Historical changing configuration field remains unknown. Do not remove Stop guard, relax permission hashes, or replay suppressed/uncertain input. Explicit human recovery authority needs owner decision.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 678,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/678",
+      "release": "v0.20.143",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 676,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/676",
+      "title": "The coordinating messages are getting pretty obtrusive. Need a way to hide those or make them human understandable",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified message presentation",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "Report requests visibility/design change. Prepare alternatives rather than silently hiding messages.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 675,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/675",
+      "title": "Use a better looking diagram renderer for rendering .dot files",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified diagram renderer",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "New library/editor adoption is design decision; #625/#626 usability defects can be fixed independently.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 672,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/672",
+      "release": "v0.20.141",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 668,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/668",
+      "title": "JobBench SQLite truncation can omit entire tables in amplifier-agent",
+      "category": "outside-Unified-runtime",
+      "canonicalOwner": "microsoft/amplifier-agent JobBench",
+      "disposition": "outside_main_unified_runtime_scope",
+      "currentEvidence": "Amplifier Agent evaluation tool is separate from Unified Core/Foundation runtime.",
+      "remaining": "Retain canonical owner tracking; no Unified resolution or gate inferred from a shared project name.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [],
+      "publicEvidence": []
+    },
+    {
+      "issue": 667,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/667",
+      "title": "Computer-use release qualification omits the executable Windows bridge",
+      "category": "canonical-repair-pr-prepared-unmerged",
+      "canonicalOwner": "microsoft/amplifier-bundle-computer-use release tooling",
+      "disposition": "canonical_fix_PR_prepared_qualified_not_merged_or_adopted",
+      "currentEvidence": "Canonical source+installed runtime manifests repaired; parent recorded6 red controls,167+13 passing checks,2 real wheels/31 runtime files including both.ps1 with RECORD/source/installed equality;4 CI checks green.",
+      "remaining": "Canonical draft PR unmerged. Windows installed execution and optional Unified dependency adoption remain unqualified.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "63871d4691d44bac4bad25875f19e3909b79ffc7"
+      ],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ],
+      "canonicalPR": "https://github.com/microsoft/amplifier-bundle-computer-use/pull/29"
+    },
+    {
+      "issue": 666,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/666",
+      "release": "v0.20.140",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 665,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/665",
+      "release": "v0.20.139",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 662,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/662",
+      "release": "v0.20.138",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 659,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/659",
+      "release": "v0.20.137",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 657,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/657",
+      "release": "v0.20.136",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 655,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/655",
+      "release": "v0.20.135",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 653,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/653",
+      "release": "v0.20.134",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 649,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/649",
+      "title": "Bash safety parser can be bypassed with unrecognized execution wrappers",
+      "category": "canonical-repair-pr-prepared-unmerged",
+      "canonicalOwner": "microsoft/amplifier-module-tool-bash",
+      "disposition": "canonical_fix_PR_prepared_qualified_not_merged_or_adopted",
+      "currentEvidence": "Canonical wrapper parser repaired. Red51; package352 passed/10 Windows skips; final180 safety tests; all7 GitHub checks passed including6 platform/Python legs. No dangerous execution.",
+      "remaining": "Canonical PR remains unmerged; Unified dependency adoption/version-bound installed acceptance not performed.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "63c92139c735dc894467c9b74e2c4309413b7f3e"
+      ],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ],
+      "canonicalPR": "https://github.com/microsoft/amplifier-module-tool-bash/pull/24"
+    },
+    {
+      "issue": 648,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/648",
+      "release": "v0.20.133",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 644,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/644",
+      "release": "v0.20.132",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 639,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/639",
+      "release": "v0.20.131",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 637,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/637",
+      "release": "v0.20.130",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 635,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/635",
+      "title": "Smart Tool update: one failed activation blocks all waiting tools behind a bare ValueError receipt (plus 6 related defects)",
+      "category": "qualified-or-disposed-current-contract",
+      "canonicalOwner": "Unified managed Smart Tool update coordinator",
+      "disposition": "fixed_integrated_focused_qualified_related_proposals_disposed",
+      "currentEvidence": "Independent Smart Tool activation no longer aborts behind one failure; exact Retry/Skip route arguments preserved, failed prior connection retained and bounded diagnostics persist.89 focused backend,27 diagnostic and38 frontend checks plus actual desktop/narrow lifecycle browser passed.",
+      "remaining": "Synthetic tool transport only; no automatic retry after uncertain restart. Original spark-1 OSError lacked errno/operation, so disk exhaustion is not retroactively established. Related UV/reset66pass1explicit opt-in skip; broader architecture proposals retained separately.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "dab2a993e",
+        "048f504cd"
+      ],
+      "publicEvidence": [
+        {
+          "path": "smart-tool-cleanup-qualification-20261015.json"
+        },
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 633,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/633",
+      "title": "Intermittent host latency persists after v0.20.129 outside measured handler time",
+      "category": "measured-improvement-target-miss-remains",
+      "canonicalOwner": "Unified request scheduling / history / persistence",
+      "disposition": "full_copy_workspace_targets_met_warm_send_target_still_missed",
+      "currentEvidence": "All32 verified event shards;274-root workspace;15 actual workspace gestures at1/6/12 workers all meet their1000ms open/page or500ms filter targets. Resident owners stay16 before/after each sequence. Source0701c94cb;22 focused Python checks and real held-plan paging browser pass.",
+      "remaining": "Warm-send sampled p95 is671/786/844ms at1/6/12 workers versus desired300ms; current focused admission investigation remains open. Three warm samples/stage and one observation/gesture are early-warning measurements, not statistical tails. Deterministic local provider; copy is per-file verified, not globally atomic.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "db57273f7",
+        "48132b59a",
+        "fd1425de8",
+        "76d3258fb",
+        "47ae959e1"
+      ],
+      "publicEvidence": [
+        {
+          "path": "bounded-workspace-metadata-20261015.json"
+        },
+        {
+          "path": "combined-scale-concurrency-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 630,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/630",
+      "title": "Security: Recipes shell escaping is bypassed inside command substitution",
+      "category": "canonical-owner-implementation-remaining",
+      "canonicalOwner": "microsoft/amplifier-bundle-recipes",
+      "disposition": "canonical_owner_implementation_environment_work_remaining",
+      "currentEvidence": "Original exact PR120 nested-expansion defect remains. Latest owner policy46e9c5f is ratified; private checker2c2047abb qualified for coding, not production. Owner has not built a production lowerer; isolated verification capacity/readiness is the current blocker.",
+      "remaining": "Canonical owner must implement admitted full compatibility/confinement design and qualify both engines, unchanged corpus/goldens, package isolation, activation and CLI. Private spark-2 environment offer recorded; no duplicate implementation or new product decision.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ],
+      "canonicalPR": "https://github.com/microsoft/amplifier-bundle-recipes/pull/120"
+    },
+    {
+      "issue": 629,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/629",
+      "release": "v0.20.129",
+      "category": "historical-automatic-release-report",
+      "disposition": "historical_failure_retained_current_source_separately_qualified",
+      "currentEvidence": "Current source separately passed72 canonical browser scenarios at4801878aa and9021 Python tests at e27593c67, with36 explicit skips/13warnings. Twelve useful optional Core cases and a real Worker history-edit probe passed separately. Later source changes have focused qualification.",
+      "remaining": "Historical release was not rerun or retroactively marked green; a passing current suite does not qualify every historical device, provider or source.",
+      "publicEvidence": [
+        {
+          "path": "readiness-test-qualification-20261015.json"
+        },
+        {
+          "path": "canonical-browser-qualification-20261015.json"
+        },
+        {
+          "path": "optional-core-qualification-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 626,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/626",
+      "title": "Canvas: DOT viewer needs better space usage, navigation, and drag performance",
+      "category": "qualified-or-disposed-current-contract",
+      "canonicalOwner": "Unified DOT viewer",
+      "disposition": "fixed_integrated_focused_qualified",
+      "currentEvidence": "Current DOT fit, pointer-centered zoom/live pan, resize and touch cancellation qualified within22 diagram assertions plus Canvas regression.",
+      "remaining": "No installed Mac PWA/trackpad acceptance; renderer replacement is separate675 decision.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "81207254f"
+      ],
+      "publicEvidence": []
+    },
+    {
+      "issue": 625,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/625",
+      "title": "Canvas: Mermaid diagrams underuse available space and lack mouse/trackpad zoom",
+      "category": "qualified-or-disposed-current-contract",
+      "canonicalOwner": "Unified Mermaid viewer",
+      "disposition": "fixed_integrated_focused_qualified",
+      "currentEvidence": "Current Mermaid fit, pointer-centered zoom/live pan, resize and touch cancellation qualified within22 diagram assertions plus Canvas regression.",
+      "remaining": "No installed Mac PWA/trackpad acceptance; source-qualified keyboard pan is focused-stage rather than full Tab journey.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "81207254f"
+      ],
+      "publicEvidence": []
+    },
+    {
+      "issue": 615,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/615",
+      "title": "Unknown unknowns that waste time",
+      "category": "qualified-or-disposed-current-contract",
+      "canonicalOwner": "Unified agent action discovery / model behavior",
+      "disposition": "current_contract_qualified_historical_reproducer_missing",
+      "currentEvidence": "Current exact action catalog and actual mounted app_control discovery/recovery controls passed: bounded lossless pages and fragments, stale revision rejection, malformed call effect none and executable recovery to known action.",
+      "remaining": "Original report does not identify one unavailable action; historical model capability judgment remains unconfirmed. Optional real programmatic-tool cross-module test skipped because module absent; no external inference acceptance.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "08880da85"
+      ],
+      "publicEvidence": []
+    },
+    {
+      "issue": 614,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/614",
+      "title": "Glancable task status vs. clicking into session",
+      "category": "qualified-or-disposed-current-contract",
+      "canonicalOwner": "Unified workspace plan summary",
+      "disposition": "delivered_plan_ui_and_no_admission_read_fix_qualified",
+      "currentEvidence": "Existing workspace plan values and detail are qualified; optional plan/title readers now preserve dormant owner residency. Focused22 checks preserve native aliases/ambiguity/deletion guards; real56-chat paging retains1 resident owner and no runtime effect. Full-copy paging retains16 owners at1/6/12 actual workers.",
+      "remaining": "No new task-status feature is promised. Small-sample workspace timing and local deterministic-provider limits remain; exact report linked.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [
+        "290aa46c8",
+        "ae12f9254"
+      ],
+      "publicEvidence": [
+        {
+          "path": "bounded-workspace-metadata-20261015.json"
+        }
+      ]
+    },
+    {
+      "issue": 613,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/613",
+      "title": "Security: amplifier-agent AGENTS.md loader follows symlinks outside the repository",
+      "category": "outside-Unified-runtime",
+      "canonicalOwner": "microsoft/amplifier-agent engine",
+      "disposition": "outside_main_unified_runtime_scope",
+      "currentEvidence": "Separate runtime from Unified Core/Foundation; not a Unified release prerequisite.",
+      "remaining": "Retain canonical owner tracking; no Unified resolution or gate inferred from a shared project name.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [],
+      "publicEvidence": []
+    },
+    {
+      "issue": 571,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/571",
+      "title": "Tempo Settings can block the main actor during Keychain verification",
+      "category": "outside-Unified-runtime",
+      "canonicalOwner": "Tempo native macOS client",
+      "disposition": "outside_main_unified_runtime_scope",
+      "currentEvidence": "Original567 historical head was repurposed. No current native source in Unified; owner/revision reconciliation needed.",
+      "remaining": "Retain canonical owner tracking; no Unified resolution or gate inferred from a shared project name.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [],
+      "publicEvidence": []
+    },
+    {
+      "issue": 470,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/470",
+      "title": "AHP/ACP release qualification does not bind legacyRevision to the exercised source",
+      "category": "secondary-AHP-track",
+      "canonicalOwner": "AHP/ACP distribution preview #448",
+      "disposition": "outside_main_unified_runtime_scope",
+      "currentEvidence": "Draft secondary architecture distribution gate; not main runtime and must not delay main readiness.",
+      "remaining": "Retain canonical owner tracking; no Unified resolution or gate inferred from a shared project name.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [],
+      "publicEvidence": []
+    },
+    {
+      "issue": 297,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/297",
+      "title": "Provider preparation: isolate unrelated failures without account fallback",
+      "category": "dependency-contract-and-adoption-decision",
+      "canonicalOwner": "Core/Foundation + Unified provider admission",
+      "disposition": "dependency_contract_and_adoption_required",
+      "currentEvidence": "Current selected-provider recovery750 qualified without account fallback; inspected runtime Core2.0.1/Foundation85532ee4 is explicitly bound.",
+      "remaining": "Unrelated provider isolation/default/named/child route semantics require Core/Foundation/routing owner contracts and published prerequisites; do not silently substitute account.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 294,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/294",
+      "title": "Feedback follow-ups: controlled original edits and later attachments",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified feedback lifecycle",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "Extension of existing feedback workflow; authorization/visibility policy needs product decision.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 293,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/293",
+      "title": "Execution observability: granular visibility and context health",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified execution observability",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "Existing detail levels/usage delivered; additional controls are feature design.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 290,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/290",
+      "title": "Add a first-class Amplifier emitter so agents can see where Amplifier is, what it's doing and what plan it's following",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Cross-host observation contracts",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "New cross-host API/registry direction beyond existing bounded observer; do not add parallel authority.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 285,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/285",
+      "title": "Support Mobile remote control app",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Mobile client",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "New client implementation is product direction, not ordinary defect.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 277,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/277",
+      "title": "Support top level drumbeat / automation in app",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified automation navigation",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "New navigation entry requested; preserve existing per-conversation schedules and no unexpected execution.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 258,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/258",
+      "title": "Voice randomly changed it's language ",
+      "category": "incident-acceptance-unavailable-or-incomplete",
+      "canonicalOwner": "Unified voice/provider",
+      "disposition": "live_provider_audio_reproduction_needed",
+      "currentEvidence": "Current synthetic voice settings/lifecycle exercised separately; voice selection persistence defect repaired independently.",
+      "remaining": "Historical language-switch cause requires actual provider/audio transcript/locale evidence. Synthetic voice lifecycle or saved voice repair cannot close this issue.",
+      "requiresProductOrAuthorityDecision": false,
+      "qualifiedChanges": [],
+      "publicEvidence": []
+    },
+    {
+      "issue": 77,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/77",
+      "title": "Follow-up: route Unified notifications through amplifier-bundle-notify",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified / notify shared behavior",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "Explicit deferred architecture follow-up; current task does not implicitly ratify dependency migration.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 36,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/36",
+      "title": "Improve voice-agent wait messaging with pacing and live task-status context",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified realtime voice status",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "Additional voice timing/status contract needs design decision; investigate duplication without new telemetry authority.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    },
+    {
+      "issue": 29,
+      "url": "https://github.com/microsoft/amplifier-unified/issues/29",
+      "title": "Add hold-to-reveal numbered shortcuts for sidebar chats",
+      "category": "product-or-authority-decision",
+      "canonicalOwner": "Unified sidebar shortcuts",
+      "disposition": "decision_brief_prepared",
+      "currentEvidence": "Concrete recommendation and decision boundary prepared in readiness-decisions-20261015.md; no unapproved behavior implemented.",
+      "remaining": "New shortcut behavior conflicts with browser-reserved keys; platform interaction decision needed.",
+      "requiresProductOrAuthorityDecision": true,
+      "qualifiedChanges": [],
+      "publicEvidence": [
+        {
+          "path": "readiness-decisions-20261015.md"
+        }
+      ]
+    }
+  ],
+  "remainingSummary": [
+    {
+      "kind": "performance-target-miss",
+      "issues": [
+        633
+      ],
+      "next": "Diagnose bounded warm admission/server publication path; keep workspace improvements and current misses separate.",
+      "evidence": "bounded-workspace-metadata-20261015.json"
+    },
+    {
+      "kind": "cold-preparation-target-not-measured",
+      "issues": [],
+      "next": "Historical38.603s first-request delay was74% legitimate requalification after a behavior removal. Approximate8s worker mount remains unsegmented; repeated unchanged-input40s delay is unproven. Current full-composition cold target unmeasured.",
+      "evidence": "cold-preparation-investigation-20261015.json"
+    },
+    {
+      "kind": "canonical-dependency-adoption",
+      "issues": [
+        649,
+        667
+      ],
+      "next": "Review unmerged canonical repair PRs and qualify the exact installed dependency revision before any Unified adoption."
+    },
+    {
+      "kind": "canonical-owner-implementation",
+      "issues": [
+        630
+      ],
+      "next": "Implement the already-ratified recipe compatibility/confinement design across both engines and qualify its canonical corpus; no production candidate exists."
+    },
+    {
+      "kind": "unavailable-or-incomplete-incident-acceptance",
+      "issues": [
+        712,
+        258
+      ],
+      "next": "Current file-policy/voice paths have proof, but exact Stories workflow and historical real-audio language change are not reconstructed."
+    },
+    {
+      "kind": "product-or-authority-decisions",
+      "issues": [
+        745,
+        679,
+        676,
+        675,
+        297,
+        294,
+        293,
+        290,
+        285,
+        277,
+        77,
+        36,
+        29
+      ],
+      "next": "Use readiness-decisions-20261015.md; no implicit product/authority expansion."
+    }
+  ],
+  "archivePR770": {
+    "url": "https://github.com/microsoft/amplifier-unified/pull/770",
+    "exactHead": "2572626588ee36386fc68ecb5c4855758d5a9228",
+    "alreadyIncludedInIntegration": true,
+    "mergeCommit": "a8ab559c6",
+    "qualifiedIntegrationCorrection": "e3b79361f",
+    "currentQualification": "Canonical archive-feedback and coordination browser scenarios passed on4801878aa.",
+    "standaloneSnapshotState": "Draft; conflict with current main; contracts check failed while systemd/fast-release/CLA passed. Current integrated passes do not erase that standalone CI result.",
+    "ownerFeedbackAlreadyPosted": "https://github.com/microsoft/amplifier-unified/pull/770#issuecomment-6195868441",
+    "next": "Review within784; do not merge770 a second time. Main/release remain held."
+  },
+  "unassignedConfirmedUnifiedNonDecisionDefectsFound": [],
+  "allIssuesResolved": false
+}
