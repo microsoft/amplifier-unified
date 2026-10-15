@@ -5,7 +5,7 @@ import pytest
 
 from amplifier_web.native_catalog import NativeCatalog
 from amplifier_web.shell_resources import scope_for
-from test_shell_modules import service
+from test_shell_modules import service, settled_resources
 
 
 @pytest.mark.parametrize('kind', ['worker', 'internal'])
@@ -26,7 +26,7 @@ async def test_nonroot_native_title_does_not_build_root_pages(service, tmp_path,
     with service.clients.bind('proof-client'):
         owner = service.shell.resources
         owner.register('proof-client', 1, ['sidebarRecent', 'pinnedNavigation', 'workspaceShortcuts'], scope_for(service.state))
-        first = owner.snapshot('proof-client')
+        first = await settled_resources(service, 'proof-client')
         before = service.performance_diagnostics.snapshot()['shellResourceRebuilds']['total']
         updated = deepcopy(initial)
         updated['sessions'][1]['title'] = 'Changed worker title'
