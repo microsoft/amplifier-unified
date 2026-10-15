@@ -29,6 +29,19 @@ async def main(home):
     async def info(request):
         return web.json_response({'project':project_slug(workspace),'ids':ids,'exists':[(sessions_dir(workspace)/sid).exists() for sid in ids], 'projectExists':(workspace/'source.txt').exists()})
     app.router.add_get('/api/fixture/history',info)
+    async def expire_review(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        # Deterministic elapsed-preview boundary, confined to this synthetic DB.
+        async with service.lock:
+            rows = service.db.execute("SELECT id,value FROM managed_deletions WHERE phase='preview'").fetchall()
+            for identity, raw in rows:
+                value = json.loads(raw)
+                value['expiresAt'] = 0
+                service.db.execute('UPDATE managed_deletions SET value=? WHERE id=?', (json.dumps(value), identity))
+            service.db.commit()
+        return web.json_response({'expired': len(rows)})
+    app.router.add_post('/api/fixture/history/expire-review',expire_review)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
     url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins']=app['allowed_origins']|{url};print(json.dumps({'url':url}),flush=True)
