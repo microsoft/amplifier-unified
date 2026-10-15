@@ -44,7 +44,7 @@ test('empty Pinned disappears; workspace-only and mixed pins share one section',
  await act(async()=>{root=create(element())});
  assert.equal(root.root.findAllByProps({'data-sidebar-section':'pinned'}).length,0);
  for(const items of [[workspacePin],[chatPin],[chatPin,workspacePin]]){
-  current={...current,pinnedItemIds:items.map(item=>item.id),pinnedNavigation:{items,total:items.length,pages:1,index:0},unpinnedWorkspaceShortcuts:[]};
+  current={...current,pinnedItemIds:items.map(item=>item.id),pinnedNavigation:{items,total:items.length,pages:1,index:0}};
   await act(async()=>root.update(element()));
   const section=root.root.findByProps({'data-sidebar-section':'pinned'});
   assert.equal(section.props['aria-label'],'Pinned items');
@@ -62,7 +62,7 @@ test('mixed keyboard ordering preserves hidden pins and typed IDs, and workspace
  const items=[{id:'session:b',kind:'session',row:{id:'b',title:'Pinned chat',pinned:true}},
               {id:'workspace:b',kind:'workspace',row:{...row,pinned:true}}];
  const current={...snapshot,pinnedItemIds:['session:b','workspace:hidden','workspace:b','session:off-page'],
-                pinnedNavigation:{items,total:2,pages:1,index:0},unpinnedWorkspaceShortcuts:[]};
+                pinnedNavigation:{items,total:2,pages:1,index:0}};
  const pinHost={...host,getSnapshot:()=>current,dispatch:async(...args)=>{calls.push(args);return {accepted:true}}};
  const nav={...navigation,browse:(...args)=>selects.push(args)};
  let root;await act(async()=>{root=create(React.createElement(WorkNavigationContext.Provider,{value:nav},React.createElement(ConversationList,{host:pinHost})))});
@@ -73,6 +73,11 @@ test('mixed keyboard ordering preserves hidden pins and typed IDs, and workspace
  await act(async()=>section.findByProps({'aria-label':'Open chats in /research'}).props.onClick());
  assert.deepEqual(selects,[['workspace','b']]);
  await act(async()=>section.findByProps({'aria-label':'New chat in /research'}).props.onClick({stopPropagation(){}}));
+ assert.deepEqual(calls.at(-1),['session.draft',{workspace:'/research',workspaceId:'b',location:{kind:'workspace'}}]);
+ const ordinary=root.root.findByProps({'data-sidebar-section':'workspaces'});
+ await act(async()=>ordinary.findByProps({'aria-label':'Open chats in /research'}).props.onClick());
+ assert.deepEqual(selects,[['workspace','b'],['workspace','b']]);
+ await act(async()=>ordinary.findByProps({'aria-label':'New chat in /research'}).props.onClick({stopPropagation(){}}));
  assert.deepEqual(calls.at(-1),['session.draft',{workspace:'/research',workspaceId:'b',location:{kind:'workspace'}}]);
  await act(async()=>root.unmount());
 });
@@ -636,7 +641,7 @@ test('Recent unmount cancels its projection wait and releases its listener witho
 test('cold resource placeholders never claim empty catalogs and matching updates keep rows',()=>{
  const pending={...snapshot,navigationResources:[],navigationResourcePending:{
   pinnedNavigation:{status:'pending'},recentNavigation:{status:'pending'},workspaceShortcuts:{status:'pending'}},
-  recentNavigation:undefined,recentShortcuts:undefined,workspaceShortcuts:undefined,unpinnedWorkspaceShortcuts:undefined};
+  recentNavigation:undefined,recentShortcuts:undefined,workspaceShortcuts:undefined};
  const coldHost={...host,getSnapshot:()=>pending,refreshResources:async()=>{throw Error('No automatic read')}};
  const cold=renderToStaticMarkup(render(React.createElement(ConversationList,{host:coldHost})));
  assert.match(cold,/Loading recent chats/);assert.match(cold,/Loading workspaces/);

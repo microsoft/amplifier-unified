@@ -124,8 +124,8 @@ def _chat_query(directory, state, section, *, activity_counts=True):
         params.append(query)
     if section:
         scope['section'] = section
-        if section in {'pinned', 'recent', 'shortcuts'}:
-            where.append('pin_position IS NOT NULL' if section == 'pinned' else 'pin_position IS NULL')
+        if section == 'pinned':
+            where.append('pin_position IS NOT NULL')
         if section in {'recent', 'shortcuts', 'search'}:
             scope['showAgentCreated'] = view.get('navShowAgentCreated') is True
             if not scope['showAgentCreated']:
@@ -147,6 +147,8 @@ def _chat_query(directory, state, section, *, activity_counts=True):
         sql += ', filtered AS (SELECT * FROM eligible)'
     ordering = 'directory_lower(title)' if sort == 'name' else '-COALESCE(created,0)' if sort == 'created' else '-COALESCE(recent,0)'
     order = f'pin_position IS NULL,CASE WHEN pin_position IS NOT NULL THEN pin_position END,CASE WHEN pin_position IS NULL THEN {ordering} END,ordinal,id'
+    if section in {'recent', 'shortcuts'}:
+        order = f'{ordering},ordinal,id'
     return sql, params, scope, counts, order, workspaces, total
 
 

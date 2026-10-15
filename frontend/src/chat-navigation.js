@@ -38,7 +38,7 @@ export function workspaceChats(sessions=[],workspace){
 function recentActivity(chat){
  return [chat.navigationActivityAt,chat.recentActivityAt,chat.createdAt].find(value=>typeof value==='number'&&Number.isFinite(value)&&value>=0)??0;
 }
-function orderedChats(state,workspace,mode='workspace'){
+function orderedChats(state,workspace,mode='workspace',pinFirst=true){
  const workspaces=visibleWorkspaces(state),byId=new Map(workspaces.map(row=>[row.id,row])),byPath=new Map(workspaces.map(row=>[row.path,row]));
  const pinned=new Set(state.pinnedSessionIds||[]);
  const organization=state.conversationOrganization||{},archived=organization.archived||{},view=state.view||{},archive=view.navArchive||'active';
@@ -49,7 +49,7 @@ function orderedChats(state,workspace,mode='workspace'){
   .filter(({chat})=>mode!=='all'||view.navLocationFilter!=='managed'||chat.location?.kind==='managed')
   .filter(({chat})=>(archive==='all'||(archive==='archived')===Object.hasOwn(archived,chat.id)))
   .map(row=>({...row.chat,workspace:row.workspace?.path||row.chat.workspace,workspaceId:row.chat.location?.kind==='managed'?null:row.workspace.id,workspaceName:row.chat.location?.kind==='managed'?'No workspace':row.workspace.name||'',workspaceLabel:row.chat.location?.kind==='managed'?'No workspace':row.workspace?.label,pinned:pinned.has(row.chat.id),recentActivityAt:recentActivity(row.chat),position:row.position}))
-  .sort((a,b)=>Number(b.pinned)-Number(a.pinned)||(a.pinned?pinOrder.get(a.id)-pinOrder.get(b.id):sort==='name'?((a.title||'Untitled conversation').toLowerCase()<(b.title||'Untitled conversation').toLowerCase()?-1:(a.title||'Untitled conversation').toLowerCase()>(b.title||'Untitled conversation').toLowerCase()?1:0):sort==='created'?(b.createdAt||0)-(a.createdAt||0):b.recentActivityAt-a.recentActivityAt)||a.position-b.position);
+  .sort((a,b)=>(pinFirst?Number(b.pinned)-Number(a.pinned):0)||(pinFirst&&a.pinned?pinOrder.get(a.id)-pinOrder.get(b.id):sort==='name'?((a.title||'Untitled conversation').toLowerCase()<(b.title||'Untitled conversation').toLowerCase()?-1:(a.title||'Untitled conversation').toLowerCase()>(b.title||'Untitled conversation').toLowerCase()?1:0):sort==='created'?(b.createdAt||0)-(a.createdAt||0):b.recentActivityAt-a.recentActivityAt)||a.position-b.position);
 }
 export function chatPage(state,workspace,{section=null}={}){
  const view=state.view||{},mode=view.navChatScope==='all'?'all':'workspace',filter=view.navFilter||'',selectedSessionId=state.selectedSessionId??null;
@@ -75,8 +75,8 @@ export function chatPage(state,workspace,{section=null}={}){
   const unavailable=state.navigationResourcePending?.[resource]?.status==='retry';
   return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:!unavailable,...(unavailable?{unavailable:true}:{})};
  }
- let chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,sessionIdentity(chat),chat.workspace,chat.workspaceName]);
- if(section==='pinned'||section==='recent')chats=chats.filter(chat=>chat.pinned===(section==='pinned'));
+ let chats=filterList(orderedChats(state,workspace,mode,section!=='recent'),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,sessionIdentity(chat),chat.workspace,chat.workspaceName]);
+ if(section==='pinned')chats=chats.filter(chat=>chat.pinned);
  if(section==='recent'||section==='search')chats=chats.filter(chat=>scope.showAgentCreated||chat.agentCreated!==true||chat.id===selectedSessionId);
  const activityCounts={attention:0,working:0,unread:0,idle:0};
  chats=chats.map(chat=>({...chat,activity:activityFor(chat,state)}));

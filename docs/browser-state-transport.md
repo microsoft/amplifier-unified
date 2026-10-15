@@ -87,7 +87,7 @@ Page names are `chatNavigation`, `homeNavigation`, `pinnedNavigation`,
 The implicit `context` resource owns controller metadata and receipts for the
 union of the active pages' visible rows. Page values contain only their fields;
 `recentNavigation` additionally owns `recentShortcuts`, and
-`workspaceShortcuts` owns pinned-excluding shortcuts. Missing coverage means
+`workspaceShortcuts` owns inclusive, recency-ordered workspace shortcuts. Missing coverage means
 loading, not an empty result. Changes to private module views have their own
 monotonic `viewRevision`; the HTTP `result.shellView` receipt prevents an older
 queued context frame from briefly restoring an acknowledged prior value.

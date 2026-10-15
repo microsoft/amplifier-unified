@@ -52,7 +52,8 @@ try{
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:a.id}});
  const section=page.locator('[data-sidebar-section=workspaces]'),pinned=page.locator('[data-sidebar-section=pinned]');
  await expect(pinned).toHaveCount(0);
- const row=workspace=>page.locator('.a-sidebar-navigation .a-workspace-row').filter({has:page.getByRole('button',{name:'New chat in '+workspace.path,exact:true})});
+ let workspaceRegion=section;
+ const row=workspace=>workspaceRegion.locator('.a-workspace-row').filter({has:page.getByRole('button',{name:'New chat in '+workspace.path,exact:true})});
  const newChat=workspace=>row(workspace).getByRole('button',{name:'New chat in '+workspace.path,exact:true});
  const geometry=async workspace=>row(workspace).evaluate(node=>{
   const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
@@ -126,7 +127,7 @@ try{
  await action('session.select',{id:sid});await expectComposer('Original chat text');
  assert.equal((await saved(page)).canvas.id,canvasId);
  await expect.poll(async()=>(await saved(page)).canvas.renderReports?.preview?.status).toBe('ready');
- // Pin B before its first chat, then apply enough activity to displace an unpinned shortcut.
+ // Pin B before its first chat: both copies remain usable.
  const scopeBefore=await saved(page);
  await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
  await page.getByRole('button',{name:'Pin workspace '+b.path,exact:true}).click();
@@ -134,10 +135,13 @@ try{
  const scopeAfter=await saved(page);
  assert.equal(scopeAfter.selectedSessionId,scopeBefore.selectedSessionId);assert.equal(scopeAfter.selectedWorkspaceId,scopeBefore.selectedWorkspaceId);assert.deepEqual(scopeAfter.view,scopeBefore.view);assert.deepEqual(scopeAfter.canvas,scopeBefore.canvas);
  await expect(pinned.getByRole('button',{name:'New chat in '+b.path,exact:true})).toBeVisible();
- await expect(section.getByRole('button',{name:'New chat in '+b.path,exact:true})).toHaveCount(0);
+ await expect(section.getByRole('button',{name:'New chat in '+b.path,exact:true})).toHaveCount(1);
  await action('session.pin',{id:sid,pinned:true});
+ await expect(page.locator(`[data-sidebar-section=recent] [data-session-id="${sid}"]`)).toHaveCount(1);
+ workspaceRegion=pinned;
  const order=()=>pinned.locator('[data-order-id]').evaluateAll(rows=>rows.map(row=>row.dataset.orderId));
  await expect.poll(order).toEqual(['workspace:'+b.id,'session:'+sid]);
+ await expect(section.getByRole('button',{name:'New chat in '+b.path,exact:true})).toHaveCount(1);
  await pinned.getByRole('button',{name:'Reorder Original chat',exact:true}).focus();
  await page.keyboard.press('ArrowUp');
  await expect.poll(order).toEqual(['session:'+sid,'workspace:'+b.id]);
@@ -171,6 +175,7 @@ try{
   await action('session.create',{workspace:folder,title:'Activity pressure '+index});
  }
  await expect(pinned.getByRole('button',{name:'New chat in '+b.path,exact:true})).toBeVisible();
+ await expect(section.getByRole('button',{name:'New chat in '+b.path,exact:true})).toHaveCount(0);
  await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
  const details=page.getByRole('dialog',{name:'Details for '+b.name,exact:true});
  await expect(details.getByText('0',{exact:true})).toBeVisible();

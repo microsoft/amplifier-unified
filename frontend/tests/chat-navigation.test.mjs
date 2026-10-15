@@ -3,6 +3,21 @@ import assert from 'node:assert/strict';
 import {chatPage,workspaceChats,visibleWorkspaces,workspaceLabel,CHAT_PAGE_SIZE,recentLimit,recentPageMatches} from '../src/chat-navigation.js';
 const fixture=()=>({view:{},selectedWorkspaceId:'project',selectedSessionId:'chat-0',workspaces:[{id:'project',path:'/fixture',available:true},{id:'other',path:'/other',available:true}],sessions:Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved chat '+i,workspaceId:'project',workspace:'/fixture'}))});
 
+test('pinning retains Recent membership and normal sort with stable ties',()=>{
+ for(const navSort of ['activity','created','name']){
+  const state=fixture();state.view.navSort=navSort;
+  state.sessions=[{id:'new',title:'New',recentActivityAt:20,createdAt:20,workspaceId:'project'},
+   {id:'old-a',title:'Same',recentActivityAt:10,createdAt:10,workspaceId:'project'},
+   {id:'old-b',title:'Same',recentActivityAt:10,createdAt:10,workspaceId:'project'}];
+  const rows=section=>chatPage(state,null,{section}).items.map(row=>row.id);
+  const expected=rows('recent');
+  for(const pins of [['old-b','old-a'],['old-a','old-b'],['old-a'],[]]){
+   state.pinnedSessionIds=pins;
+   assert.deepEqual(rows('recent'),expected);assert.deepEqual(rows('pinned'),pins);
+  }
+ }
+});
+
 test('Recent accepts safe cumulative steps, keeps requested 120 at actual 101 exhaustion and fences every scope',()=>{
  for(const limit of [20,100,120,5000])assert.equal(recentLimit(limit),limit);
  for(const limit of [0,21,Infinity,Number.MAX_SAFE_INTEGER+1,true,'120'])assert.equal(recentLimit(limit),20);

@@ -51,7 +51,8 @@ async def test_each_requested_resource_matches_complete_snapshot(service, resour
         assert scoped['recentScope'] == full['recentScope']
         assert scoped['recentShortcuts'] == full['recentShortcuts']
     if resource == 'workspaceShortcuts':
-        assert scoped['unpinnedWorkspaceShortcuts'] == full['unpinnedWorkspaceShortcuts']
+        assert 'unpinnedWorkspaceShortcuts' in full
+        assert 'unpinnedWorkspaceShortcuts' not in scoped
     for key in ('chatNavigation','homeNavigation','recentNavigation','workspaceExplorer','workspaceOverview','pinnedNavigation'):
         assert (key in scoped) == (key == resource)
     assert scoped['view'] == full['view'] and scoped['selectedWorkspaceId'] == 'two'

@@ -91,8 +91,10 @@ try{
  await page.setViewportSize({width:1280,height:1000});
  await showAgentCreated(!(await projection()).scope.showAgentCreated);
  await expect(sidebar().getByRole('button',{name:'Show agent-created',exact:true})).toHaveCount(0);
- await expect.poll(async()=>(await projection()).total).toBe(133);
+ await expect.poll(async()=>(await projection()).total).toBe(134);
  await waitForRows(20);
+ assert.ok((await order()).includes(initial.pinned));
+ await expect(page.locator(`[data-shell-instance="chats"] [data-sidebar-section="pinned"] [data-session-id="${initial.pinned}"]`)).toHaveCount(1);
  await showAgentCreated(!(await projection()).scope.showAgentCreated);
  await expect.poll(async()=>(await projection()).total).toBe(total);
  assert.deepEqual(await order(),firstOrder);
@@ -347,7 +349,7 @@ try{
   limits:[20,40,60,80,100,120,140],naturalExhaustion:true,noMountResizeFill:true,userDownwardOnly:true,
   programmaticAnchorPassive:true,staleFocusIntentPassive:true,hiddenInertCollapsedPassive:true,namedPreviewReads:0,
   offscreenUnnamedSummaryLazy:true,visibleUnnamedReadCached:true,visibilityAt20And100:true,currentRank25NotForced:true,
-  pinsDistinct:true,legacyForkVisible:true,queryFailureRetainedRows:true,streamProjectionTimeout:true,retryFailureRetainedRows:true,retryResourceReads:retryReads,retryReadOnly:true,unknownWriteNotReplayed:true,
+  pinsRetainedInEligibleRecent:true,legacyForkVisible:true,queryFailureRetainedRows:true,streamProjectionTimeout:true,retryFailureRetainedRows:true,retryResourceReads:retryReads,retryReadOnly:true,unknownWriteNotReplayed:true,
   twoClientsTwoModulesReload:true,keyboardFocus:true,narrowCoarseTouch:true,progressAnchor:true,countShrink:true,
   draftAttachmentsCanvasModelBundleRetained:true,modelCalls:0};
  if(evidence){

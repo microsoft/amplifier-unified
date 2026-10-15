@@ -22,7 +22,7 @@ function shape(shell,resources){
  for(const instance of builtin){
   const snapshot=shell.snapshots[instance.id];
   assert.deepEqual(snapshot.navigationResources,resources);
-  for(const key of ['pinnedNavigation','recentNavigation','workspaceShortcuts','unpinnedWorkspaceShortcuts','recentShortcuts','recentScope'])assert.ok(Object.hasOwn(snapshot,key),key);
+  for(const key of ['pinnedNavigation','recentNavigation','workspaceShortcuts','recentShortcuts','recentScope'])assert.ok(Object.hasOwn(snapshot,key),key);
   for(const key of ['chatNavigation','homeNavigation','workspaceOverview'])assert.equal(Object.hasOwn(snapshot,key),false,key+' was not requested');
   assert.equal(Object.hasOwn(snapshot,'workspaceExplorer'),resources.includes('workspaceExplorer'));
   assert.ok(Object.hasOwn(snapshot.sidebarNavigation,'recentView'));

@@ -280,11 +280,11 @@ test('Recent pagination stays bounded and is shared with agents',async()=>{
 });
 
 
-test('one sidebar has Pinned, Workspaces and Recent with no duplicate recent pins',async()=>{
+test('one sidebar keeps a pinned chat accessible once in Pinned and once in Recent',async()=>{
  const state=initial();state.pinnedSessionIds=['a'];state.view.navWorkspaceList=true;
  let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
  assert.deepEqual(root.root.findAll(node=>typeof node.type==='string'&&node.props['data-sidebar-section']).map(node=>node.props['data-sidebar-section']),['pinned','workspaces','recent']);
- assert.equal(root.root.findAllByProps({'data-session-id':'a'}).filter(node=>typeof node.type==='string').length,1);
+ for(const id of ['pinned','recent'])assert.equal(root.root.findByProps({'data-sidebar-section':id}).findAll(node=>typeof node.type==='string'&&node.props['data-session-id']==='a').length,1);
  assert.equal(root.root.findAllByProps({'data-session-id':'b'}).filter(node=>typeof node.type==='string').length,1);
  assert.equal(root.root.findAllByProps({'data-session-id':'c'}).filter(node=>typeof node.type==='string').length,1);
  assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,1);

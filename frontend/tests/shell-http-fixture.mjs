@@ -22,7 +22,7 @@ export function createShellHttpFixture(readState){
    const resources={context:{revision:input.revision,value:context}};
    for(const name of registration.resources){
     let value;
-    if(name==='workspaceShortcuts')value={workspaceShortcuts:[],unpinnedWorkspaceShortcuts:[]};
+    if(name==='workspaceShortcuts')value={workspaceShortcuts:[]};
     else if(name==='pinnedNavigation')value={pinnedNavigation:{items:[],total:0}};
     else if(name==='workspaceExplorer')value={workspaceExplorer:input.workspaceExplorer||{rows:[],pages:1,page:1}};
     else if(name.startsWith('sidebar'))value={sidebarNavigation:{[name.slice(7).toLowerCase()]:page(input)}};

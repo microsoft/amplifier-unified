@@ -354,7 +354,7 @@ def test_recent_origin_is_positive_bounded_and_never_ancestry_or_selection_autho
     assert ids(chat_navigation.snapshot(state, section='recent')) == ids(all_chats)
     state['pinnedSessionIds'] = ['commissioned']
     assert ids(chat_navigation.snapshot(state, section='pinned')) == ['commissioned']
-    assert 'commissioned' not in ids(chat_navigation.snapshot(state, section='recent'))
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ids(all_chats)
     state['pinnedSessionIds'] = []
     state['selectedSessionId'] = None
     state['view']['navShowAgentCreated'] = True
@@ -409,8 +409,8 @@ def test_quiet_recent_filters_before_uniform_slicing_counts_and_never_forces_cur
     assert ids(chat_navigation.snapshot(state, section='pinned')) == ['pinned-agent']
     state['view'].update(navRecentLimit=100, navShowAgentCreated=True)
     page = chat_navigation.snapshot(state, section='shortcuts')
-    assert (page['total'], page['remaining'], page['end']) == (132, 32, 100)
-    assert ids(page)[0] == 'hidden-agent'
+    assert (page['total'], page['remaining'], page['end']) == (133, 33, 100)
+    assert ids(page)[:2] == ['pinned-agent', 'hidden-agent']
     assert all('collaboration' not in row for row in page['items'])
     state['sessions'] = state['sessions'][:7]
     page = chat_navigation.snapshot(state, section='shortcuts')
@@ -727,4 +727,24 @@ def test_search_includes_matching_pins_without_promoting_unrelated_pins():
     assert page['scope']['section'] == 'search'
     assert page['scope']['showAgentCreated'] is False
     assert state == before
-    assert ids(chat_navigation.snapshot(state, section='recent')) == ['portrait-recent']
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ['portrait-pinned', 'portrait-recent']
+
+
+@pytest.mark.parametrize('sort', ['activity', 'created', 'name'])
+def test_pin_changes_do_not_change_recent_membership_order_or_cached_ties(sort):
+    from amplifier_web.state_projections import StateProjections
+    state = state_fixture()
+    state['view'].update(navChatScope='all', navSort=sort)
+    state['sessions'] = [chat('new', recent=20, createdAt=20),
+                         chat('old-a', recent=10, createdAt=10, title='Same'),
+                         chat('old-b', recent=10, createdAt=10, title='Same')]
+    projections = StateProjections()
+    expected = ids(projections.chats(state, section='recent'))
+    for pins in [['old-b', 'old-a'], ['old-a', 'old-b'], ['old-a'], []]:
+        state['pinnedSessionIds'] = pins
+        projections.pins_changed(state)
+        # Warm both ordering variants; never reuse a pin-first index for Recent.
+        assert ids(projections.chats(state, section='pinned')) == pins
+        for section in ['recent', 'shortcuts']:
+            assert ids(projections.chats(state, section=section)) == expected
+            assert ids(chat_navigation.snapshot(state, section=section)) == expected

@@ -39,7 +39,7 @@ export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compa
 // Browsing changes only the view; workspace.select changes the active project.
 export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewLimit=Infinity,compact=false,onSelect}){
  const now=useActivityClock();
- const explorer=state.workspaceExplorer||{},rows=compact?(state.unpinnedWorkspaceShortcuts||state.workspaceShortcuts||[]):explorer.rows||[],crumbs=explorer.breadcrumbs||[];
+ const explorer=state.workspaceExplorer||{},rows=compact?(state.workspaceShortcuts||[]):explorer.rows||[],crumbs=explorer.breadcrumbs||[];
  const [showAll,setShowAll]=useState(false);
  const preview=!showAll&&!explorer.filter&&explorer.mode==='recent'&&(explorer.page||1)===1;
  const shownRows=preview?rows.slice(0,previewLimit):rows;

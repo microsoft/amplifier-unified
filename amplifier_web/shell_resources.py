@@ -21,7 +21,6 @@ MAX_SAFE_INTEGER = 2**53 - 1
 PAGE_FIELDS = {
     **{name: (name,) for name in NAVIGATION_RESOURCES if not name.startswith('sidebar')},
     'recentNavigation': ('recentNavigation', 'recentShortcuts'),
-    'workspaceShortcuts': ('workspaceShortcuts', 'unpinnedWorkspaceShortcuts'),
 }
 GLOBAL_KEYS = frozenset({'workspaces', 'settings', 'workspaceDefaults', 'pinnedSessionIds',
     'pinnedWorkspaceIds', 'pinnedItemIds', 'pinOrderCustomized', 'conversationOrganization',

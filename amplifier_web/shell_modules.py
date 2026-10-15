@@ -430,7 +430,7 @@ class ShellModules:
                           if item.get('sessionId') in visible_ids
                           and item['id'] == 'session:' + item['sessionId']]
         overview = ({'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})) if wants('workspaceOverview') else None
-        shortcuts = projections.workspaces({**scoped, 'view': {**view, 'navWorkspaceMode': 'recent', 'navWorkspaceArchive': 'active', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}}) if wants('workspaceShortcuts') else None
+        shortcuts = projections.workspace_shortcuts(scoped, workspace_id=workspace_id if pinned_scope else None) if wants('workspaceShortcuts') else None
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
         result = {} if _page_only else {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
@@ -459,8 +459,12 @@ class ShellModules:
         if recent_navigation is not None:
             result.update(recentShortcuts=recent_shortcuts, recentNavigation=recent_navigation)
         if wants('workspaceShortcuts'):
-            result['workspaceShortcuts'] = [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6]
-            result['unpinnedWorkspaceShortcuts'] = [row for row in projections.workspace_shortcuts(scoped) if not pinned_scope or row.get('workspaceId') == workspace_id][:6]
+            result['workspaceShortcuts'] = [row for row in shortcuts if not pinned_scope or row.get('workspaceId') == workspace_id][:6]
+            if requested is None:
+                # Explicit/full APIs include the independent custom-module field.
+                # The bundled client consumes only inclusive workspaceShortcuts.
+                result['unpinnedWorkspaceShortcuts'] = projections.workspace_shortcuts(
+                    scoped, workspace_id=workspace_id if pinned_scope else None, exclude_pinned=True)[:6]
         if wants('workspaceExplorer'):
             result['workspaceExplorer'] = projections.workspaces(scoped)
         if not _page_only:

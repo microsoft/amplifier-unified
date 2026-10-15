@@ -45,7 +45,32 @@ def directory_fixture(tmp_path, count=240):
     return state,directory
 
 
-@pytest.mark.parametrize('section',[None,'recent','shortcuts','pinned','search'])
+@pytest.mark.parametrize('section',['recent','shortcuts'])
+@pytest.mark.parametrize('sort',['activity','created','name'])
+def test_directory_pin_changes_preserve_recent_membership_and_order(tmp_path, section, sort):
+    state, directory = directory_fixture(tmp_path)
+    state['view'].update(navSort=sort, navRecentLimit=100)
+    from amplifier_web.state_projections import StateProjections
+    projections = StateProjections(service=SimpleNamespace(directory=directory))
+    first = projections.chats({**state, 'sessions': []}, section=section)
+    preserved = deepcopy(first)
+    expected = [row['id'] for row in first['items']]
+    if sort == 'activity':
+        assert 's3' in expected and 's10' in expected
+        assert expected.index('s3') < expected.index('s10')
+    for pins in [['s140','s3','s10'], ['s10','s3','s140'], ['s10'], []]:
+        state['pinnedSessionIds'] = pins
+        dormant = {**state, 'sessions': []}
+        actual = projections.chats(dormant, section=section)
+        assert [row['id'] for row in actual['items']] == expected
+        assert actual == chat_navigation.snapshot(state, section=section)
+        assert all(row['pinned'] == (row['id'] in pins) for row in actual['items'])
+        assert [row['id'] for row in projections.chats(dormant, section='pinned')['items']] == pins
+        assert dormant['sessions'] == []
+        assert first == preserved
+
+
+@pytest.mark.parametrize('section',[None,'recent','shortcuts','pinned','search','workspace'])
 @pytest.mark.parametrize('view',[
     {}, {'navChatScope':'workspace'}, {'navSort':'name'}, {'navSort':'created'},
     {'navFilter':'special'}, {'navFilter':'*/beta*'}, {'navArchive':'archived'},

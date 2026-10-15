@@ -64,9 +64,11 @@ def test_workspace_pins_are_not_limited_to_shortcuts_or_explorer_search():
     mixed = projections.pinned_navigation(value)
     assert mixed['total'] == 110 and len(mixed['items']) == 50
     assert [item['id'] for item in mixed['items'][:7]] == [f'workspace:{i}' for i in range(7)]
-    # Exclusion precedes slicing: 110 pins cannot starve remaining shortcuts.
+    # Ordinary lists retain pins and their bounded first page.
     shortcuts = projections.workspace_shortcuts(value)
-    assert {row['workspaceId'] for row in shortcuts} == {str(i) for i in range(110, 115)}
+    assert len(shortcuts) == 100
+    assert [row['workspaceId'] for row in shortcuts] == [str(i) for i in range(100)]
+    assert [row['workspaceId'] for row in projections.workspace_shortcuts(value, workspace_id='114')] == ['114']
     assert value == before
 
 
@@ -111,7 +113,8 @@ async def test_mixed_pins_order_actions_projection_and_client_preservation(app, 
         assert query['pinnedItemIds'] == ids
         assert [row['id'] for row in query['pinnedNavigation']['items']] == ids
         assert [row['id'] for row in query['sidebarNavigation']['pinned']['items']] == [b, a]
-        assert two not in [row['workspaceId'] for row in query['unpinnedWorkspaceShortcuts']]
+        assert two in [row['workspaceId'] for row in query['workspaceShortcuts']]
+        assert {a, b} <= {row['id'] for row in query['recentNavigation']['items']}
         assert load(app.db)['pinnedItemIds'] == ids
         # Old clients change only the slots for their kind.
         await app.dispatch('session.pinOrder', {'ids': [a, b]})

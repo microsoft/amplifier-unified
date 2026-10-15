@@ -312,7 +312,7 @@ def _matches(row, query):
     return any(query in term.casefold() for term in terms)
 
 
-def snapshot(state, *, index=None, pinned_only=False, exclude_pinned=False):
+def snapshot(state, *, index=None, pinned_only=False, exclude_pinned=False, workspace_id=None):
     """Return the same bounded explorer shown to users and agents."""
     root, nodes, total = _index(state) if index is None else index
     location, query, requested_page = _location(state, root, nodes)
@@ -332,6 +332,8 @@ def snapshot(state, *, index=None, pinned_only=False, exclude_pinned=False):
             continue
         if exclude_pinned and pinned is not None:
             continue
+        if workspace_id is not None and workspace_id not in node.get('workspaceSelections', {}):
+            continue
         row = _row(path, node, pinned or selected)
         if pinned is not None:
             row['pinned'] = True
@@ -341,7 +343,7 @@ def snapshot(state, *, index=None, pinned_only=False, exclude_pinned=False):
     labels = _registry_labels(frozenset(str(path) for path, node in nodes.items() if node.get('workspace')))
     for row in rows:
         row['pathLabel'] = labels.get(row['path'], row['path'])
-    rows.sort(key=lambda row: (pins.get(row['workspaceId'], len(pins)) if mode == 'recent' else 0,
+    rows.sort(key=lambda row: (pins.get(row['workspaceId'], len(pins)) if pinned_only else 0,
                               -row['recentActivityAt'] if mode == 'recent' and not query else 0,
                               row['name'].casefold(), row['path'].casefold(), row['path']))
     pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)

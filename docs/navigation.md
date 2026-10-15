@@ -61,13 +61,15 @@ its saved collapse preference is retained. One ordered list holds pinned chats
 and workspaces together, and there is one workspace
 explorer. Pins keep the same title, workspace subtitle, activity time, and actions
 while browsing folders or filtering chats. Quiet Recent initially shows **20
-eligible unpinned chats**, not messages. Downward user scrolling within 120 px
+eligible chats**, pinned or unpinned, not messages. Downward user scrolling within 120 px
 of the list end adds 20 summaries at a time, including beyond 100, until actual
 exhaustion. **Load older chats** is a quiet keyboard/screen-reader fallback
 while older rows remain, including a tall viewport with no overflow. At
 exhaustion the last chat ends the list: no count or All/View/Review chats footer.
 **Search chats** still opens the full browser. Pins have their own bounded
-pages and never duplicate an ID in Recent.
+pages. Pinning adds a shortcut without removing the item from Recent, workspace
+lists or search. Each list contains an item once; the same item may appear in
+Pinned and another list. Recent keeps its activity order independently of pin order.
 
 The initial 20–100 limit and origin toggle persist per client and mounted module.
 Expansion beyond 100 is scoped to the attached client/module session, not copied
@@ -168,8 +170,8 @@ restores its text, attachments and saved Canvas; another client's chat is unchan
 Workspace details offer **Pin workspace** / **Unpin workspace**. Pinned workspaces
 appear in **Pinned** alongside chats, with the same drag grip, keyboard ordering,
 and **Move up** / **Move down** controls. Empty workspaces can be pinned.
-The compact **Workspaces** shortcuts exclude pinned folders; the full workspace
-browser still includes them. Older clients' workspace-only recent index and
+The compact **Workspaces** shortcuts and full workspace browser retain pinned
+folders in their ordinary recency/name order. The workspace-only recent index and
 ordering actions remain available. Agents use the
 same `workspace.pin {id,pinned}` and `workspace.pinOrder {ids}` actions; ordering
 requires every currently pinned ID exactly once, including unavailable folders.
