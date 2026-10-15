@@ -162,6 +162,8 @@ async def test_title_change_reuses_large_workspace_aggregate_without_dormant_dec
     from test_history_directory_query_budget import measure_sql
     catalog = NativeCatalog(tmp_path / 'scale.sqlite3', tmp_path / 'native-home')
     project, workspace = seed(catalog, tmp_path / 'large-workspace', count)
+    # The bulk SQL seed has no writer receipt; establish it before the warm baseline.
+    catalog.save({}, {}, {}, ())
     service.state['workspaces'].append(workspace)
     service._save_changes(sessions={'alpha', 'beta'}, globals={'workspaces'})
     service.directory.bind(catalog)
