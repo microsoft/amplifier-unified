@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "09d6ea084",
+  "candidateBuild": {
+    "version": "0.20.165",
+    "id": "41a354ad3221a613"
+  },
+  "product": "Late Smart Tool document completion saves its artifact without replacing a newer client selection. Saved-only completion retains Settings and reports that the current view is unchanged.",
+  "reproduction": {
+    "status": "failed-as-expected",
+    "scenario": "Hold Alpha document after actual SDK read; explicitly open Bravo and fill local input; release Alpha. Original implementation replaced Bravo and unmounted its input.",
+    "originalWrapperPrerequisite": "Initial attempt used incorrect Counter Read capitalization; retained separately and not counted as product evidence."
+  },
+  "qualification": {
+    "focusedPython": {
+      "passed": 179,
+      "durationSeconds": 7.01,
+      "files": [
+        "tests/test_smart_canvas.py",
+        "tests/test_canvas_visibility.py",
+        "tests/test_canvas_views.py"
+      ]
+    },
+    "browser": {
+      "passed": true,
+      "durationSeconds": 6.735,
+      "checks": [
+        "Newer explicit tool view and its unsaved input survive late older document completion.",
+        "An already executed old resource read cannot replace the current iframe, result, selection or input.",
+        "Close/reopen ABA keeps the same current artifact and local input.",
+        "Saved-only operation is truthfully labeled and does not dismiss the newer Settings visit.",
+        "Four explicit opens, no runtime/model requests, saved chat and private composer draft unchanged."
+      ],
+      "remainingDescendants": 0,
+      "forcedCleanup": 0
+    }
+  },
+  "ownership": {
+    "scope": "Attached browser clients use the existing canonical selectionRevision; latest pending opens are per client and removed in finally.",
+    "unboundAgent": "Retains legacy global presentation and session-scoped saving. Separate background sessions do not supersede one another; this is not an unbound legacy-API ABA guarantee.",
+    "noNewPersistentFields": true
+  },
+  "sourceSha256": {
+    "frontend/tests/standard-ux-smart-canvas-owner-browser.mjs": "abb4d52b98a4fe8693c34fe09ec1619d11a7d866cc76bd0b677a84eb3aedfe29",
+    "tests/fixtures/smart_canvas_owner_ui_server.py": "678119dd12e8b76ec39bd4bfb058e6c4a5f622af3763582178986ad5feb1de8b",
+    "frontend/src/smart-tools.jsx": "90f578add5131e77f4ec542dd8f3f7cc1883ab9090bcb1b78200991ea1116845",
+    "frontend/src/mcp-app-viewer.jsx": "682299b8b86a2f586680e0f9368add200c59feee855a4dc6a22a5002e8c36b47",
+    "amplifier_web/smart_canvas.py": "da4b19a5d6f88bfa2d28d0a60055fbe59b09f551aca73b77f2ec61fec2c9aefe",
+    "amplifier_web/static/build.json": "82231c2e429adea8df5c627129b83ec565a371a076296650dc7217dc95b338b0"
+  },
+  "limits": [
+    "Deterministic local MCP SDK subprocesses and synthetic conversation runtime; no external account, live provider or cross-platform qualification.",
+    "Desktop pointer scenario; no new touch/keyboard or controlled performance claim."
+  ]
+}

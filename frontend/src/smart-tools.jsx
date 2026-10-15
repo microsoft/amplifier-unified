@@ -45,7 +45,8 @@ function operationFor(operations, action, target={}) {
 
 function OperationNotice({operation, busyMessage}) {
   if (!operation) return null;
-  const message = operation.error || (operation.result?.isError ? 'The tool reported an error. See its result below.' : working(operation) ? busyMessage || 'Working…' : actionMessages[operation.action] || 'Finished');
+  const savedView = operation.action === 'smartTools.open' && operation.status === 'completed' && operation.result?.activated === false;
+  const message = operation.error || (operation.result?.isError ? 'The tool reported an error. See its result below.' : working(operation) ? busyMessage || 'Working…' : savedView ? 'Saved in Canvas. Your current view is unchanged.' : actionMessages[operation.action] || 'Finished');
   return <ResultNotice phase={phaseOf(operation)} message={typeof message === 'string' ? message : pretty(message)} detail={operation.status === 'interrupted' ? 'The previous app run ended before this request finished. Review the tool state before retrying.' : undefined}/>;
 }
 
@@ -173,7 +174,7 @@ export function SmartToolsSettings({state, act, simple=false, navigateSettings})
     if (!opening) return;
     const completed = operations.find(item => item.id === opening.id);
     if (!completed || working(completed)) return;
-    if (completed.status === 'completed' && state.selectedSessionId === opening.sessionId && state.view?.panel === 'settings' && editor.page === 'tool' && editor.serverId === opening.serverId && editor.toolName === opening.toolName) act('view.update', {patch:{panel:null}});
+    if (completed.status === 'completed' && completed.result?.activated !== false && state.selectedSessionId === opening.sessionId && state.view?.panel === 'settings' && editor.page === 'tool' && editor.serverId === opening.serverId && editor.toolName === opening.toolName) act('view.update', {patch:{panel:null}});
     setOpening(null);
   }, [opening, operations, state.selectedSessionId, state.view?.panel, editor.page, editor.serverId, editor.toolName]);
   useEffect(()=>{if(!simple||firstVisit.current)return;firstVisit.current=true;if(!state.view?.smartToolsEditor?.page){navigate('home');if(!catalog.length)run('smartTools.catalog');}},[simple]);

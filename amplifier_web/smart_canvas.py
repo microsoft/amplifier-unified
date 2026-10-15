@@ -84,6 +84,20 @@ def definitions(schema, string):
 class SmartCanvas:
     def __init__(self, service):
         self.service = service
+        # Only pending opens live here; never persist presentation intent or
+        # confuse another client's navigation with this caller's selection.
+        self._pending_opens = {}
+
+    @staticmethod
+    def _presentation(state):
+        canvas = state.get('canvas', {})
+        view = state.get('view', {})
+        editor = view.get('smartToolsEditor', {})
+        return (state.get('selectedSessionId'), state.get('selectedWorkspaceId'),
+                canvas.get('id'), canvas.get('selectedVersion'), canvas.get('open'),
+                canvas.get('view', {}).get('reload'), view.get('panel'),
+                tuple(view.get('settingsExpanded') or ()), view.get('settingsCanvas'),
+                *(editor.get(key) for key in ('page', 'serverId', 'toolName')))
 
     def binding(self, identity, expected_revision=None):
         from .mcp_view_recovery import saved, account
@@ -178,6 +192,21 @@ class SmartCanvas:
         return await manager.command(action, args, operation_id, origin)
 
     async def open(self, args):
+        owner = self.service.clients.current.get()
+        # Background agent opens have no private client selection. Preserve
+        # their legacy session-scoped save/open semantics without allowing an
+        # unrelated background chat to supersede this request's token.
+        key = owner if owner is not None else ('session', args.get('sessionId', self.service.state.get('selectedSessionId')))
+        pending = {'presentation': self._presentation(self.service.state),
+                   'selectionRevision': self.service.clients.selection_revision(owner) if owner else None}
+        self._pending_opens[key] = pending
+        try:
+            return await self._open(args, owner, key, pending)
+        finally:
+            if self._pending_opens.get(key) is pending:
+                self._pending_opens.pop(key, None)
+
+    async def _open(self, args, owner, intent_key, pending):
         state = self.service.state
         server = next((s for s in state['smartTools']['servers'] if s['id'] == args['id']), None)
         if not server:
@@ -204,8 +233,19 @@ class SmartCanvas:
             if not latest or configuration_key(latest) != key or latest.get('catalogRevision') != catalog_revision:
                 raise api.AppError('The server changed while loading its view. Try again.')
             self.service._session(sid)
+            # The existing client selection revision observes every accepted
+            # close/reopen and tab change, so equal IDs after ABA cannot revive
+            # an old open. Other clients, drafts and routine reports do not
+            # advance this caller's revision.
+            selection_current = (owner is None or owner in self.service.clients.records
+                                 and self.service.clients.selection_revision(owner) == pending['selectionRevision'])
+            activate = (self._pending_opens.get(intent_key) is pending and selection_current
+                        and pending['presentation'] == self._presentation(state)
+                        and state.get('selectedSessionId') == sid
+                        and state.get('selectedWorkspaceId') == workspace['id'])
             # Loading the app awaits I/O; a viewer can become dirty meanwhile.
-            self.service.canvas_views.guard_transition('smartTools.open', {'sessionId': sid})
+            if activate:
+                self.service.canvas_views.guard_transition('smartTools.open', {'sessionId': sid})
             canvas = {'id':uuid.uuid4().hex,'kind':'mcp-app','open':True,
                       'content':app['html'],'sessionId':sid,'workspaceId':workspace['id'],
                       'view':{},'events':[],'renderReports':{},'createdAt':time.time(),
@@ -243,12 +283,13 @@ class SmartCanvas:
             canvas['_versionWrite'] = True
             scoped = {**state,'canvas':canvas,'selectedSessionId':sid,'selectedWorkspaceId':workspace['id']}
             remember(scoped,self.service.db)
-            if state.get('selectedSessionId') == sid and state.get('selectedWorkspaceId') == workspace['id']:
+            if activate:
                 state['canvas'] = canvas
                 state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
             self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             from .canvas_versions import reference
-            return {'canvasId':canvas['id'],'resourceUri':uri,'revision':canvas.get('revision',1),'reference':reference(canvas)}
+            return {'canvasId':canvas['id'],'resourceUri':uri,'revision':canvas.get('revision',1),
+                    'reference':reference(canvas),'activated':activate}
 
     def context(self, args):
         canvas, _ = self.binding(args['canvasId'], args.get('expectedRevision'))

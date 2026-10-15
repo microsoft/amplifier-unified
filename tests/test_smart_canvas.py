@@ -1,5 +1,6 @@
 """User/agent parity and durable MCP App bindings, with no network/model calls."""
 import copy
+import asyncio
 import pytest
 from amplifier_web.service import AppService, AppError
 from amplifier_web.smart_canvas import SmartCanvas, configuration_key
@@ -133,6 +134,124 @@ async def test_failed_open_has_visible_terminal_operation(service):
     await settled(service)
     operation=next(o for o in service.state['smartTools']['operations'] if o['id']==receipt['operationId'])
     assert operation['status']=='failed' and 'connect' in operation['error']
+
+
+async def held_open(service):
+    """Delay exactly one saved document read, not its admission or later reads."""
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = service.smart_tools.read_app
+    held = False
+
+    async def read(*args):
+        nonlocal held
+        result = await original(*args)
+        if not held:
+            held = True
+            entered.set()
+            await release.wait()
+        return result
+
+    service.smart_tools.read_app = read
+    task = asyncio.create_task(service.smart_canvas.open({'id': 'one', 'tool': 'read'}))
+    await entered.wait()
+    return task, release
+
+
+async def test_late_open_saved_without_replacing_newer_explicit_view(service):
+    service.clients.attach('reader')
+    with service.clients.bind('reader'):
+        task, release = await held_open(service)
+        try:
+            newer = await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
+            release.set()
+            older = await task
+            assert newer['activated'] is True
+            assert older['activated'] is False
+            assert service.state['canvas']['id'] == newer['canvasId']
+            assert {row['id'] for row in service.state['canvasArtifacts']} == {
+                older['canvasId'], newer['canvasId']}
+            load(service.state, service.db, older['canvasId'])
+            assert service.state['canvas']['content'] == '<!doctype html><h1>Independent</h1>'
+            assert not service.smart_canvas._pending_opens
+        finally:
+            release.set()
+            await task
+
+
+async def test_pending_open_does_not_steal_selection_after_close_reopen_aba(service):
+    service.clients.attach('reader')
+    with service.clients.bind('reader'):
+        selected = await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
+        await service.dispatch('view.update', {'patch': {'panel': 'settings',
+            'smartToolsEditor': {'page': 'tool', 'serverId': 'one', 'toolName': 'read'}}})
+        task, release = await held_open(service)
+        try:
+            for visible in (False, True):
+                await service.dispatch('canvas.visibility', {'open': visible,
+                    'sessionId': service.state['selectedSessionId'], 'canvasId': selected['canvasId']})
+            release.set()
+            completed = await task
+            assert completed['activated'] is False
+            assert service.state['canvas']['id'] == selected['canvasId']
+            assert service.state['canvas']['open'] is True
+            assert not service.smart_canvas._pending_opens
+        finally:
+            release.set()
+            await task
+
+
+async def test_other_client_and_unrelated_updates_do_not_cancel_pending_activation(service):
+    for identity in ('reader', 'other'):
+        service.clients.attach(identity)
+    with service.clients.bind('reader'):
+        task, release = await held_open(service)
+        try:
+            await service.dispatch('view.update', {'patch': {'draft': 'Keep private draft', 'canvasWidth': 700}})
+            with service.clients.bind('other'):
+                other = await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
+                await service.dispatch('canvas.close')
+            release.set()
+            completed = await task
+            assert completed['activated'] is True
+            assert service.state['canvas']['id'] == completed['canvasId']
+            assert service.state['view']['draft'] == 'Keep private draft'
+            assert service.clients.records['other']['canvas']['id'] == other['canvasId']
+            assert service.clients.records['other']['canvas']['open'] is False
+            assert not service.smart_canvas._pending_opens
+        finally:
+            release.set()
+            await task
+
+
+async def test_failed_and_cancelled_open_retire_ephemeral_activation(service):
+    task, release = await held_open(service)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not service.smart_canvas._pending_opens
+    with pytest.raises(AppError, match='Configure and connect'):
+        await service.smart_canvas.open({'id': 'missing', 'tool': 'read'})
+    assert not service.smart_canvas._pending_opens
+
+
+async def test_unbound_background_chat_does_not_supersede_selected_legacy_open(service):
+    sid = service.state['selectedSessionId']
+    await service.dispatch('session.create', {'title': 'Other background chat', 'select': False})
+    other_sid = next(row['id'] for row in service.state['sessions'] if row['id'] != sid)
+    task, release = await held_open(service)
+    try:
+        other = await service.smart_canvas.open({'id': 'one', 'tool': 'read', 'sessionId': other_sid})
+        release.set()
+        current = await task
+        assert other['activated'] is False
+        assert current['activated'] is True
+        assert service.state['canvas']['id'] == current['canvasId']
+        assert service.state['selectedSessionId'] == sid
+        assert {row['sessionId'] for row in service.state['canvasArtifacts']} == {sid, other_sid}
+        assert not service.smart_canvas._pending_opens
+    finally:
+        release.set()
+        await task
 
 
 async def test_accepted_app_call_closed_before_execution_is_terminal(service):
