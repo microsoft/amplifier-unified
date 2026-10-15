@@ -142,7 +142,10 @@ def validate_server(value: dict) -> dict:
     remote = any(not is_loopback(bind) for bind in config["bind"])
     if remote and (not enabled_tls or not config["public_origins"] or any(not origin.startswith("https://") for origin in config["public_origins"])):
         raise ValueError("Non-loopback binds require configured TLS and at least one HTTPS public origin.")
-    if not enabled_tls and (tls["cert"] or tls["key"]):
+    # Allow a loopback-only host to stage the two paths in separate config
+    # commands. A remote bind still requires the complete pair above, and
+    # ssl_context refuses to start HTTPS until both paths are configured.
+    if tls["method"] == "none" and (tls["cert"] or tls["key"]):
         raise ValueError("TLS certificate and key require tls.method to be enabled.")
     if enabled_tls and any(not origin.startswith("https://") for origin in config["public_origins"]):
         raise ValueError("HTTPS TLS configuration requires HTTPS public origins.")
