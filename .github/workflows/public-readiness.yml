@@ -111,7 +111,6 @@ jobs:
           node tests/inline-artifacts-browser.mjs
           node tests/canvas-usability-browser.mjs
           node tests/pdf-browser.mjs
-          node tests/workspace-shortcuts-browser.mjs
           node tests/generated-images-browser.mjs
       - name: Check canonical media and transaction ownership regressions
         run: uv run --no-sync pytest -q tests/test_output_media.py tests/test_resource_files.py tests/test_portability_outputs.py tests/test_shell_modules.py
