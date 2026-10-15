@@ -109,6 +109,16 @@ def test_remove_exports_both_roots_before_destroy_and_retains_manifest(library, 
     assert len(list(tmp_path.glob('retained-*/manifest.json'))) == 1
 
 
+def test_retention_persistence_failure_never_destroys(library, tmp_path, monkeypatch):
+    lib, calls = library
+    def fail(directory, archives):
+        raise OSError('cannot persist archive receipt')
+    monkeypatch.setattr(worker, 'retain_manifest', fail)
+    with pytest.raises(OSError):
+        worker.execute_call(payload(tmp_path, 'remove'))
+    assert [name for name, _, _ in calls] == ['status', 'export', 'export']
+
+
 def test_remove_never_stops_or_removes_running_environment(library, tmp_path):
     lib, calls = library
     lib.status = lambda *a, **k: Value(state='running', services=[])

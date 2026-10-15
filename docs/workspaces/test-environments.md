@@ -25,6 +25,9 @@ its receipt. An interrupted or timed-out command remains uncertain and is never
 automatically replayed. A read can observe containers without proving that an
 earlier command finished. Stop of a conversation revokes agent approval; it does
 not itself claim to stop an environment or cancel an in-container command.
+Operations serialize for each environment. Stop is available after the current
+check returns or times out; concurrent cancellation of an admitted check is not
+implemented by this initial adapter.
 
 Agents need an explicit, session-scoped `test_environments` capability grant,
 their current root execution binding, and an unblocked task assignment. A peer

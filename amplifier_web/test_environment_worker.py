@@ -7,12 +7,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
 
 def serialize(value):
     return value.model_dump(mode='json')
+
+
+def retain_manifest(directory, archives):
+    """Persist archive names and their receipt before the volumes can disappear."""
+    with (directory / 'manifest.json').open('x') as stream:
+        json.dump(archives, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    for path in (directory, directory.parent):
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def profile(image):
@@ -89,7 +104,7 @@ def execute_call(payload):
             destination.mkdir(mode=0o700)
             archives = [serialize(lib.export_files(identity, source, destination / name, config=config))
                         for source, name in [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]]
-            (destination / 'manifest.json').write_text(json.dumps(archives))
+            retain_manifest(destination, archives)
             result = lib.destroy(identity, config=config)
             return {'ok': result.complete, 'universeId': identity,
                     'status': 'removed' if result.complete else 'unknown', 'result': serialize(result),
