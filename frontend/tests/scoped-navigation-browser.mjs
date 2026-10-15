@@ -122,7 +122,8 @@ try{
  const hold=route=>holdRoute(route).catch(error=>{errors.push('Held route: '+String(error))});
  await page.route('**/api/shell/resources',hold);
  await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect.poll(()=>searchHeld).toBe(true);
- await expect(body.getByRole('status').filter({hasText:/Searching|Loading/})).toBeVisible();
+ await expect(body.locator('.a-search-result-summary').getByRole('status')).toHaveText('Searching…');
+ await expect(body.locator('.a-search-result-summary').getByRole('status')).toBeVisible();
  await expect(body.getByText('No chats found.',{exact:true})).toHaveCount(0);
  allowSearch();await expect.poll(()=>searchResponseReady).toBe(true);
  // A real state publication carries the registered resource baseline even while
