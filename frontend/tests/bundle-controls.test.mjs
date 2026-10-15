@@ -130,3 +130,36 @@ test('compact bundle switch locks pending choice and failed completion does not 
   assert.equal(calls.some(row=>row.name==='conversation.send'),false);
  }finally{await renderAct(async()=>root?.unmount())}
 });
+
+for(const compact of [false,true])test(`catalog failure preserves saved choice and retries only explicitly (${compact?'compact':'detailed'})`,async()=>{
+ const calls=[],session={id:'chat',bundle:'saved-unlisted'},act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
+ let state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'saved-unlisted'}},registeredBundles:[],actionStatus:{'bundles.list':{phase:'working'}}};
+ const render=()=>React.createElement(BundleControl,{compact,state,session,act});
+ try{
+  await renderAct(async()=>root=create(render()));assert.match(JSON.stringify(root.toJSON()),/Loading bundle choices/);
+  const original=calls.length;state={...state,actionStatus:{'bundles.list':{phase:'error',error:'Catalog unavailable'}}};await renderAct(async()=>root.update(render()));
+  assert.equal(root.root.findByProps({role:'alert'}).children.join(''),'Catalog unavailable');assert.equal(calls.length,original);
+  await renderAct(async()=>root.root.findByProps({'data-action':'bundles.list'}).props.onClick());assert.deepEqual(calls.at(-1),{name:'bundles.list',args:{}});
+  state={...state,actionStatus:{'bundles.list':{phase:'working'}}};await renderAct(async()=>root.update(render()));assert.equal(root.root.findAllByProps({'data-action':'bundles.list'}).length,0);
+  state={...state,actionStatus:{'bundles.list':{phase:'ready'}},registeredBundles:[{value:'work',label:'Work'}]};await renderAct(async()=>root.update(render()));
+  assert.match(JSON.stringify(root.toJSON()),/saved-unlisted.*not in the current catalog/);assert.equal(session.bundle,'saved-unlisted');assert.equal(state.view.composerBundle.bundle,'saved-unlisted');assert.equal(calls.some(row=>row.name==='bundle.switch'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('successful empty bundle catalog is distinct from loading or failure',async()=>{
+ const state={view:{composerBundle:{open:true,sessionId:null}},registeredBundles:[],actionStatus:{'bundles.list':{phase:'ready'}}};let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement(BundleControl,{compact:true,state,act:async()=>({accepted:true})})));
+  const text=JSON.stringify(root.toJSON());assert.match(text,/No bundle choices/);assert.match(text,/No registered bundle choices are available/);assert.doesNotMatch(text,/Loading bundle/);assert.equal(root.root.findAllByProps({role:'alert'}).length,0);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+test('catalog retry transport rejection stays actionable without changing a choice',async()=>{
+ const {BundleCatalogStatus}=await server.ssrLoadModule('/src/settings-ui.jsx');let root,calls=0;
+ const state={registeredBundles:[],actionStatus:{'bundles.list':{phase:'error',error:'Initial catalog error'}}};
+ try{
+  await renderAct(async()=>root=create(React.createElement(BundleCatalogStatus,{state,value:'saved-choice',act:async()=>{calls++;if(calls===1)throw Error('Retry transport unavailable');return undefined}})));
+  await renderAct(async()=>root.root.findByType('button').props.onClick());
+  assert.equal(calls,1);assert.equal(root.root.findByType('button').props.disabled,false);assert.equal(root.root.findByProps({role:'alert'}).children.join(''),'Retry transport unavailable');
+  await renderAct(async()=>root.root.findByType('button').props.onClick());assert.equal(root.root.findByProps({role:'alert'}).children.join(''),'Bundle choices could not be loaded. Try again.');assert.equal(calls,2);
+  assert.deepEqual(state.registeredBundles,[]);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
