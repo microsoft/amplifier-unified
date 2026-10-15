@@ -768,6 +768,174 @@
             "Synthetic fixture; no real archive data or runtime shutdown.",
             "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
           ]
+        },
+        {
+          "workflow": "nav.archive",
+          "expectedIndices": [
+            2
+          ],
+          "variantsByExpectedIndex": {
+            "2": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 64
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 65
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 66
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 67
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 143
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 145
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 146
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "The frozen baseline wording is retained as previous; this qualified candidate includes reviewed PR770.",
+            "Synthetic current/native workspace setup; no real user data or runtime shutdown."
+          ]
+        },
+        {
+          "workflow": "nav.archive",
+          "expectedIndices": [
+            3
+          ],
+          "variantsByExpectedIndex": {
+            "3": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 89
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 91
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 92
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 93
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 112
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 113
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 114
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 115
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 116
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 130
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 131
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 132
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 133
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 134
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 163
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 169
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 170
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 171
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 172
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 173
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 174
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "The frozen baseline wording is retained as previous; this qualified candidate includes reviewed PR770.",
+            "Synthetic current/native workspace setup; no real user data or runtime shutdown."
+          ]
+        }
+      ],
+      "expectedResultChanges": [
+        {
+          "workflow": "nav.archive",
+          "expectedIndex": 2,
+          "previous": "Frozen baseline raw archive keeps current selection",
+          "current": "Raw archive keeps the current view; confirmed interactive archive leaves only the current chat surface without selecting another chat."
+        },
+        {
+          "workflow": "nav.archive",
+          "expectedIndex": 3,
+          "previous": "Draft770 navigation is not assumed delivered",
+          "current": "Delivered archive navigation respects newer navigation intent and preserves unsaved Canvas and Settings edits."
         }
       ]
     }

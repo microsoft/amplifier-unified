@@ -1904,6 +1904,22 @@
       ],
       "status": "requires-exact-ledger-claims",
       "limits": []
+    },
+    {
+      "workflow": "nav.archive",
+      "expectedIndices": [
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open current Chat menu and Archive",
+        "Wait confirmed notice and existing workspace destination",
+        "Use Undo; preserve newer navigation and private edits"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Files/history-byte preservation and independent membership checks remain partial."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
@@ -2023,6 +2039,11 @@
       "at": "2026-10-15T18:29:20.448591+00:00",
       "reason": "Reconcile exact root bootstrap, attention and live delegate witnesses; public Canvas output paths and own image/update-preference controls. Advanced or fixture-preopened coordination/managed surfaces retain separate outcome credit without ordinary-entry credit.",
       "ordinaryPaths": 119
+    },
+    {
+      "at": "2026-10-15T18:34:32.060342+00:00",
+      "reason": "Reconcile delivered PR770 archive intent against preserved frozen baseline wording. Import exact older canonical reply/reaction browser evidence without adding native Fork credit.",
+      "ordinaryPaths": 120
     }
   ]
 }
