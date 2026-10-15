@@ -12,7 +12,7 @@ export function ReorderList({items,ids,onChange,busy=false,renderItem,className=
  const [preview,setPreview]=useState(null),[floating,setFloating]=useState(null),[announcement,announce]=useState('');
  const rows=new Map(items.map(item=>[item.id,item]));
  const shown=preview&&preview.length===ids.length&&preview.every(id=>ids.includes(id))?preview:ids;
- const focus=id=>globalThis.requestAnimationFrame?.(()=>root.current?.querySelector(`[data-order-id="${CSS.escape(id)}"] .a-reorder-grip`)?.focus({preventScroll:true}));
+ const focus=(id,owner=globalThis.document?.activeElement)=>globalThis.requestAnimationFrame?.(()=>{if(globalThis.document?.activeElement===owner)root.current?.querySelector(`[data-order-id="${CSS.escape(id)}"] .a-reorder-grip`)?.focus({preventScroll:true})});
  const capture=()=>{if(root.current)rects.current=new Map([...root.current.querySelectorAll('[data-order-id]')].map(node=>[node.dataset.orderId,node.getBoundingClientRect()]));};
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;drag.current=null}},[]);
  useLayoutEffect(()=>{
@@ -25,10 +25,12 @@ export function ReorderList({items,ids,onChange,busy=false,renderItem,className=
  const commit=async(next,id)=>{
   if(busy||pending.current)return;
   if(next.join('\0')===ids.join('\0')){setPreview(null);return;}
+  const focusOwner=globalThis.document?.activeElement;
   pending.current=true;setPreview(next);
   try{await onChange(next,{id,to:next.indexOf(id)});if(alive.current)announce(`${rows.get(id)?.label} moved to position ${next.indexOf(id)+1}.${savedHint?' '+savedHint:''}`)}
   catch(error){if(alive.current)announce(error.message||'Could not change order.')}
-  finally{pending.current=false;if(alive.current){setPreview(null);focus(id)}}
+  // A later receipt must not move focus back after the user left this control.
+  finally{pending.current=false;if(alive.current){setPreview(null);focus(id,focusOwner)}}
  };
  const finish=cancel=>{
   const current=drag.current;if(!current)return;capture();drag.current=null;setFloating(null);onDraggingChange?.(false);
