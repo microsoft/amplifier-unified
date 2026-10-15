@@ -6,7 +6,8 @@
       "title": "Keep earlier Work steps and saved message reactions available",
       "changes": [
         "Current Work groups offer earlier step pages while keeping the initial view bounded. Steps explicitly opened in one browser remain available through live updates without resetting another browser\u2019s view.",
-        "Saved message reactions appear on recent and older pages without loading the whole conversation. Imported runtime observations remain read-only."
+        "Saved message reactions appear on recent and older pages without loading the whole conversation. Imported runtime observations remain read-only.",
+        "Workspace details include the merged test environment controls, with retained request identities for checking outcomes and separate controls for storage resources."
       ],
       "notices": []
     },
