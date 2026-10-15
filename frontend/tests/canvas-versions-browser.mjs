@@ -38,7 +38,7 @@ try{
  await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
  await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('latest');
  await expect(page.getByRole('heading',{name:'Revised plan',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Versioned plan · Version 1',exact:true}).click();
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('1');
  await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Restore as new version',exact:true}).click();
  await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toHaveValue('latest');

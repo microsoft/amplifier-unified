@@ -19,8 +19,10 @@ async def main(home):
     rows[0]['content'] = 'The earliest question'
     rows[-1]['content'] = '```python\nprint("exact α")  \n```\n'
     SessionStore.for_app(home, source['workspace']).save(source['id'], rows, {})
+    # This web-owned conversation has a native transcript plus recorded voice
+    # bubbles. Native-managed refresh deliberately replaces the whole display.
     source.update(nativeProject=project_slug(source['workspace']), nativeIdentity=source['id'],
-                  historyManaged=True, historyLoaded=True, sharedHistoryOffset=120, sharedHistoryTotal=140,
+                  historyManaged=False, historyLoaded=True, sharedHistoryOffset=120, sharedHistoryTotal=140,
                   messages=[display_message(row, index, source) for index, row in enumerate(rows) if index >= 120])
     source['messages'].append({'id': 'voice', 'role': 'user', 'text': 'Spoken follow-up', 'via': 'call', 'voiceId': 'call'})
     service.state['canvasArtifacts'].append({'id': 'saved-diagram', 'title': 'Export diagram', 'sessionId': source['id'], 'kind': 'markdown', 'messageId': 'voice'})

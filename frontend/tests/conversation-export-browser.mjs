@@ -19,7 +19,12 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
- await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
+ // The legacy fixture's conversation-settings route now opens Chat info.
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(page.locator('[data-part="overlay"]')).toHaveCount(0);
+ await page.getByRole('button',{name:'Chat',exact:true}).click();
+ await page.getByRole('button',{name:'Share or save',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Share or save',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Preview Markdown',exact:true}).click();
  await expect(page.getByLabel('Reviewed Markdown')).toBeVisible();
  await page.getByRole('button',{name:'Copy Markdown',exact:true}).click();
@@ -59,15 +64,15 @@ try{
  assert.ok(await page.locator('.a-dialog').evaluate(element=>element.scrollWidth<=element.clientWidth));
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-conversation-export-mobile.png'});
  // A late preview response must not populate another conversation's review.
- let releasePreview,startedPreview,finishedPreview;
- const held=new Promise(resolve=>{releasePreview=resolve}),started=new Promise(resolve=>{startedPreview=resolve}),finished=new Promise(resolve=>{finishedPreview=resolve});
- await page.route('**/api/conversation/exports/**',async route=>{startedPreview();await held;await route.continue();finishedPreview()});
- await page.getByRole('button',{name:'Refresh preview',exact:true}).click();await started;
+ let releasePreview,startedPreview=false,finishedPreview=false;
+ const held=new Promise(resolve=>{releasePreview=resolve});
+ await page.route('**/api/conversation/exports/**',async route=>{startedPreview=true;await held;await route.continue();finishedPreview=true});
+ await page.getByRole('button',{name:'Refresh preview',exact:true}).click();await expect.poll(()=>startedPreview).toBe(true);
  await page.evaluate(()=>window.amplifier.dispatch('session.create',{title:'Different export chat'}));
- await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
- releasePreview();await finished;await page.unroute('**/api/conversation/exports/**');
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-share'}}));
+ releasePreview();await expect.poll(()=>finishedPreview).toBe(true);await page.unroute('**/api/conversation/exports/**');
  await expect(page.getByLabel('Reviewed Markdown')).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Preview Markdown',exact:true})).toBeVisible();
  assert.deepEqual(errors,[]);
  console.log('Conversation export browser passed: complete paged native history, exact code, voice and artifact refs, byte-identical copy/download, shared action snapshot, selected ranges, immutable delivery after later activity, stale preview navigation, clipboard failure, mobile layout.');
-}finally{await browser?.close();await vite?.close();fixture.kill();}
+}finally{try{await browser?.close()}finally{try{await vite?.close()}finally{fixture.kill()}}}
