@@ -20,3 +20,10 @@
 #amp-one .a-pinned-chats .a-workspace-select,#amp-one .a-pinned-drag .a-workspace-select{flex:1;min-width:0}
 
 #amp-one .a-nav-chat-rename .a-nav-name-help{flex-basis:100%;color:var(--a-muted);white-space:normal}
+
+/* Reclaim hidden action space without removing controls from keyboard order.
+   Hover, focus and an open details panel restore the existing action widths.
+   Narrow and touch navigation keep their always-visible targets. */
+@media(min-width:761px) and (hover:hover) and (pointer:fine){
+ #amp-one .a-quiet-sidebar :is(.a-nav-chat,.a-workspace-row):not(:hover,:focus-within,.is-peeking)>:is(.a-navigation-more,.a-workspace-new-chat){width:0;min-width:0;flex-basis:0;padding-inline:0;margin-inline:0;overflow:hidden;opacity:0}
+}

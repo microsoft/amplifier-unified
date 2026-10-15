@@ -62,7 +62,8 @@ try{
   return {row:rect(node),select:rect(select),draft:rect(draft),more:rect(more),label:rect(label),overflow:node.scrollWidth>node.clientWidth+1};
  });
  for(const width of [1440,1024]){
-  await page.setViewportSize({width,height:1000});await page.mouse.move(width-10,900);
+  await page.setViewportSize({width,height:1000});await section.locator('.a-sidebar-section-heading>button').first().focus();await page.mouse.move(width-10,900);
+  await expect(page.locator('.a-navigation-flyout')).toHaveCount(0);
   const before=await geometry(b);await row(b).hover();await expect(newChat(b)).toHaveCSS('opacity','1');
   const select=row(b).locator('.a-workspace-select'),title=select.locator('[data-scroll-title]').first();
   await expect(select).toHaveAttribute('data-tooltip','off');
@@ -76,12 +77,19 @@ try{
   assert.equal(motion.animations,1);assert.notEqual(motion.transform,'none');
   await expect(page.getByRole('dialog',{name:'Details for '+b.name,exact:true})).toBeVisible();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
-  assert.deepEqual(await geometry(b),before);assert.equal(before.overflow,false);
-  assert.ok(before.draft.x+before.draft.width<=before.more.x+1);assert.ok(before.more.x+before.more.width<=before.row.x+before.row.width+1);
+  const hovered=await geometry(b);
+  assert.deepEqual(hovered.row,before.row);assert.equal(before.overflow,false);assert.equal(hovered.overflow,false);
+  assert.equal(before.draft.width,0);assert.equal(before.more.width,0);
+  assert.ok(before.label.width>=hovered.label.width+55,'Resting workspace title reclaims both actions');
+  assert.ok(hovered.label.x+hovered.label.width<=hovered.draft.x+1);
+  assert.ok(hovered.draft.x+hovered.draft.width<=hovered.more.x+1);assert.ok(hovered.more.x+hovered.more.width<=hovered.row.x+hovered.row.width+1);
   await row(b).getByRole('button',{name:'Open chats in '+b.path,exact:true}).focus();await page.keyboard.press('Tab');
   await expect(newChat(b)).toBeFocused();await expect(newChat(b)).toHaveCSS('opacity','1');
-  assert.deepEqual(await geometry(b),before);
+  assert.deepEqual(await geometry(b),hovered);
+  await page.keyboard.press('Escape');await section.locator('.a-sidebar-section-heading>button').first().focus();await page.mouse.move(width-10,900);
+  await expect(page.locator('.a-navigation-flyout')).toHaveCount(0);
  }
+ await row(b).locator('.a-workspace-select').focus();await page.keyboard.press('Tab');await expect(newChat(b)).toBeFocused();
  const callStart=calls.length;
  await page.keyboard.press('Enter');await expect.poll(async()=>(await saved(page)).view.newSessionDraft.workspace).toBe(b.path);
  let current=await saved(page);assert.equal(current.selectedSessionId,null);assert.equal(current.library.sessionCount,baseline);
@@ -95,46 +103,15 @@ try{
  current=await saved(page);assert.equal(current.canvas.id,canvasId);assert.equal(current.canvas.content,'Retained original Canvas');
  const otherAfter=await saved(other);assert.equal(otherAfter.selectedSessionId,otherBefore.selectedSessionId);assert.equal(otherAfter.selectedWorkspaceId,otherBefore.selectedWorkspaceId);assert.deepEqual(otherAfter.view,otherBefore.view);assert.deepEqual(otherAfter.canvas,otherBefore.canvas);
  await page.screenshot({path:out+'/desktop.png'});
- // Touch uses always-visible, independent sibling targets and closes the modal on New chat.
- // Reuse the primary client for mobile; the independent second client remains
- // untouched. Native CDP input emulation must actually change pointer media.
- const touch=page,desktopViewport=page.viewportSize(),cdp=await context.newCDPSession(page);
- await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
- await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:true,configuration:'mobile'});
- await touch.setViewportSize({width:390,height:844});
- assert.equal(await touch.evaluate(()=>matchMedia('(pointer:coarse)').matches&&matchMedia('(hover:none)').matches),true);
- // Finish the desktop-to-mobile close before opening the drawer as a user.
- // A direct view patch here can race the responsive layout's close action.
- await expect(touch.locator('#workspace-navigation')).toHaveAttribute('role','dialog');
- await expect.poll(async()=>(await saved(touch)).view.navExpanded).toBe(false);
- const openNavigation=touch.getByRole('button',{name:'Open navigation',exact:true});
- await expect(openNavigation).toBeVisible();
- const openPoint=await openNavigation.boundingBox();
- await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:openPoint.x+openPoint.width/2,y:openPoint.y+openPoint.height/2}]});
- await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
- const touchNew=touch.locator('[data-sidebar-section=workspaces]').getByRole('button',{name:'New chat in '+b.path,exact:true});
- await expect(touchNew).toBeVisible();await expect(touchNew).toHaveCSS('opacity','1');
- const box=await touchNew.boundingBox();assert.ok(box.width>=44&&box.height>=44);
- const touchPoint=await touchNew.boundingBox();
- await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:touchPoint.x+touchPoint.width/2,y:touchPoint.y+touchPoint.height/2}]});
- await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
- await expect.poll(async()=>(await saved(touch)).view.newSessionDraft.workspace).toBe(b.path);
- assert.equal((await saved(touch)).library.sessionCount,baseline);assert.equal((await saved(touch)).view.navExpanded,false);
- await touch.screenshot({path:out+'/touch.png'});
- await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:false});
- await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});
- await page.setViewportSize(desktopViewport);
- await action('session.select',{id:sid});await expectComposer('Original chat text');
- assert.equal((await saved(page)).canvas.id,canvasId);
- await expect.poll(async()=>(await saved(page)).canvas.renderReports?.preview?.status).toBe('ready');
  // Pin B before its first chat: both copies remain usable.
  const scopeBefore=await saved(page);
+ await row(b).hover();
  await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
  await page.getByRole('button',{name:'Pin workspace '+b.path,exact:true}).click();
  await expect.poll(async()=>(await saved(page)).pinnedWorkspaceIds).toEqual([b.id]);
  const scopeAfter=await saved(page);
  assert.equal(scopeAfter.selectedSessionId,scopeBefore.selectedSessionId);assert.equal(scopeAfter.selectedWorkspaceId,scopeBefore.selectedWorkspaceId);assert.deepEqual(scopeAfter.view,scopeBefore.view);assert.deepEqual(scopeAfter.canvas,scopeBefore.canvas);
- await expect(pinned.getByRole('button',{name:'New chat in '+b.path,exact:true})).toBeVisible();
+ await expect(pinned.getByRole('button',{name:'New chat in '+b.path,exact:true})).toHaveCount(1);
  await expect(section.getByRole('button',{name:'New chat in '+b.path,exact:true})).toHaveCount(1);
  await action('session.pin',{id:sid,pinned:true});
  await expect(page.locator(`[data-sidebar-section=recent] [data-session-id="${sid}"]`)).toHaveCount(1);
@@ -152,6 +129,46 @@ try{
  await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:8});await page.mouse.up();
  await expect.poll(order).toEqual(['workspace:'+b.id,'session:'+sid]);
  await expect.poll(()=>pinned.evaluate(node=>node.getAnimations({subtree:true}).filter(animation=>animation.playState==='running').length)).toBe(0);
+ // Resting titles reclaim space in every shortcut, not just unpinned workspaces.
+ const actionSpace=[];
+ const checkSpace=async(target,labelSelector,selectSelector,actions)=>{
+  assert.equal(await page.evaluate(()=>matchMedia('(hover:hover) and (pointer:fine)').matches),true,'Desktop checks require a real fine-hover context');
+  await composer.focus();await page.mouse.move(1000,900);await page.keyboard.press('Escape');
+  await expect(page.locator('.a-navigation-flyout')).toHaveCount(0);
+  const measure=()=>target.evaluate((node,labelSelector)=>{
+   const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
+   return {row:rect(node),rail:rect(node.closest('.a-nav-rail')),label:rect(node.querySelector(labelSelector)),actions:[...node.querySelectorAll(':scope>.a-navigation-more,:scope>.a-workspace-new-chat')].map(rect)};
+  },labelSelector);
+  const rest=await measure();assert.ok(rest.actions.every(rect=>rect.width===0),JSON.stringify({rest,context:await target.evaluate(node=>({classes:node.className,hover:node.matches(':hover'),focus:node.matches(':focus-within'),fine:matchMedia('(hover:hover) and (pointer:fine)').matches,quiet:!!node.closest('.a-quiet-sidebar'),styles:[...node.querySelectorAll(':scope>.a-navigation-more,:scope>.a-workspace-new-chat')].map(el=>({width:getComputedStyle(el).width,min:getComputedStyle(el).minWidth,padding:getComputedStyle(el).padding,basis:getComputedStyle(el).flexBasis}))}))}));
+  await page.screenshot({path:out+`/action-space-${actionSpace.length}-rest.png`});
+  await target.hover();const hover=await measure();
+  await page.screenshot({path:out+`/action-space-${actionSpace.length}-hover.png`});
+  assert.deepEqual(hover.row,rest.row);assert.deepEqual(hover.rail,rest.rail);
+  assert.ok(rest.label.width>=hover.label.width+actions*28-1);
+  assert.ok(hover.label.x+hover.label.width<=hover.actions[0].x+1);
+  assert.ok(hover.actions.every(rect=>rect.width>=26));
+  await page.keyboard.press('Escape');await composer.focus();await page.mouse.move(1000,900);
+  await expect(page.locator('.a-navigation-flyout')).toHaveCount(0);
+  const select=target.locator(selectSelector),more=target.locator(':scope>.a-navigation-more');
+  await select.focus();assert.deepEqual(await measure(),hover);
+  for(let index=0;index<actions;index++)await page.keyboard.press('Tab');
+  await expect(more).toBeFocused();await page.keyboard.press('Enter');
+  await expect(page.locator('.a-navigation-flyout')).toBeVisible();
+  assert.deepEqual(await measure(),hover,'Portaled details keep their trigger space');
+  await page.keyboard.press('Escape');await expect(more).toBeFocused();
+  // A collapsed trigger stays focusable; reverse Tab returns to its sibling.
+  await composer.focus();await more.focus();assert.deepEqual(await measure(),hover);
+  await page.keyboard.press('Shift+Tab');
+  await expect(target.locator(actions===2?'.a-workspace-new-chat':selectSelector)).toBeFocused();
+  await composer.focus();assert.deepEqual(await measure(),rest);
+  actionSpace.push({kind:labelSelector,rest,hover});
+ };
+ await checkSpace(row(b),'.a-workspace-label','.a-workspace-select',2);
+ await checkSpace(section.locator('.a-workspace-row').filter({has:page.getByRole('button',{name:'New chat in '+a.path,exact:true})}),'.a-workspace-label','.a-workspace-select',2);
+ await checkSpace(pinned.locator(`[data-session-id="${sid}"]`),'.a-nav-chat-label','.a-nav-chat-select',1);
+ await checkSpace(page.locator(`[data-sidebar-section=recent] [data-session-id="${sid}"]`),'.a-nav-chat-label','.a-nav-chat-select',1);
+ await writeFile(out+'/action-space.json',JSON.stringify(actionSpace,null,2)+'\n');
+ await row(b).hover();
  const pinnedGeometry=await geometry(b);
  assert.ok(pinnedGeometry.label.width>=50,'Pinned workspace name retains readable width: '+JSON.stringify(pinnedGeometry));
  assert.equal(pinnedGeometry.overflow,false);
@@ -168,14 +185,44 @@ try{
  assert.ok(labelGeometry.lines.every(line=>line.rect.left>=labelGeometry.label.left&&line.rect.right<=labelGeometry.label.right&&line.overflow==='hidden'));
  await composer.focus();await page.mouse.move(1000,900);await expect(page.getByRole('tooltip')).toHaveCount(0);
  await page.screenshot({path:out+'/mixed-pins.png'});
+ // Run fine-hover checks before touch emulation, which changes Chromium's
+ // pointer media for the rest of this context even after disabling touch.
+ // Touch uses always-visible sibling targets and closes the modal on New chat.
+ const touch=page,desktopViewport=page.viewportSize(),cdp=await context.newCDPSession(page);
+ await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+ await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:true,configuration:'mobile'});
+ await touch.setViewportSize({width:390,height:844});
+ assert.equal(await touch.evaluate(()=>matchMedia('(pointer:coarse)').matches&&matchMedia('(hover:none)').matches),true);
+ await expect(touch.locator('#workspace-navigation')).toHaveAttribute('role','dialog');
+ await expect.poll(async()=>(await saved(touch)).view.navExpanded).toBe(false);
+ const openNavigation=touch.getByRole('button',{name:'Open navigation',exact:true});
+ await expect(openNavigation).toBeVisible();
+ const openPoint=await openNavigation.boundingBox();
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:openPoint.x+openPoint.width/2,y:openPoint.y+openPoint.height/2}]});
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ const touchNew=touch.locator('[data-sidebar-section=workspaces]').getByRole('button',{name:'New chat in '+b.path,exact:true});
+ await expect(touchNew).toBeVisible();await expect(touchNew).toHaveCSS('opacity','1');
+ const box=await touchNew.boundingBox();assert.ok(box.width>=44&&box.height>=44);
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:box.x+box.width/2,y:box.y+box.height/2}]});
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ await expect.poll(async()=>(await saved(touch)).view.newSessionDraft.workspace).toBe(b.path);
+ assert.equal((await saved(touch)).library.sessionCount,baseline);assert.equal((await saved(touch)).view.navExpanded,false);
+ await touch.screenshot({path:out+'/touch.png'});
+ await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:false});
+ await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});
+ await page.setViewportSize(desktopViewport);
+ await action('session.select',{id:sid});await expectComposer('Original chat text');
+ assert.equal((await saved(page)).canvas.id,canvasId);
+ await expect.poll(async()=>(await saved(page)).canvas.renderReports?.preview?.status).toBe('ready');
  await page.reload();await composer.waitFor();await expect.poll(async()=>(await saved(page)).pinnedWorkspaceIds).toEqual([b.id]);
  await expect.poll(order).toEqual(['workspace:'+b.id,'session:'+sid]);
  for(let index=0;index<8;index++){
   const folder=path.join(home,'active-'+index);await mkdir(folder,{recursive:true});await action('workspace.add',{path:folder});
   await action('session.create',{workspace:folder,title:'Activity pressure '+index});
  }
- await expect(pinned.getByRole('button',{name:'New chat in '+b.path,exact:true})).toBeVisible();
+ await expect(pinned.getByRole('button',{name:'New chat in '+b.path,exact:true})).toHaveCount(1);
  await expect(section.getByRole('button',{name:'New chat in '+b.path,exact:true})).toHaveCount(0);
+ await row(b).hover();
  await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
  const details=page.getByRole('dialog',{name:'Details for '+b.name,exact:true});
  await expect(details.getByText('0',{exact:true})).toBeVisible();
@@ -183,6 +230,7 @@ try{
  await action('workspace.rename',{id:b.id,name:'Pinned empty workspace'});
  await expect(row(b).getByRole('button',{name:'Details and actions for Pinned empty workspace',exact:true})).toBeVisible();
  await action('workspace.pin',{id:a.id,pinned:true});
+ await row(b).hover();
  await row(b).getByRole('button',{name:'Details and actions for Pinned empty workspace',exact:true}).click();
  await page.getByRole('button',{name:'Move workspace down '+b.path,exact:true}).click();
  await expect.poll(order).toEqual(['session:'+sid,'workspace:'+b.id,'workspace:'+a.id]);
