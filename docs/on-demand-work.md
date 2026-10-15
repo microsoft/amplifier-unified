@@ -59,3 +59,26 @@ Selected canonical Work reconstruction now has a bounded process/read-model owne
 See [selected history projection](selected-history-projection.md) for exact source
 fences, conservative append recognition, cache and process limits, and the remaining
 cold-tree materialization boundary.
+
+### Resident live steps
+
+The bundled browser keeps the initial live source slice at 100 resident nodes.
+Explicit older reads inspect at most 100 preceding resident nodes per request;
+imported canonical/native nodes remain excluded, and no transcript or child log
+is opened. Empty filtered ranges still provide a progressing cursor. These views
+report unknown totals and never claim complete historical coverage.
+
+Each client’s open group retains only accepted step IDs and source-range receipts, not node
+bodies. Across clients, up to eight groups, eight 100-row ranges per group, and 800 accepted step
+IDs per group are admitted. This matches eight explicit detail pages while
+bounding live-update reconstruction independently of the source graph's size.
+A request beyond that budget fails explicitly and preserves the existing view;
+it never silently drops prior steps or reports an exhausted history. Closing and
+reopening starts a fresh bounded page; chat-interest departure retires receipts.
+
+Cursors bind the host-owned source, bounded grouping facts, and publication fence.
+Live sync reconstructs only admitted ranges plus the current tail, so updates
+preserve previously requested steps without scanning the full execution graph.
+A source replacement or expired receipt requires reopening the group. Field
+readers resolve only admitted resident ranges and retain exact digest validation.
+Canonical execution, accounting, and independent complete APIs are unchanged.
