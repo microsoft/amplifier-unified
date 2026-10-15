@@ -145,18 +145,37 @@
         671,
         612
       ]
+    },
+    {
+      "source": "26533c68cdf4cca9b43d9bb4e5b426407a553ea3",
+      "integrationCommit": "16b80b224",
+      "receipt": "finite-standard-control-qualification-20261015.json",
+      "checks": [
+        "Actual public keyboard and coarse-touch workspace Pin/Unpin",
+        "Nonempty unsent draft and saved history survive provider removal, replacement and reload"
+      ],
+      "browserScenariosPassed": 2,
+      "seconds": [
+        10.48,
+        4.16
+      ],
+      "build": "5f136e8e69c99e41",
+      "limits": [
+        "Synthetic provider/runtime; no real account or physical touch-device claim",
+        "Three prior fixture failures preserved; no product change"
+      ]
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
-  "remaining": "Warm send acknowledgment exceeds the desired target; current cold-composition timing and device/account-specific acceptance remain explicit limits. All70 open issue dispositions are recorded in closing-issue-dispositions-20261015.json. This audit does not declare every issue resolved.",
+  "remaining": "Warm send acknowledgment exceeds the desired target. Current normal-runtime startup and local worker controls, private canonical dependency activation, and recipe issue630 implementation remain active work. Device/account-specific acceptance and all70 issue dispositions remain explicit; this audit does not declare every issue resolved.",
   "coverage": {
     "workflows": 199,
     "outcomes": 669,
-    "observedInNamedContexts": 607,
-    "partial": 44,
+    "observedInNamedContexts": 609,
+    "partial": 42,
     "notRun": 18,
-    "explicitResidualDispositions": 62,
+    "explicitResidualDispositions": 60,
     "receipt": "standard-ux-completion-20261015.md",
-    "finiteResidualFollowup": "Independent completion audit identified additional feasible keyboard/touch and removed-provider draft witnesses; these are being closed, not classified as external limitations."
+    "finiteResidualFollowup": "Actual keyboard/coarse-touch workspace pinning and removed-provider draft/history recovery now pass; real-worker Stop/configuration and private canonical dependency activation remain finite acceptance work."
   }
 }
