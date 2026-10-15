@@ -298,7 +298,7 @@ class Collaboration:
         session = self.service._session(sid)
         task = session.get('task') or self.service.coordination.task(sid)
         waiting = self.service.db.execute("""SELECT count(*) FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','workspace.tests.submit')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','workspace.tests.submit','worktree.handoff')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND (json_extract(receipt,'$.subscription.status') IN ('waiting','reserved','backpressured')
                 OR json_extract(receipt,'$.subscription.open')=1)
@@ -645,6 +645,10 @@ class Collaboration:
                 if dependency.get('commandAction') == 'workspace.tests.submit':
                     if reason := self.service.test_queue.continuation_guard(dependency):
                         return reason
+                if dependency.get('commandAction') == 'worktree.handoff':
+                    reason = self.service.worktrees.continuation_guard(dependency)
+                    if reason:
+                        return reason
                 if dependency.get('commandAction') == 'coordination.watch' and dependency.get('watch', {}).get('status') == 'cancelled':
                     return 'The one-shot watch was cancelled.'
                 if receipt.get('dependencyOutcomeRevision') and not self.claim_matches(dependency, receipt):
@@ -755,7 +759,7 @@ class Collaboration:
 
     def resume_outcomes(self, sid):
         for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch','worktree.handoff')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND json_extract(receipt,'$.subscription.status')='backpressured' LIMIT 64""", (sid,)).fetchall():
             self.enqueue_continuation(json.loads(encoded))
