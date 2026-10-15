@@ -218,18 +218,103 @@
       "limits": [
         "Finite preview functionality; scale and performance qualification use separate source-bound receipts"
       ]
+    },
+    {
+      "source": "3a50b226ad1f512587f3c94c4e166a120f85352e",
+      "receipt": "archive-running-worker-20261015.json",
+      "passed": true,
+      "checks": [
+        "Public Archive preserves actual running worker, committed history and workspace sentinel files",
+        "Separate explicit Stop/reopen/Restore admits no replay"
+      ],
+      "limits": [
+        "Local deterministic provider and private runtime; no external effects or sustained-load claim"
+      ]
+    },
+    {
+      "source": "3a50b226ad1f512587f3c94c4e166a120f85352e",
+      "receipt": "recovery-ownership-worker-20261015.json",
+      "passed": true,
+      "checks": [
+        "Public recovery, duplicate command and service reopen preserve original history and a prior local file effect without starting a worker",
+        "Separate real Foundation lock owner refuses takeover; explicit release hands off to one normal worker; duplicate receipt retains same worker without input"
+      ],
+      "limits": [
+        "Separate Foundation lock owner, not full CLI runtime; synthetic committed tool history, not arbitrary remote effects"
+      ]
+    },
+    {
+      "source": "697fa66ac0be490dfd4edb7358b251163cd460d7",
+      "receipt": "profile-cold-worker-start-20261015.json",
+      "passed": true,
+      "checks": [
+        "Locked local wheel exports retain package identity and markers; unmatched or ambiguous sources fail",
+        "Original focused regression4failed/6passed becomes10passed",
+        "Fresh ordinary Work profile qualification and actual worker readiness; immutable parent policy unchanged"
+      ],
+      "readyMs": 7729.195,
+      "targetMs": 10000,
+      "limits": [
+        "One profile-cold/worker-cold sample with warm dependency/source caches; no download or p95 claim",
+        "No provider input; zero workers afterward"
+      ]
+    },
+    {
+      "source": "697fa66ac0be490dfd4edb7358b251163cd460d7",
+      "receipt": "integrated-preview-final-20261015.json",
+      "passed": true,
+      "checks": [
+        "Final integrated preview uses current owned product source and unchanged qualified browser build",
+        "Eight saved files/four synthetic chats unchanged; automatic updates disabled; no schedules",
+        "Authenticated browser opens without errors"
+      ],
+      "limits": [
+        "Single481ms functional launch, not matched performance measurement"
+      ]
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
-  "remaining": "Warm send acknowledgment exceeds the desired target. Recipe issue #630 both-engine/distribution/corpus/actual-CLI qualification remains active. Real-worker startup, controls, mounted dependency identity, named Work modules and refreshed combined preview now have passing source-bound receipts. Finite active-worker archive acceptance is pending; device/account-specific acceptance and all 70 issue dispositions remain explicit. This audit does not declare every issue resolved.",
+  "remaining": "Warm send acknowledgement remains above the desired300ms target. All finite ordinary runtime follow-ups identified by the independent audit have source-bound receipts. Device/account/platform acceptance and universal guarantees retain explicit limits;13 product/authority choices remain decision briefs. All70 issues are dispositioned, not all resolved. Canonical dependency PRs remain unmerged/unadopted; current PR CI is recorded separately.",
   "coverage": {
     "workflows": 199,
     "outcomes": 669,
-    "observedInNamedContexts": 615,
-    "partial": 37,
-    "notRun": 17,
-    "explicitResidualDispositions": 54,
+    "observedInNamedContexts": 618,
+    "partial": 36,
+    "notRun": 15,
+    "explicitResidualDispositions": 51,
     "receipt": "standard-ux-completion-20261015.md",
-    "finiteResidualFollowup": "Source-bound actual-worker Stop/configuration/policy and named Work required-module proofs close six more outcomes; device/account limitations remain explicit. See standard UX completion ledger and individual receipts."
+    "finiteResidualFollowup": "Archive, recovery, local ownership, current cold qualification and final preview are now qualified in their named contexts; see requirement reconciliation and individual receipts.",
+    "workflowsFullyObservedInNamedContexts": 168
+  },
+  "canonicalRecipeQualification": {
+    "pullRequest": "https://github.com/microsoft/amplifier-bundle-recipes/pull/121",
+    "head": "8de062a8577735854559f4e77e0bf68236530659",
+    "implementation": "620d786a4379c936b0cf082bd66ad3faf5e910ee",
+    "receipt": "https://github.com/microsoft/amplifier-bundle-recipes/blob/8de062a8577735854559f4e77e0bf68236530659/docs/validation/shell-source-qualification-20261015.json",
+    "repositoryGates": {
+      "modulePassed": 1646,
+      "moduleSkipped": 1,
+      "nativePassed": 590,
+      "nativeSkipped": 1,
+      "kitPassed": 19,
+      "kitSkipped": 1,
+      "unchangedLegacyGoldens": 5
+    },
+    "supplements": {
+      "historicalActivationControlPassed": 1,
+      "crossEngineKeyComparisonPassed": 1,
+      "portableDiagramExamplesPassed": 22
+    },
+    "actualCliPassed": true,
+    "unchangedIndependentCheckerPairsPassed": 14,
+    "retainedCorpusPreparations": 6984,
+    "admittedRefusals": 0,
+    "productionAdopted": false,
+    "limits": [
+      "GNU Bash5.2.21 and exact parser profile; other installed platforms not qualified",
+      "Source preparations across519 templates, not execution of arbitrary original recipes",
+      "Context source confinement is not a sandbox for trusted recipe authors",
+      "Canonical recipe capability is absent from inspected normal Work graph; no Unified dependency adoption implied"
+    ]
   }
 }
