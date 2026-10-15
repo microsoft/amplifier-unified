@@ -1,5 +1,7 @@
 """Production host/assets, empty storage, synthetic runtime; no provider calls."""
 import asyncio
+import hashlib
+import time
 import json
 import os
 from pathlib import Path
@@ -161,9 +163,24 @@ async def main(home):
         query_owner = app['service'].shell.resources.queries
         original_factory = query_owner.factory
         gate = asyncio.Event(); gate.set()
-        release_query_gate = gate.set
+        catalog_paused = False
+        def release_query_gate():
+            nonlocal catalog_paused
+            gate.set()
+            if catalog_paused:
+                catalog_paused = False
+                app['service'].history.lock.release()
         query_mode, entered, target_client = 'release', 0, None
-        query_events = []
+        query_events, query_invalidations = [], []
+        original_invalidate = query_owner.resources.invalidate
+        def record_invalidation(global_keys=None):
+            original_invalidate(global_keys)
+            task = asyncio.current_task()
+            query_invalidations.append({"at": time.monotonic(), "fields": sorted(global_keys) if global_keys is not None else None,
+                "task": task.get_coro().__qualname__ if task else None})
+            del query_invalidations[:-32]
+        query_owner.resources.invalidate = record_invalidation
+        digest = lambda value: hashlib.sha256(repr(value).encode()).hexdigest()[:16]
         def controlled_factory(*args, **kwargs):
             projector = original_factory(*args, **kwargs)
             original_project = projector.project
@@ -171,7 +188,7 @@ async def main(home):
                 nonlocal entered
                 if inputs['operation'] == 'chats' and inputs['args']['section'] == 'search':
                     job = query_owner.jobs.get(query_owner.active, {})
-                    event = {'key': options.get('key'), 'mode': query_mode, 'interests': sorted({(item[2], item[3]) for item in job.get('interests', {}).values()})}
+                    event = {'key': options.get('key'), 'at': time.monotonic(), 'fence': [digest(part) for part in job.get('fence', ())], 'mode': query_mode, 'interests': sorted({(item[2], item[3]) for item in job.get('interests', {}).values()})}
                     query_events.append(event)
                     del query_events[:-16]
                     targeted = any(item[0] == target_client and item[2:4] == ('chats', 'sidebarSearch')
@@ -184,13 +201,15 @@ async def main(home):
                         await gate.wait()
                     if query_mode == 'fail':
                         event['failureFenceCurrent'] = query_owner._fence(inputs['operation']) == job.get('fence')
+                        event['failureAt'] = time.monotonic()
+                        event['currentInterests'] = sum(query_owner._current(item) for item in job.get('interests', {}).values())
                         return {'status': 'retry', 'reason': 'worker_failed'}
                 return await original_project(inputs, **options)
             projector.project = project
             return projector
         query_owner.factory = controlled_factory
         async def query_control(request):
-            nonlocal query_mode, target_client
+            nonlocal query_mode, target_client, catalog_paused
             if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
                 raise web.HTTPForbidden()
             if request.method == 'POST':
@@ -200,13 +219,26 @@ async def main(home):
                     raise web.HTTPBadRequest()
                 if mode not in {'hold', 'release', 'fail'}:
                     raise web.HTTPBadRequest()
+                if mode == 'hold' and not catalog_paused:
+                    # This phase proves retry suppression for one unchanged data
+                    # generation. Wait for discovery already in flight, then
+                    # defer its next reconciliation until the phase releases.
+                    # Explicit canonical commands and query workers remain live.
+                    await app['service'].history.lock.acquire()
+                    catalog_paused = True
                 target_client = identity
                 query_mode = mode
                 if mode == 'hold':
                     gate.clear()
+                elif mode == 'release':
+                    release_query_gate()
                 else:
                     gate.set()
-            return web.json_response({'mode': query_mode, 'entered': entered, 'events': query_events})
+            return web.json_response({'mode': query_mode, 'entered': entered, 'events': query_events,
+                'catalogPaused': catalog_paused, 'invalidations': query_invalidations, 'epochs': query_owner.resources.epochs, 'at': time.monotonic(), 'currentFence': [digest(part) for part in query_owner._fence('chats')],
+                'jobs': [{'key': digest(key), 'currentInterests': sum(query_owner._current(item) for item in job['interests'].values())} for key, job in query_owner.jobs.items()],
+                'failures': [{'key': digest(key), 'until': value['until'], 'automatic': key in query_owner.retries,
+                    'currentInterests': sum(query_owner._current(item) for item in value['interests'].values())} for key, value in list(query_owner.failures.items())[-16:]]})
         app.router.add_get('/fixture/scoped-query', query_control)
         app.router.add_post('/fixture/scoped-query', query_control)
     runner = web.AppRunner(app)
