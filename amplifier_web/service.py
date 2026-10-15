@@ -344,6 +344,8 @@ from .workspace_resources import definitions as resource_reservation_definitions
 ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
 ACTION_DEFINITIONS.update(environment_definitions(schema, string))
+from .test_queue import definitions as test_queue_definitions
+ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
@@ -410,6 +412,7 @@ for _access, _actions in {
         *publishing_definitions(schema, string),
         *resource_reservation_definitions(schema, string),
         *environment_definitions(schema, string),
+        *test_queue_definitions(schema, string),
         *assignment_definitions(schema, string),
     },
 }.items():
@@ -686,6 +689,8 @@ class AppService:
         self.configuration_authority = ConfigurationAuthority(self)
         from .assignments import Assignments
         self.assignments = Assignments(self)
+        from .test_queue import TestQueue
+        self.test_queue = TestQueue(self)
         from .peer_attribution import PeerAttribution
         self.peer_attribution = PeerAttribution(self.db)
         self.projections.resolver = self.peer_attribution.resolve
@@ -1754,6 +1759,8 @@ class AppService:
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in test_queue_definitions(schema, string):
+            return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
         if action in environment_definitions(schema, string):
             from .task_environments import dispatch as environment_dispatch
             return await environment_dispatch(self, action, args, origin, caller_session_id, configuration_authority)
@@ -4643,6 +4650,7 @@ class AppService:
             task.cancel()
         await self.shell.resources.close()
         self.collaboration.close()
+        await self.test_queue.close()
         await self.performance_diagnostics.close()
         if getattr(self, "profiling_host", None):
             await self.profiling_host.close()

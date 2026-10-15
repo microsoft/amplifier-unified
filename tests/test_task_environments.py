@@ -119,6 +119,18 @@ async def test_timeout_is_retained_unknown_and_same_request_never_runs_again(app
         await act(app, 'execute', row, 'uncertain', command='different-command')
 
 
+async def test_refused_command_preserves_existing_environment_ownership(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    monkeypatch.setattr(owner, 'invoke', lambda *args: {
+        'ok': False, 'effectAdmitted': False, 'status': 'unknown',
+        'message': 'Source readiness changed; no command was admitted.'})
+    result = await act(app, 'execute', row, 'refused', command='check')
+    assert result['request']['state'] == 'failed'
+    assert owner.get(app.data_dir, scope(app)['sessionId'], row['id'])['backendAdmitted']
+    with pytest.raises(AppError, match='already owns'):
+        await start(app, 'competing-after-refusal')
+
+
 async def test_unready_source_observation_blocks_host_execution(app, backend, monkeypatch):
     await start(app)
     reads = []
@@ -262,6 +274,15 @@ def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatc
     value = {'enabled': True, 'installationId': identity, 'commit': pin, 'dockerHost': 'unix:///var/run/docker.sock'}
     target.write_text(json.dumps(value)); target.chmod(0o600)
     assert owner.configuration(app)[1] == 'ready'
+    from amplifier_web import incus_environment_worker
+    incus = {'qualified': 'explicit fixture'}
+    monkeypatch.setattr(incus_environment_worker, 'validate_configuration', lambda v: {**v, 'validated': True})
+    alternate = {key: item for key, item in value.items() if key != 'dockerHost'}
+    target.write_text(json.dumps({**alternate, 'backend': 'incus', 'incus': incus}))
+    configured, status, _ = owner.configuration(app)
+    assert status == 'ready' and configured['incus']['validated'] and configured['python'] == str(python)
+    target.write_text(json.dumps({**value, 'backend': 'incus', 'incus': incus}))
+    assert owner.configuration(app)[1] == 'unavailable'  # No mixed/implicit backend selection.
     for bad in [{**value, 'image': 'arbitrary-image'}, {**value, 'commit': 'c' * 40}, {**value, 'dockerHost': 'tcp://remote:2375'}]:
         target.write_text(json.dumps(bad))
         assert owner.configuration(app)[1] == 'unavailable'
@@ -273,3 +294,80 @@ def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatc
     monkeypatch.setattr(owner, 'SUPPORTED_HOST', False)
     monkeypatch.delattr(owner.os, 'getuid')
     assert owner.configuration(app)[1] == 'unavailable'
+
+
+@pytest.mark.parametrize('action', ['start', 'execute', 'stop', 'remove', 'execute-failed'])
+@pytest.mark.parametrize('persistent', [False, True])
+async def test_committed_effect_survives_projection_failure_and_read_repairs(app, backend, monkeypatch, action, persistent):
+    operation = action.removesuffix('-failed')
+    row = None if operation == 'start' else (await start(app))['resource']
+    if operation == 'remove':
+        row = (await act(app, 'stop', row, 'before-remove'))['resource']
+    request_id = 'projection-' + action
+    save, failures = owner.save, 0
+    invoke = owner.invoke
+    if action == 'execute-failed':
+        def fail_check(config, home, resource, effect, args):
+            result = invoke(config, home, resource, effect, args)
+            if effect == 'execute':
+                result['result']['exit_code'] = 7
+            return result
+        monkeypatch.setattr(owner, 'invoke', fail_check)
+    expected_state = 'failed' if action == 'execute-failed' else 'completed'
+
+    def fail_projection(home, resource, **changes):
+        nonlocal failures
+        exact = changes.get('lastOperation', {})
+        if exact.get('requestId') == request_id and (persistent or failures == 0):
+            failures += 1
+            assert exact['state'] == expected_state
+            assert app.operations.requests.read(scope(app)['sessionId'], request_id) == exact
+            raise OSError('resource projection unavailable after operation commit')
+        return save(home, resource, **changes)
+
+    monkeypatch.setattr(owner, 'save', fail_projection)
+    before = len(backend)
+    result = (await start(app, request_id) if operation == 'start' else
+              await act(app, operation, row, request_id, **({'command': 'check'} if operation == 'execute' else {})))
+    exact = result['request']
+    assert exact['state'] == expected_state
+    assert [effect for effect, _ in backend[before:]] == (['prepare', 'start'] if operation == 'start' else [operation])
+    stored = owner.get(app.data_dir, scope(app)['sessionId'], result['resource']['id'])
+    assert stored.get('pendingRequest') == (request_id if persistent else None)
+    if persistent:
+        assert failures == 2  # Original projection and one metadata-only retry.
+        assert result['resource']['observation']['status'] == 'unverified'
+        monkeypatch.setattr(owner, 'save', save)
+        calls = len(backend)
+        page = (await app.dispatch('workspace.environments.read', scope(app)))['result']
+        repaired = next(item for item in page['items'] if item['id'] == stored['id'])
+        assert [effect for effect, _ in backend[calls:]] == ([] if operation == 'remove' else ['read'])
+    else:
+        repaired = result['resource']
+        assert failures == 1
+    assert repaired['status'] == {'start': 'running', 'execute': 'running', 'stop': 'stopped', 'remove': 'removed'}[operation]
+    assert repaired['lastOperation'] == exact
+    assert app.operations.requests.read(scope(app)['sessionId'], request_id) == exact
+    assert owner.get(app.data_dir, scope(app)['sessionId'], stored['id']).get('pendingRequest') is None
+    if operation == 'remove':
+        assert owner.get(app.data_dir, scope(app)['sessionId'], stored['id'])['status'] == 'retired'
+        assert (await start(app, 'next-check'))['resource']['id'] != stored['id']
+
+
+async def test_next_effect_repairs_prior_confirmed_projection_before_admission(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    save = owner.save
+
+    def fail_stop_projection(home, resource, **changes):
+        if changes.get('lastOperation', {}).get('action') == 'workspace.environments.stop':
+            raise OSError('stop projection unavailable')
+        return save(home, resource, **changes)
+
+    monkeypatch.setattr(owner, 'save', fail_stop_projection)
+    stopped = await act(app, 'stop', row, 'saved-stop')
+    assert stopped['request']['state'] == 'completed'
+    assert stopped['resource']['status'] == 'stopping'
+    monkeypatch.setattr(owner, 'save', save)
+    removed = await act(app, 'remove', stopped['resource'], 'after-saved-stop')
+    assert removed['request']['state'] == 'completed' and removed['resource']['status'] == 'removed'
+    assert [action for action, _ in backend] == ['prepare', 'start', 'stop', 'remove']
