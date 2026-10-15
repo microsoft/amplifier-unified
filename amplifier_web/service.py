@@ -1238,7 +1238,7 @@ class AppService:
         except (OSError, ValueError, sqlite3.Error):
             logging.getLogger(__name__).warning('History owner retirement deferred; saved and resident state retained.', exc_info=True)
 
-    def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
+    def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=(), stream=False):
         """Batch stream/progress updates; final responses and approvals flush now."""
         if getattr(self, 'event_log_view', None) is not None:
             self.event_log_view.invalidate(session_ids)
@@ -1257,8 +1257,38 @@ class AppService:
             self._progress_global_keys = getattr(self, '_progress_global_keys', set()) | set(global_keys)
         self._progress_dirty = True
         self._progress_scope_known = True
+        # Only a live subscriber viewing this text needs the shorter batch.
+        # Retained/offline clients and hidden workers keep the background window.
+        delay = .05 if stream and self._stream_is_observed(session_ids) else .25
+        due = asyncio.get_running_loop().time() + delay
         if getattr(self, '_progress_publish_task', None) is None:
+            self._progress_publish_due = due
+            self._progress_publish_wake = asyncio.Event()
             self._progress_publish_task = self._task(self._flush_progress())
+        elif due < getattr(self, '_progress_publish_due', float('inf')):
+            self._progress_publish_due = due
+            wake = getattr(self, '_progress_publish_wake', None)
+            if wake is not None:
+                wake.set()
+
+    def _stream_is_observed(self, session_ids):
+        if not session_ids or not self.queues:
+            return False
+        affected = self._affected_detail(session_ids)
+        for queue in self.queues:
+            session = self.queue_sessions.get(queue)
+            if session is not None:
+                if session in affected:
+                    return True
+                continue
+            client = self.queue_clients.get(queue)
+            record = self.clients.records.get(client, {}) if client is not None else self._state
+            interests = {record.get('selectedSessionId'),
+                         self._state.get('voice', {}).get('sessionId'),
+                         (record.get('view', {}).get('subagentHistory') or {}).get('sessionId')}
+            if interests.intersection(affected):
+                return True
+        return False
 
     def _publish_smart_tool_update(self, *, defer_publish=False):
         """Commit tool receipts before effects/results, batching only the UI snapshot."""
@@ -1270,7 +1300,17 @@ class AppService:
 
     async def _flush_progress(self):
         try:
-            await asyncio.sleep(.25)
+            # A newly observed stream may shorten an existing background wait.
+            # Later events never move the deadline out, so bursts cannot starve it.
+            while True:
+                remaining = self._progress_publish_due - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(self._progress_publish_wake.wait(), remaining)
+                    self._progress_publish_wake.clear()
+                except asyncio.TimeoutError:
+                    break
             async with self.lock:
                 if self._progress_dirty and not self.closed:
                     try:
@@ -4137,7 +4177,8 @@ class AppService:
             observe_steering(self, session, kind, payload)
             if progress:
                 self._publish_progress(session_ids={session['id']},
-                                       detail_only=kind in {'assistant.delta', 'execution.event'}, record_only=True)
+                                       detail_only=kind in {'assistant.delta', 'execution.event'}, record_only=True,
+                                       stream=kind == 'assistant.delta')
             elif kind == 'execution.event':
                 # Terminal call evidence must commit immediately, but changes
                 # only this session. Reuse the catalog when the save guard
