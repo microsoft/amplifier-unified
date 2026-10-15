@@ -52,6 +52,7 @@ try{
  await page.keyboard.press('Escape');await expect(more).toBeFocused();
  // Workspace browsing changes context even when selectedSessionId stays fixed.
  await more.focus();await page.keyboard.press('Enter');await expect(details).toBeVisible();
+ await expect.poll(()=>page.evaluate(()=>{const state=window.amplifier.getShellState().snapshots.workspaces;return state.navigationResources?.includes('workspaceShortcuts')&&state.workspaceShortcuts?.some(item=>item.available!==false)})).toBe(true);
  const workspaces=await page.evaluate(()=>window.amplifier.getShellState().snapshots.workspaces.workspaceShortcuts);
  const workspace=workspaces.find(item=>item.available!==false)?.workspaceId;assert.ok(workspace);
  await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace,workWorkspaceTab:'chats'}});

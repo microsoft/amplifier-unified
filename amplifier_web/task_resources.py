@@ -21,12 +21,13 @@ from filelock import FileLock, Timeout as LockTimeout
 KINDS = ('scratch-directory', 'browser-profile', 'sqlite-database')
 MAX_ROOT = 32
 MAX_ACTIVE = 512
+IGNORE_CONTENT = b'# Local task storage is retained separately from source.\n*\n'
 
 
 def definitions(schema, string):
     scope = {'workspaceId': string(100), 'sessionId': string(200)}
     return {
-        'workspace.resources.provision': ('Allocate one task-owned scratch directory, browser-profile directory or local SQLite file outside source repositories. Does not launch processes or expand file permissions. Stable retry returns the same retained allocation.', schema({**scope,
+        'workspace.resources.provision': ('Allocate one task-owned scratch directory, browser-profile directory or local SQLite file inside this chat\'s current working folder, excluded from ordinary Git snapshots. Uses existing file access without another approval; explicit restrictions still apply. Does not launch processes or change permissions. Stable retry returns the original allocation, including older allocations outside the workspace.', schema({**scope,
             'kind': {'enum': list(KINDS)}, 'label': string(120)}, [*scope, 'kind'])),
         'workspace.resources.read': ('Inspect this task’s bounded owned storage without starting workers or recreating missing files. Current reference file-tool access is an observation, not a new grant.', schema({**scope,
             'id': string(100), 'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 32}}, [*scope])),
@@ -73,13 +74,23 @@ def get(db, sid, rid):
 
 
 def directory(home, row):
+    if row.get('storageRoot'):
+        from .task_storage_placement import root
+        try:
+            base = root(home, row)
+        except (OSError, ValueError):
+            # Retain the original path for inspection when a move is unknown;
+            # open_parent still refuses effects through an unverified binding.
+            base = Path(row['storageRoot'])
+        return base / '.amplifier' / 'task-storage' / hashlib.sha256(row['sessionId'].encode()).hexdigest() / row['id']
     return home / 'workspace-resources' / 'owned' / hashlib.sha256(row['sessionId'].encode()).hexdigest() / row['id']
 
 
 def public(home, row):
     root = directory(home, row)
-    return {**{key: value for key, value in row.items() if key not in {'directoryIdentity', 'fileIdentity'}},
+    return {**{key: value for key, value in row.items() if key not in {'directoryIdentity', 'fileIdentity', 'storageRootIdentity', 'storageCheckout'}},
             'directory': str(root), 'path': str(root / 'database.sqlite3' if row['kind'] == 'sqlite-database' else root),
+            'placement': 'working-folder' if row.get('storageRoot') else 'app-storage',
             'retention': 'preserved-until-explicit-cleanup', 'fileAccessChanged': False}
 
 
@@ -92,14 +103,74 @@ def _open_directory(parent, name, *, create=False):
     return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
 
 
-def open_parent(home, row, *, create=False):
-    """Pin every managed path component; a symlink cannot redirect an effect."""
-    fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+def _open_root(path):
+    """Reject alias substitution anywhere in a recorded canonical path."""
+    path = Path(path)
+    fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        for part in ('workspace-resources', 'owned', hashlib.sha256(row['sessionId'].encode()).hexdigest()):
-            child = _open_directory(fd, part, create=create)
+        for part in path.parts[1:]:
+            child = _open_directory(fd, part)
             os.close(fd)
             fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _ensure_ignore(parent, *, create=True, expected=None):
+    """Own only our ignore file; never modify the repository's ignore rules."""
+    try:
+        if not create:
+            raise FileExistsError
+        fd = os.open('.gitignore', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+    except FileExistsError:
+        fd = os.open('.gitignore', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or expected is not None and identity(info) != expected
+                    or stream.read(1024) != IGNORE_CONTENT):
+                raise ValueError('The task-storage ignore file changed. Existing files were preserved.')
+    else:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(IGNORE_CONTENT)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.fsync(parent)
+
+
+def open_parent(home, row, *, create=False, admission=None):
+    """Pin every managed path component; a symlink cannot redirect an effect."""
+    if row.get('storageRoot'):
+        from .task_storage_placement import root
+        current = root(home, row)
+        fd = _open_root(current)
+        if identity(os.fstat(fd)) != row['storageRootIdentity']:
+            os.close(fd)
+            raise ValueError('The task storage working folder was replaced.')
+        parts = ('.amplifier', 'task-storage', hashlib.sha256(row['sessionId'].encode()).hexdigest())
+    else:
+        current = home
+        fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        parts = ('workspace-resources', 'owned', hashlib.sha256(row['sessionId'].encode()).hexdigest())
+    try:
+        for part in parts:
+            current = current / part
+            writable = admission is None or str(current) in admission['writable']
+            expected = admission['existing'].get(str(current)) if admission else None
+            if admission is not None and not writable and expected is None:
+                raise ValueError('Task storage placement changed after access inspection.')
+            child = _open_directory(fd, part, create=create and writable)
+            os.close(fd)
+            fd = child
+            if expected is not None and identity(os.fstat(fd)) != expected:
+                raise ValueError('An existing task storage parent changed after access inspection.')
+            if row.get('storageRoot') and part == 'task-storage' and create:
+                lock = home / 'workspace-resources' / ('ignore-' + hashlib.sha256(row['storageRoot'].encode()).hexdigest() + '.lock')
+                with FileLock(str(lock), timeout=5):
+                    ignore = str(current / '.gitignore')
+                    _ensure_ignore(fd, create=admission is None or ignore in admission['writable'],
+                                   expected=admission['existing'].get(ignore) if admission else None)
         return fd
     except BaseException:
         os.close(fd)
@@ -132,10 +203,21 @@ def observe(home, row):
         return {**row, 'observation': 'changed-or-unavailable'}
 
 
-def prepare(home, workspace, sid, actor, args, command_id):
+def prepare(home, workspace, sid, actor, args, command_id, execution_root=None):
     if not command_id or len(command_id) > 200:
         raise ValueError('Supply a stable command ID for resource allocation.')
     signature = hashlib.sha256(json.dumps(['task-resource', workspace, sid, actor, args], sort_keys=True).encode()).hexdigest()
+    with closing(connect(home)) as db:
+        prior = db.execute('SELECT fingerprint,result FROM commands WHERE id=?', (command_id,)).fetchone()
+        if prior:
+            if prior[0] != signature:
+                raise ValueError('This resource command already belongs to different arguments or an owner.')
+            return get(db, sid, json.loads(prior[1])['allocationId']), False
+    placement = {}
+    if execution_root is not None:
+        from .task_storage_placement import capture
+        # Git/filesystem verification must not hold the shared ledger writer.
+        placement = capture(home, execution_root)
     with closing(connect(home)) as db, db:
         db.execute('BEGIN IMMEDIATE')
         prior = db.execute('SELECT fingerprint,result FROM commands WHERE id=?', (command_id,)).fetchone()
@@ -149,6 +231,7 @@ def prepare(home, workspace, sid, actor, args, command_id):
         row = dict(id=str(uuid.uuid4()), workspaceId=workspace, sessionId=sid, owner=actor,
                    kind=args['kind'], label=args.get('label', '').strip(), status='prepared', revision=1,
                    createdAt=time.time(), commandId=command_id)
+        row.update(placement)
         save(db, row)
         db.execute('INSERT INTO commands VALUES(?,?,?)', (command_id, signature, json.dumps({'allocationId': row['id']})))
         return row, True
@@ -168,8 +251,9 @@ def allocate(home, initial, admit=None):
     """One admitted local effect; any retry only observes its durable state."""
     lock = home / 'workspace-resources' / ('allocation-' + initial['id'] + '.lock')
     with FileLock(str(lock), timeout=5), closing(connect(home)) as db:
+        admission = None
         if admit:
-            admit()  # Main-loop authority check after any owner-lock wait.
+            admission = admit()  # Main-loop authority check after any owner-lock wait.
         with db:
             db.execute('BEGIN IMMEDIATE')
             row = get(db, initial['sessionId'], initial['id'])
@@ -179,7 +263,7 @@ def allocate(home, initial, admit=None):
             save(db, row)
         parent = fd = None
         try:
-            parent = open_parent(home, row, create=True)
+            parent = open_parent(home, row, create=True, admission=admission)
             # Never reuse a directory that predates this effect.
             os.mkdir(row['id'], mode=0o700, dir_fd=parent)
             fd = _open_directory(parent, row['id'])
@@ -296,6 +380,30 @@ async def access(app, sid, rows):
         return [{**row, 'access': unknown} for row in rows]
 
 
+async def require_allocation_access(app, sid, row):
+    """An agent cannot use the allocator to bypass its mounted write policy."""
+    root = directory(app.data_dir, row)
+    managed = root.parent.parent
+    existing, paths = {}, [str(root)]
+    for path in (managed.parent, managed, managed / '.gitignore', root.parent):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            paths.append(str(path))
+        else:
+            if not (stat.S_ISREG(info.st_mode) if path.name == '.gitignore' else stat.S_ISDIR(info.st_mode)):
+                raise ValueError('The task storage parent is not an ordinary folder or ignore file.')
+            existing[str(path)] = identity(info)
+    if row['kind'] == 'sqlite-database':
+        paths.append(str(root / 'database.sqlite3'))
+    reports = await access(app, sid, [{'path': path} for path in paths])
+    if any(item['access']['status'] != 'allowed' for item in reports):
+        raise ValueError('Task storage is inside this chat’s working folder, but its current file tools '
+                         'do not confirm write access there. Inspect the current file restrictions or '
+                         'finish pending configuration refresh before allocating. No workspace files were created.')
+    return {'writable': set(paths), 'existing': existing}
+
+
 async def dispatch(app, action, args, origin, command_id, caller):
     from .service import AppError
     from .collaboration import PRINCIPAL
@@ -324,15 +432,27 @@ async def dispatch(app, action, args, origin, command_id, caller):
     async def locked_guard():
         async with app.lock:
             guard()
+        if action == 'workspace.resources.provision' and not user:
+            admission = await require_allocation_access(app, sid, allocation_row)
+            async with app.lock:
+                guard()
+            return admission
     def admit():
-        asyncio.run_coroutine_threadsafe(locked_guard(), loop).result(timeout=10)
+        pending = asyncio.run_coroutine_threadsafe(locked_guard(), loop)
+        try:
+            return pending.result(timeout=15)
+        except TimeoutError:
+            pending.cancel()
+            raise ValueError('Task storage access inspection timed out. No workspace files were created.') from None
     try:
         if action == 'workspace.resources.read':
             page = await asyncio.to_thread(read, app.data_dir, sid, args)
         else:
             guard()
             if action == 'workspace.resources.provision':
-                row, fresh = await asyncio.to_thread(prepare, app.data_dir, workspace['id'], sid, actor, args, command_id)
+                row, fresh = await asyncio.to_thread(prepare, app.data_dir, workspace['id'], sid, actor, args, command_id,
+                                                    source.get('workingDirectory') or source['workspace'])
+                allocation_row = row
                 if fresh:
                     try:
                         guard()
