@@ -6,10 +6,85 @@ read-only, disposable projection; reading it cannot prepare or execute a runtime
 This implements the approved working-set plan incrementally, without importing
 unselected historical sessions or changing search retention policy.
 
-## Process and publication ownership
+## Requested browser windows
 
-On qualified Linux hosts, the application starts one lazy fresh-interpreter
-history worker. macOS and Windows retain the existing threaded reference reader
+The bundled browser opens a bounded recent message window and a separate root
+event window. Neither first messages nor recent Work waits for a complete
+selected-family tree. Earlier pages require an explicit reading action; opening
+or hovering the conversation rail uses only already loaded message text. An
+unknown total is not zero and does not start an automatic completeness loop.
+
+`TranscriptWindows` owns at most 32 retained pages / 32 MiB and eight physical
+reads. Native transcript reads examine at most 8 MiB / 512 raw records and return
+at most 100 visible messages, with a 4 MiB record bound. They preserve the existing
+primary/backup/pending-write recovery rules. Native rows have window-scoped
+display identities and `displayOnly: true`; an unverified prefix cannot establish
+global input uniqueness, editing/forking authority, or a canonical message/media
+binding. Copy and exact text expansion use the accepted page owner instead.
+
+Web-owned chats keep their canonical saved message IDs and command semantics.
+Resident arrays receive a conservative record/page/depth/object preflight before
+any copy or encoding; cold immutable message resources use a bounded reverse
+array reader with the same byte/record limits. The latter validates the
+requested window, resource ownership and file identity, not an unread prefix or
+the complete content digest. It never hydrates a whole cold execution, message or
+configuration body. A changed runtime transcript is offered as a separate,
+explicit read-only history view; it is not silently merged into saved web rows.
+
+Message cursors are authenticated by a service-owned key and bound to exact
+source/resource identity, source stamps and the applicable published owner fence.
+An older cursor cannot silently continue a different generation. Oversized or
+unreadable records create explicit gaps with advancing continuations; a readable
+neighbor is not dropped merely because the current request budget ran out.
+Canceled HTTP waiters do not release ownership of a still-running physical read.
+Cache retirement and source failures remain distinguishable from empty history.
+
+`WorkWindows` keeps at most eight root event pages, four jobs and 32 monotonic
+invalidation fences.
+On qualified Linux hosts its lazy disposable process uses the existing transport
+with 64 KiB inputs, 4 MiB outputs, 20 MiB aggregate spool reservation and the
+unchanged 768 MiB process policy. Other platforms use the same bounded reader in
+an owned thread until their process policy is qualified; this is not process RSS
+isolation and never falls back to exhaustive Work reconstruction. Inputs contain
+only canonical source identity, a requested window/cursor and the private signing
+key. They exclude full execution, retired usage, workers and generation graphs.
+
+Recent event observations stay separate from canonical execution/accounting.
+There is no EventIndex/ModelStore, transcript scan, child traversal or inferred
+turn pairing on this path. Existing accepted live evidence remains a separate
+bounded overlay; summaries derived from a truncated live slice do not claim
+complete call counts or usage. Admission, permissions and complete accounting
+continue to use their existing host-owned facts, never these display pages.
+Exact expanded fields resolve only retained private references through the
+current canonical source owner; clients cannot supply paths or signing keys.
+
+The host checks owner/source identity and the published fence before accepting a
+page. A rebind hides the previous owner's rows immediately. Same-source retained
+rows can remain readable while explicitly noncurrent. Selection departure,
+shutdown and bounded worker retirement release disposable interest without
+canceling accepted commands. Status-only notifications use the existing selected
+client stream and do not write canonical history.
+
+The browser's version-2 DOM receipt has `scope: recent-events`, a `windowKey`,
+`itemCount`, `sourceCount`, `scannedBytes` and `scannedEvents`, with
+`historyComplete: false`. It certifies acceptance of that root event window only.
+It must not satisfy the version-1 complete-reader readiness measurement below.
+Older/frozen or alternate history views cannot inherit the latest window's
+current receipt. First message visibility, event-window readiness and complete
+historical Work remain separate measurements. Recovery observations remain in
+canonical records but are not inserted as inline Saved work notices.
+
+These windows remove the complete graph prerequisite for ordinary browser reads.
+They do not yet provide exhaustive paged family reconstruction, globally proven
+historical associations, or a bounded cold implementation of complete-read APIs.
+Those explicit contracts continue through the complete-reader lane below;
+independent readers are not silently given a partial browser window.
+
+## Explicit complete-reader process and publication ownership
+
+The existing complete-reader lane is retained for independent subscriptions and
+explicit complete reads. On qualified Linux hosts it starts one lazy
+fresh-interpreter history worker. macOS and Windows retain its threaded reference reader
 until their native process-memory and lifecycle policies are qualified. Spawn
 compatibility alone is not platform acceptance. Only a detached
 projection input and private immutable spool paths cross that boundary. Input
@@ -28,10 +103,10 @@ discarded. Retry, saturation, cancellation and worker failure preserve selection
 and the last readable Work; retained interest retries without executing work or
 turning a read failure into a conversation failure.
 
-The host coalesces reads per canonical identity, admits at most eight active roots,
-and checks unrelated warm roots without awaiting a cold projection. Selected roots
-get admission first; other active roots rotate. Worker computation remains serial
-within that bounded queue. Loading/retry/ready status is visible while existing
+The host coalesces complete reads per canonical identity and admits at most eight
+jobs. Bundled browser subscriptions use requested windows instead of this queue;
+ordinary selection does not add an exhaustive descendant read. Worker computation
+remains serial within the bounded queue. Loading/retry/ready status is visible while existing
 conversation and Work remain readable. Transient retries back off 3–30 seconds.
 Deterministic input/output limits instead show an unavailable state. At most eight
 small negative receipts suppress repeated encoding/projection of that same rejected
@@ -163,18 +238,18 @@ An allocation or storage failure while writing a disposable checkpoint preserves
 the canonical read and the previous complete checkpoint. These bounds remove
 whole-document serialization copies; they do not bound the full cold Work tree.
 
-This slice still materializes a complete selected cold Work tree for existing
-host summary/detail consumers. It avoids repeated descendant reconstruction for
-recognized small appends and isolates uncertain/cold reconstruction. Fully paged
-host projections and broader incremental event families remain follow-up work;
-these bounds do not claim the plan's complete latency exits are met.
+This complete-reader lane still materializes a complete selected cold Work tree
+for its existing full-summary/detail consumers. It avoids repeated descendant
+reconstruction for recognized small appends and isolates uncertain/cold
+reconstruction. Fully paged complete-family projections and broader incremental
+event families remain follow-up work; these bounds do not claim the plan's
+complete latency exits are met.
 
 ## Bounded event-window primitive
 
-`event_window.read_window` is a worker-side primitive for the window-first
-follow-up. It is not yet wired into passive publication or the browser. Its
-trusted input is the canonical session owner, exact requested message-window
-key, host-owned 32-byte cursor signing key, and optional older-page cursor.
+`event_window.read_window` supplies the requested Work-window lane. Its trusted
+input is the canonical session owner, exact requested event-window key,
+host-owned 32-byte cursor signing key, and optional older-page cursor.
 Execution, retired usage, transcript bodies, workers and generations are not
 inputs. The host keeps the signing key private and stable across disposable
 worker restarts. There is no new endpoint or independent transport.
@@ -208,7 +283,7 @@ oversized records without decoding suffixes; a readable neighbor that merely
 exceeds the remaining request budget is retried whole on the next page. Structural
 depth/value-count checks precede JSON allocation. No hidden loop fills older history.
 
-The pending host/client cutover must distinguish window availability from the
-full-reader completion receipt above, keep unproven observations separate, and
-preserve live accounting and explicit complete-read APIs. This primitive alone
-does not qualify integrated chat opening or complete historical Work.
+The host/client integration distinguishes window availability from the complete
+reader receipt above, keeps unproven observations separate, and preserves live
+accounting and explicit complete-read APIs. Primitive tests alone do not qualify
+integrated chat opening or complete historical Work; each needs its own proof.
