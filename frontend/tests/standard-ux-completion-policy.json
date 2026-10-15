@@ -9,7 +9,7 @@
   "rationale": "Every reachable non-Advanced workflow and required outcome needs evidence. Repeating every outcome in all four input modes is not the default gate: shared interaction patterns can be qualified once with an explicit source/behavior crosswalk. Unrun behavior never becomes passed through reuse.",
   "requiredGates": [
     "Every workflow has actual ordinary-path browser evidence, or an explicit reviewed external capability/product limit.",
-    "All663 inventoried outcomes remain individually accountable; safety, failure, stale-owner and pending/unknown effects are targeted mandatory proofs where applicable.",
+    "All663 frozen inventoried outcomes and declared post-freeze additions remain individually accountable; safety, failure, stale-owner and pending/unknown effects are targeted mandatory proofs where applicable.",
     "Every unique input/navigation pattern has appropriate compact and keyboard/touch qualification.",
     "A shared-pattern claim covers only its tested layout/input behavior, never the target workflow effect, scope, data identity or unrun state.",
     "Keep source/build/fixture/provider/real-device limits attached to every observation."
@@ -3120,6 +3120,26 @@
         "reviewer": "root",
         "review": "Accepted as scoped navigation accounting only, not full outcome completion."
       }
+    },
+    {
+      "workflow": "workspace.queued-check",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "browserSteps": [
+        "Public workspace breadcrumb \u2192 Details \u2192 Managed resources; exact Queue/Cancel/Read result/Next output page/Check details controls."
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Controlled backend and actual journal/UI; no physical Docker/Incus or live-provider acceptance.",
+        "Keyboard Queue and output-page activation are named witnesses, not full Tab traversal.",
+        "Host restart and admitted cancellation remain separately qualified backend contracts."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",

@@ -938,6 +938,230 @@
           "current": "Delivered archive navigation respects newer navigation intent and preserves unsaved Canvas and Settings edits."
         }
       ]
+    },
+    {
+      "id": "delta.781",
+      "sourceCommit": "45a9b5e8d",
+      "reason": "Merged main adds durable queued-check controls after frozen inventory; explicit new ordinary path is accounted without relabeling the original baseline.",
+      "workflowsAdded": [
+        {
+          "id": "workspace.queued-check",
+          "family": "workspace",
+          "title": "Queue an isolated check and inspect its retained result",
+          "priority": "P1",
+          "scope": "standard-path",
+          "entryPath": [
+            "Current workspace breadcrumb",
+            "Details",
+            "Managed resources",
+            "Test environments"
+          ],
+          "prerequisites": [
+            "Synthetic owned workspace and local controlled environment adapter",
+            "A retained chat and private composer draft",
+            "Explicit capacity-full and admitted adapter states",
+            "No host/shared environment or external provider"
+          ],
+          "steps": [
+            "Open ordinary workspace Details and Managed resources",
+            "Enter check command and Queue while capacity is full",
+            "Reload, inspect waiting status, then Cancel check",
+            "Submit again and allow the exact owned check to complete and retain cleanup evidence",
+            "Open Check details and Read check result; use Next output page",
+            "Inspect recorded failed and unknown outcomes, reload and Refresh without execution replay"
+          ],
+          "expectedResults": [
+            "Queueing at full capacity saves the exact intent without starting an environment; unrelated work remains available.",
+            "Waiting intent survives browser reload; cancelling before admission starts no backend command.",
+            "An admitted check executes once, preserves its result and retires only its owned environment.",
+            "Check details and explicit bounded output paging expose the recorded owner/result without new execution.",
+            "Failed and unknown outcomes remain truthful after reopening and Refresh, without an automatic repeat command.",
+            "Named controls remain usable at desktop and narrow widths while selected chat, private draft, workspace bytes and model-runtime effects remain unchanged."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-pointer"
+          ],
+          "stateMatrix": [
+            "initial",
+            "queued",
+            "admitted",
+            "passed",
+            "cancelled-before-admission",
+            "failed",
+            "unknown",
+            "return-or-reopen"
+          ],
+          "sourceRefs": [
+            {
+              "path": "frontend/src/workspace-test-environments.jsx",
+              "line": 52,
+              "symbol": "TaskEnvironments"
+            },
+            {
+              "path": "amplifier_web/test_queue.py",
+              "line": 163,
+              "symbol": "TestQueue"
+            }
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/test-environments-browser.mjs",
+              "relation": "existing queue success/cancel and environment mutation assertions; pending combined-source qualification"
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "relation": "new exact public path/paging/failure/reload assertions; pending qualification"
+            },
+            {
+              "path": "tests/test_test_queue.py",
+              "relation": "backend authority/restart controls, not browser evidence"
+            }
+          ],
+          "performance": {
+            "current": null,
+            "desiredProfile": "standard-interaction",
+            "measurementStatus": "not_measured"
+          },
+          "browserStatus": "passed-in-named-context",
+          "evidence": [
+            "output/readiness-day-20261015/final-queue-qualification/evidence/queue-last/results.json"
+          ],
+          "limits": [
+            "Controlled backend does not establish physical Docker/Incus acceptance.",
+            "Browser reload is not host restart; admitted cancellation, interruption, revocation and host-restart no-replay require separate canonical Python evidence.",
+            "Keyboard activation is a named witness, not exhaustive sequential Tab coverage."
+          ]
+        }
+      ],
+      "evidenceContext": "synthetic controlled local backend; actual service actions/journal/HTTP/browser; no provider or physical container",
+      "qualificationStatus": "passed-in-named-context",
+      "claims": [
+        {
+          "workflow": "workspace.queued-check",
+          "expectedIndices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "variantsByExpectedIndex": {
+            "0": [
+              "desktop-keyboard"
+            ],
+            "1": [
+              "desktop-pointer"
+            ],
+            "2": [
+              "desktop-pointer"
+            ],
+            "3": [
+              "desktop-pointer",
+              "narrow-keyboard"
+            ],
+            "4": [
+              "narrow-pointer"
+            ],
+            "5": [
+              "desktop-pointer",
+              "narrow-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 22
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 23
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 26
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 29
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 30
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 31
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 34
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 35
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 37
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 39
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 40
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 41
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 44
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 45
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 46
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 47
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 50
+            }
+          ],
+          "sourceSha256": "3216406530c60eef67622701cc0a7f7ef92d339cfbbfb605fe120b22e1defab4",
+          "evidence": [
+            "output/readiness-day-20261015/final-queue-qualification/evidence/queue-last/results.json",
+            "output/readiness-day-20261015/final-queue-qualification/evidence/queue-last/artifacts/observations.json"
+          ],
+          "limits": [
+            "Controlled backend does not establish physical Docker/Incus acceptance.",
+            "Browser reload is not host restart; admitted cancellation, interruption, revocation and host-restart no-replay require separate canonical Python evidence.",
+            "Keyboard activation is a named witness, not exhaustive sequential Tab coverage."
+          ]
+        }
+      ],
+      "introducedBy": "174c3f06c1f898e413c4fb2bf5645496239d0046",
+      "build": {
+        "version": "0.20.165",
+        "id": "5f136e8e69c99e41"
+      },
+      "qualification": "docs/validation/queued-check-qualification-20261015.json",
+      "sourceHashes": {
+        "frontend/tests/standard-ux-queued-checks-browser.mjs": "3216406530c60eef67622701cc0a7f7ef92d339cfbbfb605fe120b22e1defab4",
+        "tests/fixtures/test_environments_ui_server.py": "f9f87421437eba772e1a2b7ba1c20b304ce6e5604071b8a63f1bdfb505125ae5"
+      }
     }
   ]
 }

@@ -1,22 +1,22 @@
 {
   "schemaVersion": 1,
   "reviewStatus": "scoped boundaries accepted by root; residual outcome dispositions require review; no outcome upgrade",
-  "sourceRevision": "2a5e42bb07e5b868914808f670a5b11ddca1e59c",
+  "sourceRevision": "80335d20ea2d4b33cc6dc3fb04458a86c784a6c1",
   "inventoryBaseline": "1d993e0bb32bc90b75fc66f56f1b9014c2d63f87",
-  "at": "2026-10-15T21:06:00.336865+00:00",
+  "at": "2026-10-15T21:38:05.324733+00:00",
   "policy": "All source candidates remain individually accountable. Source/file mapping and route discovery are not effect passes; ordinary alternates override Advanced labels. External capabilities and arbitrary extension authoring are not silently treated as standard built-in controls.",
   "ledgerSummary": {
-    "workflows": 198,
-    "outcomes": 663,
+    "workflows": 199,
+    "outcomes": 669,
     "outcomeStatus": {
-      "covered-in-context": 601,
+      "covered-in-context": 607,
       "partially-observed": 44,
       "not-run": 18
     },
-    "workflowsWithOutcomeEvidence": 196,
-    "workflowsAllOutcomesObservedInContext": 157,
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 158,
     "ordinaryPathStatus": {
-      "observed-in-context": 188,
+      "observed-in-context": 189,
       "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
       "reviewed-advanced-boundary-proposed": 1,
       "reviewed-advanced-only-proposed": 2,
@@ -34,7 +34,7 @@
     },
     "missingAccountability": 0,
     "baselineFiles": 126,
-    "currentCandidates": 1671,
+    "currentCandidates": 1678,
     "currentFiles": 128,
     "currentMissingAccountability": 0,
     "currentCountDelta": [
@@ -169,6 +169,22 @@
           "voice.call",
           "voice.screen"
         ]
+      },
+      {
+        "path": "frontend/src/workspace-test-environments.jsx",
+        "before": 15,
+        "current": 22,
+        "workflowCandidates": [
+          "workspace.tabs",
+          "workspace.files",
+          "workspace.details",
+          "workspace.config",
+          "workspace.review",
+          "workspace.resources",
+          "workspace.storage",
+          "workspace.environment",
+          "workspace.cleanup"
+        ]
       }
     ]
   },
@@ -201,12 +217,12 @@
     ],
     "build": {
       "version": "0.20.165",
-      "id": "a8b8c4f8468eb04d"
+      "id": "5f136e8e69c99e41"
     },
     "appAssets": [
       {
-        "path": "amplifier_web/static/assets/app-BYyxLBwp.js",
-        "sha256": "70e64b588ba44893d233e476fd5c2b5579703035337e9bd64e26b4aa6c6de138"
+        "path": "amplifier_web/static/assets/app-DvPPLJUO.js",
+        "sha256": "66c671405472f1933866236f77e699bea514f07a12e17136c934037d2873b8f3"
       }
     ],
     "markers": [

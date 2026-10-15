@@ -1,9 +1,9 @@
 # Standard UX qualification
 
-The inventory contains **198 workflows and 663 expected outcomes**.
-The current evidence ledger records **601 outcomes observed in a
+The inventory contains **199 workflows and 669 expected outcomes**.
+The current evidence ledger records **607 outcomes observed in a
 named context, 44 partially observed, and 18 not run**.
-**157 workflows** have every inventoried outcome
+**158 workflows** have every inventoried outcome
 observed in some context. These figures describe exact evidence, not universal
 device, provider, security or performance acceptance.
 
@@ -11,10 +11,17 @@ Ordinary navigation and outcome completion are separate:
 
 | Workflow accounting | Count | Meaning |
 | --- | ---: | --- |
-| Ordinary path observed | 188 | Named public actions and expected results have browser evidence. Broader outcomes can still be partial. |
+| Ordinary path observed | 189 | Named public actions and expected results have browser evidence. Broader outcomes can still be partial. |
 | Ordinary UI with platform limit | 1 | Workspace environment controls use an isolated synthetic manager; real nested-platform allocation is not qualified. |
 | Advanced or boundary audit | 3 | Bundle internals, computer/screen controls and rollback are outside ordinary navigation. Supplemental proof remains. |
 | Crosscutting audit | 6 | Keyboard, responsive layout, async behavior, privacy, performance and dynamic discovery are audits across controls, not unvisited destinations. |
+
+The frozen prior snapshot had 198 workflows/663 outcomes and 601 covered-in-context outcomes.
+The declared PR #781 queue delta adds one ordinary workflow and six newly observed
+outcomes. It does not relabel the frozen baseline. The combined queue qualification
+records 123 changed backend tests, 22 final read-admission tests, 33 affected component
+tests, and the original environment, final held-plan and new queued-result browser
+journeys. Physical Docker/Incus and provider acceptance remain separate.
 
 Root accepted this scoped accounting, **not full completion**. Each of the
 **62 residual outcomes** has its own rationale, exact supporting
