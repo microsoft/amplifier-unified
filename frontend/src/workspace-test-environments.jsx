@@ -7,17 +7,19 @@ function unwrap(outer){
 }
 
 export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
- const form=useId(),visit=useRef(0),inFlight=useRef(false),live=useRef(active);
+ const form=useId(),visit=useRef(0),inFlight=useRef(false),live=useRef(active),mounted=useRef(false);
  const key='amplifier-test-environment:'+workspaceId+':'+sessionId;
  const [draft,setDraft]=useState(()=>{try{return JSON.parse(sessionStorage.getItem(key))||{profileId:'linux-python',command:'',pending:null}}catch{return {profileId:'linux-python',command:'',pending:null}}});
  const [page,setPage]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[request,setRequest]=useState(null),[removing,setRemoving]=useState(null);
  const pending=useRef(draft.pending);
- const retain=(value,required=false)=>{try{sessionStorage.setItem(key,JSON.stringify(value))}catch{if(required)return false}pending.current=value.pending;setDraft(value);return true};
+ const retain=(value,required=false)=>{try{sessionStorage.setItem(key,JSON.stringify(value))}catch{if(required)return false}pending.current=value.pending;if(mounted.current)setDraft(value);return true};
  const refresh=async()=>{
   const token=++visit.current;
   try{const value=unwrap(await act('workspace.environments.read',{workspaceId,sessionId}));if(live.current&&token===visit.current){setPage(value);setRequest(null);setError('')}}
   catch(e){if(live.current&&token===visit.current)setError(e.message)}
  };
+ // Hidden panels still own pending requests; only unmount ends their UI lifetime.
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  useEffect(()=>{live.current=active;if(active)refresh();return()=>{live.current=false;visit.current++}},[active,workspaceId,sessionId]);
  const mutate=async(action,args={})=>{
   if(inFlight.current||!active||readOnly)return;
@@ -29,7 +31,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    const cleared=retain({...draft,pending:null},true);
    if(live.current){setRequest(result.request||null);setRemoving(null);await refresh();if(!cleared)setError('The response was received, but this tab could not clear its saved request. Check the same request after browser storage is available.')}
   }catch(e){if(e.confirmed)retain({...draft,pending:null},true);if(live.current)setError(e.message||'No confirmed response. Check the same request before trying another change.')}
-  finally{inFlight.current=false;if(live.current)setBusy(false)}
+  finally{inFlight.current=false;if(mounted.current)setBusy(false)}
  };
  const rows=page?.items||[],capability=page?.capability,blocked=busy||!!draft.pending||!active||readOnly||capability?.status!=='ready';
  const last=request||rows.map(row=>row.lastOperation).filter(Boolean).sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))[0];
