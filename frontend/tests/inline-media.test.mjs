@@ -4,6 +4,7 @@ import {GifPlayer} from '../src/gif-player.js';
 import {MediaReporter} from '../src/media-reporter.js';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import {isNavigationAction} from '../src/conversation-navigation.js';
 
 test('finite loops end without allocating another frame and never autoplay',async()=>{
  let callback,closed=0,calls=0;
@@ -373,6 +374,7 @@ test('actual App Settings-leaving guard cancels GIF admission visibly without a 
  assert.ok(start>=0&&end>start);let confirmations=0,requests=0;
  const dispatch=runInNewContext(`${source.slice(start,end)} },[acceptState,handleEffects,awaitState]);\ndispatch`,{
   useCallback:fn=>fn,acceptState(){},handleEffects(){},awaitState(){},
+  isNavigationAction,archiveRevision:{current:0},
   settingsNavigation:{current:{hasUnsaved:()=>true,confirmClose:async()=>{confirmations++;return false}}},
   request:()=>{requests++;assert.fail('Cancelled Settings navigation issued a host command')}
  });
