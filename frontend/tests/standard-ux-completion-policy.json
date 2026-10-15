@@ -1920,6 +1920,138 @@
       "limits": [
         "Files/history-byte preservation and independent membership checks remain partial."
       ]
+    },
+    {
+      "workflow": "nav.mark-unread",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open exact conversation Details",
+        "Choose Mark unread after reviewed prerequisite",
+        "Observe only that attention fingerprint becomes unread"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "composer.bundle",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open Conversation bundle or narrow Options",
+        "Choose registered bundle and reload",
+        "Inspect selected chat effective bundle and busy protection"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic runtime; no external module preparation acceptance."
+      ]
+    },
+    {
+      "workflow": "composer.busy",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Observe readable saved response while synthetic work runs",
+        "Open Options and inspect disabled authority controls",
+        "Close without sending or changing choice"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic active state; component-only transitions are separate supplemental evidence."
+      ]
+    },
+    {
+      "workflow": "canvas.open-close",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open retained Canvas resource and edit",
+        "Close and reopen through public control",
+        "Use focused view Tab and Escape, verify exact chat anchor/draft"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Custom resource fixture setup; actual controls and mounted identity asserted."
+      ]
+    },
+    {
+      "workflow": "canvas.theme-review",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open requested appearance review",
+        "Inspect unchanged theme before explicit approval",
+        "Decline or supersede and reject old authority"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic Canvas app; stale negative controls use shared API."
+      ]
+    },
+    {
+      "workflow": "delivery.history-error",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open unreadable saved native conversation",
+        "Observe stable error and unchanged files",
+        "Restore readability then activate exact Retry"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Real synthetic file permission refusal; no full-family-read spy, retained separately as partial outcome3."
+      ]
+    },
+    {
+      "workflow": "connections.default-model",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Open AI connections and exact account",
+        "Choose default model and reload",
+        "Use Check connection, distinct from message Test"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Idle synthetic chat only; active worker boundary outcome1 remains partial."
+      ]
+    },
+    {
+      "workflow": "privacy.file-policy",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Open Privacy and files then File access",
+        "Edit global allow/deny lists and observe rejected save retention",
+        "Explicitly retry and reload exact persisted policy"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "No active worker or filesystem enforcement acceptance; outcome1 remains partial."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
