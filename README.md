@@ -137,6 +137,14 @@ agent provider choices, and per-delegation model pins take precedence over
 default role routing. Unavailable requested child routes fail visibly rather
 than silently substituting the session default.
 
+For ordinary roots already including the upstream logging behavior, its ambient
+URL/key placeholders alone no longer opt into forwarding; configure a destination
+or explicit scoped legacy URL/key settings. An explicit empty destination map
+still disables forwarding. A named agent's explicit provider/model pin also
+outranks a call's role-based default; pass explicit `provider_preferences` to
+override that pin. Snapshot roots retain their saved composition and prior
+routing lifecycle rather than adopting this ordinary-root policy.
+
 ## Create a dedicated desktop or mobile app
 
 You can add Unified to a desktop or mobile device as its own app-like window or home-screen icon. This does not install or move the Unified service; it opens the same workspace more directly.

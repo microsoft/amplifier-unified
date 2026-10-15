@@ -242,3 +242,35 @@ async def test_explicit_legacy_ci_settings_are_not_shadowed_by_new_empty_default
         settings={'overrides': {'hook-context-intelligence': {'config': chosen}}})
     config = next(row['config'] for row in result.hooks if row['module'] == 'hook-context-intelligence')
     assert config['destinations'] == {}
+
+
+async def test_default_ci_hook_keeps_existing_sibling_repository_pin(tmp_path, monkeypatch):
+    repository = 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@'
+    tool_source = repository + 'explicit#subdirectory=modules/tool-context-intelligence-transcript'
+    hook_source = repository + 'main#subdirectory=modules/hook-context-intelligence'
+    root = Bundle(name='chosen', tools=[{'module': 'tool-context-intelligence-transcript',
+                                        'source': tool_source}])
+    async def load(registry, config, reference):
+        behavior = addition(CONTEXT_INTELLIGENCE_BEHAVIOR_URI)
+        behavior.hooks[0]['source'] = hook_source
+        behavior.tools[0]['source'] = tool_source.replace('@explicit#', '@main#')
+        return behavior, reference
+    monkeypatch.setattr('amplifier_web.host.session.load_configured_bundle', load)
+    config = HostConfig(tmp_path / 'app', tmp_path, {
+        'bundle': {'app': [CONTEXT_INTELLIGENCE_BEHAVIOR_URI]},
+        'web_bundles': {'excluded': [uri for uri in DEFAULT_BEHAVIORS if uri != CONTEXT_INTELLIGENCE_BEHAVIOR_URI]},
+    }, tmp_path / 'registry')
+    result = await compose_configured_bundle(None, root, config)
+    assert next(row for row in result.tools if row['module'] == 'tool-context-intelligence-transcript')['source'] == tool_source
+    assert next(row for row in result.hooks if row['module'] == 'hook-context-intelligence')['source'] == hook_source.replace('@main#', '@explicit#')
+
+
+async def test_existing_root_ambient_placeholders_are_not_explicit_forwarding(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL', 'https://ambient.invalid')
+    monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY', 'ambient-synthetic')
+    root = Bundle(name='chosen', hooks=addition(CONTEXT_INTELLIGENCE_BEHAVIOR_URI).hooks)
+    result = await composed(tmp_path, monkeypatch, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, root)
+    ci = next(row['config'] for row in result.hooks if row['module'] == 'hook-context-intelligence')
+    assert ci['destinations'] == {}
+    assert ci['context_intelligence_server_url'] == ''
+    assert ci['context_intelligence_api_key'] == ''

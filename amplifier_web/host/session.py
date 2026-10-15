@@ -542,7 +542,8 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
         # version. Reuse their effective source for child/sibling declarations.
         for row in loaded.hooks:
             if row.get("module") in {"hook-context-intelligence", "hooks-routing"}:
-                components.select(row["module"], config.module_sources.get(row["module"]) or row.get("source"))
+                components.select(row["module"], config.module_sources.get(row["module"])
+                                  or components.source(row["module"], row.get("source")))
     # Behaviors retain their own resource namespaces, but do not become the
     # selected conversation root through Foundation's last-overlay metadata.
     for key, value in root_identity.items():
