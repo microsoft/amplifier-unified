@@ -441,7 +441,20 @@ function App(){
   if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);draftJournal.bind(draftJournalEntries.current.get(payload),created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
   return created;
  }).finally(()=>{creatingSession.current=null});return creatingSession.current}
- function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=latest.current?.selectedSessionId??null;uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{for(const file of files)await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file),...(file.attachmentSource?{source:file.attachmentSource}:{})})}catch(error){reportError(error)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
+ function addFiles(files){
+  if(!files?.length||executionUnavailable||historyPending)return;
+  const target=latest.current?.selectedSessionId??null,selected=Array.from(files);
+  uploadCount.current++;setUploading(true);setError('');
+  const run=async()=>{let index=0;try{
+   for(;index<selected.length;index++){const file=selected[index];await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file),...(file.attachmentSource?{source:file.attachmentSource}:{})})}
+  }catch(error){
+   // Keep uncertain transport outcomes in the existing recovery flow. For a
+   // known file failure, explain which selection stopped this upload batch.
+   if(transportFailure(error))reportError(error);
+   else{const remaining=selected.length-index-1;setError(`${selected[index].name}: ${actionErrorMessage(error)}${remaining?` ${remaining} remaining file${remaining===1?' was':'s were'} not uploaded.`:''}`)}
+  }finally{uploadCount.current--;setUploading(uploadCount.current>0)}};
+  uploadQueue.current=uploadQueue.current.then(run,run);
+ }
  async function deliver(entry){
   if(deliveries.current.has(entry.id))return;
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
