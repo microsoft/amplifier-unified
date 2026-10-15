@@ -24,6 +24,25 @@ def settings_page(view, canvas=None):
     return next(iter(expanded), None) or {'capabilities': 'app-bundles', 'maintenance': 'updates'}.get(view.get('settingsSection'), 'ai-connections')
 
 
+def worker_history_count(state):
+    """Whether the bundled view can display the selected chat's child count.
+
+    Chat work and Canvas overview expose the history button. Canvas is kept
+    conservative here: its client-owned artifact views are projected later, so
+    an open non-settings Canvas may need the count. Ordinary chat streaming
+    with Canvas closed must not query dormant worker history on every frame.
+    """
+    view = state.get('view', {})
+    panel = view.get('panel')
+    if panel in {'chat-work', 'subagent-history'}:
+        return True
+    if panel == 'runtime' and view.get('runtimeDraft', {}).get('tab') == 'direction':
+        return True
+    return (view.get('workSurface', 'chat') == 'chat'
+            and bool(state.get('canvas', {}).get('open'))
+            and not view.get('settingsCanvas'))
+
+
 def project(result):
     view = result.get('view', {})
     panel, page = view.get('panel'), settings_page(view, result.get('canvas'))
