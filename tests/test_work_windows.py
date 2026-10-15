@@ -274,6 +274,33 @@ async def test_passive_browser_interest_never_enters_full_history_projection(tmp
 
 
 @pytest.mark.asyncio
+async def test_six_browser_interests_rotate_past_four_active_read_slots(tmp_path, monkeypatch):
+    from amplifier_web.event_log_view import EventLogView
+    service = SimpleNamespace(data_dir=tmp_path, closed=False,
+        queue_clients={str(i): str(i) for i in range(6)},
+        queue_sessions={str(i): None for i in range(6)},
+        clients=SimpleNamespace(records={str(i): {'kind': 'web', 'selectedSessionId': str(i)} for i in range(6)}),
+        _state={})
+    view = EventLogView(service)
+    admitted, current = set(), []
+    ticks = 0
+    def request(identity):
+        if len(current) < 4:
+            current.append(identity)
+            admitted.add(identity)
+    view.windows.request = request
+    async def next_iteration(_):
+        nonlocal ticks
+        assert len(current) == 4
+        current.clear()
+        ticks += 1
+        service.closed = ticks == 3
+    monkeypatch.setattr('amplifier_web.event_log_view.asyncio.sleep', next_iteration)
+    await view.loop()
+    assert admitted == {str(i) for i in range(6)}
+
+
+@pytest.mark.asyncio
 async def test_http_work_pages_use_exact_window_cursor_without_hydrating(authenticated_client, tmp_path, monkeypatch):
     from amplifier_web.server import create_app
     from test_service import Runtime

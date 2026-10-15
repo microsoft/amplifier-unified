@@ -897,7 +897,12 @@ class EventLogView:
                 if identity:
                     (web if client and record.get('kind') == 'web' else complete).add(identity)
             self.windows.retain_interest(web)
-            for identity in web:
+            requested = sorted(web)
+            if requested:
+                offset = self._interest_cursor % len(requested)
+                requested = requested[offset:] + requested[:offset]
+                self._interest_cursor += 1
+            for identity in requested:
                 self.windows.request(identity)
             for identity in complete:
                 if self.projector is not None:
