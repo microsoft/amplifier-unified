@@ -12,7 +12,7 @@ from .resource_files import detached_signature, project_detached
 
 ERROR = 'Choose an existing saved assistant message in this conversation.'
 SCALAR_FIELDS = ('id', 'role', 'nativeIndex', 'nativeMessageId', 'source',
-                 'observation', 'observation_id')
+                 'observation', 'observation_id', 'displayOnly')
 OVERSIZED = object()
 
 
@@ -284,7 +284,7 @@ def discover(stream, value, message_id, facts):
     aliases, canonical = set(), 0
     for row in claimants:
         if (not valid_id(row.get('id')) or row.get('role') != 'assistant'
-                or row.get('observation') or row.get('observation_id')
+                or row.get('observation') or row.get('observation_id') or row.get('displayOnly')
                 or type(row.get('nativeIndex')) is not int or row['nativeIndex'] != fact[3]
                 or row.get('nativeMessageId') not in (None, fact[0])
                 or row_identity(stream, value, row) != fact[0]):

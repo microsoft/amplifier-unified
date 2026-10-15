@@ -28,7 +28,7 @@ def snapshot(session, message_id):
             if rows:
                 raise ValueError(ERROR)
             rows.append(row)
-    if rows and (rows[0].get('role') != 'assistant'
+    if rows and (rows[0].get('role') != 'assistant' or rows[0].get('displayOnly')
                  or rows[0].get('observation') or rows[0].get('observation_id')):
         raise ValueError(ERROR)
     aliases = []
@@ -46,9 +46,9 @@ def snapshot(session, message_id):
             'coldMessages': copy.deepcopy(dict.get(session, '_coldFields', {}).get('messages')),
             'claimants': [{key: copy.deepcopy(row.get(key)) for key in
                            ('id', 'role', 'nativeIndex', 'nativeMessageId', 'source', 'text',
-                            'observation', 'observation_id')} for row in aliases],
+                            'observation', 'observation_id', 'displayOnly')} for row in aliases],
             'rows': [{key: copy.deepcopy(row.get(key)) for key in
-                      ('id', 'role', 'nativeIndex', 'nativeMessageId', 'source', 'text')}
+                      ('id', 'role', 'nativeIndex', 'nativeMessageId', 'source', 'text', 'displayOnly')}
                      for row in rows]}
 
 
@@ -77,7 +77,7 @@ def check_claimants(value, message_id, fact, rows, canonical_ids):
     for row in rows:
         text = row.get('text', '')
         if (not valid_id(row.get('id')) or row.get('role') != 'assistant'
-                or row.get('observation') or row.get('observation_id')
+                or row.get('observation') or row.get('observation_id') or row.get('displayOnly')
                 or type(row.get('nativeIndex')) is not int or row['nativeIndex'] != fact[3]
                 or row.get('nativeMessageId') not in (None, fact[0])
                 or not isinstance(text, str)
@@ -104,7 +104,7 @@ def resident_claimants(session, message_id, fact):
     messages = dict.get(session, 'messages', [])
     result = []
     fields = ('id', 'role', 'nativeIndex', 'nativeMessageId', 'source',
-              'observation', 'observation_id')
+              'observation', 'observation_id', 'displayOnly')
     for row in messages:
         if not isinstance(row, dict):
             raise ValueError(ERROR)

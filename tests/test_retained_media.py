@@ -134,16 +134,20 @@ async def test_native_display_only_id_cannot_admit_media_or_replace_saved_proof(
         await app.dispatch('outputs.attachMedia', args, command_id='new-window-admission')
 
 
-async def test_cold_display_only_alias_never_becomes_canonical_admission(media_app, monkeypatch):
+@pytest.mark.parametrize('cold', [False, True])
+@pytest.mark.parametrize('spelling', ['alias', 'canonical'])
+async def test_cold_display_only_alias_never_becomes_canonical_admission(media_app, monkeypatch, cold, spelling):
     """Dependency discriminator: the detached alias owner must retain the flag."""
     app = media_app
-    session, _, _, _, _ = cold_alias_corpus(app)
-    args = {**media_args_without_hydration(session), 'messageId': 'saved-web-assistant'}
+    session, _, _, _, canonical = cold_alias_corpus(app)
+    args = {**media_args_without_hydration(session),
+            'messageId': 'saved-web-assistant' if spelling == 'alias' else canonical}
     session['messages'][0]['displayOnly'] = True
-    app._state['selectedSessionId'] = None
-    monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
-    assert session['id'] in app.cold_display.retire(force=True)
-    assert not dict.__contains__(session, 'messages')
+    if cold:
+        app._state['selectedSessionId'] = None
+        monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+        assert session['id'] in app.cold_display.retire(force=True)
+        assert not dict.__contains__(session, 'messages')
     with pytest.raises(ValueError):
         await app.outputs.media.attach(args, 'ui', 'cold-window-admission')
     assert app.outputs.store.list(session['id'])['items'] == []
