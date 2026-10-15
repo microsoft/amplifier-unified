@@ -21,6 +21,7 @@ class PerformanceDiagnostics:
         self.lag = deque(maxlen=60)
         self.resource_rebuilds = deque(maxlen=60)
         self.projection_failures = deque(maxlen=16)
+        self.shell_queries = deque(maxlen=60)
         self.resource_rebuild_counts = {'total': 0, 'byReason': {}, 'byResource': {}}
         self.lock = threading.Lock()
         self.task = None
@@ -83,6 +84,23 @@ class PerformanceDiagnostics:
             with self.lock:
                 self.projection_failures.append({'at': time.time(), 'reason': reason, **value})
 
+    def record_shell_query(self, operation, section, queued_at, started_at, result, *, accepted):
+        """Bounded scheduling facts; no page keys, query text or source paths."""
+        if operation not in {'chats', 'workspace_counts', 'pinned_navigation'}:
+            return
+        section = section if section in {'recent', 'shortcuts', 'pinned', 'search'} else None
+        stats = result.get('stats', {})
+        row = {'at': time.time(), 'operation': operation, 'section': section,
+               'queueWaitMs': round(max(0, started_at - queued_at) * 1000, 2),
+               'readMs': round(max(0, time.monotonic() - started_at) * 1000, 2),
+               'accepted': bool(accepted)}
+        for key in ('vmSteps', 'decodedRows', 'elapsedMs', 'threadCpuMs'):
+            value = stats.get(key)
+            if type(value) in (int, float) and 0 <= value < float('inf'):
+                row[key] = round(value, 2)
+        with self.lock:
+            self.shell_queries.append(row)
+
     async def _heartbeat(self):
         while True:
             started = time.monotonic()
@@ -109,6 +127,7 @@ class PerformanceDiagnostics:
                     'slowOperations': [dict(row) for row in self.slow],
                     'eventLoopDelays': [dict(row) for row in self.lag],
                     'historyProjectionFailures': [dict(row) for row in self.projection_failures],
+                    'shellQueries': [dict(row) for row in self.shell_queries],
                     'shellResourceRebuilds': {'total': self.resource_rebuild_counts['total'],
                         'byReason': dict(self.resource_rebuild_counts['byReason']),
                         'byResource': dict(self.resource_rebuild_counts['byResource']),
