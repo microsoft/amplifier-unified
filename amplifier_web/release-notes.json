@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.161",
+      "title": "Keep navigation current while conversations are working",
+      "changes": [
+        "Sidebar activity follows current conversation state while navigation pages refresh. Workspace highlighting follows the current view instead of a remembered workspace route.",
+        "Pinned and recent queries can finish while busy conversations update unchanged native recency. Changes to visible titles, membership, availability, or ordering still refresh their results.",
+        "Ordinary conversation streaming no longer counts hidden worker history. Work controls and open worker history still receive current counts when needed."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.160",
       "title": "Keep open Work details current as responses finish",
       "changes": [
