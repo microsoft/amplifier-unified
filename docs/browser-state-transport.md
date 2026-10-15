@@ -109,6 +109,14 @@ pin rows remain selectable, but cannot start a reorder until current coverage
 returns. A failed Recent read keeps its prior rows and Retry without also claiming
 that it is still loading.
 
+Current activity for visible, admitted chat owners travels separately as the
+bounded context map `navigationActivityById`. The sidebar overlays those exact-ID
+facts on retained page rows while membership, order and counts remain pending;
+it does not query or hydrate dormant histories to refresh an icon. Removing a
+context entry falls back to that page's activity, without borrowing another
+owner's status. Workspace highlighting follows the current chat/workspace route,
+not a remembered workspace browsing location from a different route.
+
 The server reuses immutable resource values while semantic dependencies match.
 Workspace explorer and shortcut aggregates have a separate directory generation:
 root membership, placement, stable recency, activity and notice/read facts can

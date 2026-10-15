@@ -5,6 +5,11 @@ export function sessionIdentity(chat){
 }
 
 export function activityFor(chat,state){
+ // Page membership can be retained while a catalog read is pending. Current
+ // admitted-owner activity arrives separately in the bounded shell context.
+ const activities=state?.navigationActivityById;
+ const current=activities&&Object.hasOwn(activities,chat.id)?activities[chat.id]:null;
+ if(current)return current;
  if(chat.activity)return chat.activity;
  if(chat.approvals?.some(row=>row.status==null||row.status==='pending'))return {kind:'attention',label:'Approval requested'};
  if(chat.questions?.some(row=>row.status==='pending'&&row.required))return {kind:'attention',label:'Answer requested'};
