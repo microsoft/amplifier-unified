@@ -134,7 +134,12 @@ async def test_previews_are_bounded_and_independent_of_full_browser_filters(app,
         assert [row['id'] for row in snapshot['sidebarNavigation']['pinned']['items']] == ['chat-0']
         await app.dispatch('shell.view.update', {'clientId':'reader','instanceId':'chats','patch':{'navRecentView':{'navFilter':''}}})
         page=app.shell.inspect('reader',snapshots=True)['snapshots']['chats']['sidebarNavigation']['recent']
-        assert page['total']==69 and len(page['items'])==40 and page['pages']==2
+        assert page['total']==70 and len(page['items'])==40 and page['pages']==2
+        assert [row['id'] for row in page['items']] == [f'chat-{i}' for i in range(69, 29, -1)]
+        await app.dispatch('shell.view.update', {'clientId':'reader','instanceId':'chats','patch':{'navRecentView':{'navFilter':'Chat 0'}}})
+        pinned_match=app.shell.inspect('reader',snapshots=True)['snapshots']['chats']['sidebarNavigation']['recent']
+        assert pinned_match['total'] == 1
+        assert [row['id'] for row in pinned_match['items']] == ['chat-0']
 
 
 async def test_quiet_recent_preferences_survive_two_clients_two_modules_and_reload(app, tmp_path):
@@ -427,7 +432,9 @@ async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_client
         await app.dispatch('shell.view.update', {'clientId': 'reader', 'instanceId': 'chats',
                                               'patch': {'navRecentView': {'navFilter': 'engineering'}}})
         before = deepcopy({key: app.state[key] for key in ('sessions', 'selectedSessionId', 'selectedWorkspaceId', 'view', 'canvas', 'pinnedSessionIds')})
-        before_pages = deepcopy(app.shell.inspect('reader', snapshots=True)['snapshots']['chats']['sidebarNavigation'])
+        before_query = app.shell.inspect('reader', snapshots=True)['snapshots']['chats']
+        before_pages = deepcopy(before_query['sidebarNavigation'])
+        before_shortcut_ids = [row['workspaceId'] for row in before_query['workspaceShortcuts']]
         def forbidden(*_args, **_kwargs):
             raise AssertionError('Pin actions must not rewrite sessions, scan folders or flush pending progress')
         with monkeypatch.context() as patch:
@@ -445,12 +452,13 @@ async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_client
         assert all(app.state[key] == value for key, value in before.items())
         query = app.shell.inspect('reader', snapshots=True)['snapshots']['chats']
         assert query['pinnedWorkspaceIds'] == [ids[0][0], empty_id]
-        assert [row['workspaceId'] for row in query['workspaceShortcuts'][:2]] == [ids[0][0], empty_id]
-        assert query['workspaceShortcuts'][1]['chatCount'] == 0
+        assert [row['workspaceId'] for row in query['workspaceShortcuts']] == before_shortcut_ids
+        assert {ids[0][0], empty_id} <= set(before_shortcut_ids)
+        assert next(row for row in query['workspaceShortcuts'] if row['workspaceId'] == empty_id)['chatCount'] == 0
         assert query['sidebarNavigation'] == before_pages
         workspace_query = app.shell.inspect('reader', snapshots=True)['snapshots']['workspaces']
         assert workspace_query['pinnedWorkspaceIds'] == query['pinnedWorkspaceIds']
-        assert workspace_query['workspaceShortcuts'][:2] == query['workspaceShortcuts'][:2]
+        assert workspace_query['workspaceShortcuts'] == query['workspaceShortcuts']
     with app.clients.bind('other'):
         assert app.clients.record() == other
         assert app.shell.client('other') == other_shell
