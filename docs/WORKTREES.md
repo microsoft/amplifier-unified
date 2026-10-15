@@ -26,7 +26,11 @@ The original task resumes only on a later explicit input or separately reviewed
 authorized scheduler admission. Internal handoff does not increment the user stop
 epoch. Scheduled work must bind executionRevision and defer configurationBusy.
 
-Release failure, process death or an interrupted commit is visible as unknown.
+An initial writer-ownership refusal before any release request is rejected: the
+source stays unchanged and that attempt leaves no execution fence. Release
+failure after that boundary, process death or an interrupted commit is visible as unknown.
+Previously unknown receipts are not reclassified by this distinction; a newly
+rejected reconciliation leaves the original unknown receipt fenced.
 Restart never resumes the handoff automatically. Reconcile requires current
 receipt revision and a user's finding; choose the old source or intended target,
 confirm cooperative writer release again, and record a new receipt. Agent-mediated

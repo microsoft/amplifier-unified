@@ -488,8 +488,9 @@ class Worktrees:
                     self.save(previous)
                 self.changed()
         except BaseException as exc:
+            from .runtime import HandoffNotStartedError
             async with self.app.lock:
-                if record.get('step') == 'preflight':
+                if record.get('step') == 'preflight' or isinstance(exc, HandoffNotStartedError):
                     record.update(phase='rejected', revision=record['revision']+1,
                         detail='Handoff was rejected before runtime release. The source execution folder is unchanged. ' + str(exc)[:1000])
                     self.app._session(record['sessionId'])['configurationBusy'] = False
