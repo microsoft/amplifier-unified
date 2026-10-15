@@ -29,7 +29,11 @@ async def main(home):
     app['control_token']='fixture-browser-control-token';service=app['service']
     await service.dispatch('session.create',{'title':'Output task'});sid=service._session()['id']
     original='A reusable draft:\n:::writing{variant="document" id="12345"}\nOriginal writing copy.\n:::'
-    service._message(service._session(),'assistant',original,'text');service._publish()
+    service._message(service._session(),'assistant',original,'text')
+    if '--canvas-reading' in sys.argv:
+        for index in range(80):
+            service._message(service._session(),'assistant',f'Canvas reading marker {index:02}', 'text')
+    service._publish()
     await service.dispatch('view.update',{'patch':{'draft':'Keep output draft'}})
     async def inspect(request):
         return web.json_response({'selected':service.state['selectedSessionId'],'draft':service.state['view']['draft'],'sent':runtime.sent,

@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "applicationBase": "8e7730f8af0958b5665a92df28b4fa9ddb085512",
+  "build": {
+    "version": "0.20.165",
+    "id": "20909ea1a05ec437"
+  },
+  "context": "Owned DTU; synthetic saved artifacts; real built browser client. Functional shared load, not interaction latency.",
+  "sourceFiles": {
+    "frontend/tests/canvas-apps-browser.mjs": "163ace6475aa4fb463d1f6aed1a5076cc019bd6b1802605d9c31629ff85e0565",
+    "frontend/tests/canvas-dirty-browser.mjs": "ee71c8b0c32c05c89c9956851f9f031c59f335afa38d119c72d4eff157ec4280",
+    "frontend/tests/standard-ux-canvas-files-browser.mjs": "7dd2bc77cc0a131cae6766359e3551cc14926c91c6b15f4b79c0a1f02fb08818",
+    "frontend/tests/standard-ux-canvas-formats-browser.mjs": "1ac2a41601d2fea65dc90ee73753c90bc88260de9aa237acf7ec9c9794c3b94d",
+    "frontend/tests/canvas-renderers-browser.mjs": "ae2410d8953bc468f480a1e01be1cfda4545b2158822224cc277ddb9e6c52e49",
+    "tests/fixtures/outputs_ui_server.py": "54046840cbfa1902763caf1e72c091624890f193557e6cfb3db8425286174919",
+    "frontend/tests/inline-media-browser.mjs": "c9c722907f668aa577c8bb08e251db2e763198545e4271cf5629e0a566e137c5"
+  },
+  "runs": [
+    {
+      "batch": "firstb",
+      "scenario": "canvas-apps",
+      "status": "failed",
+      "durationSeconds": 3.067,
+      "scriptSha256": "086f531766a7cedda1fed0f4033d1a62d4affd498c0a2ad1292ad21e29cabab4",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "firstb",
+      "scenario": "canvas-dirty",
+      "status": "passed",
+      "durationSeconds": 4.782,
+      "scriptSha256": "ee71c8b0c32c05c89c9956851f9f031c59f335afa38d119c72d4eff157ec4280",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "firstb",
+      "scenario": "standard-ux-canvas-files",
+      "status": "passed",
+      "durationSeconds": 3.063,
+      "scriptSha256": "7dd2bc77cc0a131cae6766359e3551cc14926c91c6b15f4b79c0a1f02fb08818",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "firstb",
+      "scenario": "standard-ux-canvas-formats",
+      "status": "passed",
+      "durationSeconds": 2.811,
+      "scriptSha256": "1ac2a41601d2fea65dc90ee73753c90bc88260de9aa237acf7ec9c9794c3b94d",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "firstb",
+      "scenario": "canvas-renderers",
+      "status": "passed",
+      "durationSeconds": 5.569,
+      "scriptSha256": "ae2410d8953bc468f480a1e01be1cfda4545b2158822224cc277ddb9e6c52e49",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "second",
+      "scenario": "canvas-apps",
+      "status": "passed",
+      "durationSeconds": 5.368,
+      "scriptSha256": "163ace6475aa4fb463d1f6aed1a5076cc019bd6b1802605d9c31629ff85e0565",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "gif",
+      "scenario": "inline-media",
+      "status": "passed",
+      "durationSeconds": 20.941,
+      "scriptSha256": "c9c722907f668aa577c8bb08e251db2e763198545e4271cf5629e0a566e137c5",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    }
+  ],
+  "initialFailure": "New test assumed optional themePreview was false; actual undefined also means no preview. Replaced only with not-true, retaining exact rendered accent, canonical theme and draft checks. Initial failed run preserved.",
+  "observations": [
+    "Public theme review does not alter rendered accent or saved theme before approval; Back preserves pending request and draft; approve/apply/revert work.",
+    "Declined and superseded requests cannot acquire approval authority through a later shared action. Reload/restore retain exact request IDs/statuses without repeated request-state effects.",
+    "A renderer-local UUID and unsaved text remain mounted through public Canvas close/reopen and refused replacement operations.",
+    "Focus dialog wraps Tab/Shift+Tab and returns focus on Escape; close/reopen preserves exact message identity and pane-relative reading anchor within 3px.",
+    "Text/code/Markdown/JSON/HTML retain exact saved source and expected display; desktop and narrow HTML iframe stay within panel/page. Malformed JSON retains source and usable public Source recovery.",
+    "Existing custom-renderer journey passes actual failure fallback and recovery without changing draft/source.",
+    "Selected GIF phases passed with a 19,121,707-byte 1280x720 26-frame source: exact identity/hash, real pixels/play/pause/reduced motion, close decoder disposal, retained source after original removal and reload, peer draft/Canvas isolation, queued dirty refusal, decode failure, authenticated tuple/Range endpoints and narrow layout. No automatic runtime calls observed."
+  ],
+  "limits": [
+    "Artifact/renderer setup uses public APIs; this does not prove authoring controls.",
+    "Stale request approval refusals are direct shared-action negative controls, not a visible UI entry.",
+    "Request-state equality does not prove arbitrary external effects were never repeated.",
+    "Focus trap applies only to focused dialog; ordinary Canvas panel is modeless.",
+    "Reading anchor was positioned by locator before real close/reopen, not a physical scroll gesture.",
+    "No new PDF, browser, 3D, OS media codec, dirty cancellation focus, or unknown external-effect outcome proof.",
+    "Media and diagrams have separately sourced prior evidence; no full-family or all-variant claim.",
+    "All unselected inline-media phases are explicitly NOT_RUN, including the dedicated preservation/hidden-read phases and MP4 variants. GIF results do not replace those missing claims."
+  ],
+  "privateEvidence": "output/readiness-day-20261015/canvas-ordinary/",
+  "selectedMediaPhases": [
+    "gif-live-attach",
+    "gif-canvas",
+    "gif-canvas-errors",
+    "endpoints",
+    "layout"
+  ]
+}
