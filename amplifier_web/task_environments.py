@@ -246,6 +246,28 @@ def capacity(app, config):
         return {'available': False, 'blockers': [{'code': 'capacity_unknown'}]}
 
 
+def confirmed_result(row, request):
+    return (request.get('state') in {'completed', 'failed'}
+            and request.get('resourceId') == row['id']
+            and request.get('sessionId') == row['sessionId']
+            and request.get('action') in {'workspace.environments.' + action for action in ('start', 'execute', 'stop', 'remove')}
+            and isinstance(request.get('result'), dict))
+
+
+def project_result(home, row, request):
+    """Rebuild resource metadata from its exact receipt without another effect."""
+    result = request['result']
+    action = request['action'].rsplit('.', 1)[-1]
+    changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
+    if result.get('admissionDenied'):
+        changes['backendAdmitted'] = False
+    environment_state = ('running' if result.get('ok') else 'unknown') if action == 'execute' else result.get('status', 'unknown')
+    if action == 'remove' and result.get('ok') and environment_state == 'removed':
+        changes['status'] = 'retired'
+    changes.update(pendingRequest=None, environmentState=environment_state, lastOperation=request, reason=result.get('message'))
+    return save(home, row, **changes)
+
+
 def effect(app, row, action, args, config, request, admit):
     home, sid = app.data_dir, row['sessionId']
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
@@ -257,6 +279,10 @@ def effect(app, row, action, args, config, request, admit):
         row = get(home, sid, row['id'])
         if action != 'start' and row['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
+        if row.get('pendingRequest') and row['pendingRequest'] != request['requestId']:
+            prior = app.operations.requests.read(sid, row['pendingRequest'])
+            if confirmed_result(row, prior):
+                row = project_result(home, row, prior)
         if row['backendKey'] != config_key(config):
             raise ValueError('The approved backend changed. Restore its exact configuration before managing this environment.')
         if action == 'start':
@@ -288,26 +314,33 @@ def effect(app, row, action, args, config, request, admit):
         else:
             admitted = True
             result = invoke(config, home, row, action, args)
-        changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
         state = 'completed' if result.get('ok') else 'failed' if result.get('admissionDenied') else 'outcome_unknown' if admitted else 'failed'
-        if result.get('admissionDenied'):
-            changes['backendAdmitted'] = False
-        if action == 'execute':
-            environment_state = 'running' if result.get('ok') else 'unknown'
-            if result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
-                state = 'failed'
-        else:
-            environment_state = result.get('status', 'unknown')
-        if action == 'remove' and result.get('ok') and environment_state == 'removed':
-            changes['status'] = 'retired'
+        if action == 'execute' and result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
+            state = 'failed'
         request = app.operations.requests.finish(request, state, resourceId=row['id'], result=result,
             message=result.get('message', 'The result is retained; this request will not replay.'))
-        row = save(home, row, **changes, pendingRequest=None, environmentState=environment_state,
-                   lastOperation=request, reason=result.get('message'))
+        row = project_result(home, row, request)
         return {'resource': public(home, row), 'request': request}
     except BaseException as exc:
         # Hold the physical owner lock through final persistence. A rejected
         # competing request must never change the active owner's resource.
+        try:
+            recorded = app.operations.requests.read(sid, request['requestId'])
+        except (OSError, ValueError, sqlite3.Error):
+            recorded = {}
+        if confirmed_result(row, recorded):
+            # The receipt and resource projection have separate commit points.
+            # Retry only the projection; never downgrade or replay a known effect.
+            request = recorded
+            try:
+                if locked:
+                    row = project_result(home, get(home, sid, row['id']), request)
+            except (OSError, ValueError, sqlite3.Error):
+                row = {**row, 'observation': {'status': 'unverified'},
+                       'reason': 'The operation result is saved, but environment metadata could not be updated. Inspect again to repair the metadata; the operation will not replay.'}
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            return {'resource': public(home, row), 'request': request}
         request = app.operations.requests.finish(request, 'outcome_unknown' if admitted else 'failed', resourceId=row['id'],
             message=('The operation did not finish with a confirmed result. Inspect retained state; do not repeat it automatically.'
                      if admitted else 'The operation was not admitted. Read the current environment and authority before trying a new request.'))
@@ -344,12 +377,18 @@ def read(app, sid, config):
                                 reason='Preparation ended before any environment launch. Local source and evidence are retained.')
                     if row.get('pendingRequest'):
                         request = app.operations.requests.read(sid, row['pendingRequest'])
-                        if request['state'] == 'admitting':
-                            request = app.operations.requests.finish(request, 'outcome_unknown',
-                                message='The operation owner stopped before recording completion. Nothing was replayed.')
-                        row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
-                            lastOperation=request,
-                            reason='The operation owner stopped before recording completion. Nothing was replayed.')
+                        if confirmed_result(row, request):
+                            row = project_result(home, row, request)
+                        else:
+                            if request['state'] == 'admitting':
+                                request = app.operations.requests.finish(request, 'outcome_unknown',
+                                    message='The operation owner stopped before recording completion. Nothing was replayed.')
+                            row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
+                                lastOperation=request,
+                                reason='The operation owner stopped before recording completion. Nothing was replayed.')
+                    if row['status'] == 'retired':
+                        result.append(public(home, row))
+                        continue
                     if config and row.get('backendAdmitted') and row['backendKey'] == config_key(config) and storage.observe(home, row)['observation'] == 'present':
                         try:
                             observed = invoke(config, home, row, 'read', {})

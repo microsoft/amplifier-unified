@@ -278,3 +278,51 @@ async def test_result_page_fits_actual_encoded_delivery_budget(app, queue, backe
                          {**scope(app), 'requestId': 'check'}, 'read-output')
     size = len(json.dumps(result, ensure_ascii=False).encode())
     assert size < 32768, f'Actual compact app_control receipt is {size} encoded bytes'
+
+
+@pytest.mark.parametrize('phase', ['start', 'execute', 'stop', 'remove'])
+async def test_projection_failure_preserves_confirmed_queue_outcome(app, queue, backend, monkeypatch, phase):
+    save, failed = environments.save, False
+
+    def fail_projection(home, row, **changes):
+        nonlocal failed
+        operation = changes.get('lastOperation', {})
+        if operation.get('action') == 'workspace.environments.' + phase and not failed:
+            failed = True
+            assert operation['state'] == 'completed'
+            raise OSError('projection failed after exact operation committed')
+        return save(home, row, **changes)
+
+    monkeypatch.setattr(environments, 'save', fail_projection)
+    await submit(app)
+    await drive(queue)
+    receipt = record(queue, app)
+    assert failed and receipt['job']['status'] == 'passed'
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']
+    row = environments.get(app.data_dir, scope(app)['sessionId'], receipt['job']['resourceId'])
+    assert row['status'] == 'retired' and not row.get('pendingRequest')
+
+
+async def test_pending_completed_removal_repairs_before_next_queue_check(app, queue, backend, monkeypatch):
+    save = environments.save
+
+    def fail_projection(home, row, **changes):
+        if changes.get('lastOperation', {}).get('action') == 'workspace.environments.remove':
+            raise OSError('removal projection unavailable')
+        return save(home, row, **changes)
+
+    monkeypatch.setattr(environments, 'save', fail_projection)
+    await submit(app)
+    await drive(queue)
+    receipt = record(queue, app)
+    assert receipt['job']['status'] == 'passed'
+    row = environments.get(app.data_dir, scope(app)['sessionId'], receipt['job']['resourceId'])
+    assert row['status'] != 'retired' and row.get('pendingRequest')
+    monkeypatch.setattr(environments, 'save', save)
+    calls = list(backend)
+    page = (await app.dispatch('workspace.environments.read', scope(app)))['result']
+    assert page['items'][0]['status'] == 'removed' and backend == calls
+    await submit(app, 'after-repair')
+    await drive(queue)
+    assert record(queue, app, 'after-repair')['job']['status'] == 'passed'
+    assert [action for action, _ in backend].count('execute') == 2
