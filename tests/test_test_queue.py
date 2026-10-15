@@ -1,5 +1,6 @@
 """Real dispatch/journals with controlled physical backend effects."""
 import asyncio
+import json
 import threading
 import time
 from pathlib import Path
@@ -249,3 +250,31 @@ async def test_scheduler_survives_one_failed_reconciliation(app, queue, monkeypa
     monkeypatch.setattr(queue, 'tick', tick)
     await queue.loop()
     assert calls == 2
+
+
+async def test_stale_root_cannot_cancel_a_current_saved_check(app, queue, backend):
+    source = app.state['sessions'][0]
+    await submit(app)
+    with pytest.raises(AppError, match='generation'):
+        await agent(app, source, 'workspace.tests.cancel', {**scope(app), 'requestId': 'check'},
+                    'stale-cancellation', _generationId='retired-generation')
+    assert record(queue, app)['job']['status'] == 'queued'
+
+
+@pytest.mark.parametrize('character', ['\0', '界', '😀'])
+async def test_result_page_fits_actual_encoded_delivery_budget(app, queue, backend, monkeypatch, character):
+    invoke = environments.invoke
+
+    def output(config, home, row, action, args):
+        value = invoke(config, home, row, action, args)
+        if action == 'execute':
+            value['result']['stdout'] = character * 9000
+        return value
+
+    monkeypatch.setattr(environments, 'invoke', output)
+    await submit(app)
+    await drive(queue)
+    result = await agent(app, app.state['sessions'][0], 'workspace.tests.result',
+                         {**scope(app), 'requestId': 'check'}, 'read-output')
+    size = len(json.dumps(result, ensure_ascii=False).encode())
+    assert size < 32768, f'Actual compact app_control receipt is {size} encoded bytes'

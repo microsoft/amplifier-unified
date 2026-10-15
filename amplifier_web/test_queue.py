@@ -169,13 +169,26 @@ class TestQueue:
             content = output.get('stdout', '') + ('\n'+output['stderr'] if output.get('stderr') else '')
             offset = args.get('offset', 0)
             row = environments.get(self.app.data_dir, source['id'], receipt['job']['resourceId']) if receipt['job'].get('resourceId') else None
+            # Budget the encoded text, including JSON escaping and surrogate
+            # pairs, leaving room for the operation and app_control envelope.
+            page = content[offset:offset+6000]
+            low, high = 0, len(page)
+            while low < high:
+                middle = (low+high+1)//2
+                if len(json.dumps(page[:middle]).encode('utf-8')) <= 12000:
+                    low = middle
+                else:
+                    high = middle-1
+            page = page[:low]
             return {'accepted': True, 'result': {'check': self.public(receipt), 'operation': self.summary(request),
-                'exitCode': output.get('exit_code'), 'text': content[offset:offset+6000], 'offset': offset,
-                'nextOffset': offset+6000 if offset+6000<len(content) else None,
+                'exitCode': output.get('exit_code'), 'text': page, 'offset': offset,
+                'nextOffset': offset+len(page) if offset+len(page)<len(content) else None,
                 'truncatedAtSource': bool(output.get('truncated') or output.get('stdout_truncated') or output.get('stderr_truncated')),
                 'retention': environments.public(self.app.data_dir, row)['retention'] if row else None}}
         async with self.app.lock:
             if action.endswith('.cancel'):
+                if origin not in {'ui', 'user'}:
+                    owner.active_binding(owner.source(args, origin, caller, hydrate=False))
                 receipt = self.get(identity)
                 if receipt['job']['status'] not in PENDING:
                     return {'accepted': True, 'result': self.public(receipt)}

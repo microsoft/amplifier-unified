@@ -59,7 +59,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     {check.status==='queued'&&<p>Waiting for room to run. You can keep working; this request will start automatically when capacity is available.</p>}
     {check.capacity?.blockers?.some(row=>row.code==='storage_pressure')&&check.status==='queued'&&<p>The test host needs more free storage before this check can start.</p>}
     {check.detail&&<p>{check.detail}</p>}
-    {check.cancelRequested&&<p>Cancellation requested. An admitted command may continue until its timeout; cleanup keeps its evidence.</p>}
+    {check.cancelRequested&&['starting','checking','stopping','removing'].includes(check.status)&&<p>Cancellation requested. An admitted command may continue until its timeout; cleanup keeps its evidence.</p>}
     {check.check&&<button type="button" className="a-link" disabled={busy||!active} onClick={()=>readCheck(check.id)}>Read check result</button>}
     {checkOutput?.id===check.id&&<div aria-label="Saved check result">
      <p>Recorded request: {checkOutput.operation?.state?.replaceAll('_',' ')}</p>
@@ -102,12 +102,12 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    {output?.exit_code!=null&&<p>Exit code: {output.exit_code}</p>}
    {output?.stdout&&<pre className="a-state-view">{output.stdout}</pre>}
    {output?.stderr&&<pre className="a-state-view">{output.stderr}</pre>}
-   {(output?.stdout_truncated||output?.stderr_truncated)&&<p>The displayed output reached its size limit.</p>}
+   {(output?.truncated||output?.stdout_truncated||output?.stderr_truncated)&&<p>The displayed output reached its size limit.</p>}
    {last.state==='outcome_unknown'&&<p>The command may still be running. Checking the request does not run it again. Stop the environment to stop its work and keep its data.</p>}
    <details><summary>Request details</summary><pre className="a-state-view">{JSON.stringify(last,null,2)}</pre></details>
   </div>}
   <button type="button" className="a-soft" disabled={busy||!active} onClick={()=>refresh()}>Refresh test environments</button>
-  {!readOnly&&capability?.status==='ready'&&!rows.some(row=>row.status!=='removed')&&<form aria-label="Start test environment" onSubmit={event=>{event.preventDefault();mutate('workspace.environments.start',{profileId:draft.profileId})}}>
+  {!readOnly&&capability?.status==='ready'&&!waiting&&!rows.some(row=>row.status!=='removed')&&<form aria-label="Start test environment" onSubmit={event=>{event.preventDefault();mutate('workspace.environments.start',{profileId:draft.profileId})}}>
    <label htmlFor={form+'-profile'}>Environment</label><select id={form+'-profile'} disabled={blocked} value={draft.profileId} onChange={event=>retain({...draft,profileId:event.target.value})}>{(capability.profiles||[]).map(row=><option key={row.id} value={row.id}>{row.label}</option>)}</select>
    <button type="submit" className="a-soft" disabled={blocked}>Start test environment</button>
   </form>}

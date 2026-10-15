@@ -11,10 +11,7 @@ const fixture=process.env.AMPLIFIER_TEST_BASE_URL?null:spawn(process.env.AMPLIFI
 let browser,page;
 try{
  const url=process.env.AMPLIFIER_TEST_BASE_URL||await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),30000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
- // Some isolated ARM64 Linux hosts have no usable GPU child process. Opt in
- // explicitly; keep the default browser profile for ordinary environments.
- const software=process.env.AMPLIFIER_BROWSER_PROFILE==='linux-software';
- browser=await chromium.launch({headless:true,...(software?{channel:'chromium',args:['--disable-gpu','--disable-gpu-compositing','--in-process-gpu']}: {})});
+ browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1280,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
@@ -86,11 +83,13 @@ try{
  await panel.getByRole('form',{name:'Queue isolated check'}).getByLabel('Check command').fill('python check.py');
  await panel.getByRole('button',{name:'Queue check',exact:true}).click();
  await expect(panel.getByText('Check: queued',{exact:true})).toBeVisible();
+ await expect(panel.getByRole('button',{name:'Start test environment',exact:true})).toHaveCount(0);
  assert.equal((await facts()).callCounts.start,1,'Full capacity saves intent without starting another environment');
  await page.reload();await page.getByText('Managed resources',{exact:true}).click();
  await expect(panel.getByText('Check: queued',{exact:true})).toBeVisible();
  await panel.getByRole('button',{name:'Cancel check',exact:true}).click();
  await expect(panel.getByText('Check: cancelled',{exact:true})).toBeVisible();
+ await expect(panel.getByText('Cancellation requested.',{exact:false})).toHaveCount(0);
  assert.equal((await facts()).callCounts.start,1,'Cancelling a waiting check starts no backend effects');
  await panel.getByRole('button',{name:'Queue check',exact:true}).click();
  await expect(panel.getByText('Check: queued',{exact:true})).toBeVisible();

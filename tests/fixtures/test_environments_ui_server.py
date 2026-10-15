@@ -119,6 +119,12 @@ async def serve(home, port):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=0)
+    parser.add_argument('--interactive', action='store_true', help='Enable fixture-only login for manual browser acceptance on loopback.')
     options = parser.parse_args()
+    if options.interactive:
+        # This disposable fixture has no real account, provider or backend data.
+        # Preserve the real login/cookie/CSRF flow for computer-use acceptance.
+        from amplifier_web import auth
+        auth.authenticate_pam = lambda username, password: username == 'fixture' and password == TOKEN
     with tempfile.TemporaryDirectory(prefix='amplifier-environments-ui-') as temporary:
         asyncio.run(serve(Path(temporary), options.port))
