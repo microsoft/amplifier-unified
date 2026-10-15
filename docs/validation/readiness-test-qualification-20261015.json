@@ -83,6 +83,30 @@
         "Desktop pointer and synthetic history/runtime",
         "Does not qualify universal external-effect replay or every narrow-layout reading position"
       ]
+    },
+    {
+      "source": "3f002040e",
+      "receipt": "standard-ux-final-ordinary-20261015.json",
+      "checks": [
+        "Final ordinary Settings, archive/search navigation and missing workspace folder controls"
+      ],
+      "passed": true
+    },
+    {
+      "source": "9c1cd7f70",
+      "receipt": "optional-core-qualification-20261015.json",
+      "checks": [
+        "12 separately qualified optional Core checks and direct real history-edit probe"
+      ],
+      "passed": true
+    },
+    {
+      "sourceBeforeCommit": "95d64c53259625f7a53d851d1b776a99bff93524",
+      "receipt": "smart-tool-cleanup-qualification-20261015.json",
+      "checks": [
+        "Failed Smart Tool stage cleanup and current-installation preservation"
+      ],
+      "passed": true
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",

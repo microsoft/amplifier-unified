@@ -36,6 +36,21 @@ def retarget(row, previous, target):
 
 
 class ManagedUpdates:
+    async def discard_update(self, previous_id, revision):
+        """Remove only unused candidates belonging to this skipped revision.
+
+        Installation records are durable before qualification. Recover from
+        those records even if qualification failed before the batch got an ID.
+        Uninstall rechecks stage identity under its lock and keeps all existing
+        path, connection, and test-environment ownership guards.
+        """
+        if not revision:
+            return
+        candidates = [row['id'] for row in self.state['installations']
+                      if row.get('stagedFrom') == previous_id and row.get('commit') == revision]
+        for target_id in candidates:
+            await self.uninstall(target_id, staged_from=previous_id, revision=revision)
+
     def update_sources(self):
         from .updates import pinned, safe_label
         rows = []

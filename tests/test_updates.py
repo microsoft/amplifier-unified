@@ -762,6 +762,8 @@ async def test_smart_tool_cancellation_never_continues_the_batch(app, monkeypatc
 
 
 async def test_skipped_smart_tool_revision_stays_skipped_until_new_revision(app, monkeypatch):
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools = SmartToolsManager(app)
     manager = app.update_manager
     revision = 'b' * 40
     app.state['updates'].update(phase='error', pendingSmartTools=[{

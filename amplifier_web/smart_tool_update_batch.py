@@ -137,6 +137,14 @@ async def skip(manager, identity_value):
         item = next((row for row in pending if row['previous'] == identity_value), None)
         if not item or not item.get('failure'):
             raise ValueError('This tool has no failed update to skip.')
+        cleanup = {key: value for key, value in item.items() if key != 'failure'}
+        await attempt(manager, cleanup, 'cleanup', manager.service.smart_tools.discard_update,
+                      item['previous'], item.get('revision'))
+        if cleanup.get('failure'):
+            item['failure'] = cleanup['failure']
+            await manager.publish(phase='error', pendingSmartTools=pending,
+                                  error='The failed tool update could not be removed. Its current version is unchanged. Try Skip again to finish cleanup.')
+            return
         skipped = {**state.get('skippedSmartTools', {})}
         if item.get('revision'):
             skipped[identity_value] = item['revision']
