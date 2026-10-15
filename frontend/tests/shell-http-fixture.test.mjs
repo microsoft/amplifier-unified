@@ -21,6 +21,10 @@ test('mock bootstrap binds identity and only requested resource coverage',()=>{
  assert.deepEqual(Object.keys(data.shellResources.instances.chats.resources),['context','recentNavigation']);
  assert.deepEqual(data.shellResources.instances.chats.resources.recentNavigation.value.recentNavigation.items,f.state.sessions);
  assert.equal(data.instanceGenerations.chats,0);
+ assert.equal(data.shellResources.instances.chats.resources.context.value.recentScope.clientId,'one');
+ assert.equal(data.shellResources.instances.chats.resources.recentNavigation.value.recentScope,undefined);
+ const empty=f.register({...demand,demandId:2,resources:[]});
+ assert.equal(empty.instances.chats.resources.context.value.recentScope.instanceId,'chats');
 });
 test('mock receipts update accepted scope and omit pages until replacement demand',()=>{
  const f=fixture();f.attach('one');f.register();f.state.view.workerDraft='newer';f.state.revision++;

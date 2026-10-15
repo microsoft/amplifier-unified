@@ -217,8 +217,11 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     rows = runner.validate_plan(plan)
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
-    assert len(rows) == 65
-    assert hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest() == 'ca60c5f5e0a9bf5fd94795d64ea6c8d9c286b2c5f481b7d3c07d5f32fb522173'
+    added = [row for row in rows if row['id'] == 'sidebar-reading']
+    assert len(added) == 1 and added[0]['command'] == ['node', 'tests/sidebar-reading-browser.mjs']
+    original = [row for row in rows if row['id'] != 'sidebar-reading']
+    assert len(original) == 65 and len(rows) == 66
+    assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == 'ca60c5f5e0a9bf5fd94795d64ea6c8d9c286b2c5f481b7d3c07d5f32fb522173'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
     assert ['node', 'tests/empty-host-browser.mjs', '--lost-create'] in commands
@@ -259,5 +262,5 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     install = next(index for index, line in commands if 'uv pip install' in line and '--reinstall .' in line)
     for script in installed_overlap:
         assert any(index > install and f'node {script}' in line for index, line in commands)
-    # All 108 original tests-directory browser scripts still have a background lane.
-    assert len(readiness_scripts | extended_scripts) == 108
+    # All 108 original scripts and the new sidebar reading regression have a lane.
+    assert len(readiness_scripts | extended_scripts) == 109

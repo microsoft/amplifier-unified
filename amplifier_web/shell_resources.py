@@ -20,7 +20,7 @@ MAX_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_SAFE_INTEGER = 2**53 - 1
 PAGE_FIELDS = {
     **{name: (name,) for name in NAVIGATION_RESOURCES if not name.startswith('sidebar')},
-    'recentNavigation': ('recentNavigation', 'recentShortcuts', 'recentScope'),
+    'recentNavigation': ('recentNavigation', 'recentShortcuts'),
     'workspaceShortcuts': ('workspaceShortcuts', 'unpinnedWorkspaceShortcuts'),
 }
 GLOBAL_KEYS = frozenset({'workspaces', 'settings', 'workspaceDefaults', 'pinnedSessionIds',

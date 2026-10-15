@@ -467,12 +467,12 @@ test('change and retry share synchronous singleflight; a late response cannot re
   api.change({showAgentCreated:false});api.retry();
  });
  assert.equal(held.length,1);
- current={...current,selectedSessionId:'other',recentNavigation:{...recentFixture(20,true,1),
+ current={...current,selectedSessionId:'other',recentScope:{mode:'workspace',workspaceId:'other',filter:''},recentNavigation:{...recentFixture(20,true,1),
   scope:{...recentFixture(20,true,1).scope,selectedSessionId:'a'}}};
  await act(async()=>{held[0]({accepted:true});await first;root.update(React.createElement(Probe))});
  assert.deepEqual(api.page.items,[],'old-scope rows cannot appear under the new selection');
  assert.match(api.error,/previous chats are kept/);
- current={...current,selectedSessionId:'a',recentNavigation:undefined};
+ current={...current,selectedSessionId:'a',recentScope:undefined,recentNavigation:undefined};
  await act(async()=>root.update(React.createElement(Probe)));
  assert.equal(api.page.scope.viewRevision,0);assert.equal(api.page.scope.showAgentCreated,false);
  assert.equal(api.page.items.length,20,'accepted prior scope is retained without accepting the late response');
@@ -492,7 +492,7 @@ test('Retry prefers a newer host snapshot received while its read was delayed',a
  try{
   let retry;
   await act(async()=>{retry=api.retry()});
-  current={...current,recentNavigation:recentFixture(80,true,3)};
+  current={...current,view:{navRecentLimit:80,navShowAgentCreated:true},recentNavigation:recentFixture(80,true,3)};
   await act(async()=>root.update(React.createElement(Probe)));
   await act(async()=>{
    resolveRead({recentNavigation:recentFixture(60,false,2)});
@@ -564,7 +564,7 @@ test('a stale origin scope cannot self-match after the saved origin setting chan
  await act(async()=>{root=create(React.createElement(Probe))});
  current={...current,view:{navShowAgentCreated:true},recentNavigation:recentFixture(40,false,2)};
  await act(async()=>root.update(React.createElement(Probe)));
- assert.equal(api.page.limit,20);assert.equal(api.page.scope.showAgentCreated,false);
+ assert.equal(api.page.items.length,0,'changed origin filter cannot show the old filter result');
  current={...current,recentNavigation:recentFixture(40,true,2)};
  await act(async()=>root.update(React.createElement(Probe)));
  assert.equal(api.page.limit,40);assert.equal(api.page.scope.showAgentCreated,true);
@@ -644,4 +644,63 @@ test('cold resource placeholders never claim empty catalogs and matching updates
  const updating={...snapshot,navigationResourcePending:{recentNavigation:{status:'pending'}}};
  const warm=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...coldHost,getSnapshot:()=>updating}})));
  assert.match(warm,/Updating recent chats/);assert.match(warm,/Research ideas/);
+});
+
+
+test('selected chat changes retain loaded Recent rows while only a current-selection page can settle expansion',async()=>{
+ let current={...snapshot,recentNavigation:recentFixture(60,false,3),view:{navRecentLimit:60}},api,root;
+ const listeners=new Set();const readHost=recentHost({getSnapshot:()=>current,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}});
+ function Probe(){api=useRecentShortcuts(readHost,current,async()=>({accepted:true}));return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ let pending;await act(async()=>{pending=api.change({limit:80})});
+ current={...current,selectedSessionId:'other',recentNavigation:undefined,navigationResourcePending:{recentNavigation:{status:'pending'}}};
+ await act(async()=>{root.update(React.createElement(Probe));listeners.forEach(fn=>fn())});
+ assert.equal(api.page.items.length,60);assert.equal(api.error,'');assert.equal(api.busy,true);
+ current={...current,view:{navRecentLimit:80},recentNavigation:recentFixture(80,false,4),navigationResourcePending:{}};
+ await act(async()=>{root.update(React.createElement(Probe));listeners.forEach(fn=>fn())});
+ assert.equal(api.page.items.length,60,'old-selection completion cannot be accepted');
+ current={...current,recentNavigation:{...current.recentNavigation,scope:{...current.recentNavigation.scope,selectedSessionId:'other'}}};
+ await act(async()=>{root.update(React.createElement(Probe));listeners.forEach(fn=>fn());await pending});
+ assert.equal(api.page.items.length,80);assert.equal(api.error,'');assert.equal(api.busy,false);
+ await act(async()=>root.unmount());
+});
+
+test('Recent retry waits for a pending resource baseline and a failure never also reports loading',async t=>{
+ let current={...snapshot,recentNavigation:recentFixture()},api,root;const listeners=new Set();
+ const readHost=recentHost({getSnapshot:()=>current,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}});
+ function Probe(){api=useRecentShortcuts(readHost,current,async()=>({accepted:true}));return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ await timedOutChange(t,api,{limit:40});
+ current={...current,recentNavigation:undefined,navigationResourcePending:{recentNavigation:{status:'pending'}}};
+ await act(async()=>root.update(React.createElement(Probe)));
+ assert.equal(api.busy,false);assert.match(api.error,/previous chats/);assert.equal(api.page.items.length,20);
+ const old=recentRead;recentRead=async()=>current;
+ try{
+  let retry;await act(async()=>{retry=api.retry()});assert.equal(api.busy,true);
+  current={...current,view:{navRecentLimit:40},recentNavigation:recentFixture(40,false,1),navigationResourcePending:{}};
+  await act(async()=>{root.update(React.createElement(Probe));listeners.forEach(fn=>fn());await retry});
+  assert.equal(api.page.items.length,40);assert.equal(api.error,'');assert.equal(api.busy,false);
+ }finally{recentRead=old;await act(async()=>root.unmount())}
+});
+
+
+test('Recent subscriptions reject a new host before React commits the owner change',async()=>{
+ for(const operation of ['change','retry']){
+  let current={...snapshot,generation:2,navigationResourceScope:['old-host','bootstrap',1,2],recentNavigation:recentFixture()},api,root;
+  let rendered=current;const listeners=new Set(),old=recentRead;
+  const readHost=recentHost({getSnapshot:()=>current,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}});
+  function Probe(){api=useRecentShortcuts(readHost,rendered,async()=>({accepted:true}));return null}
+  await act(async()=>{root=create(React.createElement(Probe))});
+  recentRead=async()=>({...current,recentNavigation:undefined,navigationResourcePending:{recentNavigation:{status:'pending'}}});
+  try{
+   if(operation==='retry')current={...current,recentNavigation:undefined,navigationResourcePending:{recentNavigation:{status:'pending'}}};
+   let pending;await act(async()=>{pending=operation==='change'?api.change({limit:40}):api.retry()});
+   current={...current,navigationResourceScope:['new-host','bootstrap',1,2],view:{navRecentLimit:40},recentNavigation:recentFixture(40,false,99),navigationResourcePending:{}};
+   await act(async()=>{listeners.forEach(fn=>fn());await pending});
+   assert.equal(api.page.items.length,20,operation+' cannot accept another host through subscription');
+   assert.match(api.error,/Recent changed/);
+   rendered=current;await act(async()=>root.update(React.createElement(Probe)));
+   assert.equal(api.page.items.length,40,'new owner may independently accept its current page');
+  }finally{recentRead=old;await act(async()=>root.unmount())}
+ }
 });
