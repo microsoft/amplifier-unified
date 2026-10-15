@@ -47,6 +47,9 @@ SECRET_KEY = re.compile(r'(?i)(api.?key|password|secret|authorization|cookie|cre
 
 def metadata_fields(data):
     selected = {key: value for key, value in data.items() if key in META_KEYS}
+    if data.get('type') == 'runtime.bridge':
+        from .support_diagnostics import event_detail
+        selected.update(event_detail(data))
     if data.get('kind') == 'llm' and data.get('label') == 'Context compaction':
         selected['label'] = 'Context compaction'
     return selected
@@ -556,7 +559,11 @@ class Diagnostics:
             # Kernel evidence comes from the mounted community hook. Do not
             # manufacture a second provider/tool event from a UI progress card.
             return
-        data={k:v for k,v in payload.items() if k in META_KEYS}
+        if kind == 'runtime.bridge':
+            from .support_diagnostics import event_detail
+            data = event_detail({**payload, 'type': kind})
+        else:
+            data={k:v for k,v in payload.items() if k in META_KEYS}
         if kind == 'execution.event' and payload.get('kind') == 'llm' and payload.get('label') == 'Context compaction':
             data['label'] = 'Context compaction'
         # Retain only safe exception categories from the host observer. Raw
