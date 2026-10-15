@@ -1,5 +1,6 @@
 """Background naming scans cannot block navigation or publish stale candidates."""
 import asyncio
+import sys
 
 import pytest
 
@@ -90,4 +91,27 @@ async def test_cancelled_naming_scan_closes_its_owned_child(app_factory, tmp_pat
         await task
     assert projectors[0]._closed
     assert not projectors[0]._tasks
+    assert not app.runtime.started and not app.runtime.sent
+
+
+@pytest.mark.parametrize('failure', ['timeout', 'exit'])
+async def test_failed_read_defers_and_retires_process_and_spool(app_factory, tmp_path, failure):
+    from amplifier_web.history_projection_process import ProcessProjector
+    app, _, _, _ = await imported(app_factory, tmp_path)
+    projectors = []
+    def factory(*args, **kwargs):
+        if failure == 'timeout':
+            kwargs['_timeout'] = .2
+            value = held_projector(*args, **kwargs)
+        else:
+            kwargs['_command'] = (sys.executable, '-c', 'raise SystemExit(3)')
+            value = ProcessProjector(*args, **kwargs)
+        projectors.append(value)
+        return value
+    assert await read_candidates(app, 0, projector_factory=factory) == []
+    projector = projectors[0]
+    assert projector._closed and not projector._tasks
+    assert projector._process is None
+    assert projector._root is not None and not projector._root.exists()
+    assert app.performance_diagnostics.counters['naming.candidates.deferred'] == 1
     assert not app.runtime.started and not app.runtime.sent

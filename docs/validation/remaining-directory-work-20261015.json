@@ -17,6 +17,7 @@
     "mechanism": "Existing 32-candidate count/order/window query moves from the event loop to the bounded read-only query process. Host keeps all eligibility, naming and receipt authority.",
     "existingAndNewBehavior": {"passed": 24, "seconds": 29.39},
     "finalQueryAndTransportGuards": {"passed": 27, "seconds": 32.59},
+    "failureTransportGuards": {"passed": 2, "seconds": 2.50},
     "proofs": [
       "37-candidate canonical query equals the 32-row worker page, including wrap-around",
       "No candidate query executes on the host directory and no dormant session is admitted",
@@ -24,6 +25,7 @@
       "Changed app, native and closed-host facts reject the pending page",
       "Uncommitted state never spawns or exports a query",
       "Canceled read closes its owned child and pending tasks",
+      "Timeout and worker early-exit both defer naming and remove the exact child/spool",
       "Existing naming eligibility, cadence, manual-name precedence and persistent attempt suppression pass"
     ]
   },
