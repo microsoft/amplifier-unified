@@ -642,6 +642,10 @@ class Collaboration:
                     return reason
             if receipt.get('dependencyRequestId'):
                 dependency = self.receipt(receipt['dependencyRequestId'])
+                if dependency.get('commandAction') == 'worktree.handoff':
+                    reason = self.service.worktrees.continuation_guard(dependency)
+                    if reason:
+                        return reason
                 if dependency.get('commandAction') == 'coordination.watch' and dependency.get('watch', {}).get('status') == 'cancelled':
                     return 'The one-shot watch was cancelled.'
                 if receipt.get('dependencyOutcomeRevision') and not self.claim_matches(dependency, receipt):
@@ -752,7 +756,7 @@ class Collaboration:
 
     def resume_outcomes(self, sid):
         for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch','worktree.handoff')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND json_extract(receipt,'$.subscription.status')='backpressured' LIMIT 64""", (sid,)).fetchall():
             self.enqueue_continuation(json.loads(encoded))

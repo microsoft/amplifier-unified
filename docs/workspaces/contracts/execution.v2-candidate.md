@@ -68,6 +68,41 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Handoff at a saved runtime boundary — 2026-10-15
+
+A managed checkout handoff returns its durable pending receipt to the calling
+tool before changing execution placement. The host waits for the current root
+generation, tool replies, approvals, pending inputs, operations and native
+children to settle and for the worker to checkpoint and park. A saved goal yields
+at its completed-turn boundary with its progress and budget intact. An idle UI
+event alone is not a release proof; waiting must not cancel an in-flight tool or
+borrow another writer's lock. Once settled, the existing native ownership protocol
+confirms release and retires that worker before the placement revision changes.
+
+The receipt stores positive release evidence before committing placement. After
+a host restart, a retained positive boundary can finish its original placement
+without replaying input. An interrupted preflight or boundary wait rejects the
+unperformed move with its source unchanged. An unconfirmed release remains
+unknown and requires deliberate reconciliation. A later committed placement
+suppresses an earlier move's pending notification; recovery never moves it back.
+
+If active work requested the move, the host uses the existing guarded inbox to
+deliver one completion observation and continue the already authorized task in
+the destination. The original input and tool call are not resubmitted. The
+notification preserves the originating user-message, interruption, task and
+placement anchors; Stop, new user input or changed task authority suppresses it.
+An exhausted or ended goal is not re-armed by the move's completion observation.
+An outcome does not grant new authority. Failure to deliver that notification
+cannot turn a positively committed placement into an unknown move. Idle explicit
+moves do not start work. Canonical history/configuration homes, drafts, voice,
+attachment identities and file-access restrictions remain unchanged.
+
+Qualification covers actual native worker processes, saved goal budgets and
+persisted history with a scripted provider, plus interrupted boundaries, foreign writers, changed
+authority, duplicate commands and restart gaps. Real-model cooperation with the
+instruction to finish its current turn, browser acceptance and installed release
+adoption remain separate checks.
+
 ### Supported file-tool source checks — 2026-10-14
 
 Unified wraps the mounted reference filesystem tools and both reference patch

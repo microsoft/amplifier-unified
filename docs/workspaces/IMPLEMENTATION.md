@@ -1226,3 +1226,41 @@ The live Stop case observed cancellation rather than a successful native reply
 arriving after Stop; that stronger case has source coverage only. Historical
 repair requires retained exact generation receipts and does not reconstruct
 aged-out outcomes. Production services and saved production chats were unchanged.
+
+## Managed checkout handoff boundary — 2026-10-15
+
+`worktree.handoff` now retains its pending receipt while the existing worker
+settles the calling tool and native child work. `handoff_boundary.py` inspects
+native generation, input, tool, operation and child state under the worker's
+command lock. It yields saved goals at their completed-turn boundary and requires
+the existing checkpoint/park path before cooperative writer release. It does not
+cancel a tool to make a move possible or acquire a foreign conversation writer.
+
+`worktrees.py` persists positive release evidence separately from placement and
+recovers that confirmed boundary after host replacement. Earlier preflight/wait
+interruptions reject safely; unconfirmed release stays unknown. Active work gets
+one host-attributed completion observation through the existing collaboration
+inbox, guarded by its original user-message, Stop, task and execution revisions.
+Changed authority suppresses continuation. A known placement stays applied even
+if notification persistence fails; the retained notification identity is recovered
+on restart. Completed idle moves do not hydrate old histories at startup.
+Goals that end or exhaust their turn cap while waiting do not get another turn.
+
+Focused regression coverage includes pending native tools/children, goal progress,
+Stop before and after release, positive-release restart gaps, later placement,
+duplicate requests, foreign writer refusal, inherited/multiple-repository
+placements, native handoff and collaboration admission. The standalone
+`tests/fixtures/handoff_worker_probe.py` additionally runs real worker subprocesses
+with a scripted provider: its native tool receives and saves a pending receipt,
+the first worker checkpoints and exits, and the continuation runs in a second
+worker in the target checkout. Persisted native history contains one original
+input and its tool result; history home and an unsent draft remain unchanged.
+Its `--goal` mode verifies the saved native goal resumes with its remaining turn
+budget; `--goal-cap-one` verifies a move can finish without restarting an exhausted
+goal.
+
+The probe uses a minimal snapshot bundle and needs installed loop-live and
+context-simple modules. Run it with the qualified runtime interpreter and a new
+private output directory; it uses no provider credentials or user history. This
+establishes runtime lifecycle with scripted model replies, not real-model
+cooperation, browser behavior, packaged-release acceptance or production adoption.
