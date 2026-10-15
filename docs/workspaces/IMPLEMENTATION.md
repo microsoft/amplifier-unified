@@ -1082,9 +1082,12 @@ computer-use acceptance remain separate integration checks.
 
 ## Workspace work overview and combined-check controls
 
-The chat header now opens Workspace work directly while retaining the selected
-chat and composer draft. Initial inspection reads the current chat context and
-one workspace-scoped page of twenty root summaries. Active work and file-overlap
+Workspace work opens from the main workspace page and the canvas Chat overview,
+with no separate conversation-header control. The workspace page disclosure uses
+a twenty-row paged chat picker; inspecting a named chat preserves the active
+conversation and composer draft, including when browsing another workspace. The
+canvas entry reviews the current chat. Initial inspection reads that chat context
+and one workspace-scoped page of twenty root summaries. Active work and file-overlap
 information still come from the bounded awareness owner; paging is explicit.
 The page distinguishes independent active peers, commissioned helpers, attention
 and recent request outcomes. Shared tasks/assignment controls, follow-up watches,

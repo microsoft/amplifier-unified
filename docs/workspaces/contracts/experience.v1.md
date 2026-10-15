@@ -65,9 +65,13 @@ Workspace details → Files · Chats · Directions · Settings
 
 ## Workspace work and combined checks
 
-The chat header exposes **Workspace work** directly. Opening it preserves the
-selected chat and its draft. Its initial reads are bounded to that chat and its
-canonical workspace: active peers, actual shared or separate execution folders,
+The main workspace page and the canvas **Chat overview** expose **Workspace work**.
+The conversation header does not add a separate work control. Opening either entry
+preserves the selected chat and its draft. The workspace page loads twenty root
+chat summaries at a time, only after its disclosure is opened; choosing a chat
+inspects its work without selecting that conversation. An empty workspace needs no
+chat selection. The canvas entry uses its current chat. Initial inspection reads
+are bounded to the explicitly reviewed chat and its canonical workspace: active peers, actual shared or separate execution folders,
 advisory file overlap, and requests needing attention. Independent peers remain
 independent. Shared tasks and assignment controls are optional disclosures, and
 inspection never starts or follows up a worker. Older rows load only on demand;
