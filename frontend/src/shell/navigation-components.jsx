@@ -328,7 +328,7 @@ function RecentShortcuts({host,model,now}){
   return()=>{following.dispose();follower.current=null};
  },[host]);
  return <div ref={root} tabIndex={-1} className="a-recent-shortcuts" aria-busy={busy} onFocusCapture={e=>{focused.current=e.target}} onBlurCapture={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget))focused.current=null}}>
-  {!error&&<NavigationResourceStatus state={model.state} resource="recentNavigation" label="recent chats" refresh={model.refreshResources}/>}
+  {!error&&<NavigationResourceStatus state={model.state} quietRefresh resource="recentNavigation" label="recent chats" refresh={model.refreshResources}/>}
   {page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
   {!page.items.length&&!busy&&!error&&!model.state.navigationResourcePending?.recentNavigation&&<p className="a-nav-empty">Your recent chats appear here.</p>}
   {(page.remaining>0||busy||error)&&<div className="a-recent-controls">
@@ -482,9 +482,9 @@ function QuietSidebar({host,workspaceHost,navigation}){
   <NavigationEditor model={model}/>
   {!workspaceHost&&<NavigationEditor model={workspaceModel}/>}
   <button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>
-  {(!!pins.total||model.state.navigationResourcePending?.pinnedNavigation)&&<SidebarSection id="pinned" title="Pinned" model={model}><NavigationResourceStatus state={model.state} resource="pinnedNavigation" label="pinned chats and workspaces" refresh={model.refreshResources}/>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
+  {(!!pins.total||model.state.navigationResourcePending?.pinnedNavigation)&&<SidebarSection id="pinned" title="Pinned" model={model}><NavigationResourceStatus state={model.state} quietRefresh resource="pinnedNavigation" label="pinned chats and workspaces" refresh={model.refreshResources}/>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
   <SidebarSection id="workspaces" title="Workspaces" model={model} actions={<button type="button" className="a-icon" aria-label="New workspace" onClick={()=>navigation.create()}><Plus/></button>}>
-   <NavigationResourceStatus state={workspaceState} resource="workspaceShortcuts" label="workspaces" refresh={workspaceModel.refreshResources}/>
+   <NavigationResourceStatus state={workspaceState} quietRefresh resource="workspaceShortcuts" label="workspaces" refresh={workspaceModel.refreshResources}/>
    {(hasNavigationResource(workspaceState,'workspaceShortcuts')||workspaceState.navigationResourceRetained?.workspaceShortcuts)?<WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>:!workspaceState.navigationResourcePending?.workspaceShortcuts&&<p role="status">Loading workspaces…</p>}
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
   </SidebarSection>
