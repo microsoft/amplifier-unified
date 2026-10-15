@@ -447,10 +447,20 @@ class HistoryDirectory:
         self._live_notices = [notice for row in state.get('sessions', ()) for notice in notices(row, state)]
         self._live_revision += 1
 
-    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None):
-        """Return effective rows with optional alias, exact-ID or child scope."""
-        if sum(value is not None for value in (identity, public_ids, children_of)) > 1:
+    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None):
+        """Return effective rows with optional alias, exact-ID or child scope.
+
+        exact_parent uses the child candidate indexes but preserves the agent
+        overview's exact effective parent equality, including self-parent rows.
+        fields limits the final UNION projection, after retaining every scalar
+        needed by its canonical membership/suppression predicates.
+        """
+        if sum(value is not None for value in (identity, public_ids, children_of, exact_parent)) > 1:
             raise ValueError('Use one directory source scope per query.')
+        requested_fields = set(COLUMNS if fields is None else fields)
+        if not requested_fields or not requested_fields.issubset(COLUMNS):
+            raise ValueError('Use known directory fields for a scalar projection.')
+        required_fields = set(requested_fields)
         if public_ids is not None and len(public_ids) > PUBLIC_ID_BATCH:
             raise ValueError('Public-ID candidates require one bounded batch.')
         state = self._frozen_state if self.snapshot else state if state is not None else self.service._state
@@ -487,9 +497,10 @@ class HistoryDirectory:
             prefix += f'''local_candidates AS (SELECT rowid FROM history_local_rows
                 WHERE id IN (SELECT id FROM requested_ids){owners}),'''
             stored_lookup = 'l.rowid IN (SELECT rowid FROM local_candidates)'
-        elif children_of is not None:
-            prefix, scope_params, live_lookup, stored_lookup = _child_candidates(children_of, self._native_namespace)
-        scoped = identity is not None or public_ids is not None or children_of is not None
+        elif children_of is not None or exact_parent is not None:
+            parent = children_of if children_of is not None else {'id': exact_parent}
+            prefix, scope_params, live_lookup, stored_lookup = _child_candidates(parent, self._native_namespace)
+        scoped = any(value is not None for value in (identity, public_ids, children_of, exact_parent))
         if scoped and native_root_workspace is not None:
             raise ValueError('Workspace candidates cannot replace an exact source scope.')
         local = prefix + f'''live_rows AS (SELECT {live_columns} FROM json_each(?)), stored_local_rows AS (
@@ -594,7 +605,7 @@ class HistoryDirectory:
                     "(SELECT value FROM json_each(?)) AND kind='root' AND NOT directory_known_workspace(workspace_id))")
                 parameters.extend((self._native_namespace, workspace_id, self._native_namespace,
                                    json.dumps(fallback_paths, separators=(',', ':'))))
-            elif public_ids is not None or children_of is not None:
+            elif public_ids is not None or children_of is not None or exact_parent is not None:
                 native = native.replace('FROM history_native.native_rows n WHERE n.namespace=?',
                     'FROM history_native.native_rows n NOT INDEXED WHERE n.namespace=? '
                     'AND n.rowid IN (SELECT rowid FROM native_candidates)')
@@ -607,7 +618,10 @@ class HistoryDirectory:
         from .managed_deletion import tombstones
         deleted = tombstones(self.db)
         filters = ['r.id IN (SELECT id FROM requested_ids)'] if public_ids is not None else []
+        if public_ids is not None:
+            required_fields.add('id')
         if children_of is not None:
+            required_fields.update(('session_kind', 'id', 'parent_id', 'native_parent_id', 'native_project', 'workspace'))
             # This is the same effective-parent predicate used by child pages:
             # explicit app parents win, otherwise native aliases stay scoped.
             filters.append("""r.session_kind!='root' AND r.id!=(SELECT id FROM child_input) AND (
@@ -616,15 +630,21 @@ class HistoryDirectory:
                  CASE WHEN r.native_project IS NOT NULL AND (SELECT project FROM child_input) IS NOT NULL
                     THEN r.native_project=(SELECT project FROM child_input)
                     ELSE r.workspace=(SELECT workspace FROM child_input) END))""")
+        if exact_parent is not None:
+            required_fields.update(('session_kind', 'parent_id'))
+            filters.append("r.session_kind!='root' AND r.parent_id IS (SELECT id FROM child_input)")
         for column, values in (('hidden_id', hidden), ('workspace_id', hidden_workspaces),
                                ('native_project', [row['project'] for row in deleted]),
                                ('id', [sid for row in deleted for sid in row.get('ids', ())])):
             if values:
+                required_fields.add(column)
                 filters.append(f"COALESCE(r.{column},'') NOT IN (SELECT value FROM json_each(?))")
                 parameters.append(json.dumps(values))
+        selected_columns = ','.join(name for name in COLUMNS if name in required_fields)
+        output_columns = ','.join(name for name in COLUMNS if name in requested_fields)
         return (f'''WITH {local},{native}, all_directory_rows AS (
-            SELECT {columns} FROM local_rows UNION ALL SELECT {columns} FROM native_rows),
-            directory_rows AS (SELECT * FROM all_directory_rows r WHERE {' AND '.join(filters) or '1'})''', parameters)
+            SELECT {selected_columns} FROM local_rows UNION ALL SELECT {selected_columns} FROM native_rows),
+            directory_rows AS (SELECT {output_columns} FROM all_directory_rows r WHERE {' AND '.join(filters) or '1'})''', parameters)
 
     def decode(self, sql_row):
         from .native_catalog import normalize_availability

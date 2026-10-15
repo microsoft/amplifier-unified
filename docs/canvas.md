@@ -105,6 +105,16 @@ the current directory. Directory paging loads only the requested owners and
 does not select chats or start work. The HTTP detail route accepts the same
 `directoryRevision` query parameter.
 
+The overview preserves global `(ordinal, id)` positions before selecting its
+first 50 conversations and 20 exact-parent subagent entries. It counts those
+subagents through indexed source candidates and applies the same canonical
+parent and suppression rules as a complete directory read. Only the selected
+owner and requested metadata rows are decoded; global ranking carries scalar
+identity/order/kind fields rather than every historical summary and parent
+projection. The rank still visits directory membership and is synchronous.
+`directory.overview` records its duration in bounded performance diagnostics;
+it records no read arguments, paths or conversation content.
+
 Resolved configurations are stored once per session. Bulky dependency provenance
 is stored once in the app database and referenced by `$resource`; requesting its
 JSON Pointer path automatically loads a bounded page. The same read-only paging
