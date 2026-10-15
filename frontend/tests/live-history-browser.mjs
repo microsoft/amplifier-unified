@@ -56,7 +56,12 @@ try{
  await page.waitForFunction(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.status==='working');
  await expect(page.getByText('A new live response.',{exact:true})).toHaveCount(0);
  await expect(page.locator('[data-message-id]')).toHaveCount(300);
- await page.getByRole('button',{name:'Return to latest',exact:true}).click();
+ await pane.evaluate(el=>el.scrollTop=el.scrollHeight);
+ await page.waitForTimeout(150);
+ const frozenBottom=await page.evaluate(()=>{const pane=document.querySelector('.a-messages'),r=pane.getBoundingClientRect(),latest=[...document.querySelectorAll('button')].filter(el=>/Return to latest|Jump to latest messages/.test(el.getAttribute('aria-label')||el.textContent));return {atBottom:pane.scrollHeight-pane.clientHeight-pane.scrollTop<3,controls:latest.map(el=>{const b=el.getBoundingClientRect();return {label:el.getAttribute('aria-label')||el.textContent,inViewport:b.width>0&&b.bottom>r.top&&b.top<r.bottom}})}});
+ console.log(JSON.stringify({frozenBottom}));
+ const latest=page.getByRole('button',{name:'Jump to latest messages',exact:true});
+ await expect(latest).toBeInViewport();await latest.click();
  await expect(page.getByText('A new live response.',{exact:true})).toBeVisible();
  const current=await control({op:'inspect'}),saved=current.state.sessions.find(row=>row.id===native.id);
  assert.equal(saved.sharedHistoryOffset,205,'Private browser paging does not expand the resident runtime history');
