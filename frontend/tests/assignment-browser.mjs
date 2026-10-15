@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -16,7 +17,7 @@ try{
  await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
  const current=await page.request.get(url+'/fixture').then(response=>response.json());
  await composer.fill('Private assignment draft');
- await action('view.update',{patch:{panel:'chat-work'}});
+ await openChatAdvancedPage(page,'Work & automation');
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  const panel=page.locator('.a-assignment');await panel.getByText('Shared tasks and assignment',{exact:true}).click();
  await panel.getByRole('button',{name:'Start assignment',exact:true}).click();
