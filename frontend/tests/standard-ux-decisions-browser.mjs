@@ -5,6 +5,7 @@ import {mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import {StandardUxEvidence} from './standard-ux-evidence.mjs';
+import {openSettingsPage} from './browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url)),output=process.env.AMPLIFIER_TEST_ARTIFACTS;
 if(!output)throw Error('An owned evidence directory is required');
 const touch=process.env.STANDARD_UX_TOUCH==='1',variant=touch?'narrow-touch':'desktop-pointer';
@@ -28,6 +29,13 @@ try{
   await expect(card(ready.unknown)).toContainText('Delivery is unconfirmed; it has not been sent again.');await expect(card(ready.unknown).getByRole('button')).toHaveCount(0);await expect(approval('native-expired')).toHaveCount(0);
   const saved=page.waitForResponse(response=>{if(!response.url().endsWith('/api/actions')||response.request().method()!=='POST')return false;const body=unwrap(response.request().postDataJSON());return body.action==='view.update'&&body.args?.patch?.draft==='Keep private decision draft'&&response.ok()});await composer().fill('Keep private decision draft');await saved;await page.reload();await expect(composer()).toHaveDraft('Keep private decision draft');await expect(card(ready.required)).toBeVisible();
   evidence.assertion('Reload never submits unanswered or unknown decisions',(await check()).sent.length,0);evidence.assertion('Reload never replies to native waiters',(await check()).decisions.length,0);
+ });
+ await probe('badge-is-not-an-answer',['notifications.badge','decisions.question','decisions.approval'],async()=>{
+  const before=await check();await openSettingsPage(page,'notifications');const badge=page.getByRole('checkbox',{name:/^Finished responses in the app badge/});await expect(badge).not.toBeChecked();
+  await act('Enable completion badge',badge);await expect.poll(async()=>(await state()).notificationSettings?.completionBadge).toBe(true);await expect(badge).toBeEnabled();await act('Disable completion badge',badge);await expect.poll(async()=>(await state()).notificationSettings?.completionBadge).toBe(false);
+  await act('Close notification Settings',page.locator('button[aria-label="Close settings"]:visible,button[aria-label="Close panel"]:visible').last());await expect(page.locator('.a-settings-experience')).toHaveCount(0);
+  const navigation=page.getByRole('button',{name:'Open navigation',exact:true});if(await navigation.count())await act('Open navigation',navigation);await act('Open Activity with badge disabled',page.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/}));const inbox=page.getByRole('region',{name:'Activity to review',exact:true});await expect(inbox).toContainText('Questions and approvals still wait for your answer');await expect(inbox).toContainText('Decision audit');await close();
+  const after=await check();for(const key of ['sent','decisions','questions','approvals','grants'])evidence.assertion('Badge preference preserves '+key,after[key],before[key]);await expect(card(ready.required)).toBeVisible();await expect(approval('native-allow')).toBeVisible();await expect(composer()).toHaveDraft('Keep private decision draft');
  });
  await probe('review-is-not-approval',['decisions.approval'],async()=>{
   const navigation=page.getByRole('button',{name:'Open navigation',exact:true});if(await navigation.count())await act('Open navigation',navigation);await act('Open Activity',page.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/}));const inbox=page.getByRole('region',{name:'Activity to review',exact:true});await expect(inbox).toContainText('Questions and approvals still wait for your answer');const review=inbox.getByRole('button',{name:'Mark all reviewed',exact:true});if(await review.isEnabled())await act('Mark visible notices reviewed',review);await close();
