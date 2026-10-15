@@ -2335,6 +2335,125 @@
       "limits": [
         "Existing idle chat only; no real package/behavioral validation, network fetch or active-worker acceptance."
       ]
+    },
+    {
+      "workflow": "bundles.selection",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Public Workspace Details changes only future chat bundle default",
+        "Create draft and select its private override",
+        "Reject default save, restore inheritance and return original chat"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named proof context only; unsupported generic external effects or syscall-level hidden-read assertions remain unqualified."
+      ]
+    },
+    {
+      "workflow": "entry.reload",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Use actual Reload now with different packaged build bytes",
+        "Retain draft, attachment, reading anchor and new identity",
+        "Refuse while dirty Canvas/save checkpoint unresolved"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named proof context only; unsupported generic external effects or syscall-level hidden-read assertions remain unqualified."
+      ]
+    },
+    {
+      "workflow": "canvas.tabs",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open real file/tab and preserve chat",
+        "Refuse unsaved replacement",
+        "Close/reopen supported local theme without repeated approval"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named proof context only; unsupported generic external effects or syscall-level hidden-read assertions remain unqualified."
+      ]
+    },
+    {
+      "workflow": "canvas.formats",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open actual supported text/code/Markdown/JSON/HTML/PDF/Babylon/local browser views",
+        "Inspect source and renderer recovery",
+        "Check narrow containment and no model call"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named proof context only; unsupported generic external effects or syscall-level hidden-read assertions remain unqualified."
+      ]
+    },
+    {
+      "workflow": "canvas.media",
+      "expectedIndices": [
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open exact GIF/media in Canvas",
+        "Preserve chat anchor and actual animation/source bounds"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named proof context only; unsupported generic external effects or syscall-level hidden-read assertions remain unqualified."
+      ]
+    },
+    {
+      "workflow": "canvas.interactive",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Review and explicitly approve supported local theme action",
+        "Restore/reopen/reload retains one exact approval effect"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named proof context only; unsupported generic external effects or syscall-level hidden-read assertions remain unqualified."
+      ]
+    },
+    {
+      "workflow": "canvas.outputs",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Canvas Outputs & review",
+        "Inspect real empty/read-failure/nonempty states",
+        "Attach reference without external browser fetch"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact named proof context only; unsupported generic external effects or syscall-level hidden-read assertions remain unqualified."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
