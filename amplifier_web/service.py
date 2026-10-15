@@ -4254,7 +4254,11 @@ class AppService:
                 # Lifecycle may update an originating schedule or a peer's
                 # saved receipt reference on another chat.
                 changed = self.schedules.sync()
-                self._publish_changes(sessions={session['id']} | changed | collaboration_changed)
+                # An exact input receipt normally changes only its message.
+                # Keep every affected owner; the save guard still widens for
+                # status, attention, or accumulated progress changing navigation.
+                self._publish_changes(sessions={session['id']} | changed | collaboration_changed,
+                                      detail_only=kind == 'runtime.delivery')
 
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""
