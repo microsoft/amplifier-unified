@@ -142,3 +142,14 @@ test('module mount failures expose remediation without another disclosure',()=>{
  assert.match(html,/tool-fixture/);assert.match(html,/Check the module entry point and async mount function/);
  assert.doesNotMatch(html,/<summary>Runtime message/);
 });
+
+
+test('saved observation windows and partial live tails do not invent whole-turn counts',()=>{
+ for(const flags of [{observationWindow:true},{partialWindow:true}]){
+  const turn={id:'window',phase:flags.partialWindow?'running':'recorded',startedAt:1,...flags};
+  const data={turns:[turn],nodes:[{id:'entry',kind:'tool',turnId:'window',label:'Recorded tool',phase:'recorded'}]};
+  const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'window',state:{view:{}},act}));
+  assert.doesNotMatch(html,/a-execution-call-counts|a-execution-usage/);
+  assert.match(html,flags.observationWindow?/Recent saved work/:/Working/);
+ }
+});

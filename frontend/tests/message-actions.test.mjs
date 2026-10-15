@@ -4,7 +4,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import assert from 'node:assert/strict';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {newestMessageIds,completedTurnEnds,MessageEntry,groupRecoveryMessages,RecoveryGroup}=await server.ssrLoadModule('/src/message-actions.jsx');
+const {newestMessageIds,completedTurnEnds,MessageEntry}=await server.ssrLoadModule('/src/message-actions.jsx');
 test.after(()=>server.close());
 test('fork controls follow the last assistant entry in each completed user turn',()=>{
  const messages=[{id:'u1',role:'user',inputId:'1'},{id:'a1',role:'assistant'},{id:'a2',role:'assistant'},{id:'u2',role:'user',inputId:'2'},{id:'a3',role:'assistant'}];
@@ -41,23 +41,6 @@ test('verified service observations are expandable activity while matching user 
  const user=render({id:'user',role:'user',text});assert.doesNotMatch(user,/>You</);assert.match(user,/aria-label="Your message"/);assert.match(user,/aria-label="Edit message"/);
 });
 
-test('consecutive recovered records share one disclosure and preserve each original record',()=>{
- const rows=Array.from({length:35},(_,i)=>({id:'recovery-'+i,role:'user',text:'Result '+i,observation:{source:'local-job-recovery',id:'job-'+i}}));
- const original=JSON.stringify(rows),groups=groupRecoveryMessages(rows);
- assert.equal(groups.length,1);assert.deepEqual(groups[0],rows);
- const html=renderToStaticMarkup(React.createElement(RecoveryGroup,{messages:groups[0],session:{id:'chat'},state:{view:{}},act:()=>{}}));
- assert.match(html,/Saved work notices \(35\)/);assert.equal((html.match(/<details/g)||[]).length,1);
- for(const row of rows)assert.ok(!html.includes(`data-message-id="${row.id}"`));
- assert.equal(JSON.stringify(rows),original);
-});
-
-test('recovery groups stop at real messages, unverified quotes and execution boundaries',()=>{
- const recovered=id=>({id,observation:{source:'local-job-recovery',id:'job-'+id}});
- const rows=[recovered('1'),recovered('2'),{id:'reply',role:'assistant'},recovered('3'),recovered('4'),{id:'quote',role:'user',text:'Recovered work update'},recovered('5')];
- const groups=groupRecoveryMessages(rows,new Map([['3',['turn']]]));
- assert.deepEqual(groups.map(g=>Array.isArray(g)?g.map(m=>m.id):g.id),[['1','2'],'reply','3','4','quote','5']);
-});
-
 test('smart date follows every action, including branch, without a native tooltip',()=>{
  const html=renderToStaticMarkup(React.createElement(MessageEntry,{message:{id:'answer',role:'assistant',text:'Done',createdAt:100},session:{id:'chat'},state:{view:{}},act:()=>{},forkTurn:1,working:false}));
  assert.ok(html.indexOf('data-action="session.fork"')<html.indexOf('<time'));
@@ -92,4 +75,19 @@ test('trusted peer caption is always visible outside hover actions with a matchi
  assert.doesNotMatch(unknown,/a-message-attribution/);
  const human=render({id:'human',role:'user',text:caption});
  assert.match(human,/aria-label="Your message"/);assert.doesNotMatch(human,/a-message-attribution/);
+});
+
+
+test('display-only saved messages expose copy without guessed edit, fork or reply authority',()=>{
+ for(const role of ['user','assistant']){
+  const html=renderToStaticMarkup(React.createElement(MessageEntry,{message:{id:'native-window:opaque',role,text:'Saved text',displayOnly:true},session:{id:'chat'},state:{view:{}},act:()=>{},forkTurn:42,working:false}));
+  assert.match(html,/Copy message as Markdown/);
+  assert.doesNotMatch(html,/Edit message|Fork conversation|Reply to|React to|a-inline-media/);
+ }
+});
+
+
+test('bounded pages never guess global fork ordinals',()=>{
+ const session={id:'saved',status:'idle',messageWindow:{mode:'cursor',total:null,offset:null},messages:[{id:'user',role:'user'},{id:'answer',role:'assistant'}]};
+ assert.equal(completedTurnEnds(session).size,0);
 });

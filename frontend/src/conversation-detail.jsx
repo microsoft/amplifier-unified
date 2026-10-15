@@ -2,6 +2,7 @@ import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {request} from './api';
 import {Markdown} from './markdown';
 import {readDetail} from './detail-read';
+import {hasEarlierWindow,returnedWindow,validateHistoryPage} from './history-window';
 export {readDetail} from './detail-read';
 export function DetailText({text,reference,markdown=false,automatic=false,writingContext,fileContext,userContent=false}){
  const [loaded,setLoaded]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[visible,setVisible]=useState(false);
@@ -24,29 +25,25 @@ export function DetailText({text,reference,markdown=false,automatic=false,writin
  return <div className="a-detail-text" ref={element}>{markdown?<Markdown text={value??text} userContent={userContent} writingContext={writingContext} fileContext={fileContext}/>:<p>{value??text}</p>}{reference&&value===null&&(automatic&&!error?<span className="a-caption" role="status">{busy?'Loading complete response…':'Complete response loads when visible.'}</span>:<button type="button" className="a-link" disabled={busy} onClick={load}>{busy?'Loading full text…':error?'Retry loading full text':'Show full text'}</button>)}{error&&<p role="alert">{error}</p>}</div>;
 }
 const unique=rows=>[...new Map(rows.map(row=>[row.id,row])).values()];
-export function useConversationDetail(source,beforeApply,dispatch){
- const [saved,setSaved]=useState(null),[busy,setBusy]=useState(''),[error,setError]=useState(''),[focused,setFocused]=useState(null),[jumpTarget,setJumpTarget]=useState(null);
+export function useConversationDetail(source,beforeApply){
+ const [saved,setSaved]=useState(null),[busy,setBusy]=useState(''),[error,setError]=useState(''),[focused,setFocused]=useState(null),[jumpTarget,setJumpTarget]=useState(null),[nativeView,setNativeView]=useState(null);
  const current=useRef(null);
  const sourceKey=source?.id;
  if(current.current?.key!==sourceKey)current.current={key:sourceKey};
  const paging=useRef(null),[frozen,setFrozen]=useState(null);
  const reads=useRef(new Set());
  // A read belongs to the visible chat. Releasing it never cancels an accepted
- // command, including the explicit native-history expansion below.
+ // command. Saved-history paging is a disposable read only.
  useEffect(()=>()=>{for(const token of reads.current)if(token.id===sourceKey)token.abort.abort()},[sourceKey]);
  const beginRead=id=>{const token={id,abort:new AbortController()};reads.current.add(token);paging.current=token;return token};
  const finishRead=token=>{reads.current.delete(token);token.abort.abort()};
- const originalSource=source,nativeWait=useRef(null);
- useEffect(()=>{
-  const wait=nativeWait.current;if(!wait)return;
-  if(originalSource?.id!==wait.id)wait.finish('The conversation changed.');
-  else if(originalSource?.historyError)wait.finish(originalSource.historyError);
-  else if(originalSource?.sharedHistoryOffset<wait.before)wait.finish();
- },[originalSource]);
- useEffect(()=>()=>{paging.current=null;nativeWait.current?.finish('The conversation changed.')},[]);
- if(frozen?.id===source?.id)source=frozen;
+ const originalSource=source;
+ useEffect(()=>()=>{paging.current=null},[]);
+ if(frozen&&source&&frozen.id===source.id)source={...source,messages:frozen.messages,
+  messageWindow:frozen.messageWindow,execution:frozen.execution,executionWindow:frozen.executionWindow,
+  workProjection:frozen.workProjection?{...frozen.workProjection,current:false}:undefined};
  const previous=useRef(source?.messageWindow?.total);
- useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null)},[originalSource?.id]);
+ useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null);setNativeView(null)},[originalSource?.id]);
  useEffect(()=>{setFocused(null);setJumpTarget(null)},[originalSource?.id]);
  useEffect(()=>{if(source?.messageWindow?.total<previous.current)setSaved(null);previous.current=source?.messageWindow?.total},[source?.messageWindow?.total]);
  const extra=saved?.id===source?.id?saved:null;
@@ -56,12 +53,13 @@ export function useConversationDetail(source,beforeApply,dispatch){
  const projected=useMemo(()=>source?{...source,messages}:source,[source,messages]);
  const expandedMessages=useMemo(()=>extra?unique([...extra.messages,...(source?.messages||[])]).map(row=>source?.messageAnnotations?.[row.id]?{...row,...source.messageAnnotations[row.id]}:row):messages,[extra?.messages,source?.messages,source?.messageAnnotations,messages]);
  const regular=useMemo(()=>source&&extra?{...source,messages:expandedMessages,sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
-  messageWindow:{...source.messageWindow,...(extra.messages.length?{offset:extra.sourceOffset!=null?Math.max(0,extra.sourceOffset-(source.historyManaged?source.sharedHistoryOffset||0:0)):extra.messageOffset,sourceOffset:extra.sourceOffset,before:extra.messages[0].id}:{} )},
+  messageWindow:{...source.messageWindow,...(extra.messageWindow||(extra.messages.length?{offset:extra.sourceOffset!=null?Math.max(0,extra.sourceOffset-(source.historyManaged?source.sharedHistoryOffset||0:0)):extra.messageOffset,sourceOffset:extra.sourceOffset,before:extra.messages[0].id}:{}))},
   execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])]),segments:unique([...(extra.segments||[]),...(source.execution?.segments||[])])},
   executionWindow:{...source.executionWindow,...extra.groupWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected,[source,extra,projected,expandedMessages]);
  const focusedHere=focused?.sessionId===source?.id?focused:null;
- const session=useMemo(()=>focusedHere?{...projected,messages:focusedHere.messages,streaming:'',execution:focusedHere.execution,
-  sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular,[focusedHere,projected,regular]);
+ const nativeHere=nativeView?.id===source?.id?nativeView:null;
+ const session=useMemo(()=>nativeHere?{...projected,messages:nativeHere.messages,messageWindow:nativeHere.window,workProjection:undefined,streaming:'',execution:{nodes:[],turns:[],segments:[]},executionWindow:null}:focusedHere?{...projected,messages:focusedHere.messages,workProjection:undefined,streaming:'',execution:focusedHere.execution,
+  sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular,[nativeHere,focusedHere,projected,regular]);
  async function around(messageId,{jump=true,isCurrent=()=>true}={}){
   if(paging.current||!originalSource)return false;
   const id=originalSource.id,token=beginRead(id);setBusy('conversation');setError('');
@@ -73,45 +71,56 @@ export function useConversationDetail(source,beforeApply,dispatch){
   }catch(error){if(!token.abort.signal.aborted&&originalId.current===id&&paging.current===token&&isCurrent())setError(error.message);return false}
   finally{finishRead(token);if(paging.current===token){paging.current=null;setBusy('')}}
  }
- function latest(jump=true){paging.current?.abort.abort();paging.current=null;nativeWait.current?.finish('The reading window changed.');setFrozen(null);setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
+ function latest(jump=true){paging.current?.abort.abort();paging.current=null;setNativeView(null);setFrozen(null);setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
  async function earlier(part){
   if(paging.current||!session)return;
   const id=session.id,token=beginRead(id);
   const key=current.current;
   setBusy('conversation');setError('');setFrozen(session);
-  const parts=part?[part]:['messages','nodes'];
-  const windows=parts.map(part=>({part,window:part==='messages'?session.messageWindow:session.executionWindow})).filter(({window})=>window?.offset>0);
+  const parts=nativeHere?['messages']:part?[part]:['messages','nodes'];
+  const windows=parts.map(part=>({part,window:part==='messages'?session.messageWindow:session.executionWindow})).filter(({window})=>hasEarlierWindow(window));
   try{
    // Commit the paired pages once, after both requests succeed. Current text
    // stays mounted while loading so activity cannot precede its messages.
-   const results=await Promise.all(windows.map(async ({part,window})=>({part,window,result:await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:window.part||part,before:window.before}),{signal:token.abort.signal})})));
+   const results=await Promise.all(windows.map(async ({part,window})=>({part,window,result:await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:window.part||part,before:window.before,...(nativeHere?{native:'true'}:{})}),{signal:token.abort.signal})})));
+   for(const {window,result} of results)validateHistoryPage(result,window);
    if(current.current!==key)return;
-   if(!part&&!session.messageWindow?.offset&&session.sharedHistoryOffset>0&&dispatch){
-    let finish;
-    const loaded=new Promise(resolve=>{finish=resolve});
-    const timer=setTimeout(()=>finish('Loading earlier conversation took too long. Try again.'),60000);
-    nativeWait.current={id,before:session.sharedHistoryOffset,finish};
-    try{
-     await dispatch('session.history',{id,before:session.sharedHistoryOffset,limit:100});
-     const failure=await loaded;if(failure)throw Error(failure);
-     // Loading from disk expands the canonical native window, not the bounded
-     // browser tail. Fetch the preceding display page by its stable message ID.
-     if(session.messages[0])results.push({part:'messages',window:{},result:await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:'messages',before:session.messages[0].id}),{signal:token.abort.signal})});
-    }finally{clearTimeout(timer);if(nativeWait.current?.finish===finish)nativeWait.current=null}
-   }
    if(paging.current!==token||originalId.current!==id)return;
    beforeApply?.();
+   if(nativeHere){
+    const result=results[0]?.result;
+    if(result)setNativeView(old=>old?.id===id?{...old,messages:unique([...result.items,...old.messages]),window:returnedWindow(result)}:old);
+    return;
+   }
    setSaved(old=>{
     let previous=old?.id===id?old:{id,messages:[],nodes:[],turns:[]};
     for(const {part,window,result} of results)previous={...previous,[part]:unique([...(window.part==='groups'?[]:result.items),...previous[part],...(part==='messages'?session.messages:[])]),
-     ...(part==='messages'?{messageOffset:result.offset,sourceOffset:result.sourceOffset,userOffset:result.userOffset}:{nodeOffset:result.offset,turns:unique([...(result.turns||[]),...previous.turns]),segments:unique([...(window.part==='groups'?result.items:result.segments||[]),...(previous.segments||[])]),groupWindow:window.part==='groups'?{offset:result.offset,before:result.before}:previous.groupWindow})};
+     ...(part==='messages'?{messageOffset:result.offset,sourceOffset:result.sourceOffset,userOffset:result.userOffset,
+      ...(window.mode==='cursor'?{messageWindow:returnedWindow(result)}:{})}:{nodeOffset:result.offset,turns:unique([...(result.turns||[]),...previous.turns]),segments:unique([...(window.part==='groups'?result.items:result.segments||[]),...(previous.segments||[])]),groupWindow:window.part==='groups'?returnedWindow(result):previous.groupWindow})};
     return previous;
    });
-  }catch(e){if(!token.abort.signal.aborted&&originalId.current===id)setError(e.message)}finally{finishRead(token);if(paging.current===token){paging.current=null;setFrozen(null);setBusy('')}}
+  }catch(e){if(!token.abort.signal.aborted&&originalId.current===id)setError(e.message)}finally{finishRead(token);if(paging.current===token){paging.current=null;setBusy('')}}
+ }
+ async function openNativeHistory(){
+  if(paging.current||!originalSource)return;
+  const id=originalSource.id,owner=current.current,token=beginRead(id);setBusy('conversation');setError('');
+  try{
+   const result=validateHistoryPage(await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:'messages',native:'true'}),{signal:token.abort.signal}),{mode:'cursor'});
+   if(current.current===owner&&paging.current===token){beforeApply?.();setFocused(null);setNativeView({id,messages:result.items,window:returnedWindow(result)});setJumpTarget({id:'latest'})}
+  }catch(e){if(!token.abort.signal.aborted&&current.current===owner)setError(e.message)}
+  finally{finishRead(token);if(paging.current===token){paging.current=null;setBusy('')}}
  }
  const originalId=useRef(originalSource?.id);
  if(originalId.current!==originalSource?.id){originalId.current=originalSource?.id;paging.current=null}
- const hasEarlier=session?.messageWindow?.offset>0||session?.executionWindow?.offset>0||session?.sharedHistoryOffset>0;
- const controls=focusedHere?<><div className="a-history-window-controls"><button className="a-soft" disabled={!!busy||!focusedHere.before} onClick={()=>around(focusedHere.before)}>Earlier messages</button><button className="a-soft" disabled={!!busy||!focusedHere.after} onClick={()=>around(focusedHere.after)}>Later messages</button><button className="a-link" disabled={!!busy} onClick={latest}>Return to latest</button></div>{busy&&<p role="status">Loading conversation…</p>}{error&&<p role="alert">{error}</p>}</>:<>{hasEarlier&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier()}>{busy?'Loading earlier conversation…':'Load earlier conversation'}</button>}{error&&<p role="alert">{error}</p>}</>;
- return {session,controls,earlier,busy,around,latest,focused:!!focusedHere,jumpRequest:jumpTarget};
+ const hasEarlier=hasEarlierWindow(session?.messageWindow)||hasEarlierWindow(session?.executionWindow);
+ const gaps=session?.messageWindow?.unavailableRanges?.length||session?.executionWindow?.unavailableRanges?.length;
+ const controls=focusedHere?<><div className="a-history-window-controls"><button className="a-soft" disabled={!!busy||!focusedHere.before} onClick={()=>around(focusedHere.before)}>Earlier messages</button><button className="a-soft" disabled={!!busy||!focusedHere.after} onClick={()=>around(focusedHere.after)}>Later messages</button><button className="a-link" disabled={!!busy} onClick={()=>latest()}>Return to latest</button></div>{busy&&<p role="status">Loading conversation…</p>}{error&&<p role="alert">{error}</p>}</>:<>
+  {(nativeHere||frozen||extra||error)&&<button className="a-link" type="button" disabled={!!busy} onClick={()=>latest()}>Return to latest</button>}
+  {!nativeHere&&originalSource?.nativeContinuation?.status==='available'&&<button className="a-link" type="button" disabled={!!busy} onClick={openNativeHistory}>View saved runtime history</button>}
+  {hasEarlier&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier()}>{busy?'Loading earlier conversation…':'Load earlier conversation'}</button>}
+  {!!gaps&&<p role="status">Some saved records could not be shown in this page. Earlier pages remain available.</p>}
+  {busy&&!hasEarlier&&<p role="status">Loading conversation…</p>}{error&&<p role="alert">{error}</p>}
+ </>;
+
+ return {session,controls,earlier,busy,around,latest,openNativeHistory,focused:!!focusedHere||!!nativeHere||!!frozen,jumpRequest:jumpTarget};
 }
