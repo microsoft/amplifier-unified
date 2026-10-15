@@ -25,12 +25,14 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
   if(inFlight.current||!active||readOnly)return;
   const saved=pending.current||{action,args:{workspaceId,sessionId,...args,requestId:crypto.randomUUID()},id:crypto.randomUUID()};
   if(!retain({...draft,pending:saved},true)){setError('This tab cannot save a recovery receipt. Allow browser storage or use another tab before changing the environment. Nothing was sent.');return}
+  // A late response from an old mount must not clear a newer saved request.
+  const clearPending=()=>{try{const retained=JSON.parse(sessionStorage.getItem(key));if(retained?.pending?.id!==saved.id)return true;return retain({...retained,pending:null},true)}catch{return false}};
   inFlight.current=true;setBusy(true);setError('');
   try{
    const result=unwrap(await act(saved.action,saved.args,{id:saved.id}));
-   const cleared=retain({...draft,pending:null},true);
+   const cleared=clearPending();
    if(live.current){setRequest(result.request||null);setRemoving(null);await refresh();if(!cleared)setError('The response was received, but this tab could not clear its saved request. Check the same request after browser storage is available.')}
-  }catch(e){if(e.confirmed)retain({...draft,pending:null},true);if(live.current)setError(e.message||'No confirmed response. Check the same request before trying another change.')}
+  }catch(e){if(e.confirmed)clearPending();if(live.current)setError(e.message||'No confirmed response. Check the same request before trying another change.')}
   finally{inFlight.current=false;if(mounted.current)setBusy(false)}
  };
  const rows=page?.items||[],capability=page?.capability,blocked=busy||!!draft.pending||!active||readOnly||capability?.status!=='ready';

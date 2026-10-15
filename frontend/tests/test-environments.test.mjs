@@ -63,17 +63,44 @@ for(const failed of [false,true])test(`a late environment ${failed?'error':'page
  }finally{await act(async()=>root?.unmount())}
 });
 
-test('a settled success after unmount clears the durable receipt without replay on remount',async()=>{
+for(const failed of [false,true])test(`a settled ${failed?'transport error':'success'} after unmount preserves recovery without replay on remount`,async()=>{
  let settle,root;const calls=[];
- const dispatch=(action,args,meta)=>{calls.push({action,args,...(meta?{meta}:{})});return action==='workspace.environments.read'?Promise.resolve(accepted(page)):new Promise(resolve=>{settle=()=>resolve(accepted({request:{state:'complete'}}))})};
+ const dispatch=(action,args,meta)=>{calls.push({action,args,...(meta?{meta}:{})});return action==='workspace.environments.read'?Promise.resolve(accepted(page)):new Promise((resolve,reject)=>{settle=()=>failed?reject(Error('Lost response')):resolve(accepted({request:{state:'complete'}}))})};
  const props={workspaceId:'w',sessionId:'a',act:dispatch,active:true};
  try{
   await act(async()=>{root=create(React.createElement(TaskEnvironments,props))});
   await act(async()=>root.root.findByProps({'aria-label':'Start test environment'}).props.onSubmit({preventDefault(){}}));
   assert.ok(JSON.parse(storage.get(key)).pending);
   await act(async()=>root.unmount());await act(async()=>settle());
-  assert.equal(JSON.parse(storage.get(key)).pending,null);assert.equal(calls.length,2);
+  assert.equal(Boolean(JSON.parse(storage.get(key)).pending),failed);assert.equal(calls.length,2);
   await act(async()=>{root=create(React.createElement(TaskEnvironments,props))});
-  assert.deepEqual(calls[2],read);assert.equal(calls.length,3);assert.equal(button(root,'Start test environment').props.disabled,false);
+  assert.deepEqual(calls[2],read);assert.equal(calls.length,3);assert.equal(Boolean(button(root,'Start test environment').props.disabled),failed);
+  if(failed){assert.equal(JSON.parse(storage.get(key)).pending.args.requestId,calls[1].args.requestId);assert.equal(Boolean(button(root,'Check the same environment request').props.disabled),false)}
+ }finally{await act(async()=>root?.unmount())}
+});
+
+for(const rejected of [false,true])test(`an old mount's late ${rejected?'rejection':'success'} cannot clear a newer durable request`,async()=>{
+ let root,settleOld,settleNew;const calls=[];
+ const dispatch=(action,args,meta)=>{
+  calls.push({action,args,...(meta?{meta}:{})});
+  if(action==='workspace.environments.read')return Promise.resolve(accepted(page));
+  const mutations=calls.filter(row=>row.action!=='workspace.environments.read');
+  if(mutations.length===1)return new Promise(resolve=>{settleOld=()=>resolve(rejected?{accepted:false,error:'Original rejected'}:accepted({request:{state:'complete'}}))});
+  if(mutations.length===2)return Promise.resolve(accepted({request:{state:'complete'}}));
+  return new Promise(resolve=>{settleNew=()=>resolve(accepted({request:{state:'complete'}}))});
+ };
+ const props={workspaceId:'w',sessionId:'a',act:dispatch,active:true};
+ const start=()=>root.root.findByProps({'aria-label':'Start test environment'}).props.onSubmit({preventDefault(){}});
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,props))});await act(async()=>start());
+  const original=JSON.parse(storage.get(key)).pending;await act(async()=>root.unmount());
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,props))});
+  assert.equal(calls.filter(row=>row.action!=='workspace.environments.read').length,1,'remount does not replay');
+  await act(async()=>button(root,'Check the same environment request').props.onClick());
+  assert.equal(calls.filter(row=>row.action!=='workspace.environments.read')[1].args.requestId,original.args.requestId);
+  await act(async()=>start());const newer=JSON.parse(storage.get(key)).pending;assert.notEqual(newer.id,original.id);assert.notEqual(newer.args.requestId,original.args.requestId);
+  await act(async()=>settleOld());assert.deepEqual(JSON.parse(storage.get(key)).pending,newer,'old completion preserves the newer recovery receipt');
+  assert.equal(button(root,'Refresh test environments').props.disabled,true,'the new request still owns its pending controls');
+  await act(async()=>settleNew());assert.equal(JSON.parse(storage.get(key)).pending,null);assert.equal(button(root,'Start test environment').props.disabled,false);
  }finally{await act(async()=>root?.unmount())}
 });
