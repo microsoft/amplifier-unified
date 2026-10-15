@@ -87,6 +87,6 @@ def select(service, session, command_id, fingerprint, *, include_state):
         if queue.full():
             queue.get_nowait()
         queue.put_nowait(snapshot)
-    if session.get('nativeProject'):
+    if client.get('kind') == 'web' or session.get('nativeProject'):
         service._task(service.history.refresh_session(session['id']))
     return {**receipt, **({'state': snapshot or service.browser_state()} if include_state else {})}

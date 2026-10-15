@@ -79,6 +79,15 @@ class TranscriptWindowReader:
     def __init__(self):
         self._key = os.urandom(32)
 
+    @staticmethod
+    def source_revision(directory, owner):
+        root = Path(directory).resolve()
+        paths = [root / name for name in
+                 ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending')]
+        if any(path.resolve().parent != root for path in paths):
+            raise ValueError('Transcript source escaped its canonical owner.')
+        return hashlib.sha256(_encode([owner, [_stamp(path) for path in paths]])).hexdigest()
+
     def _token(self, payload):
         raw = _encode(payload)
         return base64.urlsafe_b64encode(hmac.digest(self._key, raw, 'sha256') + raw).decode().rstrip('=')

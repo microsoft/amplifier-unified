@@ -51,7 +51,7 @@ async def serve(request, service, streams):
         snapshot = service.browser_state()
         selected = next((row for row in snapshot['sessions']
                          if row['id'] == snapshot.get('selectedSessionId')), None)
-        if selected and selected.get('nativeProject'):
+        if selected and (service.history.windows.bound_web() or selected.get('nativeProject')):
             service._task(service.history.refresh_session(selected['id']))
         previous = None
         compact = request.query.get('transport') == 'delta-v1'
