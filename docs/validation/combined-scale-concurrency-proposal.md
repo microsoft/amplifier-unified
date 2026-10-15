@@ -88,7 +88,16 @@ allowlisted worker to stream and stop normally. Record actual child cleanup.
 ## Measurement and reporting
 
 Reuse the qualified real-worker benchmark recipe rather than introduce a second
-runtime simulator. Freeze one app/source/build/database baseline and capture tier.
+runtime simulator: `tests/fixtures/runtime_concurrency_server.py`, its local
+`amplifier_module_provider_concurrency` provider, and
+`frontend/tests/runtime-concurrency-browser.mjs` in the integrated readiness
+source. The fixture uses a real RuntimeManager with the qualified worker Python
+and `runtime_worker.py`; the provider emits actual coordinator streaming hooks.
+Its existing use of an already qualified interpreter bypasses fresh runtime
+qualification and must remain an explicit limitation. Empty `bundle.app` and the
+excluded image-generation module prevent implicit external modules.
+
+Freeze one app/source/build/database baseline and capture tier.
 Run 0/6/12 workers with exact admission/stream receipts and sampled copied-history
 navigation in the same process. Record main-loop responsiveness, request latency,
 stream cadence, CPU/RSS, query work, and cleanup. Pause capture I/O and other test
