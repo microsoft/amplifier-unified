@@ -83,4 +83,6 @@ def scope(app, selection):
     if not isinstance(title, str):
         title = chosen or workspace
     marker = {'id': identity, 'workspace': workspace}
-    return {'id': identity, 'title': title}, marker, sessions, ids, paths, project, native
+    from .native_history import _timestamp
+    activity = _timestamp(records[chosen].get('last_event_at')) if chosen else None
+    return {'id': identity, 'title': title, 'reviewActivityAt': activity}, marker, sessions, ids, paths, project, native

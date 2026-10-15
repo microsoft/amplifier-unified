@@ -10,10 +10,10 @@ if(!out)throw Error('Owned AMPLIFIER_TEST_ARTIFACTS is required');
 await mkdir(out,{recursive:true});
 const variants=[['desktop-pointer',1280,950,'pointer'],['desktop-keyboard',1280,950,'keyboard'],['narrow-touch',390,844,'touch'],['narrow-keyboard',390,844,'keyboard']];
 const results=[];
-for(const [id,width,height,mode] of variants){
+for(const [id,width,height,mode] of variants.filter(([id])=>!process.env.AMPLIFIER_TEST_VARIANTS||process.env.AMPLIFIER_TEST_VARIANTS.split(',').includes(id))){
  let fixture,browser,page,logs='';const row={id,status:'pending',context:'synthetic-storage-cleanup',limits:['Keyboard activation uses explicit focus plus Enter; full sequential Tab traversal not claimed.','Only disposable synthetic history; no real data or provider execution.','Bounded filesystem traversal and protected active owners require independent backend evidence.']},errors=[],external=[],actions=[];
  try{
-  fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/storage_history_ui_server.py']);
+  fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/storage_history_ui_server.py'],{env:{...process.env,AMPLIFIER_TEST_DUPLICATE_TITLES:'1'}});
   fixture.stderr.on('data',chunk=>logs+=chunk);
   const boot=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data)}}catch{}})});
   browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
@@ -47,12 +47,18 @@ for(const [id,width,height,mode] of variants){
   await activate(storage.getByRole('button',{name:'sessions',exact:true}));
   await activate(storage.getByRole('button',{name:'Review cleanup for '+initial.ids[0],exact:true}));
   const review=storage.locator('.a-chat-delete'),remove=review.getByRole('button',{name:'Delete permanently',exact:true});
-  await expect(remove).toBeEnabled();await expect(review).toContainText('This cannot be undone.');await expect(review).toContainText('Remove one session');
+  await expect(remove).toBeEnabled();await expect(review).toContainText('This cannot be undone.');await expect(review).toContainText('Same saved title');
+  await expect(review.locator('[data-part="deletion-review-identity"]')).toContainText(initial.workspace);
+  await activate(review.getByText('Exact data being removed',{exact:true}));
+  await expect(review.locator('code')).toHaveText(initial.ids[0]);
   assert.deepEqual((await state()).exists,[true,true]);
   assert.equal(actions.filter(value=>value.action==='storage.historyDelete').length,0);
   const previewAction=actions.filter(value=>value.action==='storage.historyDeletePreview').at(-1);
   assert.deepEqual(previewAction.args,{project:initial.project,nativeId:initial.ids[0]});
   await activate(review.getByRole('button',{name:'Keep session data',exact:true}));assert.deepEqual((await state()).exists,[true,true]);
+  await activate(storage.getByRole('button',{name:'Review cleanup for '+initial.ids[1],exact:true}));await expect(remove).toBeEnabled();
+  await expect(review).toContainText('Same saved title');await activate(review.getByText('Exact data being removed',{exact:true}));await expect(review.locator('code')).toHaveText(initial.ids[1]);
+  await activate(review.getByRole('button',{name:'Keep session data',exact:true}));
   await activate(storage.getByRole('button',{name:'Review cleanup for '+initial.ids[0],exact:true}));await expect(remove).toBeEnabled();
   const expired=await page.request.post(boot.url+'/api/fixture/history/expire-review');assert.ok(expired.ok());assert.ok((await expired.json()).expired>0);
   await activate(remove);await expect(review.getByRole('alert')).toContainText('preview expired');
@@ -67,7 +73,7 @@ for(const [id,width,height,mode] of variants){
   await activate(nav.getByRole('button',{name:'Storage',exact:true}));await expect(storage.locator('.a-storage-categories li')).toHaveCount(6);
   assert.deepEqual(actions.filter(value=>['conversation.send','session.warm'].includes(value.action)),[]);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
   await page.screenshot({path:out+'/'+id+'.png'});
-  row.status='passed';row.claims=[{workflow:'storage.review',expectedIndices:[1]},{workflow:'storage.delete',expectedIndices:[0,1,2,3]},{workflow:'privacy.cleanup',expectedIndices:[0,2]}];row.partial=[{workflow:'storage.review',expectedIndex:0,reason:'Review names title/counts/scope but not exact native ID/path; duplicate-title ambiguity unqualified.'}];row.receipt={expiredPreviewRejected:true,exactOneSessionRemoved:true,otherSessionAndProjectRetained:true};
+  row.status='passed';row.claims=[{workflow:'storage.review',expectedIndices:[0,1]},{workflow:'storage.delete',expectedIndices:[0,1,2,3]},{workflow:'privacy.cleanup',expectedIndices:[0,2]}];row.partial=[];row.receipt={duplicateTitlesDistinguished:true,expiredPreviewRejected:true,exactOneSessionRemoved:true,otherSessionAndProjectRetained:true};
  }catch(error){row.status='failed';row.error=String(error);if(page)try{await page.screenshot({path:out+'/'+id+'-failure.png'})}catch{}}
  finally{
   try{await browser?.close()}catch(error){row.cleanupError=String(error);row.status='failed'}

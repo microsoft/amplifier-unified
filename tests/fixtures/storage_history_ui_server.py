@@ -1,6 +1,7 @@
 """Synthetic session-history cleanup and navigation fixture."""
 import asyncio
 import json
+import os
 import tempfile
 from pathlib import Path
 from aiohttp import web
@@ -12,7 +13,8 @@ async def main(home):
     workspace=home/'project';workspace.mkdir()
     (workspace/'source.txt').write_text('Keep project working files')
     ids=[]
-    for title in ['Remove one session','Keep until project cleanup']:
+    titles = ['Same saved title', 'Same saved title'] if os.environ.get('AMPLIFIER_TEST_DUPLICATE_TITLES') == '1' else ['Remove one session','Keep until project cleanup']
+    for title in titles:
         await service.dispatch('session.create',{'title':title,'workspace':str(workspace)})
         row=service._session();sid=row['id'];ids.append(sid)
         directory=sessions_dir(workspace)/sid;directory.mkdir(parents=True,exist_ok=True)
@@ -20,14 +22,19 @@ async def main(home):
         (directory/'transcript.jsonl').write_text('{"role":"user","content":"Synthetic saved turn"}\n')
     # Settle native discovery and display reconciliation before exposing the
     # fixture. A preview/confirm test must not race initial fixture population.
-    await service.history.refresh()
+    for _ in range(8):
+        await service.history.refresh()
+        if all(service._session(sid, hydrate=False).get('nativeProject') == project_slug(workspace) for sid in ids):
+            break
+    else:
+        raise RuntimeError('Synthetic native identities did not finish bounded discovery')
     for sid in ids:
         await service.history.refresh_session(sid)
     await service._flush_pending_progress()
     service.state['view'].update(panel=None)
     service._publish()
     async def info(request):
-        return web.json_response({'project':project_slug(workspace),'ids':ids,'exists':[(sessions_dir(workspace)/sid).exists() for sid in ids], 'projectExists':(workspace/'source.txt').exists()})
+        return web.json_response({'project':project_slug(workspace),'workspace':str(workspace),'ids':ids,'exists':[(sessions_dir(workspace)/sid).exists() for sid in ids], 'projectExists':(workspace/'source.txt').exists()})
     app.router.add_get('/api/fixture/history',info)
     async def expire_review(request):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':

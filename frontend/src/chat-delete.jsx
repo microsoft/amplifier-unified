@@ -23,9 +23,14 @@ export function ChatDelete({id,act,cancel,onDeleted,historySelection}){
   }catch(e){if(version===generation.current){setError(e.message);setPreview(null)}}
   finally{pending.current=false;if(version===generation.current)setBusy(false)}
  }
- const summary=preview?.summary;
+ const summary=preview?.summary,identity=preview?.reviewIdentity;
+ const activity=typeof identity?.lastActivityAt==='number'?new Date(identity.lastActivityAt*1000):null;
  return <div className="a-chat-delete" aria-busy={busy}>
   {preview?<><p>Permanently delete <strong>{preview.title||'this chat'}</strong>?</p><p>{preview.description}</p>
+   {identity&&<div data-part="deletion-review-identity"><p>Workspace: <strong className="a-wrap">{identity.workspace}</strong></p>
+    {activity&&Number.isFinite(activity.getTime())&&<p>Last recorded activity: <time dateTime={activity.toISOString()}>{activity.toLocaleString()}</time></p>}
+    <details><summary>Exact data being removed</summary>{identity.scope==='project'?<p>All saved sessions in this workspace, including their worker history.</p>:<p>Session ID: <code className="a-wrap">{identity.sessionId}</code>. This includes its worker history.</p>}</details>
+   </div>}
    {summary&&<p className="a-caption">{summary.conversationCount} saved conversation{summary.conversationCount===1?'':'s'} · {summary.fileCount} file{summary.fileCount===1?'':'s'} · {summary.attachmentCount} attachment{summary.attachmentCount===1?'':'s'} · {summary.artifactCount} artifact{summary.artifactCount===1?'':'s'} · {summary.shareCount} published link{summary.shareCount===1?'':'s'}</p>}
    <p><strong>This cannot be undone.</strong></p>
    {!!preview.preserved?.length&&<p className="a-caption">Kept: {preview.preserved.join('; ')}.</p>}
