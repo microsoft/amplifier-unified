@@ -1,6 +1,7 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
 import {useWorkspaceChats,WorkspaceChatChoices} from './workspace-chat-choices';
 import {TaskStorage} from './workspace-task-storage';
+import {TaskEnvironments} from './workspace-test-environments';
 
 export function ManagedResources({workspace,state,act,active,readOnly}){
  const selectId=useId(),visit=useRef(0);
@@ -51,6 +52,7 @@ export function ManagedResources({workspace,state,act,active,readOnly}){
     </li>)}</ul>
     {page.operations.nextCursor&&<button className="a-soft" type="button" disabled={busy} onClick={()=>refresh({...cursors,operationsBefore:page.operations.nextCursor})}>More recorded operations</button>}
     <TaskStorage key={sid} workspaceId={workspace.id} sessionId={sid} initial={page.storage} act={act} active={active&&opened} readOnly={readOnly}/>
+    <TaskEnvironments key={'environment:'+sid} workspaceId={workspace.id} sessionId={sid} act={act} active={active&&opened} readOnly={readOnly}/>
     <p>Dynamic application preview ports, remote publishing targets and external processes are not inspected here. Cooperative reservations below do not establish physical isolation.</p>
    </>}
   </section>

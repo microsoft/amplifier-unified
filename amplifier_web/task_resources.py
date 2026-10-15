@@ -225,7 +225,9 @@ def read(home, sid, args):
     with closing(connect(home)) as db:
         limit, offset = args.get('limit', 25), args.get('offset', 0)
         rows = ([get(db, sid, args['id'])] if args.get('id') else [json.loads(value[0]) for value in db.execute(
-            'SELECT body FROM allocations WHERE root=? ORDER BY rowid DESC LIMIT ? OFFSET ?', (sid, limit+1, offset))])
+            "SELECT body FROM allocations WHERE root=? AND json_extract(body,'$.kind')!='test-environment' ORDER BY rowid DESC LIMIT ? OFFSET ?", (sid, limit+1, offset))])
+        if any(row['kind'] not in KINDS for row in rows):
+            raise ValueError('Use the resource’s dedicated controls to inspect its owned state.')
         return {'items': [public(home, observe(home, recover(home, db, row))) for row in rows[:limit]],
                 'nextOffset': offset + limit if len(rows) > limit else None}
 
@@ -266,6 +268,8 @@ def retire(home, sid, actor, args, command_id, admit=None):
                 raise ValueError('This resource command already belongs to a different retirement.')
             return json.loads(prior[1])
         row = get(db, sid, args['id'])
+        if row['kind'] not in KINDS:
+            raise ValueError('Use the resource’s dedicated controls; storage retirement cannot retire a live environment.')
         if row['revision'] != args['expectedRevision']:
             raise ValueError('The allocation changed. Inspect its current revision.')
         # A free owner lock proves no live allocation thread here. Contents,

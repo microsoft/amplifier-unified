@@ -1,0 +1,117 @@
+"""Isolated browser fixture: real task actions/receipts, controlled DTU transport."""
+import argparse
+import asyncio
+from collections import Counter
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import threading
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from aiohttp import web
+from amplifier_web.server import create_app
+from amplifier_web import task_environments as environments
+
+TOKEN = 'fixture-browser-control-token'
+
+
+class Runtime:
+    async def start(self, session, emit, **kwargs):
+        await emit('runtime.status', {'sessionId': session['id'], 'status': 'ready'})
+
+    async def stop(self, *args, **kwargs):
+        pass
+
+    async def close(self):
+        pass
+
+    async def control(self, *args, **kwargs):
+        return {}
+
+
+async def main(home, port):
+    home = home.resolve()
+    os.environ['AMPLIFIER_HOME'] = str(home / 'native')
+    os.environ['AMPLIFIER_WEB_HOME'] = str(home)
+    os.environ['AMPLIFIER_UNIFIED_IMPORT_HOME'] = str(home / 'legacy')
+    workspace = home / 'workspace'
+    workspace.mkdir()
+    (workspace / 'check.py').write_text("print('workspace check passed')\n")
+    calls, states, mode = [], {}, {'executeTimeout': False}
+    lock = threading.Lock()
+    config = {'python': '/fixture/managed/python', 'dockerHost': 'unix:///fixture/docker.sock', 'image': environments.APPROVED_IMAGE}
+    environments.configuration = lambda app: (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.')
+    def invoke(config, home, row, action, args):
+        with lock:
+            calls.append({'action': action, 'requestId': args.get('requestId'), 'resourceId': row['id']})
+            identity = 'fixture-' + row['id']
+            if action == 'prepare':
+                (environments.storage.directory(home, row) / 'source.tar').write_bytes(b'fixture-retained-source')
+                return {'ok': True, 'universeId': identity, 'snapshot': {'snapshot_commit': 'fixture-snapshot', 'snapshot_tree': 'fixture-tree',
+                    'source_head': 'fixture-head', 'source_branch': 'fixture-branch', 'files': 1, 'archive_bytes': 23, 'archive_sha256': 'fixture-archive'}}
+            if action == 'start':
+                states[row['id']] = 'running'
+            elif action == 'stop':
+                states[row['id']] = 'stopped'
+            elif action == 'remove':
+                states[row['id']] = 'removed'
+            elif action == 'execute' and mode['executeTimeout']:
+                return {'ok': False, 'status': 'unknown', 'universeId': identity,
+                    'message': 'The fixture command timed out. It may still be running; inspect or stop it without replaying this request.'}
+            value = {'ok': True, 'universeId': identity, 'status': states.get(row['id'], 'unknown')}
+            if action == 'execute':
+                value['result'] = {'exit_code': 0, 'stdout': 'workspace check passed\n', 'stderr': '', 'stdout_truncated': False, 'stderr_truncated': False}
+            return value
+    environments.invoke = invoke
+    app = await create_app(home, workspace=workspace, runtime=Runtime(), voice=False, background_updates=False)
+    app['control_token'] = TOKEN
+    app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Test environment acceptance', 'workspace': str(workspace), 'bundle': 'anchors'})
+    def authorize(request):
+        if request.headers.get('Authorization') != 'Bearer ' + TOKEN:
+            raise web.HTTPForbidden()
+    async def observations(request):
+        authorize(request)
+        sid = service.state['selectedSessionId']
+        with lock:
+            observed = {'calls': list(calls), 'callCounts': dict(Counter(call['action'] for call in calls)), 'states': dict(states), 'mode': dict(mode)}
+        observed['requests'] = service.operations.requests.list(sid)
+        observed['sessionId'] = sid
+        observed['workspaceId'] = next(row['id'] for row in service.state['workspaces'] if row['path'] == str(workspace))
+        return web.json_response(observed)
+    async def change_mode(request):
+        authorize(request)
+        value = await request.json()
+        with lock:
+            mode['executeTimeout'] = bool(value.get('executeTimeout', value.get('mode') == 'execute-timeout'))
+        return web.json_response(mode)
+    app.router.add_get('/fixture/environments', observations)
+    app.router.add_post('/fixture/environment-mode', change_mode)
+    return app
+
+
+async def serve(home, port):
+    app = await main(home, port)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '127.0.0.1', port)
+    await site.start()
+    url = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
+    app['allowed_origins'] = app['allowed_origins'] | {url}
+    print(json.dumps({'url': url, 'sessionId': app['service'].state['selectedSessionId']}), flush=True)
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await runner.cleanup()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, default=0)
+    options = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='amplifier-environments-ui-') as temporary:
+        asyncio.run(serve(Path(temporary), options.port))
