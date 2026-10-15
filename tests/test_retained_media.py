@@ -52,6 +52,10 @@ async def test_real_saves_removed_origin_eviction_unlink_and_reopen(
 
     async def check(service):
         from amplifier_web import agent_canvas, cold_display
+        # Background diagnostics may publish independently after a real reopen.
+        # Stop and settle that owner before measuring this read-only operation;
+        # retain the strict counter and all record-preservation assertions.
+        await service.diagnostics.close()
         def no_display(*args, **kwargs):
             pytest.fail('Retained metadata bridge hydrated unrelated display history')
         def no_admit(*args, **kwargs):
