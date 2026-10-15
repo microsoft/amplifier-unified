@@ -3,6 +3,7 @@ import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {openSettingsPage} from './browser-settings.mjs';
+const out=process.env.AMPLIFIER_TEST_ARTIFACTS;if(!out)throw Error('Owned artifact directory required');
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/image_setup_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser,page,release;
@@ -78,13 +79,13 @@ try{
  assert.equal(switched.find(row=>row.id==='one').config.image_generation.enabled,false);
  assert.equal(switched.find(row=>row.id==='three').config.image_generation.enabled,true);
  assert.equal(switched.find(row=>row.id==='three').config.image_generation.model,'auto');
- await page.screenshot({path:'/tmp/image-connection-central.png'});
+ await page.screenshot({path:out+'/central.png'});
  await page.reload();await page.locator('.a-settings-experience[data-settings-page=image-generation]').waitFor({state:'visible'});
  await expect(choice).toHaveValue('provider:three');
  await expect(page.getByText('Checking image connections…',{exact:true})).toHaveCount(0);
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
- await page.screenshot({path:'/tmp/image-connection-settings.png'});
+ await page.screenshot({path:out+'/settings.png'});
  await openSettingsPage(page,'ai-connections');
  await expect(choice).not.toBeVisible();
  await page.locator('[data-part="ai-connections"] .a-everyday-list button').nth(1).click();
@@ -101,5 +102,5 @@ try{
  await expect(page.getByText('You have unsaved settings changes.',{exact:false})).toHaveCount(0);
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({saved:true,disabled:true,preservedChatModel:true,rejectRetry:true,narrow:true,requests,errors}));
-}catch(error){if(page)await page.screenshot({path:'/tmp/image-connection-failure.png'});throw error}
-finally{release?.();await browser?.close();fixture.kill('SIGTERM');}
+}catch(error){if(page)await page.screenshot({path:out+'/failure.png'});throw error}
+finally{release?.();try{await browser?.close()}finally{fixture.kill('SIGTERM')}}

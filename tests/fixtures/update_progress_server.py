@@ -11,6 +11,29 @@ async def main(home):
     app=await settings_app(home)
     service=app['service']
     manager=service.update_manager
+    calls = {'check': 0, 'install': 0, 'rollback': 0}
+    service.state['settings']['updates'].update(autoCheck=True, autoInstall=False, intervalHours=7)
+    async def check(*args, **kwargs):
+        calls['check'] += 1
+        await manager.publish(phase='checking', error=None)
+        await asyncio.sleep(.05)
+        await manager.publish(phase='error' if calls['check']==1 else 'installed',
+            error='Synthetic update lookup failed. Check again.' if calls['check']==1 else None)
+    async def forbidden_install(*args, **kwargs):
+        calls['install'] += 1
+        raise RuntimeError('Fixture forbids installation effects')
+    async def forbidden_rollback(*args, **kwargs):
+        calls['rollback'] += 1
+        raise RuntimeError('Fixture forbids rollback effects')
+    manager.check = check
+    manager.install = forbidden_install
+    manager.rollback = forbidden_rollback
+    async def observations(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        async with service.lock:
+            return web.json_response({'calls': calls, 'preferences': service.state['settings']['updates']})
+    app.router.add_get('/fixture/update-observations', observations)
     diagnostics=manager.diagnostics
     diagnostics.begin('ecosystem','a'*32,tier='included',components=['foundation'])
     diagnostics.record('ecosystem-activation','succeeded')
