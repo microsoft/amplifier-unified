@@ -9,12 +9,12 @@
     "workflows": 199,
     "outcomes": 669,
     "outcomeStatus": {
-      "covered-in-context": 607,
-      "partially-observed": 44,
+      "covered-in-context": 609,
+      "partially-observed": 42,
       "not-run": 18
     },
     "workflowsWithOutcomeEvidence": 197,
-    "workflowsAllOutcomesObservedInContext": 158,
+    "workflowsAllOutcomesObservedInContext": 160,
     "ordinaryPathStatus": {
       "observed-in-context": 189,
       "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
@@ -384,5 +384,46 @@
     "reviewer": "issue_validation_day",
     "verdict": "Advanced route boundaries and nonexistent generic dirty Cancel confirmed; ordinary Workspace RelatedWork retained."
   },
-  "compiledArtifactLimit": "Compiled app identity is recorded separately; current source census does not assert that the recorded asset contains every newer integration change."
+  "compiledArtifactLimit": "Compiled app identity is recorded separately; current source census does not assert that the recorded asset contains every newer integration change.",
+  "completionAuditDelta": {
+    "at": "2026-10-15T22:03:29.393151+00:00",
+    "testRevision": "26533c68cdf4cca9b43d9bb4e5b426407a553ea3",
+    "receipt": "docs/validation/finite-standard-control-qualification-20261015.json",
+    "resolvedOutcomes": [
+      "composer.removed-provider:1",
+      "nav.workspace-pin:2"
+    ],
+    "remainingFiniteWorkerAcceptance": [
+      {
+        "id": "composer.stop:0",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      },
+      {
+        "id": "composer.stop:2",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      },
+      {
+        "id": "privacy.file-policy:1",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      },
+      {
+        "id": "connections.default-model:1",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      },
+      {
+        "id": "configuration.sources:2",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      }
+    ]
+  }
 }

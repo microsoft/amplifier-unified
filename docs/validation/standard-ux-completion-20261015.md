@@ -1,9 +1,9 @@
 # Standard UX qualification
 
 The inventory contains **199 workflows and 669 expected outcomes**.
-The current evidence ledger records **607 outcomes observed in a
-named context, 44 partially observed, and 18 not run**.
-**158 workflows** have every inventoried outcome
+The current evidence ledger records **609 outcomes observed in a
+named context, 42 partially observed, and 18 not run**.
+**160 workflows** have every inventoried outcome
 observed in some context. These figures describe exact evidence, not universal
 device, provider, security or performance acceptance.
 
@@ -24,13 +24,19 @@ tests, and the original environment, final held-plan and new queued-result brows
 journeys. Physical Docker/Incus and provider acceptance remain separate.
 
 Root accepted this scoped accounting, **not full completion**. Each of the
-**62 residual outcomes** has its own rationale, exact supporting
+**60 residual outcomes** has its own rationale, exact supporting
 claims and next acceptance step in
 `output/readiness-day-20261015/ui-inventory/residual-outcome-dispositions.json`.
 No disposition changes an unrun result into a pass.
 
-No finite ordinary check remains queued in this disposition table. The retained
-limits below still require explicit review; this is not an all-outcomes pass.
+An independent completion audit closed two finite gaps: actual workspace Pin/Unpin
+through keyboard and coarse-touch controls, and combined private draft/history
+preservation through connection removal, replacement and reload. Their exact-source
+receipts are in `finite-standard-control-qualification-20261015.json`.
+
+Finite local-worker acceptance remains queued for durable Stop and active-worker
+configuration, default-model and file-policy boundaries. The remaining disposition
+labels do not by themselves establish that all required work is complete.
 
 Other residuals distinguish external account/device/platform acceptance,
 runtime or durability invariants, broad security and filesystem-read claims,
