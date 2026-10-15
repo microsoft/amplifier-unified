@@ -43,7 +43,8 @@ async def test_discovered_reply_and_shipped_skill_example_save_bytes_before_term
     from amplifier_web.builtin_behaviors import resource_root
     source, peer, file, args = await setup(app, tmp_path, b'hello')
     file.rename(file.with_name('report.txt'))
-    action, = await app.app_bridge('list_actions', {'prefix': 'coordination.reply'}, peer['id'])
+    page = await app.app_bridge('list_actions', {'prefix': 'coordination.reply'}, peer['id'])
+    action, = page['items']
     description = action['inputSchema']['properties']['references']['description']
     reference, = re.findall(r'report\.txt@sha256:[a-f0-9]{64}', description)
     skill = (resource_root() / 'skills/coordinate-work/SKILL.md').read_text()
