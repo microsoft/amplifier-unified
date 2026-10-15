@@ -129,6 +129,22 @@
       ],
       "workspaceTargetsMet": true,
       "warmSendTargetMet": false
+    },
+    {
+      "source": "36ba434c475bc2f10c23fd0f9a7258bac27d0fc8",
+      "integrationCommit": "989b57b1b",
+      "receipt": "delivery-publication-20261015.json",
+      "checks": [
+        "Exact delivery durability, affected subscribers, private drafts, attention and pending progress widening",
+        "Same-UI complete-corpus one-worker replay"
+      ],
+      "focusedCasesPassed": 33,
+      "finalCounterOracleCasesPassed": 10,
+      "warmTargetMet": false,
+      "warmP95MsBeforeAfter": [
+        671,
+        612
+      ]
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
@@ -140,6 +156,7 @@
     "partial": 44,
     "notRun": 18,
     "explicitResidualDispositions": 62,
-    "receipt": "standard-ux-completion-20261015.md"
+    "receipt": "standard-ux-completion-20261015.md",
+    "finiteResidualFollowup": "Independent completion audit identified additional feasible keyboard/touch and removed-provider draft witnesses; these are being closed, not classified as external limitations."
   }
 }

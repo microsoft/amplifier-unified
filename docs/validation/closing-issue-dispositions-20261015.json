@@ -1008,7 +1008,13 @@
         {
           "path": "combined-scale-concurrency-20261015.json"
         }
-      ]
+      ],
+      "deliveryPublicationFollowup": {
+        "source": "36ba434c475bc2f10c23fd0f9a7258bac27d0fc8",
+        "integrationCommit": "989b57b1b",
+        "receipt": "delivery-publication-20261015.json",
+        "observation": "Same-UI one-worker replay reduced warm p95 671\u2192612ms and shell page builds400\u2192323; desired300ms remains missed. Three samples, no new6/12 claim."
+      }
     },
     {
       "issue": 630,
@@ -1325,8 +1331,11 @@
       "issues": [
         633
       ],
-      "next": "Diagnose bounded warm admission/server publication path; keep workspace improvements and current misses separate.",
-      "evidence": "bounded-workspace-metadata-20261015.json"
+      "next": "Guarded exact-delivery publication now reduces unchanged navigation work. Warm send desired300ms still missed; latest one-worker observation612ms. Further broad publication restructuring remains separate from this qualified narrow change.",
+      "evidence": [
+        "bounded-workspace-metadata-20261015.json",
+        "delivery-publication-20261015.json"
+      ]
     },
     {
       "kind": "cold-preparation-target-not-measured",
