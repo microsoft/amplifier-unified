@@ -218,6 +218,448 @@
       ],
       "status": "requires-exact-ledger-claims",
       "limits": []
+    },
+    {
+      "workflow": "nav.details",
+      "expectedIndices": [
+        0,
+        1,
+        3
+      ],
+      "browserSteps": [
+        "Open row Details",
+        "Inspect the chosen owner",
+        "Navigate to another chat and inspect dismissal"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.activity",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Browse another workspace",
+        "Return to a chat",
+        "Observe current selection and retained reading anchor"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.recent-pages",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Load older Recent chats",
+        "Observe exact appended page and retained reading anchor"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.recent-retry",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Request another Recent page",
+        "Observe controlled pending/failure with retained rows",
+        "Choose Retry and inspect exact accepted page"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.search",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Search chats",
+        "Search and clear query",
+        "Inspect unchanged selection before explicit result activation"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.search-pages",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Load next Search results",
+        "Change query",
+        "Use result keyboard navigation and inspect focus"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.pin",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Reveal row actions",
+        "Pin and unpin the chosen chat",
+        "Inspect membership and retained selected draft"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.pin-order",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Reorder pinned chats with pointer and keyboard",
+        "Inspect exact settled canonical order"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "nav.rename",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Open chosen chat rename control",
+        "Save a new name",
+        "Inspect exact canonical title"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "create.draft",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open New chat",
+        "Edit its draft/options",
+        "Return to existing chat and inspect private draft without premature creation"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "composer.draft-retention",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Edit unsent text",
+        "Switch or reload the chat",
+        "Inspect exact retained private draft and no send"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "composer.model",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Open model choice",
+        "Select a supported model",
+        "Send explicit input and inspect exact chosen model"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "composer.send",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Type message",
+        "Activate Send",
+        "Observe local outbox acceptance and exactly one submitted input"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.history-pages",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open bounded saved conversation",
+        "Explicitly load earlier messages",
+        "Inspect exact rows and stable reading position"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.rail",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open conversation rail",
+        "Choose a loaded turn",
+        "Inspect correct target and retained navigation state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.reply",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Choose Reply on a saved message",
+        "Inspect exact reference in private draft",
+        "Remove or retain it without sending"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.reaction",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Choose reaction on a saved message",
+        "Inspect acknowledged reaction on the chosen owner"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.edit",
+      "expectedIndices": [
+        0,
+        2,
+        4
+      ],
+      "browserSteps": [
+        "Open saved user message edit",
+        "Change text",
+        "Cancel or submit explicit edit while retaining failed input"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.fold",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Collapse and expand an interim response",
+        "Inspect retained final response and control state"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "messages.export",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Open Chat then Share or save",
+        "Review complete or ranged Markdown",
+        "Copy and download exact reviewed bytes"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "connections.catalog",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open AI connections",
+        "Inspect explicit catalog/default state",
+        "Retry failed discovery without losing saved configuration"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "connections.key",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open saved connection",
+        "Enter private replacement credential",
+        "Save or retry failure and inspect exact global owner"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "connections.endpoint",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open optional local endpoint form",
+        "Inspect endpoint/probe guidance and cancel safely"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Form/control qualification only; no real endpoint/provider reachability."
+      ]
+    },
+    {
+      "workflow": "voice.setup",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open Voice settings",
+        "Choose saved model/voice",
+        "Activate explicit synthetic preview and inspect saved selection"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic preview metadata only; no actual provider audio or OS device acceptance."
+      ]
+    },
+    {
+      "workflow": "notifications.badge",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Open Notifications",
+        "Change finished-response badge preference",
+        "Reload and inspect acknowledged value"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "notifications.phone",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open phone notification setup",
+        "Review private server/account controls",
+        "Save valid settings and recover from rejected changes"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic controlled notification server; no actual remote phone delivery."
+      ]
+    },
+    {
+      "workflow": "privacy.links",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open Privacy & files",
+        "Follow visible privacy destinations",
+        "Return through public Settings navigation"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "privacy.import",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Saved work",
+        "Choose synthetic conversation file",
+        "Inspect distinct stopped imported owner and no job replay"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic file selected through browser filechooser API; no native OS chooser acceptance."
+      ]
+    },
+    {
+      "workflow": "privacy.backup",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Follow Backups & recovery",
+        "Review credential warning",
+        "Create actual private synthetic backup and inspect saved path"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic state only; no restoration or real-credential handling qualification."
+      ]
+    },
+    {
+      "workflow": "storage.review",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open cleanup review",
+        "Inspect duplicate-title workspace and exact identity",
+        "Cancel without deleting"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",

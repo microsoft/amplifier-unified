@@ -8,7 +8,11 @@ input/layout behavior can use an explicit shared-component crosswalk. Source
 reads, test titles and family-wide passes never count as executed behavior.
 
 `frontend/tests/standard-ux-completion-policy.json` records the policy, an initial
-14 explicit ordinary-path mappings and seven candidate shared patterns. A pattern
+14 explicit ordinary-path mappings and seven candidate shared patterns. The next
+evidence reconciliation expands this to44 explicit paths, including actual
+navigation, messages, connection settings, notifications, synthetic import and
+private backup journeys. Form-only endpoint checks and synthetic voice/device
+checks retain their limits; they do not qualify a real provider or OS device. A pattern
 is only eligible for reuse after its current source owner and exact assertions
 are linked; it does not certify an unrun save, destructive scope, data identity or
 navigation target. Pending, unknown, stale-owner, failure/retry and destructive
