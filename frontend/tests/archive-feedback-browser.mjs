@@ -78,7 +78,7 @@ try{
  const manifest={id:'example.archive-dirty-editor',label:'Unsaved archive editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
  const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");return React.createElement("label",null,"Unsaved archive edit",React.createElement("input",{value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
  const digest=(await action('shell.packages.stage',{manifest,source})).result.digest;
- assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
+ const qualification=(await action('shell.packages.validate',{digest})).result;assert.equal(qualification.status,'passed',JSON.stringify(qualification));
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const canvasEdit=page.locator('[data-canvas-view="primary"]').getByLabel('Unsaved archive edit');
  await canvasEdit.fill('UNSAVED CANVAS ARCHIVE INPUT');
@@ -135,8 +135,9 @@ try{
  await action('session.restore',{id:sid});
  // A row action for another chat doesn't leave the current conversation.
  await action('session.select',{id:sid});await action('session.pin',{id:other,pinned:true});
- await page.getByRole('button',{name:'Other example',exact:true}).first().hover();
- await page.getByRole('button',{name:'Details and actions for Other example',exact:true}).first().click();
+ const otherRow=page.locator('[data-shell-instance=chats] [data-sidebar-section=pinned]').locator(`[data-session-id="${other}"]`);
+ await otherRow.hover();
+ await otherRow.getByRole('button',{name:'Details and actions for Other example',exact:true}).click();
  await page.getByRole('button',{name:'Archive Other example',exact:true}).click();
  await expect(page.locator('[data-archive-notice]')).toContainText('Chat archived');
  assert.equal((await state()).selectedSessionId,sid);assert.equal((await state()).view.workSurface||'chat','chat');
@@ -153,18 +154,21 @@ try{
  await action('session.create',{title:'Managed example',location:{kind:'managed'}});
  await headerArchive();await page.waitForFunction(()=>window.amplifier.getState().view.workSurface==='chats');
  await expect(page.getByRole('heading',{name:'Search chats',exact:true})).toBeVisible();
- // Last case intentionally retains an unsaved private Settings draft until fixture teardown.
+ // An archive receipt arriving after Settings opens must preserve its private draft.
+ // Settings is modal: clicking the covered chat header is not a real user path.
  const managed=(await state()).selectedSessionId;
  await action('session.select',{id:managed});await action('session.restore',{id:managed});
  await page.setViewportSize({width:1440,height:1050});
+ await expect(page.getByRole('button',{name:'Settings',exact:true})).toBeVisible();
+ mode='hold';await headerArchive();await expect.poll(()=>!!release).toBe(true);
  await openSettingsPage(page,'providers');
  const settings=page.locator('.a-settings-experience[data-settings-page="providers"]');
  await settings.getByRole('button',{name:'Add provider',exact:true}).click();
  await settings.getByRole('button',{name:'Show advanced configuration',exact:true}).click();
  const settingsEdit=settings.locator('[id$="provider-config"]');
  await settingsEdit.fill('{"unsaved-archive-input":');
- await headerArchive();
- await expect(page.locator('[data-archive-notice]:visible')).toContainText('Chat archived. Your current view was kept.');
+ release();release=null;mode='normal';
+ await expect(page.locator('[data-archive-notice]:visible')).toContainText('Chat archived');
  await expect(settings).toBeVisible();await expect(settingsEdit).toHaveValue('{"unsaved-archive-input":');
  assert.equal((await state()).view.workSurface||'chat','chat');
  assert.ok(!JSON.stringify(await state()).includes('{"unsaved-archive-input":'));
