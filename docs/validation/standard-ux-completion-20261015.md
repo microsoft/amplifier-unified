@@ -1,9 +1,9 @@
 # Standard UX qualification
 
 The inventory contains **199 workflows and 669 expected outcomes**.
-The current evidence ledger records **615 outcomes observed in a
-named context, 37 partially observed, and 17 not run**.
-**165 workflows** have every inventoried outcome
+The current evidence ledger records **616 outcomes observed in a
+named context, 36 partially observed, and 17 not run**.
+**166 workflows** have every inventoried outcome
 observed in some context. These figures describe exact evidence, not universal
 device, provider, security or performance acceptance.
 
@@ -24,7 +24,7 @@ tests, and the original environment, final held-plan and new queued-result brows
 journeys. Physical Docker/Incus and provider acceptance remain separate.
 
 Root accepted this scoped accounting, **not full completion**. Each of the
-**54 residual outcomes** has its own rationale, exact supporting
+**53 residual outcomes** has its own rationale, exact supporting
 claims and next acceptance step in
 `output/readiness-day-20261015/ui-inventory/residual-outcome-dispositions.json`.
 No disposition changes an unrun result into a pass.
@@ -41,11 +41,13 @@ separate browser and runtime witnesses are joined only for those named outcomes
 in `standard-ux-worker-outcome-delta-20261015.json`. The prior 609/42/18 snapshot
 is retained. Newly unqualified source activation is not claimed.
 
-Normal Work activation also retains its13 declared tool capabilities, live
+Normal Work activation also retains its 13 declared tool capabilities, live
 orchestrator, boundary context and configured provider; exact evidence is in
 `work-required-modules-20261015.json`. This qualifies the named Work profile,
-not arbitrary bundle composition. Actual-worker Archive/file preservation is
-still queued.
+not arbitrary bundle composition. Actual-worker Archive now preserves running work, committed history and workspace
+sentinel files. Explicit Stop is a separate action; see
+`archive-running-worker-20261015.json`. Local competing-owner and recovery-copy
+no-replay acceptance remains assigned to the coordinator.
 
 The canonical recipe repair and exact-candidate acceptance remain required work.
 Final integrated preview/source/PR reconciliation also remains separate; these

@@ -9,12 +9,12 @@
     "workflows": 199,
     "outcomes": 669,
     "outcomeStatus": {
-      "covered-in-context": 615,
-      "partially-observed": 37,
+      "covered-in-context": 616,
+      "partially-observed": 36,
       "not-run": 17
     },
     "workflowsWithOutcomeEvidence": 197,
-    "workflowsAllOutcomesObservedInContext": 165,
+    "workflowsAllOutcomesObservedInContext": 166,
     "ordinaryPathStatus": {
       "observed-in-context": 189,
       "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
@@ -481,5 +481,43 @@
       "bundles.selection:2"
     ],
     "remainingOutcomes": 54
+  },
+  "previousArchiveSnapshot": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 615,
+      "partially-observed": 37,
+      "not-run": 17
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 165,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "archiveOutcomeDelta": {
+    "receipt": "docs/validation/archive-running-worker-20261015.json",
+    "resolvedOutcomes": [
+      "nav.archive:0"
+    ],
+    "remainingOutcomes": 53,
+    "finiteRuntimeAcceptancePending": [
+      {
+        "id": "delivery.ownership:2",
+        "owner": "root",
+        "status": "finite-local-competing-owner-proof-pending"
+      },
+      {
+        "id": "delivery.context:2",
+        "owner": "root",
+        "status": "finite-local-recovery-no-replay-proof-pending"
+      }
+    ]
   }
 }
