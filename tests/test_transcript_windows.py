@@ -348,3 +348,41 @@ async def test_cold_missing_resource_is_unavailable_and_can_retry(tmp_path):
         assert not view['historyLoading'] and view['historyError'] is None
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_resident_oversized_message_never_copied_and_neighbors_progress(tmp_path):
+    class NoCopy(str):
+        def __deepcopy__(self, memo):
+            raise AssertionError('Oversized resident body must not be copied')
+    service, session = service_for(tmp_path, managed=False)
+    session['messages'] = [
+        {'id': 'older', 'role': 'user', 'text': 'older'},
+        {'id': 'huge', 'role': 'assistant', 'text': NoCopy('x' * (5 * 1024 * 1024))},
+        {'id': 'recent', 'role': 'user', 'text': 'recent'},
+    ]
+    page = await service.history.windows.read('app', limit=2)
+    assert [row['id'] for row in page['items']] == ['recent']
+    assert page['unavailableRanges'] == [{'index': 1, 'reason': 'record_limit'}]
+    older = await service.history.windows.read('app', before=page['before'], limit=2)
+    assert [row['id'] for row in older['items']] == ['older']
+    assert older['before'] is None
+    projected = service.history.windows.project(session)
+    assert [row['id'] for row in projected['messages']] == ['older', 'recent']
+    assert projected['messageWindow']['unavailableRanges']
+
+
+@pytest.mark.asyncio
+async def test_resident_page_budget_retries_intact_older_record(tmp_path, monkeypatch):
+    from amplifier_web import saved_message_window
+    monkeypatch.setattr(saved_message_window, 'MAX_BYTES', 1200)
+    service, session = service_for(tmp_path, managed=False)
+    session['messages'] = [{'id': str(i), 'role': 'user', 'text': 'x' * 100} for i in range(5)]
+    page = await service.history.windows.read('app')
+    assert 0 < len(page['items']) < 5
+    assert not page['unavailableRanges']
+    received = list(page['items'])
+    while page['before']:
+        page = await service.history.windows.read('app', before=page['before'])
+        received = page['items'] + received
+    assert [row['id'] for row in received] == [str(i) for i in range(5)]

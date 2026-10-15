@@ -144,3 +144,69 @@ def read_saved_window(source, signer, *, session_id, fence, before=None, limit=1
             'coverage': {'kind': 'saved-web', 'validation': 'window', 'historyComplete': False,
                          'scannedBytes': len(raw) + 1, 'rangeStart': next_end, 'rangeEnd': end},
             'unavailableRanges': gaps}
+
+
+def resident_rows(rows, end, limit):
+    """Bound an already-resident page before copying or encoding any body."""
+    accepted, gaps = [], []
+    remaining, nodes, examined = MAX_BYTES, 100_000, 0
+    position = end
+    while position and examined < limit:
+        index = position - 1
+        value = rows[index]
+        cost, invalid = 0, None
+        if type(value) is not dict or not isinstance(value.get('id'), str):
+            position = index
+            examined += 1
+            gaps.append({'index': index, 'reason': 'object_limit'})
+            continue
+        # Iterators avoid copying a large container merely to inspect its size.
+        stack = [(iter((value,)), 0)]
+        while stack:
+            iterator, depth = stack[-1]
+            try:
+                item = next(iterator)
+            except StopIteration:
+                stack.pop()
+                continue
+            nodes -= 1
+            cost += 2  # Container comma/colon delimiters.
+            if nodes < 0:
+                invalid = 'object_limit'
+                break
+            if depth > 64:
+                invalid = 'object_limit'
+                break
+            if isinstance(item, str):
+                cost += 6 * len(item) + 2  # UTF-8 and JSON control escaping; no encoding.
+            elif type(item) is int:
+                cost += max(64, item.bit_length())
+            elif item is None or type(item) in (bool, float):
+                cost += 64
+            elif type(item) is dict:
+                cost += 2
+                stack.append((iter(item.keys()), depth + 1))
+                stack.append((iter(item.values()), depth + 1))
+            elif type(item) in (list, tuple):
+                cost += 2
+                stack.append((iter(item), depth + 1))
+            else:
+                invalid = 'object_limit'
+                break
+            if cost > MAX_RECORD:
+                invalid = 'record_limit'
+                break
+        if not invalid and cost > remaining:
+            break  # Retry this intact older record with a fresh page budget.
+        position = index
+        examined += 1
+        if invalid:
+            gaps.append({'index': index, 'reason': invalid})
+        else:
+            accepted.append(value)
+            remaining -= cost
+        if nodes < 0:
+            break
+    accepted.reverse()
+    gaps.reverse()
+    return accepted, gaps, position

@@ -176,13 +176,14 @@ class TranscriptWindows:
                     or type(cursor.get('end')) is not int or not 0 <= cursor['end'] <= end):
                 raise ValueError('The saved messages changed. Refresh before paging.')
             end = cursor['end']
-        start = max(0, end - limit)
+        from .saved_message_window import resident_rows
+        selected, gaps, start = resident_rows(rows, end, limit)
         token = self.reader._token({'kind': 'saved-web', 'source': source,
             'sessionId': session['id'], 'end': start}) if start else None
-        return {'items': list(rows[start:end]), 'mode': 'cursor', 'before': token,
+        return {'items': selected, 'mode': 'cursor', 'before': token,
                 'hasEarlier': bool(start), 'total': None, 'offset': None, 'scope': 'recent',
                 'revision': source, 'windowKey': _digest([source, start, end]),
-                'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': []}
+                'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps}
 
     async def read(self, session_id, *, before=None, limit=100, native=False):
         if self.closed:
