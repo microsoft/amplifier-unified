@@ -196,18 +196,40 @@
       "limits": [
         "Finite source-bound isolated acceptance; see receipt for exact sources and limits."
       ]
+    },
+    {
+      "receipt": "work-required-modules-20261015.json",
+      "passed": true,
+      "checks": [
+        "Actual named Work worker mounts all 13 required tool capabilities and its declared orchestrator/context/provider; stable independent provenance, no provider input"
+      ],
+      "limits": [
+        "Named profile proof, not every bundle/provider combination"
+      ]
+    },
+    {
+      "receipt": "integrated-preview-worker-fixes-20261015.json",
+      "passed": true,
+      "checks": [
+        "Integrated product source c5c4b3c17 imports from the owned preview checkout",
+        "Actual authenticated browser launch and two repeats, no browser errors",
+        "Four synthetic chats and eight saved files preserved byte-for-byte; updates disabled and schedules empty"
+      ],
+      "limits": [
+        "Finite preview functionality; scale and performance qualification use separate source-bound receipts"
+      ]
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
-  "remaining": "Warm send acknowledgment exceeds the desired target. Recipe issue630 implementation, complete engine/distribution/corpus qualification, and final integration/preview checks remain active. Normal worker startup/controls and private exact dependency activation now have passing source-bound receipts. Device/account-specific acceptance and all70 issue dispositions remain explicit; this audit does not declare every issue resolved.",
+  "remaining": "Warm send acknowledgment exceeds the desired target. Recipe issue #630 both-engine/distribution/corpus/actual-CLI qualification remains active. Real-worker startup, controls, mounted dependency identity, named Work modules and refreshed combined preview now have passing source-bound receipts. Finite active-worker archive acceptance is pending; device/account-specific acceptance and all 70 issue dispositions remain explicit. This audit does not declare every issue resolved.",
   "coverage": {
     "workflows": 199,
     "outcomes": 669,
-    "observedInNamedContexts": 609,
-    "partial": 42,
-    "notRun": 18,
-    "explicitResidualDispositions": 60,
+    "observedInNamedContexts": 615,
+    "partial": 37,
+    "notRun": 17,
+    "explicitResidualDispositions": 54,
     "receipt": "standard-ux-completion-20261015.md",
-    "finiteResidualFollowup": "Actual keyboard/coarse-touch pinning and removed-provider draft/history recovery pass. Additional normal-worker Stop/configuration/policy controls and private dependency activation pass in separate receipts; the audited 609/42/18 outcome ledger is not yet reclassified from these newer proofs."
+    "finiteResidualFollowup": "Source-bound actual-worker Stop/configuration/policy and named Work required-module proofs close six more outcomes; device/account limitations remain explicit. See standard UX completion ledger and individual receipts."
   }
 }
