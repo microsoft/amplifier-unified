@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.164",
+      "title": "Reduce work when reading large chat directories",
+      "changes": [
+        "Agent overviews load large chat directories with less database work while preserving conversation ordering, worker totals, and visibility rules."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.163",
       "title": "Keep pinned items available and sidebar refreshes quiet",
       "changes": [
