@@ -28,14 +28,21 @@ export function WorkspaceDetails({row,now,actions}){
  return <><div className="a-navigation-detail-heading"><FolderOpen/><span>Workspace details</span></div><h3>{row.customName||row.name}</h3><dl><dt>Chats</dt><dd>{row.chatCount??0}</dd><dt>Activity</dt><dd>{counts.working||0} working · {counts.attention||0} need attention</dd><dt>Last activity</dt><dd>{relativeActivity(row.recentActivityAt,now).long}</dd></dl><CopyDetail label="Full workspace path" value={row.path}/>{!row.customName&&row.pathLabel?.includes('/')&&<p className="a-caption">The “in …” label distinguishes folders with the same name.</p>}{actions&&<div className="a-navigation-actions">{actions}</div>}</>;
 }
 
+// Only navigation identity dismisses a peek; activity/title updates keep it usable.
+export function navigationDetailsContext(state){
+ const view=state.view||{},surface=view.workSurface||'chat';
+ return JSON.stringify([state.selectedSessionId??null,state.selectedWorkspaceId??null,surface,
+  surface==='workspace'?view.workWorkspaceId??null:null]);
+}
+
 // Portals stay inside the rail's outer slot, outside its scroll/clip container.
 // Peeking is local presentation only: it never selects a chat or changes recency.
-export function NavigationRow({className='',label,children,details,expanded=false,...props}){
+export function NavigationRow({className='',label,children,details,expanded=false,contextKey,...props}){
  const narrow=useNarrowScreen(),navigationOpen=useContext(NavigationOpen);
  const row=useRef(null),panel=useRef(null),trigger=useRef(null),opening=useRef(null),closing=useRef(null),focusRequested=useRef(false),id=useId();
  const [open,setOpen]=useState(false),[locked,setLocked]=useState(false),[position,setPosition]=useState({left:0,top:0});
  const clear=()=>{clearTimeout(opening.current);clearTimeout(closing.current)};
- const close=(focus=false)=>{clear();setOpen(false);setLocked(false);if(focus)trigger.current?.focus({preventScroll:true})};
+ const close=(focus=false)=>{clear();focusRequested.current=false;setOpen(false);setLocked(false);if(focus)trigger.current?.focus({preventScroll:true})};
  useModalFocus(panel,navigationOpen&&narrow&&open,()=>close(true));
  const show=(lock=false)=>{
   clear();
@@ -46,6 +53,7 @@ export function NavigationRow({className='',label,children,details,expanded=fals
  };
  useEffect(()=>()=>clear(),[]);
  useEffect(()=>{if(!navigationOpen)close()},[navigationOpen]);
+ useLayoutEffect(()=>{close()},[contextKey]);
  useEffect(()=>{if(expanded)show(true)},[expanded]);
  useEffect(()=>{
   if(!open)return;
