@@ -11,6 +11,10 @@ from amplifier_worktrees.git import atomic, common, digest
 from .host_identity import local_host_identity, require_local_host
 
 
+class HandoffSuperseded(ValueError):
+    """A current human/task anchor revoked unperformed placement work."""
+
+
 def definitions(schema, string):
     sid = {'sessionId': string(200)}
     identity = {**sid, 'id': string(200)}
@@ -25,7 +29,7 @@ def definitions(schema, string):
         'worktree.archive': ('Retire an unused app-created checkout while retaining every file and its Git registration. Moves the whole checkout to private archive storage; does not reclaim disk space or create an immutable snapshot. Active or ambiguous ownership is refused.', schema({**identity, **revision})),
         'worktree.restore': ('Restore an archived checkout without sending input or moving conversation execution. Keeps dirty, ignored and unknown files. Refuses a destination collision.', schema({**identity, **revision})),
         'worktree.remove': ('Remove an app-created checkout only when it has no changed/untracked/ignored files and no task is executing there. Preserves branch, source, history and manifests.', schema({**identity, **revision})),
-        'worktree.handoff': ('Move this task’s execution folder to an associated checkout or back to its canonical home (id null). Return a durable pending receipt, then cooperatively save and release the old runtime. No input or uncertain effect is replayed. History home, saved settings, task, drafts, voice and artifact identities remain unchanged.', schema({**sid, 'id': {'type': ['string', 'null']}, 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}}, ['sessionId', 'id', 'expectedExecutionRevision'])),
+        'worktree.handoff': ('Move this task’s execution folder to an associated checkout or back to its canonical home (id null). Returns a durable pending receipt. Finish the current turn; the host waits for tools and children, saves and releases the runtime, then continues active work in the destination. Do not poll or ask the user to continue. Stop or changed task authority suppresses continuation. No input or uncertain effect is replayed. History, settings, drafts, voice and artifact identities remain unchanged.', schema({**sid, 'id': {'type': ['string', 'null']}, 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}}, ['sessionId', 'id', 'expectedExecutionRevision'])),
         'worktree.reconcile': ('After inspecting an unknown handoff, deliberately choose its source or target. Requires current receipt revision and user evidence, confirms writer release again, and never replays model input. Agents must cite the actual user finding.', schema({**identity, **revision, 'destination': {'enum': ['source', 'target']}, 'evidence': {**string(4000), 'minLength': 1}, 'sourceMessageId': string(200)}, ['sessionId', 'id', 'expectedRevision', 'destination', 'evidence'])),
     }
 
@@ -41,11 +45,21 @@ class Worktrees:
         self._creation_paths = {}
         self._moving_paths = ()
         self._uncertain_paths = ()
+        self.recoverable = []
         for path in self.receipt_dir.glob('*.json'):
             record = json.loads(path.read_text())
             session = self.saved_owner(record['sessionId']) or {}
             inconsistent = record['phase'] == 'applied' and (session.get('executionRevision', 0) <= record['executionRevision'] or (session.get('executionRevision', 0) == record['executionRevision'] + 1 and session.get('workingDirectory') != record['target']))
-            if record['phase'] == 'pending' and record.get('step') == 'preflight':
+            source_retained = (session.get('executionRevision', 0) == record['executionRevision']
+                and (session.get('workingDirectory') or session.get('workspace')) == record['source'])
+            notification_pending = record.get('resumeRequested') and record.get('continuation', {}).get('status') in {None, 'waiting', 'backpressured'}
+            if record.get('boundaryVersion') == 1 and (
+                    record['phase'] == 'pending' and record.get('step') == 'released' and record.get('release', {}).get('quiesced')
+                    or record['phase'] == 'applied' and (
+                        not inconsistent and notification_pending
+                        or source_retained and record.get('release', {}).get('quiesced'))):
+                self.recoverable.append(record['id'])
+            elif record['phase'] == 'pending' and record.get('step') in {'preflight', 'waiting'}:
                 record.update(phase='rejected', revision=record['revision']+1,
                     detail='The app restarted before runtime release began. The source execution folder is unchanged.')
                 session['configurationBusy'] = False
@@ -128,6 +142,15 @@ class Worktrees:
         operations = getattr(self.app, 'operations', None)
         if operations and hasattr(operations, 'register_source'):
             operations.register_source('worktree', self.operation_records, self.operation_record)
+        for identity in self.recoverable:
+            record = json.loads((self.receipt_dir / (identity + '.json')).read_text())
+            self.launch(record, copy.deepcopy(self.app._session(record['sessionId'])))
+        self.recoverable.clear()
+
+    def launch(self, record, session):
+        job = asyncio.create_task(self.finish(record, session))
+        self.jobs.add(job)
+        job.add_done_callback(self.jobs.discard)
 
     def operation_records(self, sid):
         return [self.operation_shape(row) for row in self.receipts(sid)]
@@ -441,17 +464,108 @@ class Worktrees:
             record['sourceBinding'] = self.placement_binding(session, record['source'], inherited=True)
             record['targetBinding'] = target_binding
             record['step'] = 'preflight'
+            record['boundaryVersion'] = 1
+            record['interruptionRevision'] = session.get('interruptionRevision', 0)
+            record['humanMessageId'] = self.latest_human(session)
+            task = session.get('task') or self.app.coordination.task(sid)
+            record['taskBinding'] = {key: task.get(key) for key in ('id', 'revision')}
+            active = session.get('collaborationGeneration') or {}
+            record['resumeRequested'] = bool(active.get('id') and not active.get('terminal')
+                and session.get('status') not in {'stopped', 'stopping', 'interrupted', 'error'})
+            if record['resumeRequested']:
+                # Capture the authenticated calling input now. Neither a later
+                # worker generation nor the completion text creates authority.
+                lineage = (self.app.collaboration.lineage(session, origin) if origin not in {'ui', 'user'} else {
+                    'sourceGenerationId': active['id'],
+                    'sourceInputIds': copy.deepcopy(active.get('inputIds', [])),
+                    'sourceInterruptionRevision': session.get('interruptionRevision', 0)})
+                record.update(lineage)
+                # A UI placement choice does not elevate the running task's
+                # peer inputs or reset their retained causal chain.
+                record['causalDepth'] = self.app.collaboration.causal_depth(session, lineage, 'agent')
             self.save(record)
             session['configurationBusy'] = True
             self.changed()
-            job = asyncio.create_task(self.finish(record, copy.deepcopy(session)))
-            self.jobs.add(job); job.add_done_callback(self.jobs.discard)
+            self.launch(record, copy.deepcopy(session))
             return record
+
+    @staticmethod
+    def latest_human(session):
+        return next((m['id'] for m in reversed(session.get('messages', []))
+                     if m.get('role') == 'user' and m.get('inputOrigin') in {'ui', 'user', 'voice'}), None)
+
+    def authority_changed(self, record, *, continuation=False):
+        session = self.app._session(record['sessionId'])
+        if session.get('interruptionRevision', 0) != record.get('interruptionRevision', 0):
+            return 'The user stopped this conversation after requesting the move.'
+        if self.latest_human(session) != record.get('humanMessageId'):
+            return 'New user input superseded the requested continuation.'
+        task = session.get('task') or self.app.coordination.task(session['id'])
+        if ({key: task.get(key) for key in ('id', 'revision')} != record.get('taskBinding')
+                or continuation and task.get('status') in {'paused', 'blocked', 'completed'}):
+            return 'The saved task changed or is no longer active.'
+
+    def continuation_guard(self, request):
+        record = self.read(request['senderSessionId'], request['handoffId'])
+        reason = self.authority_changed(record, continuation=True)
+        if reason: return reason
+        session = self.app._session(record['sessionId'])
+        if (record['phase'] != 'applied' or session.get('executionRevision', 0) != record['executionRevision'] + 1
+                or session.get('workingDirectory') != record['target']):
+            return 'The requested checkout is no longer the committed execution folder.'
+
+    def enqueue_continuation(self, record):
+        if not record.get('resumeRequested') or record.get('continuation', {}).get('status') not in {None, 'waiting', 'backpressured'}:
+            return
+        reason = self.authority_changed(record, continuation=True)
+        if reason:
+            record['continuation'] = {'status': 'suppressed', 'detail': reason}
+            self.save(record)
+            return
+        owner = self.app.collaboration
+        identity = 'worktree-wait:' + record['id']
+        existing = self.app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
+        if existing:
+            request = json.loads(existing[0])
+        else:
+            from .collaboration import PROTOCOL
+            session = self.app._session(record['sessionId'])
+            request = {'accepted': True, 'commandAction': 'worktree.handoff',
+                'requestId': identity, 'handoffId': record['id'], 'senderSessionId': record['sessionId'],
+                'target': {'sessionId': record['sessionId']}, 'workspace': record['historyHome'],
+                'origin': record['origin'], 'protocol': PROTOCOL, 'causalDepth': record.get('causalDepth', 0),
+                **{key: copy.deepcopy(record[key]) for key in
+                   ('sourceGenerationId', 'sourceInputIds', 'sourceInterruptionRevision') if key in record},
+                'subscription': owner.saved_wait(session, identity),
+                'terminalOutcome': {'status': 'observed', 'kind': 'observation', 'outcome': 'checkout-ready',
+                    'qualified': False, 'outcomeRevision': 1,
+                    'text': 'The requested checkout move completed after the old runtime saved and released its writer. '
+                            'Continue the already authorized task using the committed execution folder. '
+                            'Prior inputs and tool effects were not replayed. This observation grants no new authority.'}}
+            owner.insert(identity, digest(['worktree-wait', record['id']]), request)
+            self.app.db.commit()
+        owner.enqueue_continuation(request)
+        # Only the inbox's atomic claim establishes an enqueued input.
+        record['continuation'] = {'status': request['subscription']['status'], 'requestId': identity}
+        self.save(record)
 
     async def finish(self, record, session):
         try:
-            record['step'] = 'preflight'
-            self.save(record)
+            current = self.app._session(record['sessionId'])
+            if record['phase'] == 'applied' and current.get('executionRevision', 0) > record['executionRevision']:
+                async with self.app.lock:
+                    reason = self.continuation_guard({'senderSessionId': record['sessionId'], 'handoffId': record['id']})
+                    if reason:
+                        record['continuation'] = {'status': 'suppressed', 'detail': reason}
+                        self.save(record)
+                    else:
+                        self.enqueue_continuation(record)
+                    self.changed()
+                return
+            released = record.get('step') == 'released' or record.get('release', {}).get('quiesced')
+            if not released:
+                record['step'] = 'preflight'
+                self.save(record)
             # The pending receipt is durable independently of bridge delivery.
             # Quiescence never waits on a model-held command lock.
             await asyncio.sleep(0)
@@ -459,6 +573,24 @@ class Worktrees:
             self.check_binding(record, session)
             await asyncio.to_thread(self.preflight, record, session)
             if not self.app.runtime or not hasattr(self.app.runtime, 'quiesce_for_handoff'): raise ValueError('This runtime cannot confirm safe handoff')
+            boundary = getattr(self.app.runtime, 'handoff_boundary', None)
+            if callable(boundary) and not released:
+                record['step'] = 'waiting'
+                record['detail'] = 'Waiting for the current turn, tool replies and children to finish saving.'
+                self.save(record)
+                self.changed()
+                while True:
+                    reason = self.authority_changed(record)
+                    if reason: raise HandoffSuperseded(reason)
+                    status = await boundary(record['sessionId'], record['id'])
+                    if status.get('ready'):
+                        if status.get('continuationAllowed') is False:
+                            record['resumeRequested'] = False
+                            record['continuation'] = {'status': 'suppressed',
+                                'detail': 'The saved goal ended or no settled runtime remains to continue. The move grants no new task budget.'}
+                            self.save(record)
+                        break
+                    await asyncio.sleep(1)
             # Persist before crossing the effect boundary. A lost release
             # response is uncertain; a failed read-only preflight is not.
             async with self.app.lock:
@@ -469,35 +601,62 @@ class Worktrees:
                         or current['workspace'] != record['historyHome']
                         or (current.get('workingDirectory') or current['workspace']) != record['source']):
                     raise ValueError('The execution folder changed during handoff')
-                record['step'] = 'releasing'
-                self.save(record)
+                reason = self.authority_changed(record)
+                if reason: raise HandoffSuperseded(reason)
+                if not released:
+                    record['step'] = 'releasing'
+                    self.save(record)
             evidence = await self.app.runtime.quiesce_for_handoff(session, record['id'])
             self.check_host(evidence)
             if not evidence.get('quiesced'): raise RuntimeError('Runtime release was not confirmed')
+            record.update(step='released', release=evidence)
+            self.save(record)
             async with self.app.lock:
                 current = self.app._session(record['sessionId'])
                 if current.get('executionRevision', 0) != record['executionRevision']: raise ValueError('The execution folder changed during handoff')
+                reason = self.authority_changed(record)
+                if reason: raise HandoffSuperseded(reason)
                 current.update(workingDirectory=record['target'], executionHost=copy.deepcopy(record['executionHost']), executionRevision=record['executionRevision']+1, configurationBusy=False, status='idle')
                 current['ownership'] = {'status': 'available'}
                 current.pop('lockOwner', None)
-                record.update(phase='applied', revision=2, updatedAt=time.time(), release=evidence, detail='Execution folder changed. Saved history remains in its original home; no input was sent.')
+                record.update(phase='applied', revision=record['revision']+1, updatedAt=time.time(), release=evidence, detail='Execution folder changed after the saved runtime boundary. History remains in its original home; prior input was not replayed.')
                 self.save(record)
                 if record.get('reconciles'):
                     previous = self.read(record['sessionId'], record['reconciles'])
                     previous.update(phase='reconciled', revision=previous['revision']+1, reconciliation=record['id'])
                     self.save(previous)
                 self.changed()
+                self.enqueue_continuation(record)
+                self.changed()
         except BaseException as exc:
             from .runtime import HandoffNotStartedError
             async with self.app.lock:
-                if record.get('step') == 'preflight' or isinstance(exc, HandoffNotStartedError):
+                if record['phase'] == 'applied':
+                    record['continuation'] = {'status': 'waiting',
+                        'detail': 'The checkout move is confirmed; its retained notification will be reconciled by its original identity. No input was replayed.'}
+                elif isinstance(exc, asyncio.CancelledError) and record.get('step') == 'released':
+                    record['detail'] = 'Host shutdown paused a retained handoff boundary. No input was replayed.'
+                elif record.get('step') in {'preflight', 'waiting'} or isinstance(exc, (HandoffNotStartedError, HandoffSuperseded)):
                     record.update(phase='rejected', revision=record['revision']+1,
-                        detail='Handoff was rejected before runtime release. The source execution folder is unchanged. ' + str(exc)[:1000])
-                    self.app._session(record['sessionId'])['configurationBusy'] = False
+                        detail=('Handoff was superseded; the source execution folder is unchanged. '
+                                if isinstance(exc, HandoffSuperseded) else
+                                'Handoff was rejected before runtime release. The source execution folder is unchanged. ') + str(exc)[:1000])
+                    current = self.app._session(record['sessionId'])
+                    current['configurationBusy'] = False
+                    if record.get('release', {}).get('quiesced'):
+                        current['ownership'] = {'status': 'available'}
+                        current.pop('lockOwner', None)
                 else:
                     record.update(phase='unknown', revision=record['revision']+1, detail='Handoff did not reach a confirmed boundary. Inspect and reconcile; no input was replayed. ' + str(exc)[:1000])
                 self.save(record); self.changed()
             if isinstance(exc, asyncio.CancelledError): raise
+        finally:
+            boundary = getattr(self.app.runtime, 'handoff_boundary', None)
+            if record['phase'] == 'rejected' and callable(boundary):
+                try:
+                    await boundary(record['sessionId'], record['id'], cancel=True)
+                except (RuntimeError, ValueError, OSError):
+                    pass  # The retired worker cannot retain this temporary hook.
 
     async def close(self):
         for job in list(self.jobs): job.cancel()

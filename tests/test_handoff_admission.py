@@ -50,6 +50,9 @@ class BarrierRuntime(RuntimeManager):
             await self.release.wait()
             return {'quiesced': True}
 
+    async def handoff_boundary(self, *args, **kwargs):
+        return {'ready': True}
+
 
 async def fixture(tmp_path):
     root=repository(tmp_path)
