@@ -168,3 +168,47 @@ host summary/detail consumers. It avoids repeated descendant reconstruction for
 recognized small appends and isolates uncertain/cold reconstruction. Fully paged
 host projections and broader incremental event families remain follow-up work;
 these bounds do not claim the plan's complete latency exits are met.
+
+## Bounded event-window primitive
+
+`event_window.read_window` is a worker-side primitive for the window-first
+follow-up. It is not yet wired into passive publication or the browser. Its
+trusted input is the canonical session owner, exact requested message-window
+key, host-owned 32-byte cursor signing key, and optional older-page cursor.
+Execution, retired usage, transcript bodies, workers and generations are not
+inputs. The host keeps the signing key private and stable across disposable
+worker restarts. There is no new endpoint or independent transport.
+
+One request reads at most 4 MiB / 512 complete event records from one exact root
+file and returns at most 100 observations in source order. It does not construct
+an EventIndex or ModelStore, scan a transcript, verify an unread prefix, or open
+child logs. Delegation events can name a child but cannot admit its history.
+Older bytes require explicit continuation. The authenticated cursor binds owner,
+requested window, source identity/size/times and byte boundary. Replacement,
+append, truncation or in-place edits invalidate it. The reader validates sources
+before and after reading; publication still requires the host's current
+owner/window/source check. Source references and signing keys are private owner
+data, never client-supplied paths or keys.
+
+Items are source-event observations, not reconstructed calls or full Work groups.
+Event-offset/digest IDs preserve distinct observations when legacy call IDs repeat.
+Recorded IDs remain available for a separate proven host binding. The primitive
+never infers turn placement, prompt uniqueness, request/response pairing, running
+state or accounting from a cut prefix. It returns no aggregate usage or complete
+call totals. `read_field` resolves an accepted observation's exact private field
+reference, validates canonical bytes, and returns at most 16,384 text characters
+per explicit request. It does not require a full `execution.nodes` graph.
+
+Coverage always says `historyComplete: false`, including an exhausted root file:
+no transcript or descendant completeness was proved. `rootExhausted` describes
+only the root file's range. Missing sources and unfinished final records remain
+explicit. Oversized or structurally excessive records produce unavailable ranges,
+never an empty-complete claim. Signed unaligned continuations advance through
+oversized records without decoding suffixes; a readable neighbor that merely
+exceeds the remaining request budget is retried whole on the next page. Structural
+depth/value-count checks precede JSON allocation. No hidden loop fills older history.
+
+The pending host/client cutover must distinguish window availability from the
+full-reader completion receipt above, keep unproven observations separate, and
+preserve live accounting and explicit complete-read APIs. This primitive alone
+does not qualify integrated chat opening or complete historical Work.
