@@ -332,9 +332,10 @@ async def test_warm_cache_never_bypasses_changed_index(tmp_path, in_memory):
     from amplifier_web.resource_files import put_prepared_async, root
     db = sqlite3.connect(':memory:' if in_memory else tmp_path / 'index.sqlite3')
     db.execute('CREATE TABLE state_resources(id TEXT PRIMARY KEY, value TEXT NOT NULL)')
-    session = {'id': 'own', 'workspace': 'synthetic'}
+    session = {'id': 'own', 'workspace': 'synthetic', 'workingDirectory': 'synthetic',
+               'sessionKind': 'root', 'nativeProject': None}
     app = SimpleNamespace(db=db, lock=asyncio.Lock(), _session=lambda sid, **kwargs: session)
-    media = Media(SimpleNamespace(app=app))
+    media = Media(SimpleNamespace(app=app, _owner=lambda sid: session))
     body = await put_prepared_async(db, _prepare_media(gif()))
     db.commit()
     record = {'id': 'saved-media', 'sessionId': 'own', 'kind': 'media',
