@@ -92,13 +92,22 @@ class Outputs:
         if live is not None:
             facts['sessionKind'] = dict.get(live, 'sessionKind', 'root')
             facts['mediaRevision'] = dict.get(live, 'mediaRevision', 0)
-        elif 'mediaRevision' not in owner:
-            # Older summaries may omit the scalar. Read only a keyed saved
-            # scalar, never load_owner's control or the $viewPayload body.
-            row = self.app.db.execute("""SELECT json_extract(value,'$.mediaRevision'),
-                json_type(value,'$.mediaRevision')
-                FROM state_records WHERE kind='session' AND id=?""", (owner['id'],)).fetchone()
-            facts['mediaRevision'] = row[0] if row and row[1] == 'integer' else None
+        else:
+            # The directory's grouping column normalizes malformed kinds. Its
+            # saved scalar summary still carries explicit admission evidence;
+            # dormancy must not promote an invalid kind to root authority.
+            kind = self.app.db.execute("""SELECT json_extract(summary,'$.sessionKind'),
+                json_type(summary,'$.sessionKind') FROM history_local_rows WHERE id=?""",
+                (owner['id'],)).fetchone()
+            if kind and kind[1] is not None:
+                facts['sessionKind'] = kind[0]
+            if 'mediaRevision' not in owner:
+                # Older summaries may omit the scalar. Read only a keyed saved
+                # scalar, never load_owner's control or the $viewPayload body.
+                row = self.app.db.execute("""SELECT json_extract(value,'$.mediaRevision'),
+                    json_type(value,'$.mediaRevision')
+                    FROM state_records WHERE kind='session' AND id=?""", (owner['id'],)).fetchone()
+                facts['mediaRevision'] = row[0] if row and row[1] == 'integer' else None
         revision = facts['mediaRevision']
         if type(revision) is not int or revision < 0:
             facts['mediaRevision'] = None  # unavailable, not an invented current zero

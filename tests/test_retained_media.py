@@ -465,6 +465,10 @@ async def test_corrupt_cold_view_reopen_keeps_registry_bridge_and_http_reads_met
     app = server['service']
     await app.history.close()
     await app.event_log_view.close()
+    # Isolate this read boundary from the background diagnostics publisher.
+    # It independently saves revision/global/client state; retain total_changes
+    # and all retained-record equality assertions during the measured reads.
+    await app.diagnostics.close()
     client = await authenticated_client(server)
     try:
         sid = saved['sid']
@@ -512,6 +516,34 @@ async def test_corrupt_cold_view_reopen_keeps_registry_bridge_and_http_reads_met
         assert saved['viewPath'].read_bytes() == b'{"unrelated":"damaged saved view"}'
     finally:
         await client.close()
+
+
+@pytest.mark.parametrize('kind', ['unknown', '', False, None, [], {}])
+async def test_dormant_explicit_invalid_kind_cannot_gain_root_authority(
+        cold_retained_owner, monkeypatch, kind):
+    from amplifier_web.service import AppError
+    app, saved = cold_retained_owner
+    sid = saved['sid']
+    # Keep the directory grouping normalized to root while preserving the
+    # malformed explicit scalar as normal summary projection does.
+    app.db.execute("""UPDATE history_local_rows SET session_kind='root',
+        summary=json_set(summary,'$.sessionKind',json(?)) WHERE id=?""",
+        (json.dumps(kind), sid))
+    app.db.commit()
+    assert app.directory.resolve(sid)['sessionKind'] == 'root'
+    exact = {**saved['saved'], 'messageId': saved['args']['messageId']}
+    with app.clients.bind('cold-metadata-reader'), monkeypatch.context() as patch:
+        _forbid_retained_owner_hydration(patch, app)
+        with pytest.raises(AppError, match='root'):
+            await app.app_bridge('dispatch', {
+                'action': 'outputs.read', 'args': {'id': exact['id']}}, sid)
+        with pytest.raises(ValueError, match='root'):
+            await app.outputs.media.describe(sid, exact['messageId'])
+        for operation in (app.outputs.media.bytes, app.outputs.media.head):
+            with pytest.raises(ValueError, match='root'):
+                await operation(exact)
+    assert sid not in {row['id'] for row in app._state['sessions']}
+    assert not app.outputs.media.observations and not app.outputs.media.cache
 
 
 def _change_cold_retained_owner(app, sid, change):
