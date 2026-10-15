@@ -33,3 +33,29 @@ This capability belongs to the provider adapter. No provider's credentials, undo
 ## Conversation totals
 
 Chat details has a Conversation usage section backed by `capacity.read`. It reads once when opened and refreshes explicitly; it does not create a background poll or a separate accounting ledger. Totals and provider/model breakdown cover all recorded calls, independent of the receipt page limit. Copy usage exports this aggregate snapshot. Partial, pending, estimated and unavailable values remain distinguished. Cumulative tokens are not context-window occupancy.
+
+
+### Ordered terminal transport bursts
+
+The host may reduce up to 16 already-buffered consecutive terminal execution
+receipts from one worker/root, within 64 KiB of wire data, under one service lock
+and one durable publication. Every receipt, revision and observer runs in wire
+order; this is persistence batching, not call deduplication. A valid larger
+single record retains the existing single-event path. Wrappers that do not opt
+into the batch callback also retain single-event delivery.
+
+No additional bytes are awaited to fill a batch. Bridge requests (including
+capacity admission), replies, progress, lifecycle, approval, malformed frames and
+EOF are barriers. Prior pending progress from other sessions remains part of the
+publication's durable union. The next admission cannot run until the terminal
+batch commits. Save failure retains dirty scope and stops the reader; a later
+save retries persistence, never the event observers or commands. A reducer or
+observer fault preserves the already-applied prefix conservatively and stops;
+remaining receipts in that failed batch are not claimed accepted or replayed.
+Cancellation retains the bounded consumed-batch owner through commit, reaps its
+single pending read, and does not acknowledge a following command. Runtime stop
+and shutdown must continue to await readers outside the service state lock.
+
+This improves consecutive terminal bursts only. Interleaved event barriers and
+the cost of persisting the union of concurrently dirty chats remain; batching is
+not proof that a provider's bridge timeout cannot occur.

@@ -591,19 +591,77 @@ class RuntimeManager:
                 await self._write(row, {"op":"bridge.result","id":data["id"],"error":str(exc)})
 
     async def _read(self, sid, row):
+        from .runtime_event_batches import BufferedLines, EventSink, MAX_BYTES, finish_owned, terminal
+        lines = BufferedLines(row['process'].stdout)
+
+        def terminal_event(data):
+            if not isinstance(data, dict) or data.get('op') or data.get('type') != 'execution.event':
+                return None
+            payload = data.get('event')
+            if not terminal('execution.event', payload):
+                return None
+            # Only one current worker's root receipt; child identity is retained.
+            if payload.get('rootSessionId') not in (sid, row.get('runtime_id')):
+                return None
+            payload = dict(payload)
+            for key in ('sessionId', 'rootSessionId'):
+                if payload.get(key) == row.get('runtime_id'):
+                    payload[key] = sid
+            return normalize_event({**data, 'event': payload}, sid, row['inputId'])
+
+        decoded = None
+
+        async def deliver_batch(line, event, sink):
+            def accept(candidate):
+                nonlocal decoded
+                if row['emit'] is not sink:
+                    return None
+                try:
+                    data = json.loads(candidate)
+                except (ValueError, UnicodeDecodeError):
+                    return None
+                result = terminal_event(data)
+                if result is None:
+                    decoded = (candidate, data)
+                return result
+            events = await lines.collect(line, event, accept)
+            # start/takeover may replace the callback during the fairness yield,
+            # just as in the single-event path. Never call a retired callback.
+            sink = row['emit']
+            if isinstance(sink, EventSink):
+                await sink.batch(events)
+            else:
+                for kind, payload in events:
+                    await row['emit'](kind, payload)
+            # Delivery succeeded durably before lifecycle bookkeeping advances.
+            for _, payload in events:
+                if payload.get('lifecycle') == 'background':
+                    row.setdefault('backgroundCalls', set()).add(payload['id'])
+
         reported_error = None
         try:
-            while line := await row["process"].stdout.readline():
+            while line := await lines.next():
+                try:
+                    data = decoded[1] if decoded is not None and line is decoded[0] else json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    await asyncio.sleep(0)
+                    continue
+                finally:
+                    decoded = None
+                if not isinstance(data, dict):
+                    await asyncio.sleep(0)
+                    continue
+                sink = row['emit']
+                event = terminal_event(data) if isinstance(sink, EventSink) and len(line) <= MAX_BYTES else None
+                if event is not None:
+                    # Cancellation cannot abandon already consumed receipts.
+                    # The bounded collector never waits for another full line.
+                    await finish_owned(deliver_batch(line, event, sink))
+                    continue
                 # readline and event callbacks can both finish synchronously
                 # while stdout is buffered. Let pending replies, bridge calls,
                 # HTTP requests and stop commands run between ordered events.
                 await asyncio.sleep(0)
-                try:
-                    data = json.loads(line)
-                except (ValueError, UnicodeDecodeError):
-                    continue
-                if not isinstance(data, dict):
-                    continue
                 if data.get("op") == "bridge":
                     task = asyncio.create_task(self._bridge(sid, row, data))
                     row["bridge_tasks"].add(task)
@@ -773,11 +831,14 @@ class RuntimeManager:
             if not row["ready"].done():
                 row["ready"].set_exception(RuntimeError(error))
         finally:
-            row.get('sendInputs', {}).clear()
-            for future in row["pending"].values():
-                if not future.done():
-                    future.set_exception(RuntimeHostClosingError() if row.get('stop_reason') == 'shutdown'
-                                         else RuntimeError("Amplifier worker disconnected"))
+            try:
+                await finish_owned(lines.close())
+            finally:
+                row.get('sendInputs', {}).clear()
+                for future in row["pending"].values():
+                    if not future.done():
+                        future.set_exception(RuntimeHostClosingError() if row.get('stop_reason') == 'shutdown'
+                                             else RuntimeError("Amplifier worker disconnected"))
 
     async def _execution_ended(self, sid, row, status):
         """Only a confirmed process exit settles independent background calls."""
