@@ -55,14 +55,20 @@ async def test_event_refresh_preserves_catalog_epoch_and_updates_browser_usage(a
     assert queues[1].empty(), 'Execution detail must not republish the unrelated chat'
     with app.clients.bind('0'):
         current = next(item for item in app.browser_state()['sessions'] if item['id'] == row['id'])
-    assert current['execution']['turns'][0]['aggregateUsage']['totalTokens'] == 6
+    # The browser retains authoritative accounting, but does not invent a
+    # complete historical turn from its separate recent-event window.
+    assert current['execution']['aggregateUsage']['totalTokens'] == 6
+    assert row['execution']['turns'][0]['aggregateUsage']['totalTokens'] == 6
+    assert current['execution']['nodes'] == []
+    assert current['executionWindow']['coverage']['historyComplete'] is False
     assert state_records.load(app.db)['runtimeControl'][rows[1]['id']] == unrelated
     # A later event updates the retained browser projection and usage rollup.
     model_event(row, 2)
     await view.refresh('native' if use_native_alias else row['id'])
     with app.clients.bind('0'):
         current = next(item for item in app.browser_state()['sessions'] if item['id'] == row['id'])
-    assert current['execution']['turns'][0]['aggregateUsage']['totalTokens'] == 12
+    assert current['execution']['aggregateUsage']['totalTokens'] == 12
+    assert row['execution']['turns'][0]['aggregateUsage']['totalTokens'] == 12
     assert app._history_local_revision == epoch
     # Reload from committed records plus the authoritative event log.
     await app.publishing.close()
