@@ -61,8 +61,10 @@ async def main(home, port):
             elif action == 'execute' and mode['executeTimeout']:
                 return {'ok': False, 'status': 'unknown', 'universeId': identity,
                     'message': 'The fixture command timed out. It may still be running; inspect or stop it without replaying this request.'}
-            return {'ok': True, 'universeId': identity, 'status': states.get(row['id'], 'unknown'),
-                'result': {'exit_code': 0, 'stdout': 'workspace check passed\n', 'stderr': '', 'stdout_truncated': False, 'stderr_truncated': False}}
+            value = {'ok': True, 'universeId': identity, 'status': states.get(row['id'], 'unknown')}
+            if action == 'execute':
+                value['result'] = {'exit_code': 0, 'stdout': 'workspace check passed\n', 'stderr': '', 'stdout_truncated': False, 'stderr_truncated': False}
+            return value
     environments.invoke = invoke
     app = await create_app(home, workspace=workspace, runtime=Runtime(), voice=False, background_updates=False)
     app['control_token'] = TOKEN
