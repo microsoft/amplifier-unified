@@ -89,24 +89,38 @@ try{
  await deliveredDelegate.locator(':scope > button').click();
  await expect(deliveredDelegate.getByRole('region',{name:'Response to parent',exact:true})).toContainText('The exact delivered async answer.');
  await expect(page.getByText('Pre-delivery tool record',{exact:true})).toHaveCount(0);
- // Return to an old focused window after the delegate exchange leaves the
- // browser tail. Lazy reads must carry that window identity, not re-center it.
+ // The rail contains loaded messages only. Demand the older page before
+ // jumping to its question, then read the exact retained root-event record.
+ // This does not reconstruct historical nested delegate exchanges.
  await control({op:'patch',sessions:{[alpha]:{messages:[...messages,reportMessage,...Array.from({length:100},(_,i)=>({
   id:`later-${i}`,role:i%2?'assistant':'user',text:`Later conversation ${i}`,createdAt:start+100+i
  }))]}}});
+ await control({op:'historical-delegate-record'});
  await page.setViewportSize({width:1440,height:1000});
  await page.reload();
+ await expect(page.locator('[data-message-id="later-99"]')).toBeVisible();
  await expect(page.locator('[data-message-id="question"]')).toHaveCount(0);
+ await expect(page.locator('.a-rail-mark[data-turn-id="question"]')).toHaveCount(0);
  const focusedReads=[];page.on('request',r=>{if(r.url().includes('/api/conversation/detail?'))focusedReads.push(new URL(r.url()).searchParams)});
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
+ await expect(page.locator('[data-message-id="question"]')).toBeVisible();
  await page.locator('.a-rail-mark[data-turn-id="question"]').click();
- await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toBeVisible();
- const focusedWork=page.locator('[data-part="execution-group"] > button').first();
- if(await focusedWork.getAttribute('aria-expanded')!=='true')await focusedWork.click();
- const focusedDelegate=page.locator('[data-group-id="turn-one@report-message"] [data-kind="worker"]');
- await expect(focusedDelegate).toBeVisible();
- if(await focusedDelegate.locator(':scope > button').getAttribute('aria-expanded')!=='true')await focusedDelegate.locator(':scope > button').click();
- await expect(focusedDelegate).toContainText('The exact delivered async answer.');
- assert.ok(focusedReads.some(args=>args.get('windowMessageId')==='question'&&args.get('group')==='turn-one@report-message'));
+ await expect(page.locator('[data-message-id="question"]')).toBeInViewport();
+ // Historical records are explicit partial observations. Do not invent the
+ // full child tree, turn association, or accounting from this root-event page.
+ const saved=page.locator('[data-group-id^="event-window:"]');
+ await saved.getByRole('button',{name:/^Recent saved work/}).click();
+ await expect(saved).toContainText('Full conversation totals and earlier activity are not included.');
+ const recorded=saved.locator('[data-kind="tool"]');
+ await recorded.locator(':scope > button').click();
+ await expect(recorded).toContainText('The exact delivered async answer.');
+ await expect(saved.locator('.a-execution-usage')).toHaveCount(0);
+ await expect(saved.locator('.a-execution-call-counts')).toHaveCount(0);
+ await expect(saved.locator('[data-kind="worker"]')).toHaveCount(0);
+ const coverage=await page.evaluate(()=>{const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId).executionWindow.coverage});
+ assert.equal(coverage.sourceCount,1);assert.equal(coverage.historyComplete,false);
+ assert.ok(focusedReads.some(args=>args.get('part')==='messages'&&args.get('before')),'Older transcript requires explicit bounded page demand');
+ assert.ok(focusedReads.some(args=>args.get('group')?.startsWith('event-window:')),'Recorded work is read on disclosure');
  const header=page.locator('.a-work-header');
  await expect(header.getByRole('button',{name:'Chat overview',exact:true})).toHaveCount(0);
  await expect(header.getByRole('button',{name:'Chat',exact:true}).locator('.lucide-sliders-horizontal')).toHaveCount(1);
@@ -121,5 +135,5 @@ try{
  await expect(page.getByText('Saved recording setting: On',{exact:true})).toBeVisible();
  await page.screenshot({path:root+'test-results/delegate-recording-settings.png'});
  assert.deepEqual(errors,[]);
- console.log('PASS: delegate ownership across message boundaries, expandable model calls, and unambiguous header controls.');
+ console.log('PASS: live delegate nesting and delivered exchange, bounded historical root record with explicit partial accounting, current header and saved recording setting. Historical nested delegate reconstruction is not qualified.');
 }finally{await browser?.close();fixture.kill()}

@@ -174,6 +174,21 @@ async def main():
                     row.update(id=identity,title=f'Additional conversation {index}',status='idle',nativeIdentity=None,runtimeSessionId=None,
                         messages=[{'id':f'{identity}-m-{i}','role':'assistant','text':'Retained text. '*350,'createdAt':1700000000+i} for i in range(count)],execution={'turns':[],'nodes':[]})
                     service.state['sessions'].append(row)
+            elif op == 'historical-delegate-record':
+                # Historical UI uses a bounded canonical root-event page, not
+                # the in-memory live tree fabricated by the earlier scenario.
+                from amplifier_web.event_log_view import event_path
+                from amplifier_web.work_windows import WorkWindows
+                row = service._session(aid)
+                event_path(row, aid).unlink(missing_ok=True)
+                log_hook(aid, 'tool:post', {'tool_call_id': 'delegate-one',
+                    'tool_name': 'delegate', 'result': {'success': True,
+                    'output': {'response': 'The exact delivered async answer.'}}}, 1791409140)
+                log_hook(aid, 'llm:response', {'model': 'historical-model',
+                    'usage': {'total_tokens': 999999, 'cost_usd': 999}}, 1791409141)
+                await service.event_log_view.windows.close()
+                service.event_log_view.windows = WorkWindows(service)
+                await service.event_log_view.windows.read(aid)
             elif op in {'canonical-work','canonical-append'}:
                 from amplifier_web.event_log_view import event_path
                 row=service._session(aid);base=1700000000
