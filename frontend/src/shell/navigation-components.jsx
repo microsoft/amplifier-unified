@@ -22,6 +22,7 @@ import {waitForSnapshot} from './wait-for-snapshot';
 import {hasNavigationResource} from './navigation-demand';
 import {NavigationResourceStatus} from './navigation-resource-status';
 import {usePinOrderSettlement} from './pin-order-settlement';
+import {sidebarReadingSnapshot} from './resources';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
@@ -168,6 +169,9 @@ export function useRecentShortcuts(host,state,act){
  const initial={limit:recentLimit(state.recentNavigation?.scope?.limit??state.view?.navRecentLimit),showAgentCreated:state.view?.navShowAgentCreated===true};
  const [settings,setSettings]=useState(initial),[page,setPage]=useState(state.recentNavigation||{items:[],total:0,remaining:0,limit:initial.limit});
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+ const ownerFor=current=>JSON.stringify([current?.navigationResourceScope?.[0],current?.navigationResourceScope?.[1],current?.generation]);
+ const owner=ownerFor(state);
+ const acceptedOwner=useRef(owner),observedOwner=useRef(owner);
  const accepted=useRef(page),intent=useRef(null),sequence=useRef(0),mounted=useRef(true),waiting=useRef(false),uncertain=useRef(false),readWait=useRef(null);
  const latest=useRef(null);latest.current={host,state,act};
  const scopeFor=current=>{
@@ -181,35 +185,42 @@ export function useRecentShortcuts(host,state,act){
    selectedSessionId:current.selectedSessionId??null};
  };
  const desired=(value,current=latest.current.state)=>({...scopeFor(current),...value});
- const newer=candidate=>(candidate?.scope?.viewRevision??0)>=(accepted.current?.scope?.viewRevision??0)
+ const sameQuery=(scope,current)=>Object.entries(scope).every(([key,value])=>key==='selectedSessionId'||scopeFor(current)[key]===value);
+ const newer=candidate=>acceptedOwner.current!==owner||(candidate?.scope?.viewRevision??0)>=(accepted.current?.scope?.viewRevision??0)
   &&((candidate?.scope?.viewRevision??0)>(accepted.current?.scope?.viewRevision??0)
    ||(candidate?.dataRevision??0)>=(accepted.current?.dataRevision??0));
  const accept=candidate=>{
   candidate={...candidate,items:[...new Map(candidate.items.map(row=>[row.id,row])).values()]};
-  accepted.current=candidate;uncertain.current=false;setPage(candidate);
+  acceptedOwner.current=owner;accepted.current=candidate;uncertain.current=false;setPage(candidate);
   setSettings({limit:candidate.scope.limit,showAgentCreated:candidate.scope.showAgentCreated});
  };
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;sequence.current++;readWait.current?.abort()}},[]);
  useLayoutEffect(()=>{
+  if(observedOwner.current===owner)return;
+  observedOwner.current=owner;sequence.current++;readWait.current?.abort();waiting.current=false;
+  intent.current=null;uncertain.current=false;setBusy(false);setError('');
+ },[owner]);
+ useLayoutEffect(()=>{
   const candidate=state.recentNavigation;
-  if(waiting.current||!candidate||!newer(candidate))return;
+  if(waiting.current||!candidate||state.navigationResourceRetained?.recentNavigation||!newer(candidate))return;
   const pending=intent.current,wanted=pending?.wanted||{
    limit:recentLimit(state.view?.navRecentLimit??candidate.scope.limit),
    showAgentCreated:state.view?.navShowAgentCreated===true
   };
   if(recentPageMatches(candidate,desired(wanted))
-   &&(!pending||Object.entries(pending.scope).every(([key,value])=>candidate.scope[key]===value)
+   &&(!pending||sameQuery(pending.scope,state)
     &&candidate.scope.viewRevision>=pending.minRevision)){
    accept(candidate);
    if(intent.current){intent.current=null;setError('')}
   }
- },[state.recentNavigation,state.recentScope,state.selectedSessionId,busy]);
+ },[state.recentNavigation,state.recentScope,state.selectedSessionId,state.navigationResourceRetained,owner,busy]);
  const change=async value=>{
   // This ref is set synchronously, before React renders or dispatch can await.
   // Scroll, fallback, toggle and Retry must all share the same flight.
   if(waiting.current||uncertain.current)return;
   const wanted={limit:accepted.current.limit,showAgentCreated:accepted.current.scope?.showAgentCreated,...value},ticket=++sequence.current;
-  const scope=scopeFor(latest.current.state),minRevision=(accepted.current.scope?.viewRevision??0)+1;
+  const requestOwner=ownerFor(latest.current.state);
+ const scope=scopeFor(latest.current.state),minRevision=(accepted.current.scope?.viewRevision??0)+1;
   intent.current={wanted,scope,minRevision};waiting.current=true;setSettings(wanted);setBusy(true);setError('');
   try{
    const receipt=await patch(act,{navRecentLimit:wanted.limit,navShowAgentCreated:wanted.showAgentCreated});
@@ -217,11 +228,11 @@ export function useRecentShortcuts(host,state,act){
    if(!mounted.current||ticket!==sequence.current)return;
    const controller=new AbortController();readWait.current=controller;
    const candidate=await waitForSnapshot(latest.current.host,current=>{
-    if(!Object.entries(scope).every(([key,value])=>scopeFor(current)[key]===value))
+    if(ownerFor(current)!==requestOwner||!sameQuery(scope,current))
      throw Error('Recent changed during the read. The previous chats are kept.');
     const page=current.recentNavigation;
     return recentPageMatches(page,desired(wanted,current))
-     &&Object.entries(scope).every(([key,value])=>page.scope[key]===value)
+     &&!current.navigationResourceRetained?.recentNavigation
      &&page.scope.viewRevision>=minRevision&&newer(page)?page:null;
    },{signal:controller.signal});
    if(!mounted.current||ticket!==sequence.current)return;
@@ -233,9 +244,21 @@ export function useRecentShortcuts(host,state,act){
   // Reconcile only. Never replay an uncertain view write (or task/input work).
   if(waiting.current)return;
   const ticket=++sequence.current;waiting.current=true;setBusy(true);
-  const scope=scopeFor(latest.current.state);
+  const scope=scopeFor(latest.current.state),requestOwner=ownerFor(latest.current.state);
   try{
-   const snapshot=await host.refreshResources();
+   let snapshot=await host.refreshResources();
+   if(!mounted.current||ticket!==sequence.current)return;
+   if(!snapshot?.recentNavigation||snapshot.navigationResourcePending?.recentNavigation){
+    const controller=new AbortController();readWait.current=controller;
+    snapshot=await waitForSnapshot(latest.current.host,current=>{
+     if(ownerFor(current)!==requestOwner||!sameQuery(scope,current))throw Error('Recent changed during the read. The previous chats are kept.');
+     if(current.navigationResourcePending?.recentNavigation?.status==='retry')throw Error('Recent could not be refreshed. The previous chats are kept.');
+     const candidate=current.recentNavigation;
+     return !current.navigationResourceRetained?.recentNavigation&&!current.navigationResourcePending?.recentNavigation
+      &&recentPageMatches(candidate,desired({limit:recentLimit(current.view?.navRecentLimit??candidate?.scope?.limit),
+       showAgentCreated:current.view?.navShowAgentCreated===true},current))&&newer(candidate)?current:null;
+    },{signal:controller.signal});
+   }
    if(!mounted.current||ticket!==sequence.current)return;
    const current=latest.current.host.getSnapshot(),read=snapshot?.recentNavigation,live=current.recentNavigation;
    // A shell snapshot received during this read may already be newer. Prefer
@@ -250,8 +273,9 @@ export function useRecentShortcuts(host,state,act){
    const matching=(value,snapshot)=>recentPageMatches(value,desired(savedSettings(value,snapshot),current));
    const useLive=matching(live,current)&&(!matching(read,snapshot)||after(live,read));
    const candidate=useLive?live:read,saved=savedSettings(candidate,useLive?current:snapshot);
-   if(!recentPageMatches(candidate,desired(saved,current))
-    ||!Object.entries(scope).every(([key,value])=>candidate.scope[key]===value)||!newer(candidate))
+   if(ownerFor(current)!==requestOwner||ownerFor(useLive?current:snapshot)!==requestOwner
+    ||!recentPageMatches(candidate,desired(saved,current))
+    ||!sameQuery(scope,current)||current.navigationResourceRetained?.recentNavigation||!newer(candidate))
     throw Error('Recent changed during the read. Retry to read the current list.');
    const unsaved=intent.current&&!recentPageMatches(candidate,desired(intent.current.wanted,current));
    accept(candidate);intent.current=null;
@@ -260,9 +284,10 @@ export function useRecentShortcuts(host,state,act){
   finally{if(mounted.current&&ticket===sequence.current){waiting.current=false;setBusy(false)}}
  };
  const queryPending=state.navigationResourcePending?.recentNavigation;
- const matching=Object.entries(scopeFor(state)).every(([key,value])=>page.scope?.[key]===value);
+ const matching=acceptedOwner.current===owner&&page.scope?.showAgentCreated===(state.view?.navShowAgentCreated===true)
+  &&Object.entries(scopeFor(state)).every(([key,value])=>key==='selectedSessionId'||page.scope?.[key]===value);
  const visiblePage=matching?page:{items:[],total:0,remaining:0,limit:settings.limit};
- return {page:visiblePage,settings,busy:busy||queryPending?.status==='pending'||!matching&&!queryPending,
+ return {page:visiblePage,settings,busy:busy||!error&&(queryPending?.status==='pending'||!matching&&!queryPending),
   error,blocked:uncertain.current||!!queryPending,change,retry};
 }
 
@@ -303,10 +328,11 @@ function RecentShortcuts({host,model,now}){
   return()=>{following.dispose();follower.current=null};
  },[host]);
  return <div ref={root} tabIndex={-1} className="a-recent-shortcuts" aria-busy={busy} onFocusCapture={e=>{focused.current=e.target}} onBlurCapture={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget))focused.current=null}}>
+  {!error&&<NavigationResourceStatus state={model.state} resource="recentNavigation" label="recent chats" refresh={model.refreshResources}/>}
   {page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
   {!page.items.length&&!busy&&!error&&!model.state.navigationResourcePending?.recentNavigation&&<p className="a-nav-empty">Your recent chats appear here.</p>}
   {(page.remaining>0||busy||error)&&<div className="a-recent-controls">
-   {busy&&<small role="status">Loading recent chats…</small>}
+   {busy&&!model.state.navigationResourcePending?.recentNavigation&&<small role="status">Loading recent chats…</small>}
    {page.remaining>0&&<button ref={more} type="button" className="a-sidebar-all a-link a-recent-control" style={{minHeight:44}} aria-disabled={busy||blocked} data-action="view.update" onClick={load}>Load older chats</button>}
    {error&&<p role="alert">{error} <button type="button" className="a-link a-recent-control" aria-disabled={busy} onClick={()=>{if(busy)return;capture();return retry()}}>Retry</button></p>}
   </div>}
@@ -347,7 +373,7 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
  };
  const open=row=>navigation?navigation.browse('workspace',row.workspaceId):workspaceModel.act('workspace.select',{id:row.workspaceId});
  const newChat=row=>workspaceModel.act('session.draft',{workspace:row.path,workspaceId:row.workspaceId,location:{kind:'workspace'}});
- return <><ReorderList items={items} ids={visible} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
+ return <><ReorderList items={items} ids={visible} busy={!!model.state.navigationResourceRetained?.pinnedNavigation} orderKey={(model.state.pinnedItemIds||[]).join('\0')} onChange={reorder} className="a-pinned-chats" floatingClassName="a-pinned-drag" action="navigation.pinOrder" renderItem={(item,{handle,floating})=>item.kind==='workspace'?<WorkspaceRow row={item.row} state={workspaceModel.state} act={workspaceModel.act} now={now} {...{handle,floating,browse,open,newChat}} compact pinnedShortcut onEdit={canEdit?workspaceModel.setDraft:undefined}/>:<ChatRow chat={item.row} model={model} now={now} handle={handle} floating={floating}/>}/>
   {error&&<p role="alert" className="a-danger">{error}</p>}
   <ChatPagination page={page} label="pinned items" onChange={index=>patch(model.act,{navPinnedPage:index})}/>
  </>;
@@ -447,8 +473,10 @@ function LegacyConversationList({host,workspaceHost}){
 }
 
 function QuietSidebar({host,workspaceHost,navigation}){
- const model=useNavigationController(host,'chats'),now=useActivityClock();
- const workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),workspaceState=workspaceModel.state;
+ const controller=useNavigationController(host,'chats'),now=useActivityClock();
+ const workspaceController=useNavigationController(workspaceHost||host,'workspaces');
+ const model={...controller,state:sidebarReadingSnapshot(controller.state)};
+ const workspaceModel={...workspaceController,state:sidebarReadingSnapshot(workspaceController.state)},workspaceState=workspaceModel.state;
  const pins=model.state.pinnedNavigation||model.state.sidebarNavigation?.pinned||{items:[],total:0,pages:1};
  return <div className="a-sidebar-navigation a-quiet-sidebar">
   <NavigationEditor model={model}/>
@@ -457,7 +485,7 @@ function QuietSidebar({host,workspaceHost,navigation}){
   {(!!pins.total||model.state.navigationResourcePending?.pinnedNavigation)&&<SidebarSection id="pinned" title="Pinned" model={model}><NavigationResourceStatus state={model.state} resource="pinnedNavigation" label="pinned chats and workspaces" refresh={model.refreshResources}/>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
   <SidebarSection id="workspaces" title="Workspaces" model={model} actions={<button type="button" className="a-icon" aria-label="New workspace" onClick={()=>navigation.create()}><Plus/></button>}>
    <NavigationResourceStatus state={workspaceState} resource="workspaceShortcuts" label="workspaces" refresh={workspaceModel.refreshResources}/>
-   {hasNavigationResource(workspaceState,'workspaceShortcuts')?<WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>:!workspaceState.navigationResourcePending?.workspaceShortcuts&&<p role="status">Loading workspaces…</p>}
+   {(hasNavigationResource(workspaceState,'workspaceShortcuts')||workspaceState.navigationResourceRetained?.workspaceShortcuts)?<WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>:!workspaceState.navigationResourcePending?.workspaceShortcuts&&<p role="status">Loading workspaces…</p>}
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
   </SidebarSection>
   <SidebarSection id="recent" title="Recent" model={model} actions={<>
@@ -465,7 +493,6 @@ function QuietSidebar({host,workspaceHost,navigation}){
    {model.history.error&&<span role="alert">{model.history.error}</span>}
    <button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>
   </>}>
-   <NavigationResourceStatus state={model.state} resource="recentNavigation" label="recent chats" refresh={model.refreshResources}/>
    <RecentShortcuts host={host} model={model} now={now}/>
   </SidebarSection>
  </div>;

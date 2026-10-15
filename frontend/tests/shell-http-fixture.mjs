@@ -15,6 +15,7 @@ export function createShellHttpFixture(readState){
   for(const instance of descriptor.composition.instances){
    const snapshot=descriptor.snapshots[instance.id];
    const context={view:snapshot.view,viewRevision:input.revision,selectedSessionId:input.selectedSessionId,
+    recentScope:{mode:'all',filter:'',clientId,instanceId:instance.id,generation:0,workspaceId:input.selectedWorkspaceId},
     selectedWorkspaceId:input.selectedWorkspaceId,workspaces:input.workspaces||[],settings:input.settings||{},
     library:{bounded:true},sidebarNavigation:{recentView:{}},attention:input.attention||{},
     locationListing:input.locationListing,actionStatus:input.actionStatus};
@@ -26,8 +27,7 @@ export function createShellHttpFixture(readState){
     else if(name==='workspaceExplorer')value={workspaceExplorer:input.workspaceExplorer||{rows:[],pages:1,page:1}};
     else if(name.startsWith('sidebar'))value={sidebarNavigation:{[name.slice(7).toLowerCase()]:page(input)}};
     else value={[name]:input[name]||page(input)};
-    if(name==='recentNavigation')value={...value,recentShortcuts:value.recentNavigation.items,
-     recentScope:{clientId,instanceId:instance.id,generation:0,workspaceId:input.selectedWorkspaceId}};
+    if(name==='recentNavigation')value={...value,recentShortcuts:value.recentNavigation.items};
     resources[name]={revision:input.revision,value};
    }
    instances[instance.id]={generation:0,stateRevision:input.revision,pending:{},resources};

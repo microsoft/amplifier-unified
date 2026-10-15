@@ -1,3 +1,4 @@
+import {conversationHistoryPending} from './history-window.js';
 import {SettingsActions} from './settings-layout';
 import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useState,useEffect,useRef} from 'react';
@@ -18,7 +19,7 @@ function CompactBundleControl({state,session,act,working,embedded=false}){
  const open=embedded||(draft.open&&draft.sessionId===(session?.id||null)),popover=useRef(null),{style:position,panelRef,renderPopover}=useComposerPopover(open&&!embedded,popover);
  useOutsideDismiss(open&&!embedded,popover,()=>edit({open:false}),panelRef);
  useEffect(()=>{if(!state.registeredBundles?.length)act('bundles.list',{})},[]);
- const rows=state.registeredBundles||[],unavailable=session?.workspaceAvailable===false||session?.historyReadOnlyReason||session?.historyLoaded===false;
+ const rows=state.registeredBundles||[],unavailable=session?.workspaceAvailable===false||session?.historyReadOnlyReason||conversationHistoryPending(session);
  async function choose(bundle,resetModel=false){
   if(guard.current)return;guard.current=true;setPending(true);setError('');edit({bundle});
   try{await act(session?'bundle.switch':'view.update',session?{sessionId:session.id,bundle,resetModel}:{patch:{newSessionDraft:{...setup,bundle}}})}catch(e){setError(e.message)}finally{guard.current=false;setPending(false)}
@@ -44,7 +45,7 @@ function DetailedBundleControl({state,session,act,working}){
  const operation=session?.bundleChange,preview=session?.bundlePreview;
  const pending=!!submitting||!!session?.configurationBusy||operation?.phase==='working';
  const ready=preview?.bundle===draft.bundle&&preview?.previewId;
- const unavailable=session?.workspaceAvailable===false||session?.historyReadOnlyReason||session?.historyLoaded===false;
+ const unavailable=session?.workspaceAvailable===false||session?.historyReadOnlyReason||conversationHistoryPending(session);
  const disabled=working||pending||unavailable||!draft.bundle?.trim();
  const needsModel=ready&&!preview.modelCompatible&&!draft.resetModel;
  const activeAction=submitting||operation?.action;

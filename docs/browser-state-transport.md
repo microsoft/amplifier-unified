@@ -86,11 +86,28 @@ Page names are `chatNavigation`, `homeNavigation`, `pinnedNavigation`,
 `sidebarWorkspace`, `sidebarRecent`, `sidebarPinned`, and `workspaceOverview`.
 The implicit `context` resource owns controller metadata and receipts for the
 union of the active pages' visible rows. Page values contain only their fields;
-`recentNavigation` additionally owns `recentShortcuts`/`recentScope`, and
+`recentNavigation` additionally owns `recentShortcuts`, and
 `workspaceShortcuts` owns pinned-excluding shortcuts. Missing coverage means
 loading, not an empty result. Changes to private module views have their own
 monotonic `viewRevision`; the HTTP `result.shellView` receipt prevents an older
 queued context frame from briefly restoring an acknowledged prior value.
+
+The implicit context also carries exact `recentScope` controller identity while
+its page is pending. A temporary missing page cannot change client, instance,
+generation or canonical workspace identity. Recent expansion and explicit Retry
+wait for the matching page through the existing stream; selection changes do not
+replay the view write. Genuine query or host changes still fence the wait.
+
+During a selection-demand transition the quiet sidebar may retain its previous
+Pinned, workspace-shortcut and Recent rows as local reading state. This bounded
+state is separate from `navigationResources`: it never grants current coverage,
+satisfies a page wait, or fills main search/workspace results. Same-query rows
+remain visibly updating so removing them cannot collapse the sidebar and reset
+its scroll position. Changed host, bootstrap, module generation, effective pinned
+workspace, filters or page identity discard incompatible reading state. Retained
+pin rows remain selectable, but cannot start a reorder until current coverage
+returns. A failed Recent read keeps its prior rows and Retry without also claiming
+that it is still loading.
 
 The server reuses immutable resource values while semantic dependencies match.
 Workspace explorer and shortcut aggregates have a separate directory generation:

@@ -393,6 +393,17 @@ class ShellModules:
         # These are views over the native history index, never another chat list.
         # Pins remain independent of either chat list's filters and pagination.
         sidebar_home = {**home_view, 'navChatScope': 'workspace' if pinned_scope else 'all'}
+        # Controller identity must exist before the asynchronous page arrives.
+        # Use the same available/path-qualified registration as chat queries;
+        # an unavailable or unresolved workspace is explicitly null.
+        recent_workspace = next((row for row in state.get('workspaces', [])
+            if row['id'] == workspace_id and row.get('available') is True
+            and isinstance(row.get('path'), str) and row['path']), None)
+        recent_scope = {'mode': sidebar_home['navChatScope'],
+            'workspaceId': recent_workspace['id'] if pinned_scope and recent_workspace else None,
+            'filter': '', 'clientId': identity if identity is not None else self.service.clients.current.get(),
+            'instanceId': instance['id'],
+            'generation': client['views'].get(instance['id'], {}).get('generation', 0)}
         recent_view = {**sidebar_home, **view.get('navRecentView', {})}
         pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned') if wants('sidebarPinned') else None
         recent = projections.chats({**scoped, 'view': recent_view}, section='recent') if wants('sidebarRecent') else None
@@ -400,10 +411,6 @@ class ShellModules:
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace') if wants('sidebarWorkspace') else None
         recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts') if wants('recentNavigation') else None
         if recent_navigation is not None:
-            recent_scope = {key: recent_navigation['scope'][key] for key in ('mode', 'workspaceId', 'filter')}
-            recent_scope.update(clientId=identity if identity is not None else self.service.clients.current.get(),
-                                instanceId=instance['id'],
-                                generation=client['views'].get(instance['id'], {}).get('generation', 0))
             # Identity is not part of the shared projection cache. Copy its scope,
             # so one client's fence cannot contaminate another's cached rows.
             recent_navigation = {**recent_navigation, 'scope': {**recent_navigation['scope'], **recent_scope}}
@@ -427,6 +434,7 @@ class ShellModules:
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
         result = {} if _page_only else {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
+                'recentScope': recent_scope,
                 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
                 'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
@@ -449,7 +457,7 @@ class ShellModules:
                         'search': search, 'workspace': workspace_chats}.items() if page is not None})
         result['sidebarNavigation'] = sidebar
         if recent_navigation is not None:
-            result.update(recentShortcuts=recent_shortcuts, recentNavigation=recent_navigation, recentScope=recent_scope)
+            result.update(recentShortcuts=recent_shortcuts, recentNavigation=recent_navigation)
         if wants('workspaceShortcuts'):
             result['workspaceShortcuts'] = [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6]
             result['unpinnedWorkspaceShortcuts'] = [row for row in projections.workspace_shortcuts(scoped) if not pinned_scope or row.get('workspaceId') == workspace_id][:6]

@@ -1,3 +1,4 @@
+import {conversationHistoryPending} from './history-window.js';
 import React,{useLayoutEffect,useRef,useState,useEffect} from 'react';
 import {SlidersHorizontal,X} from 'lucide-react';
 import {ModelControl} from './chat-controls';
@@ -22,7 +23,7 @@ export function ComposerOptions({state,session,act,working}){
   if(previousNarrow.current===narrow)return;previousNarrow.current=narrow;
   if(state.view?.composerModel?.open||state.view?.composerBundle?.open)act('view.update',{patch:{composerModel:{...state.view?.composerModel,open:false},composerBundle:{...state.view?.composerBundle,open:false}}});
  },[narrow]);
- const unavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||session?.historyLoaded===false;
+ const unavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||conversationHistoryPending(session);
  const props={state,session,act,working};
  return <div className="a-composer-options" ref={ref}>
   {narrow?<><button type="button" className="a-composer-options-trigger" aria-label="Chat options" aria-expanded={open} aria-haspopup="dialog" disabled={unavailable} onClick={()=>setOpen(!open)}><SlidersHorizontal/><span>Options</span></button>

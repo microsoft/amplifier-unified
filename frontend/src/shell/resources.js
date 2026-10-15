@@ -18,6 +18,39 @@ export function matchesResources(envelope,bootstrap,demand){
 }
 
 const navigation=new Set(['builtin.chats','builtin.workspaces']);
+
+const sidebarFields={pinnedNavigation:['pinnedNavigation'],
+ recentNavigation:['recentNavigation','recentShortcuts'],
+ workspaceShortcuts:['workspaceShortcuts','unpinnedWorkspaceShortcuts']};
+const queryScope=['mode','workspaceId','filter','clientId','instanceId','generation'];
+function readingResources(bootstrap,instance,prior,snapshot,wanted){
+ const retained={};
+ if(!prior||prior.generation!==snapshot.generation
+  ||prior.navigationResourceScope?.[0]!==bootstrap.hostInstanceId
+  ||prior.navigationResourceScope?.[1]!==bootstrap.shellBootstrapKey)return retained;
+ // Sidebar shortcuts have a fixed query independent of the selected chat and
+ // main browsing surface. Keep their old rows only as explicitly stale reading
+ // state. A pinned instance changing its effective workspace is a new query.
+ if(!prior.recentScope||!snapshot.recentScope
+  ||queryScope.some(key=>prior.recentScope[key]!==snapshot.recentScope[key]))return retained;
+ for(const name of wanted){
+  if(!sidebarFields[name])continue;
+  if(name==='recentNavigation'&&!!prior.view?.navShowAgentCreated!==!!snapshot.view?.navShowAgentCreated)continue;
+  if(name==='pinnedNavigation'&&(prior.view?.navPinnedPage||0)!==(snapshot.view?.navPinnedPage||0))continue;
+  const old=prior.navigationResourceRetained?.[name];
+  if(!prior.navigationResources?.includes(name)&&!old)continue;
+  const value=old||Object.fromEntries(sidebarFields[name].filter(key=>prior[key]!==undefined).map(key=>[key,prior[key]]));
+  if(Object.keys(value).length)retained[name]=value;
+ }
+ return retained;
+}
+
+// Reading rows never grant resource coverage or satisfy a page wait. Only the
+// quiet sidebar renders them; main search/workspace results remain scope-fenced.
+export function sidebarReadingSnapshot(snapshot){
+ return {...Object.assign({},...Object.values(snapshot.navigationResourceRetained||{})),...snapshot};
+}
+
 function validEntry(entry){
  return Number.isSafeInteger(entry.stateRevision)&&entry.stateRevision>=0
   &&entry.pending&&typeof entry.pending==='object'&&!Array.isArray(entry.pending)
@@ -48,6 +81,8 @@ export function resourceSnapshots(bootstrap,envelope,demand,previous={}){
     if(sidebarNavigation)snapshot.sidebarNavigation={...snapshot.sidebarNavigation,...sidebarNavigation};
     snapshot.navigationResources.push(name);
    }
+   snapshot.navigationResourceRetained=readingResources(bootstrap,instance,previous[instance.id],snapshot,
+    demand.resources.filter(name=>pending[name]&&!snapshot.navigationResources.includes(name)));
    snapshots[instance.id]=snapshot;
   }else if(!instance.package.startsWith('builtin.')&&entry?.resources?.customSnapshot){
    snapshots[instance.id]={...entry.resources.customSnapshot.value,generation};
@@ -79,14 +114,18 @@ export function retainResourceVersions(previous,next){
  return {...next,instances};
 }
 
-export function pendingSnapshots(bootstrap,previous){
+export function pendingSnapshots(bootstrap,previous,demand,hostInstanceId=bootstrap.hostInstanceId){
  const snapshots={};
  for(const instance of bootstrap.resolvedInstances){
   const prior=previous.snapshots?.[instance.id],generation=bootstrap.instanceGenerations[instance.id];
   if(!prior||prior.generation!==generation)continue;
   if(navigation.has(instance.package)){
    const context=previous.shellResources?.instances?.[instance.id]?.resources?.context?.value||{};
-   snapshots[instance.id]={...context,view:prior.view,generation,navigationResources:[]};
+   const snapshot={...context,view:prior.view,generation,navigationResources:[],
+    navigationResourcePending:Object.fromEntries((demand?.resources||[]).map(name=>[name,{status:'pending'}])),
+    navigationResourceScope:[hostInstanceId,bootstrap.shellBootstrapKey,demand?.id,generation,...(demand?.scope||[])]};
+   snapshot.navigationResourceRetained=hostInstanceId===bootstrap.hostInstanceId?readingResources(bootstrap,instance,prior,snapshot,demand?.resources||[]):{};
+   snapshots[instance.id]=snapshot;
   }else if(!instance.package.startsWith('builtin.'))snapshots[instance.id]=prior;
  }
  return snapshots;

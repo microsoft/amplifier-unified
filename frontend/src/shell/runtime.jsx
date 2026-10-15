@@ -122,7 +122,7 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
   const host=state?.client?.hostInstanceId;
   if(current.bootstrap&&current.data&&(!matchesResources(current.data.shellResources,current.bootstrap,current.demand)
    ||host&&host!==current.bootstrap.hostInstanceId&&host!==current.bootstrapObservedHost)){
-   publish({...current.data,snapshots:pendingSnapshots(current.bootstrap,current.data)});setError('');
+   publish({...current.data,snapshots:pendingSnapshots(current.bootstrap,current.data,current.demand,host)});setError('');
   }
  },[demandKey,state?.client?.hostInstanceId,publish]);
  useEffect(()=>{

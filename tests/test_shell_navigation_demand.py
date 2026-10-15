@@ -93,3 +93,50 @@ async def test_empty_demand_retains_controller_metadata_without_pages(service, m
     assert row['navigationResources'] == []
     assert row['attention'] == {'sessions':{},'items':[]}
     assert all(key in row for key in ('view','settings','workspaceDefaults','workspaces','library','generation','sharedHistory'))
+
+
+@pytest.mark.parametrize('pinned,workspace,expected', [
+    (False, 'one', None), (True, 'two', 'two'), (True, 'gone', None),
+    (True, 'unknown', None), (True, 'missing', None),
+])
+async def test_recent_controller_scope_does_not_depend_on_page(service, monkeypatch, pinned, workspace, expected):
+    from amplifier_web.shell_resources import context_value, page_value
+    client = service.shell.client('recent-controller')
+    instance = {'id': 'chats', 'package': 'builtin.chats', 'slot': 'navigation',
+                'scope': {'mode': 'pinned', 'workspaceId': workspace} if pinned else {'mode': 'all'}}
+    full = service.shell.navigation(client, instance, identity='recent-controller')
+    expected_scope = {'mode': 'workspace' if pinned else 'all', 'workspaceId': expected,
+        'filter': '', 'clientId': 'recent-controller', 'instanceId': 'chats',
+        'generation': client['views'].get('chats', {}).get('generation', 0)}
+    assert full['recentScope'] == expected_scope
+    assert {key: full['recentNavigation']['scope'][key] for key in expected_scope} == expected_scope
+    assert 'recentScope' not in page_value(full, 'recentNavigation')
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Controller identity must not read a navigation page')
+    for method in ('chats', 'pinned_navigation', 'workspaces', 'workspace_shortcuts'):
+        monkeypatch.setattr(service.projections, method, forbidden)
+    pending = service.shell.navigation(client, instance, identity='recent-controller',
+                                       navigation_resources=frozenset())
+    assert context_value(pending)['recentScope'] == expected_scope
+    assert 'recentNavigation' not in pending
+
+
+async def test_pending_recent_resource_keeps_exact_controller_identity(service, monkeypatch):
+    from amplifier_web.shell_resources import scope_for
+    from amplifier_web.shell_query_owner import PendingQuery
+    client = service.clients.attach('recent-pending')
+    client.update(selectedSessionId='alpha', selectedWorkspaceId='one')
+    def pending(*args, **kwargs):
+        raise PendingQuery()
+    monkeypatch.setattr(service.projections, 'chats', pending)
+    with service.clients.bind('recent-pending'):
+        owner = service.shell.resources
+        owner.register('recent-pending', 1, ['recentNavigation'], scope_for(service.state))
+        envelope = owner.snapshot('recent-pending')
+    entry = envelope['instances']['chats']
+    assert entry['pending']['recentNavigation']['status'] == 'pending'
+    assert 'recentNavigation' not in entry['resources']
+    assert entry['resources']['context']['value']['recentScope'] == {
+        'mode': 'all', 'workspaceId': None, 'filter': '', 'clientId': 'recent-pending',
+        'instanceId': 'chats', 'generation': entry['generation']}

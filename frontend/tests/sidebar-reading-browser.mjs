@@ -1,0 +1,69 @@
+// Exact sidebar reading state while selection demand is deliberately held.
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {fileURLToPath} from 'node:url';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {createServer} from 'vite';
+import {chromium,expect} from '@playwright/test';
+const source=fileURLToPath(new URL('../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/chat_library_server.py',import.meta.url))],{env:{...process.env,AMPLIFIER_NAVIGATION_PROOF:'1'},stdio:['ignore','pipe','pipe']});
+let logs='',vite,browser,page,release,primary;
+fixture.stderr.on('data',value=>logs+=value);
+const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/sidebar-reading158';
+const ready=new Promise((resolve,reject)=>{let output='';fixture.stdout.on('data',value=>{output+=value;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});fixture.once('error',reject);fixture.once('exit',code=>reject(Error(`Fixture exited ${code}: ${logs}`)))});
+try{
+ await mkdir(out,{recursive:true});
+ const port=await ready,target=`http://127.0.0.1:${port}`;
+ vite=await createServer({configFile:false,root:source,cacheDir:'/tmp/sidebar-reading158-vite',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,req=>req.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
+ page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const errors=[],requests=[];page.on('pageerror',error=>errors.push(error.message));page.on('request',req=>{if(new URL(req.url()).pathname==='/api/shell/resources')requests.push(req.postDataJSON())});
+ const shell=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
+ const act=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+ const rows=page.locator('[data-shell-instance="chats"] [data-sidebar-section="recent"] .a-nav-chat[data-session-id]');
+ const older=page.locator('[data-shell-instance="chats"] [data-sidebar-section="recent"]').getByRole('button',{name:'Load older chats',exact:true});
+ const rail=page.locator('.a-nav-content');
+ await page.goto(vite.resolvedUrls.local[0]);await expect(rows).toHaveCount(20);
+ await older.click();await expect(rows).toHaveCount(40);await expect(page.getByText(/Recent changed during the read/)).toHaveCount(0);
+ // Put an existing row near the middle. Select it without scrolling the rail.
+ await rows.nth(23).scrollIntoViewIfNeeded();
+ const reading=()=>rail.evaluate(node=>{
+  const top=node.getBoundingClientRect().top,rows=[...node.querySelectorAll('[data-sidebar-section="recent"] .a-nav-chat[data-session-id]')];
+  const visible=rows.find(row=>row.getBoundingClientRect().top>=top+10);
+  return {top:node.scrollTop,height:node.scrollHeight,id:visible?.dataset.sessionId,offset:visible?.getBoundingClientRect().top-top,count:rows.length};
+ });
+ let held=0;let holding=true;const gate=new Promise(resolve=>release=resolve);
+ await page.route('**/api/shell/resources',async route=>{if(holding){held++;await gate}await route.continue()});
+ const before=await reading();assert.ok(before.top>200);
+ await page.locator(`[data-sidebar-section="recent"] [data-session-id="${before.id}"] .a-nav-chat-select`).click();
+ await expect.poll(()=>held).toBeGreaterThan(0);
+ await expect(rows).toHaveCount(40);
+ const pending=await reading();assert.ok(pending.top>200,'selection must not clamp the rail to zero');
+ assert.ok(Math.abs(pending.offset-before.offset)<2,JSON.stringify({before,pending}));
+ assert.equal((await shell()).navigationResources.includes('recentNavigation'),false,'retained rows never grant current coverage');
+ await expect(page.getByText(/Recent changed during the read/)).toHaveCount(0);
+ holding=false;release();await expect.poll(async()=>(await shell()).recentNavigation?.scope?.selectedSessionId).toBe(before.id);
+ await expect(rows).toHaveCount(40);
+ // Browsing another workspace changes main interest, not the global sidebar query.
+ let unblock;const workspaceGate=new Promise(resolve=>unblock=resolve);release=unblock;holding=true;held=0;
+ await page.unroute('**/api/shell/resources');await page.route('**/api/shell/resources',async route=>{if(holding){held++;await workspaceGate}await route.continue()});
+ const beforeWorkspace=await reading();
+ const workspaces=await page.evaluate(()=>window.amplifier.getShellState().snapshots.workspaces.workspaceShortcuts);
+ assert.ok(workspaces.length);const workspace=workspaces.at(-1).workspaceId;
+ await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace,workWorkspaceTab:'chats'}});
+ await expect.poll(()=>held).toBeGreaterThan(0);await expect(rows).toHaveCount(40);
+ const workspacePending=await reading();assert.ok(Math.abs(workspacePending.offset-beforeWorkspace.offset)<2,JSON.stringify({beforeWorkspace,workspacePending}));
+ holding=false;release();await expect.poll(async()=>(await shell()).navigationResources.includes('recentNavigation')).toBe(true);
+ await older.click();await expect(rows).toHaveCount(60);await expect(page.getByText(/Recent changed during the read/)).toHaveCount(0);
+ assert.deepEqual(errors,[]);assert.ok(requests.every(req=>req.resources.length<=4));
+ await page.screenshot({path:out+'/sidebar.png'});
+ await writeFile(out+'/result.json',JSON.stringify({passed:true,before,pending,beforeWorkspace,workspacePending,finalRows:60,resourcePosts:requests.length},null,2)+'\n');
+ console.log('Sidebar retained 40 rows and reading anchor across held chat/workspace demand; current coverage fenced; explicit expansion reached60 without retry error.');
+}catch(error){primary=error;if(page)await page.screenshot({path:out+'/failure.png'}).catch(()=>{});throw error}
+finally{
+ release?.();let failure;
+ for(const cleanup of [()=>browser?.close(),()=>vite?.close(),async()=>{if(fixture.exitCode!==null)return;const done=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);try{const [code,signal]=await done;if(code!==0)throw Error(`Fixture cleanup ${code}/${signal}`)}finally{clearTimeout(timer)}}])try{await cleanup()}catch(error){failure??=error}
+ if(logs)await writeFile(out+'/fixture.log',logs).catch(()=>{});
+ if(!primary&&failure)throw failure;
+}

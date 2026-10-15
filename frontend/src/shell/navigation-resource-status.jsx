@@ -13,7 +13,7 @@ export function NavigationResourceStatus({state,resource,label,refresh}){
  useEffect(()=>{setError('');setBusy(false);flight.current=null},[key]);
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  if(!pending)return null;
- const retained=hasNavigationResource(state,resource);
+ const retained=hasNavigationResource(state,resource)||!!state.navigationResourceRetained?.[resource];
  const retry=async()=>{
   if(flight.current===key)return;
   const requested=key;flight.current=requested;setBusy(true);setError('');
