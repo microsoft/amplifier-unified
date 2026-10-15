@@ -9,12 +9,12 @@
     "workflows": 199,
     "outcomes": 669,
     "outcomeStatus": {
-      "covered-in-context": 616,
+      "covered-in-context": 618,
       "partially-observed": 36,
-      "not-run": 17
+      "not-run": 15
     },
     "workflowsWithOutcomeEvidence": 197,
-    "workflowsAllOutcomesObservedInContext": 166,
+    "workflowsAllOutcomesObservedInContext": 168,
     "ordinaryPathStatus": {
       "observed-in-context": 189,
       "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
@@ -367,15 +367,7 @@
   "mandatoryActions": [
     {
       "owner": "root",
-      "action": "Review explicit per-outcome dispositions and mandatory actions in residual-outcome-dispositions.json; scoped path accounting is already accepted and is not full completion."
-    },
-    {
-      "owner": "root",
-      "action": "Review26 unreachable built-in candidates and nonexistent Canvas Cancel using source plus rendered evidence and independent review."
-    },
-    {
-      "owner": "build_qualify145",
-      "action": "Retain every current partial/not-run outcome from the ledger; complete ordinary checks and separately identify external/runtime/universal acceptance limits."
+      "action": "Retain all residual outcome limits and review any newly discovered finite ordinary gap; this is named-context acceptance, not universal proof."
     }
   ],
   "finalControlWitness": "final-controls-qualification.json",
@@ -507,17 +499,40 @@
       "nav.archive:0"
     ],
     "remainingOutcomes": 53,
-    "finiteRuntimeAcceptancePending": [
-      {
-        "id": "delivery.ownership:2",
-        "owner": "root",
-        "status": "finite-local-competing-owner-proof-pending"
-      },
-      {
-        "id": "delivery.context:2",
-        "owner": "root",
-        "status": "finite-local-recovery-no-replay-proof-pending"
-      }
+    "finiteRuntimeAcceptancePending": []
+  },
+  "previousRecoverySnapshot": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 616,
+      "partially-observed": 36,
+      "not-run": 17
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 166,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "recoveryOwnershipOutcomeDelta": {
+    "receipt": "docs/validation/recovery-ownership-worker-20261015.json",
+    "resolvedOutcomes": [
+      "delivery.ownership:2",
+      "delivery.context:2"
+    ],
+    "remainingOutcomes": 51,
+    "limits": [
+      "Competing owner is a separate real Foundation lock/release process, not the complete Amplifier CLI runtime.",
+      "Recovery retained an actual prior local file effect with synthetic committed tool history; arbitrary remote tool effects are not exercised.",
+      "Recovery itself and same-command retries/reopen run without starting a worker; explicit takeover starts one normal worker without input.",
+      "Existing independent browser witnesses qualify the UI entry; this receipt covers the runtime boundary, not additional browser gestures.",
+      "No live provider account, production history, device acceptance or performance claim."
     ]
   }
 }

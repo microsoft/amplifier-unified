@@ -172,8 +172,13 @@
     "recipe-frozen-checker-namespace.py": "3d69c5943cc4108718972a37165d5caf10d4282c85f811d0a1a43aaf2cc50220"
   },
   "remaining": [
-    "Four repository gates and whole-retained-corpus preparation tiers are owned by the issue lane and still require their own exact-source receipts.",
     "This seven-case checker proof is not universal Bash or arbitrary corpus execution assurance.",
     "No main merge, publishing, production adoption or external provider call."
-  ]
+  ],
+  "subsequentQualification": {
+    "sourceCommit": "620d786a4379c936b0cf082bd66ad3faf5e910ee",
+    "receipt": "microsoft/amplifier-bundle-recipes docs/validation/shell-source-qualification-20261015.json",
+    "repositoryGates": "1646 module passes/1 original skip;590 native passes/1 original skip;19 kit passes/1 original skip;5 unchanged goldens. Each skip has a separate exact-source supplement; the diagram test also has an explicit test-only portable-path correction fc18ee4 with22 cases passing.",
+    "wholeCorpus": "1227 rows,519 templates,3492 role/default cases,6984 both-engine source preparations verified; no original commands executed."
+  }
 }
