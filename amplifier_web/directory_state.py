@@ -8,18 +8,58 @@ import copy
 import hashlib
 import json
 
+from .performance_diagnostics import measured
+
+
+def _metadata(directory, keys):
+    """Decode only the bounded selected positions, preserving global ordinals."""
+    from .history_directory import COLUMNS
+    if not keys:
+        return {}
+    keys = list(dict.fromkeys(keys))
+    sql, bound = directory.effective(public_ids=list(dict.fromkeys(key[0] for key in keys)))
+    rows = directory.db.execute(sql + ' SELECT ' + ','.join(COLUMNS) + """ FROM directory_rows
+        WHERE (id,ordinal) IN (SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]')
+                              FROM json_each(?))""", (*bound, json.dumps(keys)))
+    return {(row[0], row[COLUMNS.index('ordinal')]): directory.decode(row) for row in rows}
+
 
 def _ranked(directory, where='1', params=(), *, limit=50, offset=0):
-    from .history_directory import COLUMNS
-    sql, bound = directory.effective()
-    sql += ', ranked AS (SELECT *,ROW_NUMBER() OVER(ORDER BY ordinal,id)-1 AS position FROM directory_rows)'
-    cursor = directory.db.execute(sql + ' SELECT ' + ','.join(COLUMNS) + ',position FROM ranked WHERE '
-        + where + ' ORDER BY position LIMIT ? OFFSET ?', (*bound, *params, limit, offset))
-    return [(row[-1], directory.decode(row[:-1])) for row in cursor]
+    sql, bound = directory.effective(fields=('id', 'ordinal', 'session_kind'))
+    # Rank membership scalars before filtering. Resolving every historical
+    # parent/body/activity while ranking made a small pointer read catalog-sized.
+    sql += ', ranked AS (SELECT id,ordinal,session_kind,ROW_NUMBER() OVER(ORDER BY ordinal,id)-1 AS position FROM directory_rows)'
+    rows = directory.db.execute(sql + ' SELECT id,ordinal,position FROM ranked WHERE '
+        + where + ' ORDER BY position LIMIT ? OFFSET ?', (*bound, *params, limit, offset)).fetchall()
+    metadata = _metadata(directory, [(row[0], row[1]) for row in rows])
+    return [(position, metadata[(identity, ordinal)]) for identity, ordinal, position in rows]
+
+
+def _overview_rows(directory, selected):
+    children, total = [], 0
+    if selected is not None:
+        sql, bound = directory.effective(exact_parent=selected, fields=('id', 'ordinal'))
+        selected_rows = directory.db.execute(sql + ' SELECT id,ordinal,count(*) OVER() FROM directory_rows ORDER BY ordinal,id LIMIT 20', bound).fetchall()
+        total = selected_rows[0][2] if selected_rows else 0
+        children = [(identity, ordinal) for identity, ordinal, _ in selected_rows]
+    sql, bound = directory.effective(fields=('id', 'ordinal', 'session_kind'))
+    sql += ", ranked AS (SELECT id,ordinal,session_kind,ROW_NUMBER() OVER(ORDER BY ordinal,id)-1 AS position FROM directory_rows)"
+    rows = directory.db.execute(sql + """
+        SELECT 0,id,ordinal,position FROM (SELECT * FROM ranked WHERE session_kind='root' ORDER BY position LIMIT 50)
+        UNION ALL
+        SELECT 1,id,ordinal,position FROM ranked WHERE id=? OR (id,ordinal) IN (
+            SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]') FROM json_each(?))
+        ORDER BY 1,4""", (*bound, selected, json.dumps(children))).fetchall()
+    metadata = _metadata(directory, [(row[1], row[2]) for row in rows])
+    roots = [(position, metadata[(identity, ordinal)]) for kind, identity, ordinal, position in rows if kind == 0]
+    positions = {(identity, ordinal): position for _, identity, ordinal, position in rows}
+    owner = next(((position, metadata[(identity, ordinal)]) for kind, identity, ordinal, position in rows
+                  if kind == 1 and identity == selected), None)
+    return owner, roots, [(positions[key], metadata[key]) for key in children], total
 
 
 def _count(directory, where='1', params=()):
-    sql, bound = directory.effective()
+    sql, bound = directory.effective(fields=('id',) if where == '1' else None)
     return directory.db.execute(sql + ' SELECT count(*) FROM directory_rows WHERE ' + where,
                                 (*bound, *params)).fetchone()[0]
 
@@ -58,23 +98,22 @@ def _limits(args):
     return offset, min(limit, 50)
 
 
+@measured('directory.overview')
 def _overview(directory, state, session_id):
     from .agent_state import overview
     selected = session_id or state.get('selectedSessionId')
-    selected_rows = _ranked(directory, 'id=?', (selected,), limit=1)
+    selected_row, roots, children, total = _overview_rows(directory, selected)
     # Build the existing caller-scoped overview from one owner, then attach
     # SQL-paged metadata. Its pointers keep the complete catalog's ordinals.
-    owner = _owner(directory, selected_rows[0][1], state, session_id) if selected_rows else None
+    owner = _owner(directory, selected_row[1], state, session_id) if selected_row else None
     result = overview({**state, 'sessions': [owner] if owner is not None else []}, selected,
-                      positions={selected: selected_rows[0][0]} if selected_rows else {})
+                      positions={selected: selected_row[0]} if selected_row else {})
     result['conversations'] = [{'id': row['id'], 'title': row.get('title'), 'status': row.get('status'),
         'messageCount': row.get('sharedHistoryTotal', row.get('displayMessageCount') if row.get('historyLoaded', True) else None),
         'historyLoaded': row.get('historyLoaded', True), 'workspaceId': row.get('workspaceId'),
         '$statePath': '/sessions/' + str(position)}
-        for position, row in _ranked(directory, "session_kind='root'", limit=50)]
-    where, params = "session_kind!='root' AND parent_id IS ?", (selected,)
-    children = _ranked(directory, where, params, limit=20) if selected is not None else []
-    result['subagentChats'] = {'total': _count(directory, where, params) if selected is not None else 0,
+        for position, row in roots]
+    result['subagentChats'] = {'total': total,
         'items': [{'id': row['id'], 'title': row.get('title'), '$statePath': '/sessions/' + str(position)}
                   for position, row in children]}
     return result
