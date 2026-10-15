@@ -86,7 +86,10 @@ try{
  await page.waitForFunction(()=>window.amplifier.getState().settings.fallbackVoice==='gpt-live-1');
  await page.reload();await page.locator('#preferred-voice').waitFor();await page.getByText('If the preferred model is unavailable',{exact:true}).click();
  assert.equal(await page.locator('#preferred-voice').inputValue(),'gpt-realtime-2.1');assert.equal(await page.getByRole('combobox',{name:'Fallback model',exact:true}).inputValue(),'gpt-live-1');
- await openSettingsPage(page,'providers');await page.locator('.a-provider-access summary').click();await page.locator('#provider-key-source').selectOption('private');
+ await openSettingsPage(page,'providers');
+ // Missing credentials open this disclosure initially; only expand a closed one.
+ if(!await page.locator('.a-provider-access').evaluate(el=>el.open))await page.locator('.a-provider-access summary').click();
+ await page.locator('#provider-key-source').selectOption('private');
  await page.locator('#provider-key').fill('fixture-unsaved-key');
  await openSettingsPage(page,'routing');await openSettingsPage(page,'providers');
  assert.equal(await page.locator('#provider-key').inputValue(),'fixture-unsaved-key');
