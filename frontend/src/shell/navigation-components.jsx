@@ -7,7 +7,7 @@ import {MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,Lo
 import {chatPage,visibleWorkspaces,movePin,recentLimit,recentPageMatches} from '../chat-navigation';
 import {followLaterHistory} from '../history-scroll';
 import {request} from '../api';
-import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
+import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock,navigationDetailsContext} from '../navigation-details';
 import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
 import {ReorderList} from '../reorder-list';
 import '../sidebar-navigation.css';
@@ -158,7 +158,7 @@ function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
  const className='a-nav-chat '+(chat.id===state.selectedSessionId?'is-selected':'');
  // The drag preview uses the exact same contents without interactive flyouts.
  if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
- return <NavigationRow className={className} data-session-id={chat.id} label={title} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>{content}</NavigationRow>;
+ return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-session-id={chat.id} label={title} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>{content}</NavigationRow>;
 }
 function ChatPagination({page,onChange,label='conversations'}){
  if(page.pages<2)return null;
@@ -460,7 +460,7 @@ function LegacyConversationList({host,workspaceHost}){
    {creating&&<WorkspaceForm state={workspaceState} act={workspaceAct} onDone={closeCreate} onCancel={closeCreate}/>}
    {browsing?(workspaceHost?<PairedWorkspaceBrowser host={workspaceHost} onOpen={openWorkspace}/>:<WorkspaceExplorer state={state} act={act} onOpen={openWorkspace} onEdit={model.setDraft} heading={false} previewLimit={8}/>):<div className="a-workspace-chat-view" aria-label={'Chats in '+workspace.name}>
     <button type="button" className="a-navigation-back" data-action="view.update" onClick={browseWorkspaces}><ArrowLeft/>All workspaces</button>
-    <NavigationRow className="a-navigation-workspace" label={workspace.name} details={({close})=><WorkspaceDetails row={selectedWorkspace||{...workspace,chatCount:workspaceChats.total}} now={now} actions={<><button type="button" data-action="view.update" onClick={()=>{close();workspaceAct('view.update',{patch:{workspaceDraft:{mode:'rename',id:workspace.id,name:workspace.name}}})}}><Pencil/>Rename</button><button type="button" className="a-danger" disabled={workspaceState.library?.workspaceCount<2} data-action="view.update" onClick={()=>{close();workspaceAct('view.update',{patch:{workspaceDraft:{mode:'remove',id:workspace.id,name:workspace.name}}})}}><Trash2/>Remove registration</button></>}/>}><Folder/><div><strong>{workspace.name}</strong><small title={workspace.path}>{compactParent(workspace.path)}</small></div></NavigationRow>
+    <NavigationRow contextKey={navigationDetailsContext(state)} className="a-navigation-workspace" label={workspace.name} details={({close})=><WorkspaceDetails row={selectedWorkspace||{...workspace,chatCount:workspaceChats.total}} now={now} actions={<><button type="button" data-action="view.update" onClick={()=>{close();workspaceAct('view.update',{patch:{workspaceDraft:{mode:'rename',id:workspace.id,name:workspace.name}}})}}><Pencil/>Rename</button><button type="button" className="a-danger" disabled={workspaceState.library?.workspaceCount<2} data-action="view.update" onClick={()=>{close();workspaceAct('view.update',{patch:{workspaceDraft:{mode:'remove',id:workspace.id,name:workspace.name}}})}}><Trash2/>Remove registration</button></>}/>}><Folder/><div><strong>{workspace.name}</strong><small title={workspace.path}>{compactParent(workspace.path)}</small></div></NavigationRow>
     <div className="a-sidebar-workspace-actions"><span>{workspaceChats.total} chats</span><button type="button" className="a-link" aria-label={'New chat in '+workspace.name} data-action="session.draft" onClick={()=>act('session.draft',{workspace:workspace.path})}><Plus/>New chat</button></div>
     <ChatList page={workspaceChats} model={model} view={view} viewAct={act} now={now} showLocation={false}/>
    </div>}
