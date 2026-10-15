@@ -164,10 +164,42 @@
         "Synthetic provider/runtime; no real account or physical touch-device claim",
         "Three prior fixture failures preserved; no product change"
       ]
+    },
+    {
+      "receipt": "normal-runtime-worker-start-20261015.json",
+      "passed": true,
+      "checks": [
+        "Three actual RuntimeManager starts using the existing qualified Work profile; no worker command override or model input"
+      ],
+      "limits": [
+        "Finite source-bound isolated acceptance; see receipt for exact sources and limits."
+      ]
+    },
+    {
+      "receipt": "normal-worker-control-boundaries-20261015.json",
+      "passed": true,
+      "checks": [
+        "Six actual-worker configuration, durable Stop, no automatic replay and filesystem permission controls",
+        "68 setup tests and 60 profile/update tests; original defects retained as failing controls"
+      ],
+      "limits": [
+        "Finite source-bound isolated acceptance; see receipt for exact sources and limits."
+      ]
+    },
+    {
+      "receipt": "integrated-dependency-activation-20261015.json",
+      "passed": true,
+      "checks": [
+        "Exact Bash and computer-use candidate package identities installed in a new private graph",
+        "Full Work preparation and normal worker readiness with network disabled; no provider inputs or desktop actions"
+      ],
+      "limits": [
+        "Finite source-bound isolated acceptance; see receipt for exact sources and limits."
+      ]
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
-  "remaining": "Warm send acknowledgment exceeds the desired target. Current normal-runtime startup and local worker controls, private canonical dependency activation, and recipe issue630 implementation remain active work. Device/account-specific acceptance and all70 issue dispositions remain explicit; this audit does not declare every issue resolved.",
+  "remaining": "Warm send acknowledgment exceeds the desired target. Recipe issue630 implementation, complete engine/distribution/corpus qualification, and final integration/preview checks remain active. Normal worker startup/controls and private exact dependency activation now have passing source-bound receipts. Device/account-specific acceptance and all70 issue dispositions remain explicit; this audit does not declare every issue resolved.",
   "coverage": {
     "workflows": 199,
     "outcomes": 669,
@@ -176,6 +208,6 @@
     "notRun": 18,
     "explicitResidualDispositions": 60,
     "receipt": "standard-ux-completion-20261015.md",
-    "finiteResidualFollowup": "Actual keyboard/coarse-touch workspace pinning and removed-provider draft/history recovery now pass; real-worker Stop/configuration and private canonical dependency activation remain finite acceptance work."
+    "finiteResidualFollowup": "Actual keyboard/coarse-touch pinning and removed-provider draft/history recovery pass. Additional normal-worker Stop/configuration/policy controls and private dependency activation pass in separate receipts; the audited 609/42/18 outcome ledger is not yet reclassified from these newer proofs."
   }
 }
