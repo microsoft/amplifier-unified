@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from test_automatic_history import app_factory
 
 from amplifier_web.browser_detail import project
@@ -103,6 +105,8 @@ async def test_workspace_plan_query_avoids_hydration_children_and_transcript_ass
         scanned.append(index.identity)
         return original(index)
     monkeypatch.setattr(EventIndex, 'refresh', observed)
+    selected = app.state['selectedSessionId']
+    original_bytes = path.read_bytes()
     result = await app.dispatch('session.plans', {'ids': [session['id']]})
     plan = result['result']['items'][0]['plan']
     assert (plan['done'], plan['total']) == (0, 1)
@@ -110,3 +114,17 @@ async def test_workspace_plan_query_avoids_hydration_children_and_transcript_ass
     assert scanned == [identity]
     detail = await app.dispatch('session.plans', {'ids': [session['id']], 'includeItems': True})
     assert detail['result']['items'][0]['plan']['items'] == tasks()
+
+    # A browsing query must not acquire an execution worker or alter saved work.
+    assert app.state['selectedSessionId'] == selected
+    assert app.runtime.started == app.runtime.sent == app.runtime.stopped == []
+    assert path.read_bytes() == original_bytes
+    assert result['effects'] == detail['effects'] == []
+    before_rejections = list(scanned)
+    from amplifier_web.service import AppError
+    with pytest.raises(AppError):
+        await app.dispatch('session.plans', {'ids': [f'chat-{i}' for i in range(51)]})
+    with pytest.raises(AppError, match='one chat'):
+        await app.dispatch('session.plans', {'ids': [session['id'], 'another-chat'], 'includeItems': True})
+    assert scanned == before_rejections
+    assert app.runtime.started == app.runtime.sent == app.runtime.stopped == []
