@@ -118,7 +118,7 @@ ACTION_DEFINITIONS = {
     "session.titlePreview": ("Read a bounded first-message label for one unnamed chat without loading its history or running work.", schema({"sessionId": string(200)}, ["sessionId"])),
     "session.inspect": ("Inspect conversation identity, status and recorded failure without running work.", schema({"id": string(200)}, ["id"])),
     "session.recover": ("Create an independent recovery copy with readable history, excluding old native tool/image payloads. Preserve the original and safety stops. Never start or replay work.", schema({"id": string(200)}, ["id"])),
-    "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
+    "session.fork": ("Fork conversation history through an optional user turn or exact saved user message", schema({"id": string(100),"turn":{"type":"integer","minimum":1},"afterMessageId":string(200)},["id"])),
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
@@ -2757,7 +2757,7 @@ class AppService:
                 from .session_store import fork_session
                 media_origins = {} if source.get('nativeProject') else None
                 try:
-                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"),
+                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"),after_message_id=args.get('afterMessageId'),
                                                 recovery=action == "session.recover", media_origins=media_origins))
                 except ValueError as exc:
                     raise AppError(str(exc),409) from exc

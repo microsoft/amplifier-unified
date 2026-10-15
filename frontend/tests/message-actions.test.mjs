@@ -4,17 +4,17 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import assert from 'node:assert/strict';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {newestMessageIds,completedTurnEnds,MessageEntry}=await server.ssrLoadModule('/src/message-actions.jsx');
+const {newestMessageIds,completedTurnEnds,MessageEntry,ForkTurn}=await server.ssrLoadModule('/src/message-actions.jsx');
 test.after(()=>server.close());
 test('fork controls follow the last assistant entry in each completed user turn',()=>{
  const messages=[{id:'u1',role:'user',inputId:'1'},{id:'a1',role:'assistant'},{id:'a2',role:'assistant'},{id:'u2',role:'user',inputId:'2'},{id:'a3',role:'assistant'}];
  const session={status:'working',messages,execution:{turns:[{inputId:'1',phase:'completed'},{inputId:'2',phase:'running'}]}};
- assert.deepEqual([...completedTurnEnds(session)],[['a2',1]]);
- session.status='idle';session.execution.turns[1].phase='completed';assert.deepEqual([...completedTurnEnds(session)],[['a2',1],['a3',2]]);
+ assert.deepEqual([...completedTurnEnds(session)],[['a2',{messageId:'u1',turn:1}]]);
+ session.status='idle';session.execution.turns[1].phase='completed';assert.deepEqual([...completedTurnEnds(session)],[['a2',{messageId:'u1',turn:1}],['a3',{messageId:'u2',turn:2}]]);
 });
 test('legacy completed messages support forks but partial failed responses do not',()=>{
  const session={status:'idle',messages:[{id:'u1',role:'user'},{id:'a1',role:'assistant'}]};
- assert.equal(completedTurnEnds(session).get('a1'),1);session.status='error';assert.equal(completedTurnEnds(session).size,0);
+ assert.deepEqual(completedTurnEnds(session).get('a1'),{messageId:'u1',turn:1});session.status='error';assert.equal(completedTurnEnds(session).size,0);
 });
 
 test('unknown native message time does not display the session creation time',()=>{
@@ -29,7 +29,7 @@ test('unknown native message time does not display the session creation time',()
 
 test('paged native history uses the original user-turn number for forks',()=>{
  const session={status:'idle',sharedHistoryUserTurnOffset:21,messages:[{id:'older-assistant',role:'assistant'},{id:'u22',role:'user'},{id:'a22',role:'assistant'},{id:'u23',role:'user'},{id:'a23',role:'assistant'}]};
- assert.deepEqual([...completedTurnEnds(session)],[['a22',22],['a23',23]]);
+ assert.deepEqual([...completedTurnEnds(session)],[['a22',{messageId:'u22',turn:22}],['a23',{messageId:'u23',turn:23}]]);
 });
 
 test('verified service observations are expandable activity while matching user quotes remain user messages',()=>{
@@ -42,7 +42,7 @@ test('verified service observations are expandable activity while matching user 
 });
 
 test('smart date follows every action, including branch, without a native tooltip',()=>{
- const html=renderToStaticMarkup(React.createElement(MessageEntry,{message:{id:'answer',role:'assistant',text:'Done',createdAt:100},session:{id:'chat'},state:{view:{}},act:()=>{},forkTurn:1,working:false}));
+ const html=renderToStaticMarkup(React.createElement(MessageEntry,{message:{id:'answer',role:'assistant',text:'Done',createdAt:100},session:{id:'chat'},state:{view:{}},act:()=>{},forkTurn:{messageId:'user',turn:1},working:false}));
  assert.ok(html.indexOf('data-action="session.fork"')<html.indexOf('<time'));
  assert.match(html,/<time[^>]*aria-label=/);assert.doesNotMatch(html,/<time[^>]*title=/);
  assert.match(html,/<\/time><\/div><\/article>$/);
@@ -80,14 +80,19 @@ test('trusted peer caption is always visible outside hover actions with a matchi
 
 test('display-only saved messages expose copy without guessed edit, fork or reply authority',()=>{
  for(const role of ['user','assistant']){
-  const html=renderToStaticMarkup(React.createElement(MessageEntry,{message:{id:'native-window:opaque',role,text:'Saved text',displayOnly:true},session:{id:'chat'},state:{view:{}},act:()=>{},forkTurn:42,working:false}));
+  const html=renderToStaticMarkup(React.createElement(MessageEntry,{message:{id:'native-window:opaque',role,text:'Saved text',displayOnly:true},session:{id:'chat'},state:{view:{}},act:()=>{},forkTurn:{messageId:'user',turn:42},working:false}));
   assert.match(html,/Copy message as Markdown/);
   assert.doesNotMatch(html,/Edit message|Fork conversation|Reply to|React to|a-inline-media/);
  }
 });
 
 
-test('bounded pages never guess global fork ordinals',()=>{
+test('bounded saved pages fork by exact message without guessing global ordinals',()=>{
  const session={id:'saved',status:'idle',messageWindow:{mode:'cursor',total:null,offset:null},messages:[{id:'user',role:'user'},{id:'answer',role:'assistant'}]};
- assert.equal(completedTurnEnds(session).size,0);
+ const boundary=completedTurnEnds(session).get('answer');
+ assert.deepEqual(boundary,{messageId:'user',turn:null});
+ const calls=[],button=ForkTurn({session,turn:boundary,act:(...args)=>calls.push(args),working:false});
+ assert.equal(button.props['aria-label'],'Fork conversation after this turn');button.props.onClick();
+ assert.deepEqual(calls,[['session.fork',{id:'saved',afterMessageId:'user'}]]);
+ for(const message of session.messages){message.displayOnly=true;assert.equal(completedTurnEnds(session).size,0);delete message.displayOnly}
 });

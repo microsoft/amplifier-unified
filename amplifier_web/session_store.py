@@ -401,7 +401,7 @@ def _media_fork_map(canonical, bindings, visible, index_map, messages, target_id
     return origins
 
 
-def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False, recovery=False, expected_context_digest=None, media_origins=None):
+def fork_session(home, source, target_id, *, turn=None, after_message_id=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False, recovery=False, expected_context_digest=None, media_origins=None):
     """Fork complete provider context into a new independent root session.
 
     The source must be idle (also enforced by the service). Job ledgers,
@@ -409,6 +409,8 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     """
     if source.get("status") in {"starting","working","running","stopping"}:
         raise ValueError("Wait for the conversation to finish before forking its transcript")
+    if after_message_id is not None and (turn is not None or before_message_id is not None or recovery):
+        raise ValueError('Choose one exact message boundary for the fork.')
     if recovery and any(worker.get('status') in {'queued', 'starting', 'running', 'working', 'stopping'} for worker in source.get('workers', [])):
         raise ValueError('Wait for delegated work to stop before creating a recovery copy.')
     home = Path(home)
@@ -464,7 +466,18 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     user_offset = source.get('sharedHistoryUserTurnOffset', 0)
     before_turn = None
     cut = len(visible)
-    if before_message_id is not None:
+    if after_message_id is not None:
+        # A bounded display page has no global ordinal. Resolve its saved ID only
+        # against the complete authoritative messages loaded for this explicit
+        # command; never promote a provisional native-window observation.
+        matches = [i for i, row in enumerate(visible) if row.get('id') == after_message_id]
+        if (len(matches) != 1 or visible[matches[0]].get('role') != 'user'
+                or visible[matches[0]].get('displayOnly')):
+            raise ValueError('Choose an existing saved user message for the fork. Refresh this chat if it changed.')
+        next_turn = user_indexes.index(matches[0]) + 1
+        if next_turn < len(user_indexes):
+            cut = user_indexes[next_turn]
+    elif before_message_id is not None:
         cut = next((i for i in user_indexes if visible[i].get('id') == before_message_id), None)
         if cut is None:
             raise ValueError('Choose one of your messages to edit.')
@@ -514,7 +527,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     # hidden. Partial edits rebuild references only from their retained prefix,
     # because an old wrapper may also describe messages after the edit boundary.
     retained = [(index, row) for index, row in enumerate(messages)
-                if (turn is None and before_message_id is None)
+                if (turn is None and after_message_id is None and before_message_id is None)
                 or not (row.get('metadata') or {}).get('amplifier_visible_reference')]
     target_positions = {}
     if recovery:
