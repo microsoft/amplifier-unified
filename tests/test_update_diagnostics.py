@@ -294,10 +294,12 @@ async def test_partial_tool_staging_lists_only_the_tools_that_activated(app,monk
     app.smart_tools=SmartToolsManager(app)
     monkeypatch.setattr(app.smart_tools,'stage_update',stage)
     monkeypatch.setattr(app.smart_tools,'activate_update',activate)
-    with pytest.raises(ValueError):await manager.installSmartTools()
+    await manager.installSmartTools()
     assert len(app.state['updates']['pendingSmartTools'])==1
-    await manager.activateSmartTools()
+    assert app.state['updates']['phase']=='error'
+    assert app.state['updates']['pendingSmartTools'][0]['previous']=='tool-b'
     completed=manager.diagnostics.state['completedBatches'][-1]
+    assert completed['phase']=='smart-tools-partial'
     assert completed['components']==['tool-a'] and completed['componentCount']==1
 
 

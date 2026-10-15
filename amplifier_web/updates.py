@@ -613,8 +613,8 @@ class UpdateManager:
                 await activate(self, force=args)
             elif action == 'featureInstall':
                 await self.featureInstall(args['feature'], args['hostInstanceId'], command_id)
-            elif action == 'smartToolRollback':
-                await self.smartToolRollback(args['id'])
+            elif action in {'smartToolRollback', 'smartToolRetry', 'smartToolSkip'}:
+                await getattr(self, action)(args['id'])
             elif action == 'install':
                 # A click during a check must not disappear at install()'s
                 # busy guard. Join that check, then re-evaluate its inventory.
@@ -733,6 +733,9 @@ class UpdateManager:
                     try:
                         row['latest'] = await task
                         row['status'] = 'update' if row['latest'] != row.get('current') else 'current'
+                        if (row.get('kind') == 'smart tool' and row['status'] == 'update'
+                                and state.get('skippedSmartTools', {}).get(row.get('installationId')) == row['latest']):
+                            row.update(status='skipped', detail='This Smart Tool revision was skipped. A newer revision can still be offered.')
                     except (ValueError, RuntimeError, TimeoutError): row['status']='check_failed'
                 checked = []
                 for stage in (['included', 'other'] if tier == 'included' else ['other']):
@@ -802,7 +805,12 @@ class UpdateManager:
         if state.get('sequence'):
             await self.publish(sequence={**state['sequence'], 'install': True})
         if self.service.state['updates'].get('pendingSmartTools'):
-            await self.activateSmartTools()
+            pending = list(self.service.state['updates']['pendingSmartTools'])
+            if all(item.get('failure') for item in pending):
+                for item in pending:
+                    await self.smartToolRetry(item['previous'])
+            else:
+                await self.activateSmartTools()
             return
         if self.service.state['updates'].get('pendingApp'):
             from .app_updates import activate
@@ -1172,66 +1180,33 @@ class UpdateManager:
                 await self.publish(phase='error',error='Could not activate the ecosystem update; review its diagnostic receipt before retrying.')
 
     async def installSmartTools(self):
-        if self.lock.locked(): return
-        async with self.lock:
-            smart = self.service.smart_tools
-            pending = self.service.state['updates'].get('pendingSmartTools', [])
-            if not pending:
-                self.diagnostics.begin('smart-tools',tier='other',
-                                       components=[row.get('label','') for row in self.inventory if row.get('kind')=='smart tool' and row.get('status')=='update' and row.get('eligible')])
-                await self.publish(phase='staging', error=None, detail='Preparing Smart Tool updates…')
-                for source in self.inventory:
-                    if source.get('kind') != 'smart tool' or source.get('status') != 'update' or not source.get('eligible'): continue
-                    target = await self.diagnostics.run('smart-tool-stage', smart.stage_update, source)
-                    name=source.get('label','')
-                    component=name if isinstance(name,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',name) else None
-                    pending = [*pending, {'previous': source['installationId'], 'target': target['id'],
-                                         **({'component':component} if component else {})}]
-                    await self.publish(pendingSmartTools=pending)
-            await self.publish(phase='staged', detail='Smart Tools prepared; waiting for work to finish.')
-        await self.activateSmartTools()
+        from .smart_tool_update_batch import stage
+        await stage(self)
 
     async def activateSmartTools(self):
-        async with self.service.runtime_lifecycle():
-            async with self.lock:
-                pending = self.service.state['updates'].get('pendingSmartTools', [])
-                if not pending: return
-                async with self.service.lock:
-                    if self.busy(): return
-                    self.service.state['updates'].update(phase='activating', error=None, detail='Checking and switching Smart Tools…')
-                    self.service._publish_changes(globals={'updates','settings'})
-                try:
-                    while pending:
-                        item = pending[0]
-                        await self.diagnostics.run('smart-tool-activate', self.service.smart_tools.activate_update,
-                                                   item['previous'], item['target'])
-                        batch=self.diagnostics.state.get('batch',{})
-                        if batch.get('attemptId')==self.diagnostics.state.get('attemptId'):
-                            activated=batch.setdefault('activatedComponents',[])
-                            component=item.get('component')
-                            if isinstance(component,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',component) and component not in activated:
-                                activated.append(component)
-                        pending = pending[1:]
-                        await self.publish(pendingSmartTools=pending)
-                    sequence = {**self.service.state['updates'].get('sequence', {}), 'nextStage': 'other'}
-                    self.diagnostics.record('smart-tools-complete','succeeded')
-                    await self.publish(phase='installed', sequence=sequence, detail='Smart Tools updated. Previous versions are retained for rollback.')
-                    self.inventory = []
-                except BaseException:
-                    await self.publish(phase='error', error='A Smart Tool update failed. Its previous connection settings were preserved. Review the update receipt.')
-                    raise
+        from .smart_tool_update_batch import activate
+        await activate(self)
+
+    async def smartToolRetry(self, identity):
+        from .smart_tool_update_batch import retry
+        await retry(self, identity)
+
+    async def smartToolSkip(self, identity):
+        from .smart_tool_update_batch import skip
+        await skip(self, identity)
 
     async def smartToolRollback(self, identity):
         if self.lock.locked(): raise ValueError('Wait for the current update to finish.')
         async with self.lock:
             state = self.service.state['updates']
-            if any(state.get(key) for key in ('pendingSmartTools', 'pendingApp', 'pendingRelease')):
+            pending = list(state.get('pendingSmartTools', []))
+            if any(state.get(key) for key in ('pendingApp', 'pendingRelease')) or any(not item.get('failure') for item in pending):
                 raise ValueError('Finish or inspect the pending update before restoring a tool.')
             row = next((item for item in self.service.smart_tools.state['installations'] if item['id'] == identity), {})
             previous = row.get('previousInstallationId')
             if not previous: raise ValueError('No previous Smart Tool revision is available.')
             self.diagnostics.begin('smart-tools')
-            await self.publish(pendingSmartTools=[{'previous': identity, 'target': previous}], phase='staged', sequence={**state.get('sequence', {}), 'install': False})
+            await self.publish(pendingSmartTools=[*pending, {'previous': identity, 'target': previous}], phase='staged', sequence={**state.get('sequence', {}), 'install': False})
             async with self.service.lock:
                 self.service.state['settings']['updates']['autoInstall'] = False
         await self.activateSmartTools()
@@ -1254,7 +1229,7 @@ class UpdateManager:
         if state.get('blockers', []) != blockers:
             await self.publish(blockers=blockers)
         if state.get('pendingSmartTools'):
-            if state.get('phase') != 'error': await self.activateSmartTools()
+            if state.get('phase') not in {'error', 'interrupted'}: await self.activateSmartTools()
             return
         if state.get('pendingApp'):
             from .app_updates import activate

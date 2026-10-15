@@ -6,6 +6,12 @@ from pathlib import Path
 import time
 
 
+class ToolQualificationError(ValueError):
+    def __init__(self, reason='smart-tool-startup-failed'):
+        super().__init__('The updated tool could not complete its connection check. Its existing connection is unchanged.')
+        self.diagnostic_facts = {'reason': reason}
+
+
 def retarget(row, previous, target):
     if row.get('transport', 'stdio') != 'stdio':
         raise ValueError('Remote MCP services are updated by their owner.')
@@ -64,12 +70,50 @@ class ManagedUpdates:
         # Installing by immutable revision must not change the user's update policy.
         await self._change(lambda state: next(row for row in state['installations'] if row['id'] == target['id']).update(
             ref=previous.get('ref') or 'HEAD', stagedFrom=previous['id']))
+        await self.validate_update(previous['id'], target['id'])
         return target
+
+    async def _prepare_update_connection(self, row):
+        from .mcp_connection import Connection
+        secrets = {}
+        for name, variable in row.get('env', {}).items():
+            if not os.environ.get(variable):
+                raise ToolQualificationError('missing-configured-environment')
+            secrets[name] = os.environ[variable]
+        connection = Connection(row, secrets)
+        try:
+            info = await asyncio.wait_for(asyncio.shield(connection.ready), 30)
+            definitions, values = await self._discover_catalog(connection)
+            row.update(values)
+            row.update(self._redact(info), status='connected', connectionState='ready', error=None, updatedAt=time.time())
+            return connection, definitions
+        except BaseException as error:
+            await connection.close()
+            if connection.ready.done() and not connection.ready.cancelled():
+                connection.ready.exception()
+            if not isinstance(error, Exception):
+                raise
+            raise ToolQualificationError() from error
+
+    async def validate_update(self, previous_id, target_id):
+        """Check exact configured MCP commands before declaring a stage ready.
+
+        Initialization and catalog discovery only; never invoke a tool, replace
+        a registration, or change a saved server’s connection state.
+        Activation repeats qualification because configuration may change.
+        """
+        previous = next(row for row in self.state['installations'] if row['id'] == previous_id)
+        target = next(row for row in self.state['installations'] if row['id'] == target_id)
+        for original in self.state['servers']:
+            if original.get('installationId') != previous_id:
+                continue
+            candidate = retarget(original, previous, target)
+            connection, _ = await self._prepare_update_connection(candidate)
+            await connection.close()
 
     async def activate_update(self, previous_id, target_id):
         """Caller holds the app's idle/admission barrier. Never run a tool call."""
         from .smart_tools import configuration_key
-        from .mcp_connection import Connection
         previous = next(row for row in self.state['installations'] if row['id'] == previous_id)
         target = next(row for row in self.state['installations'] if row['id'] == target_id)
         originals = {row['id']: copy.deepcopy(row) for row in self.state['servers'] if row.get('installationId') == previous_id}
@@ -84,17 +128,9 @@ class ManagedUpdates:
             # Handshake and discovery validate the exact command/arguments and
             # referenced environment. No inference, sampling or tool call occurs.
             for key, row in candidates.items():
-                secrets = {}
-                for name, variable in row.get('env', {}).items():
-                    if not os.environ.get(variable): raise ValueError(f'Environment variable {variable} is not set.')
-                    secrets[name] = os.environ[variable]
-                connection = Connection(row, secrets)
+                connection, definitions = await self._prepare_update_connection(row)
                 connections[key] = connection
-                info = await asyncio.wait_for(asyncio.shield(connection.ready), 30)
-                definitions, values = await self._discover_catalog(connection)
                 catalogs[key] = definitions
-                row.update(values)
-                row.update(self._redact(info), status='connected', connectionState='ready', error=None, updatedAt=time.time())
             async with self.install_lock:
                 if any(configuration_key(self._server(key)) != configuration_key(row) or self.connections.get(key) is not old_connections[key] for key, row in originals.items()):
                     raise ValueError('A connection changed while the update was prepared. Check again.')

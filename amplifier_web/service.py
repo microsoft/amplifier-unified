@@ -207,6 +207,8 @@ ACTION_DEFINITIONS = {
     "updates.app": ("Stage a published application release and restart when idle",schema()),
     "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
     "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
+    "updates.smartToolRetry": ("Retry one failed Smart Tool update by its current installation ID. Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
+    "updates.smartToolSkip": ("Skip one failed Smart Tool revision and retain its current installation. Newer revisions remain eligible.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
@@ -3110,7 +3112,7 @@ class AppService:
                         'updatedAt':time.time(), 'detail':'Feature installation requested; awaiting qualification.'}
                     while len(rows) > 20:
                         rows.pop(next(iter(rows)))
-                pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action in {'updates.featureInstall', 'updates.forceRestart'} else (action.split(".")[1],)))
+                pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id)))
             elif action == "settings.update":
                 patch = dict(args["patch"])
                 if set(patch) - {"preferredVoice", "fallbackVoice", "voiceName", "fallbackVoiceName", "voiceInterruptions", "bundle", "workspace", "notifications", "updates", "workspaces"}:

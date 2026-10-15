@@ -15,7 +15,7 @@ ERROR_TYPES = {'Exception','CommandFailure','CommandTimeout','AssertionError','I
 PREPARATION_REASONS = {'ModuleActivationError':'module-prepare-failed','BundleNotFoundError':'bundle-not-found',
                        'BundleLoadError':'bundle-load-failed','BundleValidationError':'bundle-validation-failed',
                        'BundleDependencyError':'bundle-dependency-failed', 'HostComponentConflict':'host-component-conflict'}
-RECOVERY_REASONS = {'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values()}
+RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values()}
 PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','prepared','capabilities','cleanup','worker-imports'}
 
 
@@ -138,6 +138,9 @@ class UpdateDiagnostics:
                'kind':self.state.get('kind'),'phase':phase,'status':status}
         if self.state.get('revision'):event['revision']=self.state['revision']
         if isinstance(facts.get('reason'),str) and facts['reason'] in RECOVERY_REASONS:event['reason']=facts['reason']
+        for key in ('component', 'installationId', 'targetInstallationId'):
+            value = facts.get(key)
+            if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', value):event[key] = value
         if isinstance(facts.get('package'),str) and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*',facts['package']) and len(facts['package'])<=128:
             event['package']=facts['package']
         for key in ('durationMs','exitCode','stdoutBytes','stderrBytes'):
@@ -155,18 +158,18 @@ class UpdateDiagnostics:
             if probe:event['probe']=probe
         self.state['events']=(self.state['events']+[event])[-50:]
         self.state['latest']=event
-        if status=='succeeded' and phase in {'ecosystem-activation','smart-tools-complete','restart-ack'}:
+        if status=='succeeded' and phase in {'ecosystem-activation','smart-tools-complete','smart-tools-partial','restart-ack'}:
             batch=self.state.get('batch',{})
             if batch.get('attemptId')==event['attemptId']:
                 completed={**batch,'completedAt':event['at'],'phase':phase}
-                if phase=='smart-tools-complete':
+                if phase in {'smart-tools-complete','smart-tools-partial'}:
                     activated=batch.get('activatedComponents',[])
                     completed.update(components=activated[:5],componentCount=len(activated))
                 # Smart Tools may activate separately within one attempt.
                 prior=[row for row in self.state.get('completedBatches',[]) if row.get('attemptId')!=event['attemptId']]
                 self.state['completedBatches']=(prior+[completed])[-8:]
         if status in {'failed','interrupted'}:
-            if status=='interrupted' and self.state.get('lastFailure',{}).get('attemptId')==event['attemptId'] and self.state['lastFailure'].get('status')=='failed':
+            if status=='interrupted' and self.state.get('lastFailure',{}).get('attemptId')==event['attemptId'] and self.state.get('lastFailure',{}).get('status')=='failed':
                 prior_failure=self.state['lastFailure']
             self.state['lastFailure']=prior_failure if prior_failure is not None else event
         collector=getattr(self.manager.service,'diagnostics',None)
@@ -205,20 +208,21 @@ class UpdateDiagnostics:
         self.record(phase,'succeeded',commandId=command_id,durationMs=round((time.monotonic()-started)*1000))
         return result
 
-    async def run(self,phase,operation,*args,**kwargs):
+    async def run(self,phase,operation,*args,_context=None,**kwargs):
         command_id=uuid.uuid4().hex
-        self.record(phase,'started',commandId=command_id)
+        context = _context or {}
+        self.record(phase,'started',commandId=command_id,**context)
         started=time.monotonic()
         try:result=await operation(*args,**kwargs)
         except BaseException as error:
             facts={'durationMs':round((time.monotonic()-started)*1000),'errorType':exception_type(error)}
             facts.update(getattr(error,'diagnostic_facts',{}))
-            self.record(phase,'interrupted' if type(error).__name__=='CancelledError' else 'failed',commandId=command_id,**facts)
+            self.record(phase,'interrupted' if type(error).__name__=='CancelledError' else 'failed',commandId=command_id,**context,**facts)
             raise
         facts={'durationMs':round((time.monotonic()-started)*1000)}
         facts.update(getattr(result,'diagnostic_facts',{}))
         if isinstance(result,(str,bytes)):
             probe=probe_record(result)
             if probe:facts['probe']=probe
-        self.record(phase,'succeeded',commandId=command_id,**facts)
+        self.record(phase,'succeeded',commandId=command_id,**context,**facts)
         return result
