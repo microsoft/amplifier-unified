@@ -12,6 +12,23 @@ import os
 from pathlib import Path
 import signal
 
+READ_ACTIONS = frozenset({
+    'view.update', 'shell.view.update', 'shell.report', 'session.select', 'workspace.select',
+    'session.history', 'session.plans', 'session.inspect', 'session.titlePreview',
+    'configuration.defaults', 'providers.list', 'routing.list',
+    'schedule.list', 'schedule.read', 'observation.list', 'observation.read',
+    'worktree.list', 'worktree.read', 'notifications.status', 'diagnostics.status', 'updates.status',
+})
+
+
+def reading_action(action, args):
+    if action == 'shell.command':
+        # Admit only one declared read/navigation capability. The real shell
+        # handler still validates client, generation and module ownership, then
+        # calls the guarded dispatch again for the inner action.
+        return isinstance(args, dict) and args.get('action') in READ_ACTIONS
+    return action in READ_ACTIONS
+
 
 def verify_isolation(marker):
     proof = json.loads(Path(marker).read_text())
@@ -78,17 +95,11 @@ async def main(args):
     app.middlewares.insert(0, reading_routes)
     # All client view/demand transports are real. Historical content is private,
     # with normal fresh-token authentication; there is no auth bypass.
-    allowed_actions = frozenset({
-        'view.update', 'shell.view.update', 'session.select', 'workspace.select',
-        'session.history', 'session.plans', 'session.inspect',
-        'schedule.list', 'schedule.read', 'observation.list', 'observation.read',
-        'worktree.list', 'worktree.read', 'notifications.status',
-        'diagnostics.status', 'updates.status',
-    })
     service = app['service']
     original_dispatch = service.dispatch
     async def dispatch(action, *values, **options):
-        if action not in allowed_actions:
+        args = values[0] if values else options.get('args')
+        if not reading_action(action, args):
             raise ValueError('This private replica permits reading and navigation only.')
         return await original_dispatch(action, *values, **options)
     service.dispatch = dispatch

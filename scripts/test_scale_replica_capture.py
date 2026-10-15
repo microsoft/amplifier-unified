@@ -62,6 +62,15 @@ class CaptureTests(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(data).hexdigest(), row['sha256'])
                     self.assertTrue(row['stable'])
 
+    def test_reading_profile_admits_shell_navigation_but_not_wrapped_mutations(self):
+        from scale_replica_app import reading_action
+        self.assertTrue(reading_action('session.select', {'id': 'synthetic'}))
+        self.assertTrue(reading_action('shell.command', {'action': 'session.select', 'args': {'id': 'synthetic'}}))
+        for action in ('conversation.send', 'session.create', 'schedule.create', 'updates.install', 'shell.command'):
+            self.assertFalse(reading_action('shell.command', {'action': action, 'args': {}}))
+        self.assertFalse(reading_action('conversation.send', {}))
+        self.assertFalse(reading_action('shell.command', None))
+
     def test_extractor_rejects_path_escape(self):
         payload = io.BytesIO()
         with tarfile.open(fileobj=payload, mode='w') as archive:
