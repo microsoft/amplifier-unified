@@ -1,0 +1,11 @@
+{
+  "qualifiedRevision": "596a7ff08a50d09a7233747c01331079d1da7edc",
+  "build": {
+    "version": "0.20.165",
+    "id": "a8b8c4f8468eb04d"
+  },
+  "staticFileCount": 311,
+  "buildInputFilesVerified": 298,
+  "exactStaticMatch": true,
+  "inputsChanged": []
+}
