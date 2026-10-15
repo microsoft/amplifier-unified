@@ -119,6 +119,21 @@ async def test_timeout_is_retained_unknown_and_same_request_never_runs_again(app
         await act(app, 'execute', row, 'uncertain', command='different-command')
 
 
+async def test_unready_source_observation_blocks_host_execution(app, backend, monkeypatch):
+    await start(app)
+    reads = []
+    def incomplete(config, home, row, action, args):
+        reads.append(action)
+        assert action == 'read'
+        return {'ok': True, 'universeId': row['universeId'], 'status': 'unknown', 'sourceReady': False,
+                'message': 'Source preparation is not confirmed for this exact snapshot.'}
+    monkeypatch.setattr(owner, 'invoke', incomplete)
+    row = (await app.dispatch('workspace.environments.read', scope(app)))['result']['items'][0]
+    assert row['status'] == 'unknown' and row['sourceReady'] is False
+    result = await act(app, 'execute', row, 'must-not-run', command='python -m unittest')
+    assert result['request']['state'] == 'failed' and reads == ['read']
+
+
 async def test_start_failure_and_cleanup_failure_keep_ownership(app, backend, monkeypatch):
     def fail(config, home, row, action, args):
         return {'ok': action == 'prepare', 'status': 'unknown', 'universeId': 'maybe-created', 'snapshot': {}}

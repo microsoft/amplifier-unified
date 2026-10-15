@@ -101,7 +101,7 @@ def public(home, row):
         'id': row['id'], 'sessionId': row['sessionId'], 'workspaceId': row['workspaceId'],
         'revision': row['revision'], 'profileId': row['profileId'],
         'status': row.get('environmentState', 'unknown'), 'universeId': row.get('universeId'),
-        'source': row['source'], 'snapshot': row.get('snapshot'), 'services': row.get('services', []),
+        'source': row['source'], 'snapshot': row.get('snapshot'), 'sourceReady': row.get('sourceReady'), 'services': row.get('services', []),
         'lastOperation': row.get('lastOperation'), 'reason': row.get('reason'), 'observation': row.get('observation'),
         'retention': {'path': str(storage.directory(home, row)), 'preserved': True,
                       'policy': 'Stop retains container data. Remove exports source and artifacts before deleting owned containers and volumes. Retained host files are never deleted here.'},
@@ -160,6 +160,7 @@ def invoke(config, home, row, action, args):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
     folder = storage.directory(home, row)
     payload = {'action': action, 'root': str(folder), 'source': row['source'],
+               'snapshot': row.get('snapshot'),
                'operationId': row['launchOperationId'], 'universeId': row.get('universeId'),
                'dockerHost': config['dockerHost'], 'image': config['image'],
                'requestId': args.get('requestId'), 'command': args.get('command'),
@@ -251,7 +252,7 @@ def effect(app, row, action, args, config, request, admit):
         else:
             admitted = True
             result = invoke(config, home, row, action, args)
-        changes = {key: result[key] for key in ('universeId', 'snapshot', 'services') if result.get(key) is not None}
+        changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
         state = 'completed' if result.get('ok') else 'outcome_unknown' if admitted else 'failed'
         if action == 'execute':
             environment_state = 'running' if result.get('ok') else 'unknown'
@@ -315,9 +316,11 @@ def read(app, sid, config):
                         try:
                             observed = invoke(config, home, row, 'read', {})
                             if observed.get('ok'):
-                                changes = {key: observed[key] for key in ('universeId', 'services', 'snapshot') if key in observed and observed[key] != row.get(key)}
+                                changes = {key: observed[key] for key in ('universeId', 'services', 'snapshot', 'sourceReady') if key in observed and observed[key] != row.get(key)}
                                 if observed.get('status') != row.get('environmentState'):
                                     changes['environmentState'] = observed.get('status', 'unknown')
+                                if observed.get('message') and observed['message'] != row.get('reason'):
+                                    changes['reason'] = observed['message']
                                 if changes:
                                     row = save(home, row, **changes)
                                 row = {**row, 'observation': {'status': 'observed', 'observedAt': time.time()}}

@@ -33,7 +33,7 @@ def library(monkeypatch):
             return value
         return call
     lib = SimpleNamespace(
-        export_repository_snapshot=record('snapshot', Value(snapshot_commit='exact', snapshot_tree='tree')),
+        export_repository_snapshot=record('snapshot', Value(snapshot_commit='exact', snapshot_tree='tree', archive_sha256='digest')),
         launch_id=record('identity', 'owned'),
         launch=record('launch', Value(id='owned', state='running', services=[])),
         push_files=record('push', Value()),
@@ -51,6 +51,7 @@ def library(monkeypatch):
 
 def payload(tmp_path, action):
     return {'action': action, 'root': str(tmp_path), 'source': '/approved/task/worktree',
+            'snapshot': {'snapshot_commit': 'exact', 'snapshot_tree': 'tree', 'archive_sha256': 'digest'},
             'operationId': 'durable-launch', 'universeId': 'owned', 'dockerHost': 'unix:///approved/docker.sock',
             'image': owner.APPROVED_IMAGE, 'requestId': 'stable-request', 'timeoutSeconds': 12, 'command': 'python -V'}
 
@@ -84,6 +85,70 @@ def test_start_copies_exact_snapshot_without_host_mount(library, tmp_path):
     assert next(item for item in calls if item[0] == 'push')[1] == ('owned', tmp_path / 'source.tar', '/artifacts/.source.tar')
     assert next(item for item in calls if item[0] == 'execute')[2]['max_output_bytes'] == 32768
     assert "filter='data'" in next(item for item in calls if item[0] == 'execute')[1][1]
+    assert worker.source_ready(tmp_path, 'owned', payload(tmp_path, 'read')['snapshot'])
+
+
+def test_failed_unpack_never_promotes_running_container_to_ready(library, tmp_path):
+    lib, calls = library
+    executions = []
+    def unpack(*args, **kwargs):
+        executions.append(args[1])
+        return Value(stdout='', stderr='outside symlink refused', exit_code=1)
+    lib.execute = unpack
+    lib.status = lambda *a, **k: Value(state='running', services=[])
+    assert not worker.execute_call(payload(tmp_path, 'start'))['ok']
+    observed = worker.execute_call(payload(tmp_path, 'read'))
+    assert observed['status'] == 'unknown' and not observed['sourceReady']
+    assert not worker.execute_call(payload(tmp_path, 'execute'))['ok']
+    assert len(executions) == 1  # Only the original unpack attempt, never a check or replay.
+    assert not (tmp_path / 'source-ready.json').exists()
+
+
+def test_helper_loss_after_launch_cannot_enable_checks_or_reinstall_source(library, tmp_path):
+    lib, calls = library
+    def lost(*args, **kwargs):
+        raise Failure()
+    lib.push_files = lost
+    lib.status = lambda *a, **k: Value(state='running', services=[])
+    assert not worker.execute_call(payload(tmp_path, 'start'))['ok']
+    assert worker.execute_call(payload(tmp_path, 'read'))['status'] == 'unknown'
+    assert not worker.execute_call(payload(tmp_path, 'execute'))['ok']
+    assert not any(name == 'execute' for name, _, _ in calls)
+
+
+@pytest.mark.parametrize('change', ['snapshot', 'universe', 'missing'])
+def test_readiness_receipt_requires_exact_snapshot_and_universe(library, tmp_path, change):
+    lib, calls = library
+    assert worker.execute_call(payload(tmp_path, 'start'))['ok']
+    lib.status = lambda *a, **k: Value(state='running', services=[])
+    altered = payload(tmp_path, 'read')
+    if change == 'snapshot':
+        altered['snapshot']['archive_sha256'] = 'another-digest'
+    elif change == 'universe':
+        altered['universeId'] = 'another-universe'
+    else:
+        (tmp_path / 'source-ready.json').unlink()
+    assert worker.execute_call(altered)['status'] == 'unknown'
+    assert not worker.execute_call({**altered, 'action': 'execute'})['ok']
+    assert sum(name == 'execute' for name, _, _ in calls) == 1
+
+
+def test_confirmed_source_survives_lost_host_response_without_reextraction(library, tmp_path):
+    lib, calls = library
+    worker.execute_call(payload(tmp_path, 'start'))  # Simulate a lost response after the durable source receipt.
+    lib.status = lambda *a, **k: Value(state='running', services=[])
+    observed = worker.execute_call(payload(tmp_path, 'read'))
+    assert observed['status'] == 'running' and observed['sourceReady']
+    assert sum(name == 'execute' for name, _, _ in calls) == 1
+
+
+def test_partial_source_can_still_be_stopped_and_preserved(library, tmp_path):
+    lib, calls = library
+    assert not (tmp_path / 'source-ready.json').exists()
+    assert worker.execute_call(payload(tmp_path, 'stop'))['status'] == 'stopped'
+    observed = worker.execute_call(payload(tmp_path, 'read'))
+    assert observed['status'] == 'stopped' and not observed['sourceReady']
+    assert worker.execute_call(payload(tmp_path, 'remove'))['status'] == 'removed'
 
 
 @pytest.mark.parametrize('failure_at', [1, 2])

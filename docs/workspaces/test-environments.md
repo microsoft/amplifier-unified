@@ -46,7 +46,11 @@ a generic MCP endpoint is not an equivalent adapter.
 
 The fixed Linux Python profile copies the task's actual Git working area into a
 separate container volume. Snapshot provenance names its source and immutable
-content. Tracked files and nonignored untracked files are included; symlink text
+content. A private, durable readiness receipt binds successful source extraction
+to that exact universe and snapshot digest. A running container without that
+receipt remains unready for checks; inspection never repeats source extraction.
+Stop and preservation before removal remain available for partial source copies.
+Tracked files and nonignored untracked files are included; symlink text
 is preserved without reading its targets; extraction refuses links that leave
 the container working folder. Git credentials, repository hooks and
 provider credentials are not forwarded. This is not a guarantee that source

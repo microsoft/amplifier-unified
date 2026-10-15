@@ -9,11 +9,54 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
+import tempfile
 
 
 def serialize(value):
     return value.model_dump(mode='json')
+
+
+def source_identity(identity, snapshot):
+    if not isinstance(snapshot, dict) or any(not isinstance(snapshot.get(key), str) or not snapshot[key]
+            for key in ('archive_sha256', 'snapshot_commit', 'snapshot_tree')):
+        raise ValueError('The exact source snapshot identity is unavailable.')
+    return {'version': 1, 'universeId': identity, 'archiveSha256': snapshot['archive_sha256'],
+            'snapshotCommit': snapshot['snapshot_commit'], 'snapshotTree': snapshot['snapshot_tree']}
+
+
+def source_ready(root, identity, snapshot):
+    """A running container alone is not proof that its source was installed."""
+    try:
+        expected = source_identity(identity, snapshot)
+        descriptor = os.open(root / 'source-ready.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor) as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 2048:
+                return False
+            return json.load(stream) == expected
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def retain_source_ready(root, identity, snapshot):
+    """Publish exact readiness atomically, only after successful extraction."""
+    value = source_identity(identity, snapshot)
+    descriptor, temporary = tempfile.mkstemp(prefix='.source-ready-', dir=root)
+    try:
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(value, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, root / 'source-ready.json')
+        directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def retain_manifest(directory, archives):
@@ -59,7 +102,7 @@ def execute_call(payload):
     config = BackendConfig(state_root=root / 'backend', docker_host=payload['dockerHost'])
     action = payload['action']
     identity = payload.get('universeId')
-    snapshot = None
+    snapshot = payload.get('snapshot')
     try:
         if action == 'prepare':
             # Source snapshot is immutable and retained even when launch fails.
@@ -67,6 +110,7 @@ def execute_call(payload):
             (root / 'snapshot.json').write_text(json.dumps(snapshot))
             return {'ok': True, 'universeId': lib.launch_id(payload['operationId'], config=config), 'snapshot': snapshot}
         if action == 'start':
+            source_identity(identity, snapshot)
             compose = root / 'compose.json'
             compose.write_text(json.dumps(profile(payload['image'])))
             universe = lib.launch(compose, operation_id=payload['operationId'], timeout_seconds=600, config=config)
@@ -77,7 +121,8 @@ def execute_call(payload):
             if unpack.exit_code != 0:
                 return {'ok': False, 'universeId': identity, 'snapshot': snapshot, 'status': 'unknown',
                         'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.', 'result': serialize(unpack)}
-            return {'ok': True, 'universeId': identity,
+            retain_source_ready(root, identity, snapshot)
+            return {'ok': True, 'universeId': identity, 'sourceReady': True,
                     'status': universe.state, 'services': [serialize(item) for item in universe.services]}
         if not identity:
             # One resource has its own backend root. Exact launch identity is the
@@ -85,9 +130,15 @@ def execute_call(payload):
             identity = lib.launch_id(payload['operationId'], config=config)
         if action == 'read':
             universe = lib.status(identity, config=config)
-            return {'ok': True, 'universeId': identity, 'status': universe.state,
-                    'services': [serialize(item) for item in universe.services]}
+            ready = source_ready(root, identity, snapshot)
+            return {'ok': True, 'universeId': identity, 'sourceReady': ready,
+                    'status': universe.state if ready or universe.state == 'stopped' else 'unknown',
+                    'services': [serialize(item) for item in universe.services],
+                    'message': None if ready else 'Source preparation is not confirmed for this exact snapshot. Checks are unavailable. Stop and remove the environment to retain any partial files; inspection does not install source again.'}
         if action == 'execute':
+            if not source_ready(root, identity, snapshot):
+                return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
+                        'message': 'Source preparation is not confirmed for this exact snapshot. No check was started and source was not installed again.'}
             result = lib.execute(identity, payload['command'], workdir='/workspace',
                 timeout_seconds=payload['timeoutSeconds'], max_output_bytes=32768, config=config)
             return {'ok': True, 'universeId': identity, 'result': serialize(result)}
