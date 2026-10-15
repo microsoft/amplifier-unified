@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.160",
+      "title": "Keep open Work details current as responses finish",
+      "changes": [
+        "Open Work steps update when a response finishes or new messages arrive, including final status and usage. Equivalent resident refreshes preserve explicitly opened pages and full-result reads.",
+        "Work receipts still reject replaced sessions, changed group ownership, and mismatched step identities."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.159",
       "title": "Keep earlier Work steps and saved message reactions available",
       "changes": [

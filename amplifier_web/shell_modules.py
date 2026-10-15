@@ -429,12 +429,28 @@ class ShellModules:
                           for item in scoped.get('attention', {}).get('items', ()) if not _page_only
                           if item.get('sessionId') in visible_ids
                           and item['id'] == 'session:' + item['sessionId']]
+        activity_by_id = {}
+        if not _page_only and visible_ids:
+            from .attention import reviewed_session_errors
+            from .navigation_summary import activity, task_blocked
+            admitted = projections.sessions(state).by_id
+            attention = scoped['attention']
+            reviewed = reviewed_session_errors(attention)
+            # Pending catalog pages retain membership/order, but their admitted
+            # owners' current status is already available without another query
+            # or any transcript/configuration hydration.
+            for sid in sorted(visible_ids):
+                row = admitted.get(sid)
+                if row is not None:
+                    activity_by_id[sid] = activity(row, bool(attention.get('sessions', {}).get(sid)),
+                        error_reviewed=sid in reviewed, blocked=task_blocked(state, sid))
         overview = ({'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})) if wants('workspaceOverview') else None
         shortcuts = projections.workspace_shortcuts(scoped, workspace_id=workspace_id if pinned_scope else None) if wants('workspaceShortcuts') else None
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
         result = {} if _page_only else {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
                 'recentScope': recent_scope,
+                'navigationActivityById': activity_by_id,
                 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
                 'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
