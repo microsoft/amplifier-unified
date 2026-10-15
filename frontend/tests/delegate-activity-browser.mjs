@@ -28,7 +28,7 @@ try{
  const delegation={id:'delegate-request',sessionId:alpha,kind:'tool',label:'delegate',toolCallId:'delegate-one',turnId:'turn-one',phase:'running',startedAt:start+1,input:JSON.stringify({agent:'review',instruction})};
  const worker={id:'worker:review',parentId:delegation.id,sessionId:'review',kind:'worker',label:'Source review',turnId:'turn-one',phase:'running',startedAt:start+1};
  const child={...model,id:'review-call',sessionId:'review',parentId:worker.id,anchorMessageId:'answer',startedAt:start+40,endedAt:start+45,model:'review-model'};
- await control({op:'patch',sessions:{[alpha]:{messages,execution:{turns:[{id:'turn-one',phase:'completed',startedAt:start,endedAt:start+30}],nodes:[delegation,worker,child]}}}});
+ await control({op:'patch',sessions:{[alpha]:{messages,workers:[{id:'review',status:'running'},{id:'unrelated-worker',status:'running'}],execution:{turns:[{id:'turn-one',phase:'completed',startedAt:start,endedAt:start+30}],nodes:[delegation,worker,child]}}}});
  await page.reload();
  const after=page.locator('[data-group-id="turn-one@answer"]');
  await after.locator(':scope > button').click();
@@ -39,6 +39,13 @@ try{
  await delegate.locator(':scope > button').click();
  await expect(delegate.getByRole('region',{name:'Request to delegate',exact:true})).toContainText('Review the source');
  await expect(delegate).toContainText('Waiting for response');
+ const beforeStop=await control({op:'inspect'});
+ assert.deepEqual(beforeStop.workerStops,[]);assert.deepEqual(beforeStop.runtimeStops,[]);
+ await delegate.getByRole('button',{name:'Stop worker',exact:true}).click();
+ await expect.poll(async()=>(await control({op:'inspect'})).workerStops).toEqual([[alpha,'review']]);
+ assert.deepEqual((await control({op:'inspect'})).runtimeStops,[],'Stopping this delegate must not stop its parent or another chat');
+ // This fixture proves the real UI/service target. Later lifecycle records
+ // below are controlled events, not an actual child-process exit claim.
  await expect(delegate.locator('[data-node-id="review-call"]')).toHaveCount(0);
  const reads=[];page.on('request',r=>{if(r.url().includes('/api/conversation/text'))reads.push(r.url())});
  const initialReads=reads.length;

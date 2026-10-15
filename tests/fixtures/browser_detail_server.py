@@ -17,7 +17,7 @@ async def fixture_routing(self, workspace): pass
 SetupManager.ensure_routing_catalog = fixture_routing
 
 class Runtime:
-    def __init__(self): self.starts=0; self.sends=0
+    def __init__(self): self.starts=0; self.sends=0; self.stops=[]; self.worker_stops=[]
     async def start(self, session, emit):
         self.starts+=1
         await emit('runtime.status', {'sessionId':session['id'], 'status':'ready'})
@@ -26,7 +26,8 @@ class Runtime:
         await emit('assistant.message', {'sessionId':session['id'], 'text':'Synthetic reply.', 'inputId':input_id})
         await emit('runtime.status', {'sessionId':session['id'], 'status':'idle'})
     async def control(self, *args): return {}
-    async def stop(self, *args, reason="stopped"): pass
+    async def stop(self, sid, *, reason="stopped"): self.stops.append(sid)
+    async def stop_worker(self, sid, worker_id): self.worker_stops.append([sid, worker_id])
     async def close(self): pass
 
 async def main():
@@ -318,6 +319,7 @@ async def main():
             service._publish()
             return web.json_response({'alpha':aid,'beta':bid,'revision':service.state['revision'], 'state':service.get_state(),
                 'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends,
+                'runtimeStops':service.runtime.stops,'workerStops':service.runtime.worker_stops,
                 'retainedSessions':len(service.state['sessions']),
                 'retainedMessages':sum(len(row.get('messages',[])) for row in service.state['sessions']),
                 'canonicalBytes':len(json.dumps(service.state['sessions']).encode())})
