@@ -5,6 +5,7 @@
     {"id": "state-transport", "command": ["node", "tests/state-transport-browser.mjs"], "env": {"AMPLIFIER_PERF_EVIDENCE": "{root}/output/active-client-performance/report.json"}},
     {"id": "demand", "command": ["node", "tests/demand-browser.mjs"], "env": {"AMPLIFIER_PERF_EVIDENCE": "{root}/output/active-client-performance/report.json"}},
     {"id": "scoped-navigation", "command": ["node", "tests/scoped-navigation-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/scoped-navigation"}},
+    {"id": "sidebar-reading", "command": ["node", "tests/sidebar-reading-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/sidebar-reading-artifacts"}},
     {"id": "selected-context", "command": ["node", "tests/selected-context-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/selected-context"}},
     {"id": "registry-validation", "command": ["node", "tests/registry-validation-browser.mjs"]},
     {"id": "empty-host", "command": ["node", "tests/empty-host-browser.mjs"]},

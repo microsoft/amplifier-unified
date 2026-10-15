@@ -58,3 +58,14 @@ test('offline stream timeout is bounded and does not replay intent',async t=>{
   await f.key('session:b','ArrowUp');await act(async()=>t.mock.timers.tick(10001));assert.equal(f.listeners.size,0);assert.equal(f.busy('session:b'),undefined);assert.equal(f.calls.length,1);assert.match(JSON.stringify(f.root.toJSON()),/display has not arrived/);
  }finally{t.mock.timers.reset();await f.close()}
 });
+
+test('selection-retained pins stay readable but cannot begin keyboard or pointer reordering',async()=>{
+ const f=await fixture();try{
+  await f.update({navigationResources:[],navigationResourceRetained:{pinnedNavigation:{pinnedNavigation:f.current.pinnedNavigation}},navigationResourcePending:{pinnedNavigation:{status:'pending'}}});
+  assert.equal(f.busy('session:b'),true);await f.key('session:b','ArrowUp');
+  await act(async()=>f.root.root.findByProps({'aria-label':'Reorder session:b'}).props.onPointerDown({button:0}));
+  assert.equal(f.calls.length,0);assert.deepEqual(f.order(),ids);
+  await f.update({navigationResources:['pinnedNavigation'],navigationResourceRetained:{},navigationResourcePending:{}});
+  assert.equal(f.busy('session:b'),undefined);await f.key('session:b','ArrowUp');assert.equal(f.calls.length,1);
+ }finally{await f.close()}
+});

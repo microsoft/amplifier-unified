@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.158",
+      "title": "Show ready chat pages and preserve sidebar reading position",
+      "changes": [
+        "Ready recent conversation pages now appear without waiting for full runtime history hydration. Model, bundle, and compact chat controls use the same display readiness, and failed reads keep Retry available.",
+        "Selecting a chat or workspace preserves the loaded sidebar rows and reading position while fresh results arrive. Loading older chats retains the current query identity and no longer reports a false changed-during-read error.",
+        "Saved peer-message attribution is restored when a complete bounded page proves its identity. Partial or native history pages remain neutral rather than claiming unverified attribution."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.157",
       "title": "Open recent conversation pages without rebuilding archived history",
       "changes": [

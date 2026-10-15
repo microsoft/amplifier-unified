@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {shellScope,resourceSnapshots,retainResourceVersions} from '../src/shell/resources.js';
+import {shellScope,resourceSnapshots,retainResourceVersions,pendingSnapshots,sidebarReadingSnapshot} from '../src/shell/resources.js';
 import {createShellDiagnostics} from '../src/shell/diagnostics.js';
 const bootstrap={clientId:'client',hostInstanceId:'host',shellBootstrapKey:'key',resolvedInstances:[{id:'chat',package:'builtin.chats'},{id:'button',package:'builtin.actions'},{id:'custom',package:'custom.sidebar'}],instanceGenerations:{chat:1,button:2,custom:3}};
 const demand={id:1,scope:['chat','workspace','chat',null,null],resources:['sidebarSearch']};
@@ -121,4 +121,41 @@ test('late pending and retry entries cannot rewind equal-value completion',()=>{
  delete next.instances.chat.resources.sidebarSearch;
  assert.equal(retainResourceVersions(ready,next).instances.chat.resources.sidebarSearch,undefined);
  const switched={...next,demandId:2};assert.equal(retainResourceVersions(ready,switched),switched);
+});
+
+function readingFixture(){
+ const wanted={...demand,resources:['pinnedNavigation','recentNavigation','workspaceShortcuts','sidebarSearch']};
+ const value=envelope(),entry=value.instances.chat;
+ entry.resources.context.value.recentScope={mode:'all',workspaceId:null,filter:'',clientId:'client',instanceId:'chat',generation:1};
+ for(const name of wanted.resources.filter(name=>name!=='sidebarSearch'))entry.resources[name]={revision:1,value:{[name]:name==='workspaceShortcuts'?[{workspaceId:'one'}]:{items:[{id:name}],total:1}}};
+ const snapshots=resourceSnapshots(bootstrap,value,wanted);
+ return {wanted,value,previous:{shellResources:value,snapshots}};
+}
+test('selection pending retains sidebar reading geometry without granting coverage or stale search',()=>{
+ const {wanted,previous}=readingFixture();
+ const changed={...wanted,id:2,scope:['next-chat','next-workspace','workspace','next-workspace','chats']};
+ const pending=pendingSnapshots(bootstrap,previous,changed).chat;
+ assert.deepEqual(pending.navigationResources,[]);
+ assert.equal(pending.pinnedNavigation,undefined);
+ assert.deepEqual(Object.keys(pending.navigationResourceRetained),['pinnedNavigation','recentNavigation','workspaceShortcuts']);
+ const reading=sidebarReadingSnapshot(pending);
+ assert.equal(reading.recentNavigation.items.length,1);assert.equal(reading.workspaceShortcuts.length,1);
+ assert.equal(reading.sidebarNavigation.search,undefined);
+ assert.equal(reading.navigationResourcePending.recentNavigation.status,'pending');
+});
+test('retained sidebar survives pending baseline but clears for new host, module, query or released interest',()=>{
+ const {wanted,previous,value}=readingFixture(),changed={...wanted,id:2};
+ const waiting=pendingSnapshots(bootstrap,previous,changed);
+ const next=structuredClone(value);next.demandId=2;next.instances.chat.resources={context:next.instances.chat.resources.context};
+ next.instances.chat.pending=Object.fromEntries(wanted.resources.map(name=>[name,{status:'pending'}]));
+ const assembled=resourceSnapshots(bootstrap,next,changed,waiting).chat;
+ assert.equal(sidebarReadingSnapshot(assembled).recentNavigation.items.length,1);
+ assert.deepEqual(assembled.navigationResources,[]);
+ const moved=structuredClone(next);moved.instances.chat.resources.context.value.recentScope.workspaceId='other';
+ assert.deepEqual(resourceSnapshots(bootstrap,moved,changed,waiting).chat.navigationResourceRetained,{});
+ const filtered=structuredClone(next);filtered.instances.chat.resources.context.value.view.navShowAgentCreated=true;
+ assert.equal(resourceSnapshots(bootstrap,filtered,changed,waiting).chat.navigationResourceRetained.recentNavigation,undefined);
+ assert.deepEqual(pendingSnapshots(bootstrap,previous,changed,'new-host').chat.navigationResourceRetained,{});
+ assert.equal(pendingSnapshots({...bootstrap,instanceGenerations:{...bootstrap.instanceGenerations,chat:2}},previous,changed).chat,undefined);
+ assert.deepEqual(pendingSnapshots(bootstrap,previous,{...changed,resources:[]}).chat.navigationResourceRetained,{});
 });

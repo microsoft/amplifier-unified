@@ -183,7 +183,8 @@ class TranscriptWindows:
         return {'items': selected, 'mode': 'cursor', 'before': token,
                 'hasEarlier': bool(start), 'total': None, 'offset': None, 'scope': 'recent',
                 'revision': source, 'windowKey': _digest([source, start, end]),
-                'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps}
+                'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps,
+                '_savedComplete': start == 0 and end == len(rows) and not gaps}
 
     async def read(self, session_id, *, before=None, limit=100, native=False):
         if self.closed:
@@ -213,6 +214,8 @@ class TranscriptWindows:
             task.add_done_callback(self._read_finished)
             page = await asyncio.shield(task)
         if not use_native:
+            if cold is not None:
+                page['_savedComplete'] = before is None and not page['hasEarlier'] and not page['unavailableRanges']
             page['_savedOwner'] = {'source': source, 'fence': fence,
                                    'resource': cold.identity if cold is not None else None}
         # Detach/size only this selected page outside writer exclusion.
@@ -231,16 +234,24 @@ class TranscriptWindows:
             self._retain(session_id, page, size)
         return self._wire(page, session_id)
 
-    @staticmethod
-    def _wire(page, session_id):
+    def _wire(self, page, session_id):
         result = {key: copy.deepcopy(value) for key, value in page.items() if key != 'items'}
-        result['items'] = [dict(row) for row in page['items']]
+        from .peer_attribution import derive
+        # Attribution requires global duplicate checks. Only a complete bounded
+        # saved set supplies that proof; neither a native suffix nor a partial
+        # saved page may promote a single local match into global uniqueness.
+        complete = result.pop('_savedComplete', False) is True
+        resolver = getattr(self.service.projections, 'resolver', None) if complete else None
+        rows = derive({'id': session_id, 'messages': page['items']}, page['items'], resolver)
+        result['items'] = rows
         result.pop('_owner', None)
         saved_owner = result.pop('_savedOwner', None)
         for index, row in enumerate(result['items']):
             if not row.get('displayOnly'):
                 from .browser_detail import compact
                 result['items'][index] = compact(row, session_id, 'messages', 4096)
+                if row.get('attribution'):
+                    result['items'][index]['attribution'] = row['attribution']
                 if saved_owner and result['items'][index].get('textDetail'):
                     result['items'][index]['textDetail']['windowKey'] = page['windowKey']
                 continue

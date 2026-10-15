@@ -160,18 +160,27 @@ async def test_worker_summary_detail_targets_parent_view_not_other_client(app_fa
 async def test_scoped_rename_updates_shared_navigation_without_rebuilding_other_body(app_factory, monkeypatch):
     from amplifier_web import browser_state
     app, rows = fixture(app_factory, count=20)
+    # This case mutates canonical saved messages. Native-managed rows instead
+    # project their native file windows, independently of these saved bodies.
+    for row in rows[:2]:
+        row['historyManaged'] = False
     queues = []
     for number in range(2):
         with app.clients.bind(f'client-{number}'):
             queues.append(app.subscribe())
             app.browser_state()
-    built = []
-    original = browser_state.project
-    monkeypatch.setattr(browser_state, 'project',
-                        lambda row, **kwargs: (built.append(row['id']), original(row, **kwargs))[1])
+    reads = []
+    original = app.history.windows.read
+    async def read(identity, **kwargs):
+        reads.append(identity)
+        return await original(identity, **kwargs)
+    monkeypatch.setattr(app.history.windows, 'read', read)
+    def full_body(*args, **kwargs):
+        raise AssertionError('Bound browser must not rebuild a full canonical body')
+    monkeypatch.setattr(browser_state, 'project', full_body)
     rows[0]['title'] = 'Updated title'
     app._publish(session_ids={rows[0]['id']})
-    assert rows[1]['id'] not in built
+    assert rows[1]['id'] not in reads
     b = queues[1].get_nowait()
     assert 'chatNavigation' not in b
     with app.clients.bind('client-1'):
@@ -182,8 +191,11 @@ async def test_scoped_rename_updates_shared_navigation_without_rebuilding_other_
     rows[1]['messages'] = [{'id': 'new', 'role': 'assistant', 'text': 'Fresh body'}]
     app._save()
     with app.clients.bind('client-1'):
+        # A save may retire the newly committed body. Await its actual bounded
+        # display reader; an old cached page must never satisfy this observation.
+        await app.history.refresh_session(rows[1]['id'])
         latest = app.browser_state()
-    assert rows[1]['id'] in built
+    assert len(reads) <= 1 and all(identity == rows[1]['id'] for identity in reads)
     assert next(row for row in latest['sessions'] if row['id'] == rows[1]['id'])['messages'][0]['text'] == 'Fresh body'
 
 
