@@ -619,6 +619,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/diagnostics/performance", performance_diagnostics)
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
+    from .message_interactions import install_routes as install_message_annotation_routes
+    install_message_annotation_routes(app)
     app.router.add_get("/api/conversation/detail", conversation_detail)
     app.router.add_get("/api/conversation/provider-recording", provider_recording)
     app.router.add_get("/api/conversation/navigation", conversation_navigation)

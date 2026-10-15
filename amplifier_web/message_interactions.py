@@ -72,8 +72,12 @@ def command(service, action, args):
         annotations = session.setdefault('messageAnnotations', {}).setdefault(row['id'], {})
         selected = set(annotations.get('reactions', []))
         (selected.add if args['present'] else selected.discard)(args['emoji'])
-        annotations['reactions'] = [emoji for emoji in REACTIONS if emoji in selected]
-        return {'sessionId': session['id'], 'messageId': row['id'], **copy.deepcopy(annotations), 'sent': False}
+        updated = [emoji for emoji in REACTIONS if emoji in selected]
+        if updated != annotations.get('reactions', []):
+            session['messageAnnotationRevision'] = session.get('messageAnnotationRevision', 0) + 1
+        annotations['reactions'] = updated
+        return {'sessionId': session['id'], 'messageId': row['id'], **copy.deepcopy(annotations),
+                'annotationRevision': session.get('messageAnnotationRevision', 0), 'sent': False}
     client = service.clients.record()
     if client is None or action != 'message.reveal' and service.state.get('selectedSessionId') != session['id']:
         raise AppError('Choose a connected browser displaying this conversation.', 409)
@@ -149,3 +153,33 @@ async def prepare_input(coordinator, text, quote, *, max_chars):
     # references must never cause files or tools to be read again.
     expanded = await expand_input(coordinator, text, max_chars=max_chars)
     return quoted_text(expanded, quote)
+
+
+def read_annotations(session, identities):
+    """Read only requested app-owned reactions; never load transcript bodies."""
+    if (not isinstance(identities, list) or not 1 <= len(identities) <= 100
+            or any(not isinstance(key, str) or not 0 < len(key) <= 200 for key in identities)
+            or len(set(identities)) != len(identities)):
+        raise ValueError('Choose between 1 and 100 distinct message IDs.')
+    annotations = session.get('messageAnnotations', {})
+    return {'sessionId': session['id'], 'revision': session.get('messageAnnotationRevision', 0),
+            'items': {key: {'reactions': [emoji for emoji in annotations.get(key, {}).get('reactions', [])
+                                       if emoji in REACTIONS]} for key in identities}}
+
+
+def install_routes(app):
+    from aiohttp import web
+
+    async def annotations(request):
+        args = await request.json()
+        if (not isinstance(args, dict) or not isinstance(args.get('sessionId'), str)
+                or not args['sessionId']):
+            raise ValueError('Choose an explicit conversation and message IDs.')
+        service = app['service']
+        # Auth/origin/client middleware is shared with other conversation reads.
+        # No await after resolving the exact owner; no runtime admission.
+        session = service._session(args.get('sessionId'), hydrate=False)
+        return web.json_response(read_annotations(session, args.get('messageIds')),
+                                 headers={'Cache-Control': 'no-store'})
+
+    app.router.add_post('/api/conversation/annotations', annotations)

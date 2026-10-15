@@ -26,7 +26,8 @@ test('unchanged message branches survive parent renders and unrelated session up
   assert.equal(detail.session.messages[0].text,'Edited!');
   assert.equal(rows[0].text,'Current');
   value={...value,messageAnnotations:{}};await act(async()=>root.update(React.createElement(Probe)));
-  assert.equal(detail.session.messages[0].reactions,undefined);
+  assert.deepEqual(detail.session.messages[0].reactions,[]);
+  assert.equal(detail.session.messages[0].annotationRevision,0);
  }finally{await act(async()=>root?.unmount())}
 });
 test('paired history failure preserves both windows and a retry commits them together',async()=>{
