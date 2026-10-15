@@ -72,7 +72,11 @@ for(const variant of variants){
    evidence.assertion('Saved preference does not request permission',await page.evaluate(()=>window.__notificationRequests.length),0);
    await act('Explicitly request browser permission',page.getByRole('button',{name:'Allow browser notifications',exact:true}));await expect.poll(()=>page.evaluate(()=>window.__notificationRequests.length)).toBe(1);
    evidence.assertion('Synthetic browser denied request',await page.evaluate(()=>Notification.permission),'denied');evidence.assertion('Denied permission leaves saved preference off',(await state()).notificationSettings.desktop,false);await expect(desktop).not.toBeChecked();
-   // Permission denial recovery wording is recorded, not inferred from the saved toggle.
+   await expect(page.getByRole('status').filter({hasText:'Browser notifications are blocked.'})).toContainText('browser’s site settings');await expect(page.getByRole('button',{name:'Allow browser notifications',exact:true})).toHaveCount(0);
+   evidence.assertion('Denied permission explains recovery',await page.getByRole('status').filter({hasText:'Browser notifications are blocked.'}).innerText(),'Browser notifications are blocked. Allow notifications for this site in your browser’s site settings, then return here. Your saved preference is unchanged.');
+   await evidence.action('Simulate permission changed in browser settings',()=>page.evaluate(()=>{Notification.permission='granted';window.dispatchEvent(new Event('focus'))}));await expect(page.getByRole('status').filter({hasText:'This browser has permission'})).toBeVisible();await expect(desktop).not.toBeChecked();
+   await evidence.action('Simulate browser without notification capability',()=>page.evaluate(()=>{delete window.Notification;window.dispatchEvent(new Event('amplifier:notification-permission'))}));await expect(page.getByRole('status').filter({hasText:'This browser does not support notifications.'})).toContainText('Ready for you');await expect(page.getByRole('button',{name:'Allow browser notifications',exact:true})).toHaveCount(0);await expect(desktop).not.toBeChecked();
+   evidence.assertion('Unsupported capability retains saved preference',(await state()).notificationSettings.desktop,false);
    evidence.assertion('One explicit permission command',calls.filter(row=>row.action==='notification.request').length,1);
   });
   await probe('close-retention',['settings.destinations','settings.narrow','accessibility.privacy'],async()=>{

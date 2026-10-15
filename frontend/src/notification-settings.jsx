@@ -1,7 +1,20 @@
 import React,{useRef,useState,useEffect} from 'react';
 import {SettingsActions} from './settings-layout';
 import {ResultNotice} from './settings-ui';
+const browserPermission=()=>typeof window==='undefined'||!window.Notification?'unsupported':window.Notification.permission;
+function useNotificationPermission(){
+ const [permission,setPermission]=useState(browserPermission);
+ useEffect(()=>{
+  let active=true,status;
+  const refresh=()=>{if(active)setPermission(browserPermission())};
+  window.addEventListener('amplifier:notification-permission',refresh);window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
+  navigator.permissions?.query({name:'notifications'}).then(value=>{if(!active)return;status=value;status.addEventListener('change',refresh);refresh()}).catch(()=>{});
+  return()=>{active=false;status?.removeEventListener('change',refresh);window.removeEventListener('amplifier:notification-permission',refresh);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh)};
+ },[]);
+ return permission;
+}
 export function NotificationSettings({state,act}){
+ const permission=useNotificationPermission();
  const notify=state.notificationSettings||{},draft=state.view?.maintenanceDraft||{};
  const [localPatch,setLocalPatch]=useState({}),[topic,setTopic]=useState(''),[token,setToken]=useState(''),[pending,setPending]=useState(null),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const edits=useRef({topic:0,token:0}),saving=useRef(false);
@@ -13,7 +26,7 @@ export function NotificationSettings({state,act}){
  const save=async(patch=null)=>{if(saving.current)return;saving.current=true;setLocalPatch(patch||{});setError('');setNotice('');const version={...edits.current};try{const result=await act('notifications.save',{patch:patch||{server,enabled,...(topic?{topic}:{}),...(token?{token}:{})}});if(!result?.accepted||!result.operationId)throw Error(result?.error||'Could not save. Please retry.');setPending({id:result.operationId,version,connection:!patch})}catch(e){saving.current=false;setLocalPatch({});setError(e.message)}};
  return <div className="a-notification-settings"><p className="a-everyday-intro">Know when your response is ready, wherever you’re working.</p>
  <section className="a-notification-card"><label className="a-everyday-toggle"><span><strong>Finished responses in the app badge</strong><small>Off by default. Responses remain available in Ready for you and their chats.</small></span><input type="checkbox" checked={localPatch.completionBadge??notify.completionBadge??false} disabled={!!pending||saving.current} data-action="notifications.save" onChange={e=>save({completionBadge:e.target.checked})}/></label></section>
- <section className="a-notification-card"><label className="a-everyday-toggle"><span><strong>On this device</strong><small>Show a browser notification when a response is ready.</small></span><input type="checkbox" checked={localPatch.desktop??notify.desktop??true} disabled={!!pending||saving.current} data-action="notifications.save" onChange={e=>save({desktop:e.target.checked})}/></label><p className="a-caption">Your browser also needs permission.</p><button className="a-link" data-action="notification.request" onClick={()=>act('notification.request')}>Allow browser notifications</button></section>
+ <section className="a-notification-card"><label className="a-everyday-toggle"><span><strong>On this device</strong><small>Show a browser notification when a response is ready.</small></span><input type="checkbox" checked={localPatch.desktop??notify.desktop??true} disabled={!!pending||saving.current} data-action="notifications.save" onChange={e=>save({desktop:e.target.checked})}/></label><p className="a-caption" role="status">{permission==='denied'?'Browser notifications are blocked. Allow notifications for this site in your browser’s site settings, then return here. Your saved preference is unchanged.':permission==='unsupported'?'This browser does not support notifications. Responses remain available in Ready for you and their chats.':permission==='granted'?'This browser has permission to show notifications.':'Your browser also needs permission.'}</p>{permission==='default'&&<button className="a-link" data-action="notification.request" onClick={()=>act('notification.request')}>Allow browser notifications</button>}</section>
  <section className="a-notification-card"><label className="a-everyday-toggle"><span><strong>On another device</strong><small>{notify.enabled&&notify.topicConfigured?'Connected through ntfy.':'Get notifications on your phone with ntfy.'}</small></span><input type="checkbox" data-action="view.update" checked={enabled} disabled={!!pending||saving.current} onChange={e=>{if(notify.topicConfigured){set({notifyEnabled:undefined});save({enabled:e.target.checked})}else set({notifyEnabled:e.target.checked})}}/></label>
  <details className="a-everyday-disclosure" open={enabled||undefined}><summary>{notify.topicConfigured?'Manage phone notifications':'Set up phone notifications'}</summary><div className="a-notification-steps">
  <div><h4>1. Open ntfy on your phone</h4><p><a href="https://ntfy.sh" target="_blank" rel="noreferrer">Get the ntfy app</a>, then subscribe to a topic. A topic is the name of your notification channel.</p></div>

@@ -144,7 +144,7 @@ function App(){
     if(effect.type==='call.resumeAudio')voiceClient.current.callAudio.resumePlayback();
     if(effect.type==='call.keepAwake')voiceClient.current.setKeepAwake(effect.enabled??effect.args?.enabled??true);
     if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
-    if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
+    if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();window.dispatchEvent(new Event('amplifier:notification-permission'));await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
    }).catch(e=>reportError(e));
   }
  },[]);
