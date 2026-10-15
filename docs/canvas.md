@@ -403,6 +403,15 @@ inline view and refuses unsaved edits. Conversation transitions protect dirty
 views and clear clean inline leases; a new browser page never inherits leases
 from its predecessor. Saved content is unaffected by preview disposal.
 
+The app's **Reload now** control also protects unfinished Canvas input. Mounted
+native renderers and interactive apps register local dirty intent before sending
+the canonical declaration, so a pending or rejected acknowledgement still blocks
+reload. Only the latest successful clean declaration clears that local guard;
+unmount retires it. Canonical dirty views provide an additional safeguard. Reload
+checks again after draft/checkpoint preparation, immediately before navigation.
+This does not turn a best-effort observation checkpoint into saved input, and does
+not intercept the browser's own reload/close controls.
+
 Preview bodies load only near the viewport. A client may retain up to eight
 inline previews; additional artifacts remain available in full Canvas, and the
 user can close a preview to free capacity. This bounds mounted frames without
