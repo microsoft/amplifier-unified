@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import tempfile
 
 from aiohttp import web
@@ -36,6 +37,20 @@ async def main(home):
     await service.dispatch('session.archive',{'id':rows[3]['id']})
     await service.dispatch('session.select',{'id':rows[0]['id']})
     await service.dispatch('view.update',{'patch':{'setupJourney':'done','navPinned':True,'navChatScope':'all','panel':None}})
+    owned_workspaces=[]
+    if '--workspace-actions' in sys.argv:
+        for name in ['Archive this workspace','Remove this registration']:
+            folder=home/name.lower().replace(' ','-');folder.mkdir()
+            (folder/'keep.txt').write_text('Preserve '+name)
+            await service.dispatch('workspace.add',{'path':str(folder),'name':name})
+            owned_workspaces.append(next(row for row in service.state['workspaces'] if row['path']==str(folder)))
+        native_store=SessionStore.for_app(home/'app',owned_workspaces[0]['path'])
+        native_store.save('workspace-preserved-native',[{'role':'user','content':'Keep saved workspace history'}],
+                          {'session_id':'workspace-preserved-native','working_dir':owned_workspaces[0]['path'],'name':'Preserved native work'})
+        # workspace.add deliberately enters the newly registered workspace.
+        # Restore the stated current-chat prerequisite before opening a browser.
+        await service.dispatch('session.select',{'id':rows[0]['id']})
+        await service.dispatch('view.update',{'patch':{'navPinned':True,'navChatScope':'all','panel':None}})
     service._publish()
     store=SessionStore.for_app(home/'app',str(workspace));new_id='navigation-native-new'
     def auth(request):
@@ -47,7 +62,10 @@ async def main(home):
                 'titles':{row['id']:service._session(row['id'],hydrate=False)['title']for row in rows},
                 'messages':{row['id']:hashlib.sha256(json.dumps(service._session(row['id'],hydrate=False)['messages'],sort_keys=True).encode()).hexdigest()for row in rows},
                 'file':(workspace/'keep.txt').read_text(),'runtime':{'started':runtime.started,'sent':runtime.sent,'stopped':runtime.stopped},
-                'nativePresent':(store.directory(new_id)/'transcript.jsonl').exists()})
+                'nativePresent':(store.directory(new_id)/'transcript.jsonl').exists(),
+                'registeredWorkspaces':[{'id':row['id'],'path':row['path'],'name':row['name'],'archived':row.get('archived',False)}for row in service.state['workspaces']],
+                'ownedFiles':{row['id']:(Path(row['path'])/'keep.txt').read_text()for row in owned_workspaces},
+                'preservedNativeSha256':hashlib.sha256((native_store.directory('workspace-preserved-native')/'transcript.jsonl').read_bytes()).hexdigest() if owned_workspaces else None})
     async def seed_native(request):
         auth(request)
         store.save(new_id,[{'role':'user','content':'New saved native question'}],
@@ -59,7 +77,7 @@ async def main(home):
     url='http://127.0.0.1:'+str(site._server.sockets[0].getsockname()[1]);app['allowed_origins']|={url}
     stop=asyncio.Event();loop=asyncio.get_running_loop()
     for sig in (signal.SIGTERM,signal.SIGINT):loop.add_signal_handler(sig,stop.set)
-    print(json.dumps({'url':url,'ids':[row['id']for row in rows]}),flush=True)
+    print(json.dumps({'url':url,'ids':[row['id']for row in rows],'workspaces':owned_workspaces}),flush=True)
     try:await stop.wait()
     finally:await runner.cleanup()
 
