@@ -350,4 +350,5 @@ async def main():
         for sig in [signal.SIGTERM,signal.SIGINT]:asyncio.get_running_loop().add_signal_handler(sig,stopped.set)
         await stopped.wait();await runner.cleanup()
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())
