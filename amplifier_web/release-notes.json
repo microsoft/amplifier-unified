@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.165",
+      "title": "Confirm update restarts and keep sidebar selection clear",
+      "changes": [
+        "Updates can interrupt active work and restart into a qualified staged app after explicit confirmation. Saved history and drafts remain, interrupted work is not replayed, and unresolved checkout handoffs still require inspection.",
+        "Checkout handoffs refused before any runtime release no longer leave the chat stuck preparing. Existing uncertain handoffs remain protected until reconciled.",
+        "The sidebar highlights a workspace only while browsing that workspace; viewing a chat highlights the chat.",
+        "Workspace chat lists refresh quietly without inserting an Updating message that shifts the layout.",
+        "Sidebar titles use the space reserved for hidden actions. Hover and keyboard focus reveal the controls; Everything mode and touch layouts keep their existing visible actions."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.164",
       "title": "Reduce work when reading large chat directories",
       "changes": [

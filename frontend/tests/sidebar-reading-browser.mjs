@@ -51,6 +51,8 @@ try{
  const beforeWorkspace=await reading();
  const workspaces=await page.evaluate(()=>window.amplifier.getShellState().snapshots.workspaces.workspaceShortcuts);
  const currentWorkspace=(await shell()).selectedWorkspaceId;
+ const containingWorkspace=workspaces.find(row=>row.workspaceId===currentWorkspace);
+ assert.ok(containingWorkspace,'selected chat has a registered containing workspace');
  const otherWorkspace=workspaces.find(row=>row.workspaceId!==currentWorkspace&&row.available!==false);
  assert.ok(otherWorkspace);const workspace=otherWorkspace.workspaceId;
  await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace,workWorkspaceTab:'chats'}});
@@ -61,9 +63,13 @@ try{
  // A remembered workspace route must not leave its pinned row selected after
  // returning to a chat in another workspace, including the held demand phase.
  await act('workspace.pin',{id:workspace,pinned:true});
+ await act('workspace.pin',{id:currentWorkspace,pinned:true});
  const workspaceButtons=rail.getByRole('button',{name:'Open chats in '+otherWorkspace.path,exact:true});
+ const containingButtons=rail.getByRole('button',{name:'Open chats in '+containingWorkspace.path,exact:true});
  await expect.poll(()=>workspaceButtons.count()).toBeGreaterThan(0);
+ await expect.poll(()=>containingButtons.count()).toBeGreaterThan(0);
  await expect.poll(()=>workspaceButtons.evaluateAll(nodes=>nodes.every(node=>node.getAttribute('aria-pressed')==='true'))).toBe(true);
+ await expect.poll(()=>containingButtons.evaluateAll(nodes=>nodes.every(node=>node.getAttribute('aria-pressed')==='false'))).toBe(true);
  let releaseChat;const chatGate=new Promise(resolve=>releaseChat=resolve);release=releaseChat;holding=true;held=0;
  await page.unroute('**/api/shell/resources');await page.route('**/api/shell/resources',async route=>{if(holding){held++;await chatGate}await route.continue()});
  await act('session.select',{id:before.id});
@@ -72,8 +78,10 @@ try{
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.workWorkspaceId)).toBe(workspace);
  await expect(rows).toHaveCount(60);
  await expect.poll(()=>workspaceButtons.evaluateAll(nodes=>nodes.length>0&&nodes.every(node=>node.getAttribute('aria-pressed')==='false'))).toBe(true);
+ await expect.poll(()=>containingButtons.evaluateAll(nodes=>nodes.length>0&&nodes.every(node=>node.getAttribute('aria-pressed')==='false'))).toBe(true);
  holding=false;release();await expect.poll(async()=>(await shell()).navigationResources.includes('recentNavigation')).toBe(true);
  await expect.poll(()=>workspaceButtons.evaluateAll(nodes=>nodes.length>0&&nodes.every(node=>node.getAttribute('aria-pressed')==='false'))).toBe(true);
+ await expect.poll(()=>containingButtons.evaluateAll(nodes=>nodes.length>0&&nodes.every(node=>node.getAttribute('aria-pressed')==='false'))).toBe(true);
  assert.deepEqual(errors,[]);assert.ok(requests.every(req=>req.resources.length<=4));
  await page.screenshot({path:out+'/sidebar.png'});
  await writeFile(out+'/result.json',JSON.stringify({passed:true,before,pending,beforeWorkspace,workspacePending,finalRows:60,resourcePosts:requests.length},null,2)+'\n');

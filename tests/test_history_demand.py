@@ -66,29 +66,37 @@ def test_legacy_selection_requires_a_live_anonymous_stream():
 @pytest.mark.parametrize('status', ['working', 'running', 'starting', 'stopping'])
 async def test_event_reader_ignores_closed_clients_and_keeps_active_work(status):
     host = service()
-    host.clients.records = {'browser': {'selectedSessionId': 'live-chat'},
-        'closed-browser': {'selectedSessionId': 'closed-chat'},
-        'finished-api': {'selectedSessionId': 'api-chat'},
-        'tui': {'selectedSessionId': 'old-tui-selection'}}
+    host.clients.records = {'browser': {'kind': 'web', 'selectedSessionId': 'live-chat'},
+        'closed-browser': {'kind': 'web', 'selectedSessionId': 'closed-chat'},
+        'finished-api': {'kind': 'api', 'selectedSessionId': 'api-chat'},
+        'tui': {'kind': 'tui', 'selectedSessionId': 'old-tui-selection'}}
     host.queue_clients.update(browser='browser', terminal='tui')
     host.queue_sessions['terminal'] = 'terminal-chat'
     host.state['sessions'] = [{'id': sid, 'status': 'idle'} for sid in
         ['legacy-chat', 'live-chat', 'closed-chat', 'api-chat', 'old-tui-selection', 'terminal-chat']]
-    host.state['sessions'].append({'id': 'background-work', 'status': status})
-    visited, complete = [], asyncio.Event()
+    host.state['sessions'].append({'id': 'background-work', 'status': status,
+                                  'execution': {'nodes': [{'id': 'live', 'phase': status}]}})
+    original = copy.deepcopy(host.state)
+    visited, windows, interests, complete = [], [], [], asyncio.Event()
     view = EventLogView(host)
+    view.windows.request = windows.append
+    view.windows.retain_interest = lambda identities: interests.append(set(identities))
 
     async def observe(identity, *, passive=False):
         assert passive is True
         visited.append(identity)
-        if identity == 'background-work':
-            complete.set()
+        complete.set()
 
     view.refresh = observe
     view.start()
     try:
         await asyncio.wait_for(complete.wait(), 2)
-        assert visited == ['live-chat', 'terminal-chat', 'background-work']
+        assert windows == ['live-chat']
+        assert interests == [{'live-chat'}]
+        assert visited == ['terminal-chat']
+        # Active execution retains its live facts, without demanding a complete
+        # historical import. Disconnected/retained views request neither lane.
+        assert host.state == original
     finally:
         host.closed = True
         await view.close()

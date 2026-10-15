@@ -209,6 +209,7 @@ ACTION_DEFINITIONS = {
     "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
+    "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
@@ -1707,7 +1708,7 @@ class AppService:
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
-        if action.startswith(("smartTools.","providers.")) or action == 'updates.featureInstall' or action.startswith('permissions.') and args.get('scope') == 'session':
+        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.forceRestart'} or action.startswith('permissions.') and args.get('scope') == 'session':
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
@@ -3088,13 +3089,22 @@ class AppService:
                 pending.append((self.management.command,(action,copy.deepcopy(args),command_id,configuration_authority)))
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
+                if action == 'updates.forceRestart':
+                    if origin not in {'ui', 'user'}:
+                        raise AppError('Force restart requires explicit user confirmation in Updates.', 403)
+                    from .update_restart import require
+                    try:
+                        require(self.update_manager, args)
+                    except ValueError as error:
+                        raise AppError(str(error), 409) from None
+                    self.state['updates']['forceRestartResult'] = {'requestId': command_id, 'status': 'queued'}
                 if action == 'updates.featureInstall':
                     rows = self.state['updates'].setdefault('featureResults', {})
                     rows[command_id] = {'requestId':command_id, 'feature':args['feature'], 'phase':'queued',
                         'updatedAt':time.time(), 'detail':'Feature installation requested; awaiting qualification.'}
                     while len(rows) > 20:
                         rows.pop(next(iter(rows)))
-                pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action == 'updates.featureInstall' else (action.split(".")[1],)))
+                pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action in {'updates.featureInstall', 'updates.forceRestart'} else (action.split(".")[1],)))
             elif action == "settings.update":
                 patch = dict(args["patch"])
                 if set(patch) - {"preferredVoice", "fallbackVoice", "voiceName", "fallbackVoiceName", "voiceInterruptions", "bundle", "workspace", "notifications", "updates", "workspaces"}:
@@ -3251,7 +3261,7 @@ class AppService:
             if action in {"feedback.submit", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                           "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
                 receipt["requestId"] = args['requestId']
-            if action == 'updates.featureInstall':
+            if action in {'updates.featureInstall', 'updates.forceRestart'}:
                 receipt['requestId'] = command_id
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
