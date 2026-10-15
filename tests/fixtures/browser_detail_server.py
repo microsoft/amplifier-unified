@@ -1,5 +1,5 @@
 """Disposable heavy conversation browser fixture. No model providers or user data."""
-import asyncio, copy, json, os, signal, sys, tempfile, time
+import asyncio, copy, hashlib, json, os, signal, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(sys.argv[1]).resolve()
@@ -102,13 +102,26 @@ async def main():
                     'working_dir':str(alpha),'name':'Live saved history','bundle':'bundle:anchors'}))
                 (native/'transcript.jsonl').write_text(''.join(json.dumps({'role':'user' if i%2==0 else 'assistant',
                     'content':f'Saved message {i}\n\n'+('A retained paragraph. '*25)})+'\n' for i in range(305)))
+                native_receipt = {name: hashlib.sha256((native/name).read_bytes()).hexdigest()
+                                  for name in ('metadata.json', 'transcript.jsonl')}
+                service.fixture_native_receipt = native_receipt
+                service.fixture_native_path = native
+                if args.get('unreadable'):
+                    (native/'transcript.jsonl').chmod(0)
                 await service.history.refresh()
                 # Refresh discovers dormant entries in the directory. Only the
                 # explicitly requested chat joins the resident working set.
-                row=service._session('paging-fixture')
-                await service.history.load(row['id'])
+                row=service._session('paging-fixture', hydrate=False)
+                if not args.get('unreadable'):
+                    await service.history.load(row['id'])
                 row.update(status='ready',preparation={'status':'active'})
                 service.state.update(selectedSessionId=row['id'],selectedWorkspaceId=row['workspaceId'])
+            elif op=='native-readable':
+                native=service.fixture_native_path
+                (native/'transcript.jsonl').chmod(0o600)
+                return web.json_response({'original': service.fixture_native_receipt,
+                    'current': {name: hashlib.sha256((native/name).read_bytes()).hexdigest()
+                                for name in ('metadata.json', 'transcript.jsonl')}})
             elif op=='live-response':
                 row=service._session(args['id'])
                 # Match actual send admission: live callbacks belong to the
@@ -157,7 +170,6 @@ async def main():
                     'event':'generation.failed','generation_id':service._session(aid)['fixtureGeneration'],'input_ids':['interim-input']})
                 await service.on_runtime_event('runtime.error',{'sessionId':aid,'error':'Synthetic interruption.'})
             elif op=='interim-media':
-                import hashlib
                 from inline_media_samples import animation
                 data,_=animation();path=alpha/'interim.gif';path.write_bytes(data)
                 message=service._session(aid)['messages'][1]

@@ -32,23 +32,38 @@ try{
  const before=await info(),failed=before.state.sessions.find(row=>row.nativeIdentity==='alpha-197');
  const workspace=state=>state.workspaceExplorer.rows.find(row=>row.path===failed.workspace);
  assert.equal(workspace(before.state).activityCounts.attention,2);
- await row(failed.id).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
+ await row(failed.id).hover();await row(failed.id).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
  await expect(details.locator('.a-navigation-detail-status')).toHaveText('Needs attention');
  await details.getByRole('button',{name:'Mark error reviewed',exact:true}).click();
  await expect.poll(async()=>(await info()).state.attention.items.find(row=>row.id==='session:'+failed.id).read).toBe(true);
  await expect(details.locator('.a-navigation-detail-status')).toHaveText('Idle');
- assert.equal((await query()).sidebarNavigation.recent.items.find(item=>item.id===failed.id).activity.kind,'idle');
+ assert.equal((await query()).recentNavigation.items.find(item=>item.id===failed.id).activity.kind,'idle');
  const reviewed=await info(),saved=reviewed.state.sessions.find(row=>row.id===failed.id);
  assert.equal(saved.error,failed.error);assert.equal(saved.status,failed.status);assert.deepEqual(saved.messages,failed.messages);
  assert.equal(workspace(reviewed.state).activityCounts.attention,1);
  const agent=await api('/api/fixture/agent',{args:{action:'shell.query',args:{clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId:'chats'}}});
- assert.equal(agent.result.sidebarNavigation.recent.items.find(item=>item.id===failed.id).activity.kind,'idle');
+ assert.equal(agent.result.recentNavigation.items.find(item=>item.id===failed.id).activity.kind,'idle');
  await page.keyboard.press('Escape');await page.reload();await row(failed.id).waitFor();
- await expect.poll(async()=>(await query()).sidebarNavigation.recent.items.find(item=>item.id===failed.id).activity.kind).toBe('idle');
+ await expect.poll(async()=>(await query()).recentNavigation.items.find(item=>item.id===failed.id).activity.kind).toBe('idle');
  const approval=before.state.sessions.find(row=>row.nativeIdentity==='alpha-199');
- await row(approval.id).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
+ await row(approval.id).hover();await row(approval.id).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
  await expect(details.locator('.a-navigation-detail-status')).toHaveText('Approval requested');
  assert.equal(await details.getByRole('button',{name:'Mark error reviewed',exact:true}).count(),0);
+ await page.keyboard.press('Escape');
+ const completed=before.state.sessions.find(row=>row.nativeIdentity==='alpha-198');
+ const completedNotice=(await info()).state.attention.items.find(item=>item.sessionId===completed.id);
+ // Establish the reviewed prerequisite explicitly; the public action below must
+ // make an actual read-to-unread transition, not assert an already-unread row.
+ await api('/api/actions',{action:'attention.read',args:{ids:[completedNotice.id],fingerprints:{[completedNotice.id]:completedNotice.fingerprint}}});
+ await expect.poll(async()=>(await info()).state.attention.items.find(item=>item.sessionId===completed.id)?.read).toBe(true);
+ const beforeUnread=await info();
+ await row(completed.id).hover();await row(completed.id).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
+ await details.getByRole('button',{name:'Mark unread',exact:true}).click();
+ await expect.poll(async()=>(await info()).state.attention.items.find(item=>item.sessionId===completed.id)?.read).toBe(false);
+ const afterUnread=await info();
+ assert.deepEqual(afterUnread.state.attention.items.filter(item=>item.sessionId!==completed.id),beforeUnread.state.attention.items.filter(item=>item.sessionId!==completed.id),'Mark unread changes only the intended conversation attention');
+ assert.equal(afterUnread.state.selectedSessionId,beforeUnread.state.selectedSessionId);
+ assert.deepEqual(afterUnread.state.sessions.find(row=>row.id===completed.id).messages,completed.messages);
  const final=await info();assert.deepEqual(final.runtimeStarts,[]);assert.deepEqual(final.runtimeSends,[]);assert.deepEqual(errors,[]);
  console.log('PASS: exact review clears chat/workspace markers, survives reload, retains errors and approvals, and starts no work.');
 }finally{
