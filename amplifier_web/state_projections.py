@@ -156,6 +156,16 @@ class StateProjections:
         A scoped commit evicts its identities; an unknown save evicts all.
         No client draft/selection is retained in this shared body cache.
         """
+        from .work_windows import web_context
+        if self.service is not None and web_context(self.service):
+            from .browser_detail import project
+            transcript = getattr(getattr(self.service, 'history', None), 'windows', None)
+            events = getattr(getattr(self.service, 'event_log_view', None), 'windows', None)
+            # Window bodies have their own bounded generation/cache. Do not
+            # reuse the authoritative full-tree body cache for this surface.
+            return project(row, resolver=self.resolver,
+                message_overlay=transcript.project(row) if transcript is not None else None,
+                work_overlay=events.project(row) if events is not None else None)
         fields = ('messages', 'messageWindow', 'sharedHistoryUserTurnOffset',
                   'execution', 'executionWindow', 'workers', 'workerSummary', 'generations', 'historyActivity')
         body = self.detail_bodies.pop(row['id'], None)

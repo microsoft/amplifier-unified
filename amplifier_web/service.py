@@ -2414,7 +2414,8 @@ class AppService:
                     if action == 'workspace.create' and selected is None and not args.get('fromDraft'):
                         from .new_chat import open_draft
                         open_draft(self, {'workspace': workspace['path']})
-                    if selected and selected.get('nativeProject'):
+                    if selected and (selected.get('nativeProject') or
+                            client_id is not None and self.clients.records.get(client_id, {}).get('kind') == 'web'):
                         pending.append((self.history.load, (selected['id'],)))
             elif action.startswith("canvas."):
                 from .workspace_canvas import canvas_command
@@ -2568,7 +2569,8 @@ class AppService:
                         attachments[session['id']] = attachments.pop('', [])
                     self.state['view'].pop('newSessionDraft', None)
             elif action == "session.select":
-                session = self._session(args["id"])
+                bundled = client_id is not None and self.clients.records.get(client_id, {}).get('kind') == 'web'
+                session = self._session(args["id"], hydrate=not bundled)
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state, session)
                 previous = next((row for row in self.state['sessions'] if row['id'] == self.state.get('selectedSessionId')), None)
@@ -2578,7 +2580,7 @@ class AppService:
                 self.state["view"]["workSurface"] = "chat"
                 self.state["view"]["unreadVisit"] = session.get("manualUnread")
                 self.state["view"]["draft"] = session.get('draft', '')
-                if session.get('nativeProject'):
+                if session.get('nativeProject') or bundled:
                     pending.append((self.history.refresh_session, (session['id'],)))
             elif action == "session.warm":
                 session = self._session(args['id'])
@@ -3432,7 +3434,7 @@ class AppService:
             await self.on_runtime_event("runtime.error", {"sessionId": sid, "error": str(exc), **diagnostic_reference(exc)})
 
     async def history_page(self, session_id, before, limit):
-        await self.history.load(session_id, before=before, limit=limit)
+        await self.history.load(session_id, before=before, limit=limit, canonical=True)
 
     async def _edit_current(self, source):
         edit = source['historyEdit']
@@ -3760,7 +3762,7 @@ class AppService:
         from .runtime import SessionInUseError
         try:
             await self.runtime.takeover(session, self.on_runtime_event, session.get('lockOwner'))
-            await self.history.load(session['id'])
+            await self.history.load(session['id'], canonical=True)
             async with self.lock:
                 current = self._session(session['id'])
                 current.pop('lockOwner', None)
