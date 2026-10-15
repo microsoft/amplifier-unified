@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.159",
+      "title": "Keep earlier Work steps and saved message reactions available",
+      "changes": [
+        "Current Work groups offer earlier step pages while keeping the initial view bounded. Steps explicitly opened in one browser remain available through live updates without resetting another browser\u2019s view.",
+        "Saved message reactions appear on recent and older pages without loading the whole conversation. Imported runtime observations remain read-only."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.158",
       "title": "Show ready chat pages and preserve sidebar reading position",
       "changes": [
