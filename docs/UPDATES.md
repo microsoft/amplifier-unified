@@ -4,7 +4,32 @@ Available updates are listed immediately at the top of Settings. The application
 
 Automatic update checks default to every **4 hours**. Under **Update preferences**, choose every **1 hour**, **4 hours**, **8 hours**, or **daily**. Existing saved schedules remain unchanged on upgrade, including the previous daily default and older 6-hour or weekly choices. Older choices are shown with an explanation until replaced. Resetting app settings restores the 4-hour check interval while leaving automatic installation off.
 
-Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. All these controls use the same agent-accessible action registry.
+Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
+
+When a qualified application update is waiting, expand **View active work** to
+find **Force restart…**. Its confirmation explains that running chats, workers,
+tools and calls will be interrupted, saved history and drafts are retained, and
+interrupted work is not replayed automatically. An unresolved checkout handoff
+is labeled separately: restarting does not reconcile it or clear its chat fence.
+Ordinary automatic updates still wait for their existing idle checks.
+
+`updates.forceRestart` requires `confirm: true` and the exact
+`hostInstanceId`, staged `revision`, `generation`, and `attemptId` from
+`updates.forceRestartTarget`. Only user/UI origins may confirm; an agent cannot
+supply its own confirmation. A changed host or candidate rejects the request
+before effects. The action returns a request ID; a queued rejection is reported
+in `updates.forceRestartResult` for that request, without an automatic retry.
+Force is available only for an immutable qualified application generation, not
+an in-place legacy installation or an ecosystem-only update.
+
+Candidate and serving-component validation still run. At final admission the
+normal durable replacement fence blocks new work, then the owned runtime is
+closed and checked for remaining workers, preparations or pending operations
+before promotion. Failed interruption retains the fence and does not promote.
+Promotion, installed-package verification, managed host restart and new-host
+health confirmation use the normal update path. Remaining host services use
+the normal graceful shutdown; no conversation input is replayed. A failed or
+uncertain replacement remains fenced for inspection rather than reopening work.
 
 Checks compare the actual commit in all eligible app-owned Foundation Git caches against their remote branches, including unregistered transitive modules and skill copies. Usage is a separate classification, never an eligibility gate: `usage: configured` has positive repository/ref evidence from default and saved-session bundle selections, known workspaces' existing settings, enabled app bundles, module source overrides or explicit Git inputs in module configuration (including skill sources). `usageEvidence` reports those categories without exposing workspace paths or private source URLs. Shared global, project, local and native-session settings use the same merge rules and session identity as runtime configuration, but checks never import settings, load keys or prepare bundles. Bundle aliases resolve through shared settings; retained registry entries are not selection authority or evidence of use. Different refs, including main and master, are never assumed equivalent.
 

@@ -38,7 +38,11 @@ def blockers(service):
     for session in sessions.values():
         sid = session['id']
         if session.get('configurationBusy'):
-            add('configuration', 'Conversation settings are being applied', sid)
+            unknown = any(row.get('phase') == 'unknown' for row in session.get('worktreeHandoffs', []))
+            if unknown:
+                add('checkout-handoff', 'Checkout handoff needs inspection; restarting will not resolve it', sid)
+            else:
+                add('configuration', 'Conversation settings are being applied', sid)
         if session.get('status') in {'working', 'starting', 'stopping'} or (session.get('status') == 'ready' and
                 any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', []))):
             add('conversation', 'Conversation work is running or finishing', sid)

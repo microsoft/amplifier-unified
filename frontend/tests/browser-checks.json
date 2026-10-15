@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "scenarios": [
+    {"id": "update-restart", "command": ["node", "tests/update-restart-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/update-restart-artifacts"}},
     {"id": "active-client-performance", "command": ["node", "tests/active-client-performance-browser.mjs"], "env": {"AMPLIFIER_PERF_EVIDENCE": "{root}/output/active-client-performance/report.json"}},
     {"id": "state-transport", "command": ["node", "tests/state-transport-browser.mjs"], "env": {"AMPLIFIER_PERF_EVIDENCE": "{root}/output/active-client-performance/report.json"}},
     {"id": "demand", "command": ["node", "tests/demand-browser.mjs"], "env": {"AMPLIFIER_PERF_EVIDENCE": "{root}/output/active-client-performance/report.json"}},
