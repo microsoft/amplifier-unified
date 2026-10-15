@@ -92,9 +92,12 @@ export function useNavigationController(host,kind){
  useEffect(()=>{if(!draft.mode)return;form.current?.scrollIntoView?.({block:'nearest'});form.current?.querySelector?.('input')?.focus()},[draft.mode,draft.id]);
  return {host,state,act,refreshResources:host.refreshResources,prefix,view,draft,form,saving,formError,history,refreshing,workspace,workspaceCount,allChats,setDraft,updateDraft,choose,submit};
 }
-export function NavigationEditor({model}){
+export function NavigationEditor({model,deleteOwner=true}){
  const editorId=useId();
  const {state,act,draft,form,saving,formError,setDraft,updateDraft,submit}=model;
+ // A hidden browser and the sidebar share this draft. Only its active surface
+ // may obtain a deletion token; a second preview invalidates the first token.
+ if(draft.mode==='chat-delete'&&!deleteOwner)return null;
  if(draft.mode==='add')return <WorkspaceForm state={state} act={act} onDone={()=>setDraft({})} onCancel={()=>setDraft({})}/>;
  return <>{draft.mode==='chat-delete'&&<div className="a-nav-form"><strong>Delete chat?</strong><ChatDelete key={draft.id} id={draft.id} act={act} cancel={()=>setDraft({})}/></div>}    {draft.mode&&draft.mode!=='chat-rename'&&draft.mode!=='chat-delete'&&<form ref={form} className="a-nav-form" aria-busy={saving} onSubmit={submit}>
      <div className="a-nav-form-title"><strong>{draft.mode==='add'?'New workspace':draft.mode==='rename'?'Rename workspace':draft.mode==='chat-rename'?'Rename chat':'Remove workspace?'}</strong><button className="a-icon" type="button" aria-label="Cancel navigation edit" data-action="view.update" onClick={()=>setDraft({})}><X/></button></div>
@@ -481,7 +484,7 @@ function QuietSidebar({host,workspaceHost,navigation}){
  const workspaceModel={...workspaceController,state:sidebarReadingSnapshot(workspaceController.state)},workspaceState=workspaceModel.state;
  const pins=model.state.pinnedNavigation||model.state.sidebarNavigation?.pinned||{items:[],total:0,pages:1};
  return <div className="a-sidebar-navigation a-quiet-sidebar">
-  <NavigationEditor model={model}/>
+  <NavigationEditor model={model} deleteOwner={(model.view.workSurface||'chat')==='chat'}/>
   {!workspaceHost&&<NavigationEditor model={workspaceModel}/>}
   <button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>
   {(!!pins.total||model.state.navigationResourcePending?.pinnedNavigation)&&<SidebarSection id="pinned" title="Pinned" model={model}><NavigationResourceStatus state={model.state} quietRefresh resource="pinnedNavigation" label="pinned chats and workspaces" refresh={model.refreshResources}/>{model.state.pinnedNavigation?<PinnedItems page={pins} model={model} workspaceModel={workspaceModel} canEdit={!!workspaceHost||!model.draft.mode} now={now} navigation={navigation}/>:<PinnedChats page={pins} model={model} now={now}/>}</SidebarSection>}
