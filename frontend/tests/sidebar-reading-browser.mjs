@@ -50,12 +50,30 @@ try{
  await page.unroute('**/api/shell/resources');await page.route('**/api/shell/resources',async route=>{if(holding){held++;await workspaceGate}await route.continue()});
  const beforeWorkspace=await reading();
  const workspaces=await page.evaluate(()=>window.amplifier.getShellState().snapshots.workspaces.workspaceShortcuts);
- assert.ok(workspaces.length);const workspace=workspaces.at(-1).workspaceId;
+ const currentWorkspace=(await shell()).selectedWorkspaceId;
+ const otherWorkspace=workspaces.find(row=>row.workspaceId!==currentWorkspace&&row.available!==false);
+ assert.ok(otherWorkspace);const workspace=otherWorkspace.workspaceId;
  await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace,workWorkspaceTab:'chats'}});
  await expect.poll(()=>held).toBeGreaterThan(0);await expect(rows).toHaveCount(40);
  const workspacePending=await reading();assert.ok(Math.abs(workspacePending.offset-beforeWorkspace.offset)<2,JSON.stringify({beforeWorkspace,workspacePending}));
  holding=false;release();await expect.poll(async()=>(await shell()).navigationResources.includes('recentNavigation')).toBe(true);
  await older.click();await expect(rows).toHaveCount(60);await expect(page.getByText(/Recent changed during the read/)).toHaveCount(0);
+ // A remembered workspace route must not leave its pinned row selected after
+ // returning to a chat in another workspace, including the held demand phase.
+ await act('workspace.pin',{id:workspace,pinned:true});
+ const workspaceButtons=rail.getByRole('button',{name:'Open chats in '+otherWorkspace.path,exact:true});
+ await expect.poll(()=>workspaceButtons.count()).toBeGreaterThan(0);
+ await expect.poll(()=>workspaceButtons.evaluateAll(nodes=>nodes.every(node=>node.getAttribute('aria-pressed')==='true'))).toBe(true);
+ let releaseChat;const chatGate=new Promise(resolve=>releaseChat=resolve);release=releaseChat;holding=true;held=0;
+ await page.unroute('**/api/shell/resources');await page.route('**/api/shell/resources',async route=>{if(holding){held++;await chatGate}await route.continue()});
+ await act('session.select',{id:before.id});
+ await expect.poll(()=>held).toBeGreaterThan(0);
+ await act('view.update',{patch:{workSurface:'chat',workWorkspaceId:workspace}});
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.workWorkspaceId)).toBe(workspace);
+ await expect(rows).toHaveCount(60);
+ await expect.poll(()=>workspaceButtons.evaluateAll(nodes=>nodes.length>0&&nodes.every(node=>node.getAttribute('aria-pressed')==='false'))).toBe(true);
+ holding=false;release();await expect.poll(async()=>(await shell()).navigationResources.includes('recentNavigation')).toBe(true);
+ await expect.poll(()=>workspaceButtons.evaluateAll(nodes=>nodes.length>0&&nodes.every(node=>node.getAttribute('aria-pressed')==='false'))).toBe(true);
  assert.deepEqual(errors,[]);assert.ok(requests.every(req=>req.resources.length<=4));
  await page.screenshot({path:out+'/sidebar.png'});
  await writeFile(out+'/result.json',JSON.stringify({passed:true,before,pending,beforeWorkspace,workspacePending,finalRows:60,resourcePosts:requests.length},null,2)+'\n');

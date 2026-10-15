@@ -50,3 +50,21 @@ test('active execution supersedes saved blocked task, while questions still requ
  assert.equal(activityFor({id:'chat',status:'idle'},state).label,'Work blocked');
  assert.equal(activityFor({id:'chat',status:'working',questions:[{status:'pending',required:true}]},state).label,'Answer requested');
 });
+
+test('current admitted activity updates retained rows independently of page membership',()=>{
+ const chats=Array.from({length:12},(_,index)=>({id:'chat-'+index,activity:{kind:'idle',label:'Idle'}}));
+ const before=JSON.stringify(chats);
+ const state={navigationResourcePending:{pinnedNavigation:{status:'pending'}},
+  navigationActivityById:Object.fromEntries(chats.map(chat=>[chat.id,{kind:'working',label:'Working'}]))};
+ for(const chat of chats)assert.deepEqual(activityFor(chat,state),{kind:'working',label:'Working'});
+ state.navigationActivityById['chat-3']={kind:'attention',label:'Approval requested'};
+ state.navigationActivityById['chat-7']={kind:'unread',label:'New response'};
+ state.navigationActivityById['chat-9']={kind:'idle',label:'Idle'};
+ assert.equal(activityFor(chats[3],state).label,'Approval requested');
+ assert.equal(activityFor(chats[7],state).kind,'unread');
+ assert.equal(activityFor(chats[9],state).kind,'idle');
+ assert.equal(activityFor({id:'unobserved',activity:{kind:'attention',label:'Needs attention'}},state).kind,'attention');
+ assert.equal(activityFor(chats[0],{navigationActivityById:{}}).kind,'idle','a replaced context cannot inherit another owner’s activity');
+ assert.equal(activityFor({id:'constructor',activity:{kind:'idle',label:'Idle'}},state).kind,'idle');
+ assert.equal(JSON.stringify(chats),before,'current activity never mutates cached page rows');
+});
