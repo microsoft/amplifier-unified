@@ -5,7 +5,6 @@ import {DetailText,readDetail} from './conversation-detail';
 import React,{memo,useEffect,useMemo,useRef,useState} from 'react';
 import {Copy,Check,Pencil,GitBranch,ArrowUp,AlertCircle,RotateCcw,LoaderCircle} from 'lucide-react';
 import {AttachmentStrip} from './chat-controls';
-import {RecoveryNotice} from './recovery-notice';
 import {usePendingMessageEdit} from './pending-message-edits';
 import {InlineMedia} from './inline-media';
 
@@ -16,7 +15,9 @@ export function newestMessageIds(messages){
 }
 
 export function completedTurnEnds(session){
- const messages=session?.messages||[],ends=new Map();let turn=Number(session?.sharedHistoryUserTurnOffset)||0;
+ const messages=session?.messages||[],ends=new Map();
+ if(session?.messageWindow?.mode==='cursor'&&!Number.isInteger(session?.sharedHistoryUserTurnOffset))return ends;
+ let turn=Number(session?.sharedHistoryUserTurnOffset)||0;
  for(let i=0;i<messages.length;i++){
   if(messages[i].role!=='user')continue;
   turn++;
@@ -29,25 +30,10 @@ export function completedTurnEnds(session){
  return ends;
 }
 
-export function groupRecoveryMessages(messages,after=new Map()){
- const groups=[];let pending=[];
- const flush=()=>{if(pending.length)groups.push(pending.length>1?pending:pending[0]);pending=[]};
- for(const message of messages){
-  if(message.observation?.source==='local-job-recovery'&&!(after.get(message.id)||[]).length)pending.push(message);
-  else {flush();groups.push(message)}
- }
- flush();return groups;
-}
-
-export function RecoveryGroup({messages,renderArtifacts,...props}){
- const [opened,setOpened]=useState(false);
- return <details className="a-recovery-group" onToggle={e=>{if(e.currentTarget.open)setOpened(true)}}><summary>Saved work notices ({messages.length})</summary><p>Recorded when this chat resumed. These notices are part of its history.</p>{opened&&messages.map(message=><React.Fragment key={message.id}><article data-message-id={message.id}><RecoveryNotice message={message} {...props}/></article>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
-}
-
 // Controls still observe every current permission, edit and delivery state.
 // Only text rendering is isolated, with all of its inputs explicit.
-const MessageText=memo(function MessageText({text,reference,role,sessionId,messageId,workspace,act}){
- const writingContext=useMemo(()=>role==='assistant'?{sessionId,messageId,act}:undefined,[role,sessionId,messageId,act]);
+const MessageText=memo(function MessageText({text,reference,role,sessionId,messageId,workspace,act,displayOnly}){
+ const writingContext=useMemo(()=>role==='assistant'&&!displayOnly?{sessionId,messageId,act}:undefined,[role,sessionId,messageId,act,displayOnly]);
  const fileContext=useMemo(()=>role==='assistant'?{sessionId,workspace,act}:undefined,[role,sessionId,workspace,act]);
  return <DetailText text={text} reference={reference} markdown userContent={role==='user'} automatic={role==='assistant'} writingContext={writingContext} fileContext={fileContext}/>;
 });
@@ -82,15 +68,15 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    <p className="a-caption">{localDelivery?'Update this unsent message and try again.':edit?.fork?'Create and open a separate edited chat. This original chat and its pin stay unchanged.':'Continue in this chat, keeping its name, workspace and pin. Later messages leave the active conversation; saved event history and earlier tool effects remain.'}</p>
    {!localDelivery&&<label className="a-inline-checkbox"><input type="checkbox" checked={!!edit?.fork} disabled={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch({...edit,text,fork:e.target.checked})}}/>Create a separate chat (fork)</label>}
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={editLocked} data-action="view.update" onClick={()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch(null)}}>Cancel</button><button className="a-primary" type="submit" disabled={editLocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':!localDelivery&&edit?.fork?'Create edited chat':'Save & regenerate'}</button></div>
-  </form>:<MessageText text={m.text|| (working?'…':'')} reference={m.textDetail} role={m.role} sessionId={session.id} messageId={m.id} workspace={session.workspace} act={act}/>}
-  {m.role==='assistant'&&!editing&&!omitMedia&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} dispatch={dispatch}/>}
+  </form>:<MessageText text={m.text|| (working?'…':'')} reference={m.textDetail} role={m.role} sessionId={session.id} messageId={m.id} workspace={session.workspace} act={act} displayOnly={m.displayOnly}/>}
+  {m.role==='assistant'&&!m.displayOnly&&!editing&&!omitMedia&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} dispatch={dispatch}/>}
   </div>
   {attribution&&<p className="a-message-attribution">{attribution}</p>}
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
-   <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
-   {!localDelivery&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}
-   {m.role==='user'&&!external&&<button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={editLocked} data-operation-pending={saving||undefined} aria-busy={saving||undefined} data-action="view.update" onClick={async()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;setSaving(true);try{patch({sessionId:session.id,messageId:m.id,text:m.textDetail?await readDetail(m.textDetail):m.text,fork:false})}catch(e){setDetailError(e.message)}finally{setSaving(false)}}}><Pencil/></button>}
-   {forkTurn&&<ForkTurn session={session} turn={forkTurn} act={act} working={working}/>}
+   <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery&&!m.displayOnly){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.textDetail?await readDetail(m.textDetail):m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
+   {!localDelivery&&!m.displayOnly&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}
+   {m.role==='user'&&!external&&!m.displayOnly&&<button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={editLocked} data-operation-pending={saving||undefined} aria-busy={saving||undefined} data-action="view.update" onClick={async()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;setSaving(true);try{patch({sessionId:session.id,messageId:m.id,text:m.textDetail?await readDetail(m.textDetail):m.text,fork:false})}catch(e){setDetailError(e.message)}finally{setSaving(false)}}}><Pencil/></button>}
+   {forkTurn&&!m.displayOnly&&<ForkTurn session={session} turn={forkTurn} act={act} working={working}/>}
    <MessageDelivery message={m} session={session} delivery={delivery} localDelivery={localDelivery} dispatch={dispatch} retry={retry} discard={discard}/>
 
    {copied?.status==='ready'&&<span role="status" className="a-copy-result success">Copied Markdown</span>}

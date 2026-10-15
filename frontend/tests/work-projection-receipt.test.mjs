@@ -33,3 +33,16 @@ test('bound includes UTF-8 size and rejects excessive identity instead of trunca
  assert.equal(workProjectionReceipt(row,long),undefined);
  assert.equal(workProjectionReceipt({...session(),id:'x'.repeat(201)},'host'),undefined);
 });
+
+
+test('bounded Work receipts qualify only the selected window, never complete history',()=>{
+ const supplied={hostInstanceId:'host',sessionId:'chat',generation:5,scope:'recent-events',windowKey:'owned',historyComplete:false,sourceCount:1,itemCount:92,scannedBytes:4194304,scannedEvents:123};
+ const value=JSON.parse(workProjectionReceipt(session({receipt:supplied}),'host'));
+ assert.equal(value.version,2);assert.equal(value.current,true);
+ assert.equal(value.receipt.historyComplete,false);assert.equal(value.receipt.itemCount,92);
+ assert.equal('nodeCount' in value.receipt,false);assert.equal('turnCount' in value.receipt,false);
+ for(const patch of [{historyComplete:true},{windowKey:''},{scannedBytes:-1},{scannedEvents:undefined}]){
+  const invalid=JSON.parse(workProjectionReceipt(session({receipt:{...supplied,...patch}}),'host'));
+  assert.equal(invalid.current,false);assert.equal(invalid.receipt,null);
+ }
+});

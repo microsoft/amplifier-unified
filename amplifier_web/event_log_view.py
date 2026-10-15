@@ -680,12 +680,18 @@ class EventLogView:
         self._retry_at = OrderedDict()
         self._refused = OrderedDict()  # At most eight small deterministic-cap receipts.
         self._work_generation = 0
+        from .work_windows import WorkWindows
+        self.windows = WorkWindows(service)
 
     def invalidate(self, session_ids=None):
         """Invalidate before mutations are published, including deferred/failed saves."""
         # The same bounded weak owners that justify passive reuse own the public
         # completion receipt. Never leave a retained generation labelled current
         # after a writer invalidates it, and never admit an owner to update it.
+        self.windows.invalidate(session_ids)
+        transcript = getattr(getattr(self.service, 'history', None), 'windows', None)
+        if transcript is not None:
+            transcript.invalidate(session_ids)
         for identity, (reference, _) in self._clean_inputs.items():
             if session_ids is None or identity in session_ids:
                 owner = reference()
@@ -844,6 +850,7 @@ class EventLogView:
         self.task = asyncio.create_task(self.loop())
 
     async def close(self):
+        await self.windows.close()
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
@@ -880,27 +887,33 @@ class EventLogView:
 
     async def loop(self):
         while not self.service.closed:
-            from .history_demand import event_sessions, subscribed_sessions
-            interests = event_sessions(self.service)
-            if self.projector is not None:
-                # Selection gets admission first; rotating other active roots
-                # prevents one fixed prefix from monopolizing the bounded queue.
-                selected = subscribed_sessions(self.service)
-                waiting = [identity for identity in interests if identity not in selected]
-                if waiting:
-                    offset = self._interest_cursor % len(waiting)
-                    waiting = waiting[offset:] + waiting[:offset]
-                    self._interest_cursor += 1
-                for identity in [identity for identity in interests if identity in selected] + waiting:
+            # The bundled browser requests recent observations only. Active
+            # execution already publishes its authoritative live overlay; it
+            # must not accidentally request an exhaustive descendant import.
+            web, complete = set(), set()
+            for queue, client in tuple(self.service.queue_clients.items()):
+                record = self.service.clients.records.get(client, {}) if client else self.service._state
+                identity = self.service.queue_sessions.get(queue) or record.get('selectedSessionId')
+                if identity:
+                    (web if client and record.get('kind') == 'web' else complete).add(identity)
+            self.windows.retain_interest(web)
+            requested = sorted(web)
+            if requested:
+                offset = self._interest_cursor % len(requested)
+                requested = requested[offset:] + requested[:offset]
+                self._interest_cursor += 1
+            for identity in requested:
+                self.windows.request(identity)
+            for identity in complete:
+                if self.projector is not None:
                     self._process_refresh_task(identity)
-            else:
-                for identity in interests:
+                else:
                     try:
                         await self.refresh(identity, passive=True)
                     except (OSError, ValueError):
-                        pass  # Keep the last readable view while a log is replaced.
+                        pass
                     except Exception:
-                        logger.exception('Could not refresh the event-log view for %s', identity)
+                        logger.exception('Could not refresh explicit event view for %s', identity)
             await asyncio.sleep(1)
 
     @measured('events.read', session=True)

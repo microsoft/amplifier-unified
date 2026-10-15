@@ -70,7 +70,11 @@ export function chatPage(state,workspace,{section=null}={}){
  if(projection?.scope&&sameLocation(projection.scope)&&sameSort(projection.scope)&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&(requestedIndex===null||projection.index===requestedIndex))return projection;
  // A bounded snapshot cannot answer a different search or page locally. The
  // control updates immediately, while the shared action fetches its real rows.
- if(state.library?.bounded)return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:true};
+ if(state.library?.bounded){
+  const resource=section?({search:'sidebarSearch',workspace:'sidebarWorkspace',recent:'sidebarRecent',pinned:'sidebarPinned'})[section]:'chatNavigation';
+  const unavailable=state.navigationResourcePending?.[resource]?.status==='retry';
+  return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:!unavailable,...(unavailable?{unavailable:true}:{})};
+ }
  let chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,sessionIdentity(chat),chat.workspace,chat.workspaceName]);
  if(section==='pinned'||section==='recent')chats=chats.filter(chat=>chat.pinned===(section==='pinned'));
  if(section==='recent'||section==='search')chats=chats.filter(chat=>scope.showAgentCreated||chat.agentCreated!==true||chat.id===selectedSessionId);
