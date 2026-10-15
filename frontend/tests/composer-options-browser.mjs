@@ -14,7 +14,13 @@ try{
  const page=await browser.newPage({viewport:{width:390,height:844},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),options=page.getByRole('button',{name:'Chat options',exact:true}),menu=page.getByRole('dialog',{name:'Chat options',exact:true});
- await expect(options).toBeVisible();await composer.fill('Use my selected model');await options.click();await expect(menu).toBeVisible();
+ await expect(options).toBeVisible();await composer.fill('Use my selected model');
+ // A saved custom ID can be valid without appearing in a provider's catalog.
+ // Seed that prerequisite, then prove ordinary Options never silently replaces it.
+ await page.evaluate(async()=>{const setup=window.amplifier.getState().view.newSessionDraft||{};await window.amplifier.dispatch('view.update',{patch:{newSessionDraft:{...setup,selection:{instance:'test-provider',model:'owned-custom-model',effort:'high'}}}})});
+ await options.click();await expect(menu).toBeVisible();await expect(menu.locator('#chat-model option[value="chosen-model"]')).toBeAttached();await expect(menu.locator('#chat-model')).toHaveValue('owned-custom-model');await expect(menu.locator('#chat-model option[value="owned-custom-model"]')).toHaveText('owned-custom-model');
+ await menu.getByRole('button',{name:'Done',exact:true}).click();await page.reload();await options.click();await expect(menu.locator('#chat-model')).toHaveValue('owned-custom-model');await expect(composer).toHaveDraft('Use my selected model');
+ const unsent=await(await page.request.get(url+'/fixture')).json();assert.deepEqual(unsent.started,[]);assert.deepEqual(unsent.sent,[]);
  await expect(menu.locator('#chat-provider')).toBeFocused();
  const bundle=menu.getByRole('combobox',{name:'Registered root bundles',exact:true});
  await bundle.selectOption('work');await menu.locator('#chat-model').selectOption('chosen-model');

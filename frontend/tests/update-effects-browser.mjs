@@ -16,12 +16,17 @@ try{
  const receipt=async mode=>{const response=mode?await page.request.post(boot.url+'/fixture/update-effects',{data:{mode}}):await page.request.get(boot.url+'/fixture/update-effects');assert.ok(response.ok());return response.json()};
  await page.goto(boot.url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep my unsent update draft');const before=await receipt();
  await openSettingsPage(page,'updates');const updates=page.locator('[data-part="updates"]'),overview=page.locator('[data-part="application-update"]').first();
+ const identity=overview.locator('.a-update-version-line');
+ await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');
  await updates.getByRole('button',{name:'Update Amplifier',exact:true}).click();
  await expect(overview).toContainText('Waiting for 1 chat to finish');const staged=await receipt();assert.equal(staged.calls.length,1);assert.equal(staged.calls[0].application.latest,'99.0.0');assert.equal(staged.generation.active,'original-generation');assert.deepEqual(staged.updates.pendingApp,staged.target);
  await updates.locator('[data-part="update-blockers"]>summary').click();await expect(updates.locator('[data-part="update-blockers"]')).toContainText('Settings test');
  assert.equal(actions.filter(row=>row.action==='updates.forceRestart').length,0);assert.equal(staged.updates.application.current,'0.20.165');
+ await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');await expect(overview).not.toContainText('Latest release installed');
  await receipt('unknown');await expect(overview).toContainText('Updates need attention');await expect(updates).toContainText('installation needs verification');await expect(updates.locator('[data-action="updates.check"]')).toBeDisabled();await expect(updates.locator('[data-action="updates.install"]')).toHaveCount(0);assert.equal((await receipt()).calls.length,1);
+ await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');assert.equal((await receipt()).generation.active,'original-generation');
  await receipt('known-failure');await expect(updates.getByRole('button',{name:'Try update again',exact:true})).toBeEnabled();assert.equal((await receipt()).generation.active,'original-generation');
+ await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');await expect(updates).toContainText('Synthetic staging failed; original generation retained.');
  await updates.getByRole('button',{name:'Try update again',exact:true}).click();await expect(overview).toContainText('Waiting for 1 chat to finish');assert.equal((await receipt()).calls.length,2);
  await receipt('rollback-ready');
  // The only rollback control is within Advanced details; this is supplemental

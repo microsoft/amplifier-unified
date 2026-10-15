@@ -1,13 +1,33 @@
 """Isolated chat shell fixture. Never contacts a model provider."""
-import asyncio
+import asyncio, copy
 from pathlib import Path
 import tempfile
 from aiohttp import web
 import settings_ui_server as fixture
 class ChatRuntime(fixture.Runtime):
  def __init__(self):
-  super().__init__();self.selection=None
+  super().__init__();self.selection=None;self.sent=[];self.edits=[];self.emitters={}
+ async def start(self,session,emit,*,preserve_emit=False):
+  self.emitters[session['id']]=emit
+  await super().start(session,emit,preserve_emit=preserve_emit)
  async def control(self,sid,operation,args):
+  if operation=='history.edit':
+   # Synthetic worker boundary, preserving the real preparation and service
+   # revision path. Actual Core rewind/checkpoint semantics are qualified by
+   # history_edit_probe.py; this fixture proves browser admission and effects.
+   from amplifier_web.session_store import fork_session
+   source=args['source'];prepared=fork_session(self.home,source,sid,
+    before_message_id=args['messageId'],prepare_only=True,
+    expected_context_digest=source.get('historyEditContextDigest'))
+   result={'messages':prepared['messages'],'throughTurn':prepared['throughTurn'],
+    'operationId':args['operationId'],'eventsPreserved':True,
+    'sharedHistoryOffset':source.get('sharedHistoryOffset',0),
+    'sharedHistoryUserTurnOffset':source.get('sharedHistoryUserTurnOffset',0),
+    'sharedHistoryTotal':source.get('sharedHistoryOffset',0)+len(prepared['messages'])+1}
+   self.edits.append(args['operationId']);emit=self.emitters[sid]
+   await emit('history.revised',{**result,'sessionId':sid})
+   await self.send(source,args['text'],args['operationId'],emit)
+   return result
   if operation=='provider.select':self.selection=args.copy();return {'selection':self.selection}
   if operation=='provider.reset':self.selection=None;return {'selection':None}
   if operation=='configuration.providers':
@@ -15,6 +35,7 @@ class ChatRuntime(fixture.Runtime):
   if operation=='configuration.providerModels':return {'provider':'openai','models':[{'id':'fixture-model'},{'id':'fixture-vision'}]}
   return await super().control(sid,operation,args)
  async def send(self,session,text,input_id,emit):
+  self.sent.append({'sessionId':session['id'],'text':text,'inputId':input_id})
   await emit('runtime.status',{'sessionId':session['id'],'status':'working'})
   await asyncio.sleep(.3)
   await emit('assistant.message',{'sessionId':session['id'],'text':'## Ready\n\nI received your message and attachments.\n\n'+('\n\nA paragraph with **Markdown** and a useful result.'*30),'inputId':input_id})
@@ -33,6 +54,20 @@ async def fixture_defaults(*args,**kwargs):
              'metadata':{'info':{'display_name':'Fixture OpenAI'},'configSchema':{'fields':[{'id':'reasoning_effort','choices':['low','medium','high'],'field_type':'choice'}]}}}}}
 draft_defaults.resolve_defaults=fixture_defaults
 
+async def main(home):
+ app=await fixture.main(home)
+ app['service'].runtime.home=home
+ async def inspect(request):
+  if request.headers.get('Authorization')!='Bearer fixture-browser-control-token':
+   raise web.HTTPForbidden()
+  service=app['service']
+  async with service.lock:
+   return web.json_response({'pins':copy.deepcopy(service._state['pinnedSessionIds']),
+    'sessions':[{key:copy.deepcopy(row.get(key)) for key in ('id','title','workspaceId','messages')} for row in service._state['sessions']],
+    'sends':copy.deepcopy(service.runtime.sent),'edits':copy.deepcopy(service.runtime.edits)})
+ app.router.add_get('/fixture/message-source',inspect)
+ return app
+
 if __name__=='__main__':
  with tempfile.TemporaryDirectory(prefix='amplifier-chat-ui-') as tmp:
-  web.run_app(fixture.main(Path(tmp)),host='127.0.0.1',port=8958,print=None)
+  web.run_app(main(Path(tmp)),host='127.0.0.1',port=8958,print=None)

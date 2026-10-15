@@ -83,6 +83,11 @@ async def main():
             def lifecycle(self,event):self.observer.lifecycle(event)
         async def control(request):
             args=await request.json(); op=args.get('op')
+            if op == 'inspect-work-source':
+                # A read-only oracle: do not publish a frame or rebuild usage.
+                async with service.lock:
+                    return web.json_response({'sessions':[{key:copy.deepcopy(row.get(key)) for key in ('id','messages','execution')} for row in service._state['sessions']],
+                        'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends})
             if op == 'agent-bridge':
                 try:
                     result = await service.app_bridge(args['operation'], args.get('args', {}), args['sessionId'])
