@@ -2151,7 +2151,10 @@ class AppService:
             for source in sources:
                 rows.append(await asyncio.to_thread(self.event_log_view.read_plan, source,
                     include_items=args.get('includeItems', False)))
-            return {'accepted': True, 'result': {'items': rows}, 'effects': []}
+            # The result is this read's complete receipt. It does not publish
+            # app state, and cannot require a later unrelated stream revision.
+            return {'accepted': True, 'result': {'items': rows}, 'effects': [],
+                    '_stateIndependent': True}
         prepared_export = None
         prepared_share = None
         if action == 'session.sharePreview':
