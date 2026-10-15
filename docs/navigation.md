@@ -69,7 +69,7 @@ exhaustion the last chat ends the list: no count or All/View/Review chats footer
 **Search chats** still opens the full browser. Pins have their own bounded
 pages. Pinning adds a shortcut without removing the item from Recent, workspace
 lists or search. Each list contains an item once; the same item may appear in
-Pinned and another list. Recent keeps its activity order independently of pin order.
+Pinned and another list. Recent keeps its chosen sort independently of pin order.
 
 The initial 20–100 limit and origin toggle persist per client and mounted module.
 Expansion beyond 100 is scoped to the attached client/module session, not copied
