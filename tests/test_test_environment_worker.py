@@ -26,6 +26,7 @@ class Failure(Exception):
 
 @pytest.fixture
 def library(monkeypatch):
+    monkeypatch.setattr(worker, 'docker_capacity', lambda payload: {'available': True, 'scope': {'daemon': 'fixture-daemon'}})
     calls = []
     def record(name, value):
         def call(*args, **kwargs):
@@ -53,7 +54,8 @@ def payload(tmp_path, action):
     return {'action': action, 'root': str(tmp_path), 'source': '/approved/task/worktree',
             'snapshot': {'snapshot_commit': 'exact', 'snapshot_tree': 'tree', 'archive_sha256': 'digest'},
             'operationId': 'durable-launch', 'universeId': 'owned', 'dockerHost': 'unix:///approved/docker.sock',
-            'image': owner.APPROVED_IMAGE, 'requestId': 'stable-request', 'timeoutSeconds': 12, 'command': 'python -V'}
+            'image': owner.APPROVED_IMAGE, 'requestId': 'stable-request', 'timeoutSeconds': 12, 'command': 'python -V',
+            'admissionRoot': str(tmp_path / 'admission')}
 
 
 def test_fixed_profile_has_no_host_mount_ports_or_privilege_escalation():

@@ -12,6 +12,69 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
+import subprocess
+from contextlib import contextmanager
+
+
+def docker_json(payload, *args):
+    value = subprocess.run(['docker', '--host', payload['dockerHost'], *args],
+        check=True, capture_output=True, text=True, timeout=20)
+    if len(value.stdout) > 1024 * 1024:
+        raise ValueError('Docker observation exceeded its bound.')
+    return json.loads(value.stdout)
+
+
+def docker_capacity(payload):
+    """Observe the actual daemon, including stopped and externally launched DTUs."""
+    daemon = docker_json(payload, 'info', '--format', '{{json .}}')
+    if not daemon.get('ID') or not daemon.get('DockerRootDir'):
+        raise ValueError('The daemon identity or storage location is unavailable.')
+    result = subprocess.run(['docker', '--host', payload['dockerHost'], 'ps', '-a',
+        '--filter', 'label=com.docker.compose.project', '--format', '{{json .}}'],
+        check=True, capture_output=True, text=True, timeout=20)
+    if len(result.stdout) > 1024 * 1024:
+        raise ValueError('Docker inventory exceeded its bound.')
+    projects = {}
+    for line in result.stdout.splitlines():
+        row = json.loads(line)
+        labels = dict(label.split('=', 1) for label in row.get('Labels', '').split(',') if '=' in label)
+        identity = labels.get('com.docker.compose.project', '')
+        if identity.startswith('dtu-'):
+            projects.setdefault(identity, []).append(row['State'])
+    active = sum(any(state not in {'exited', 'dead'} for state in states) for states in projects.values())
+    disk = os.statvfs(daemon['DockerRootDir'])
+    free = disk.f_bavail * disk.f_frsize
+    maximum, retained, minimum = payload.get('maxRunning', 15), payload.get('maxInstances', 256), payload.get('minFreeBytes', 10*1024**3)
+    blockers = []
+    if maximum and active >= maximum:
+        blockers.append({'code': 'execution_capacity'})
+    if retained and len(projects) >= retained:
+        blockers.append({'code': 'retained_capacity'})
+    if free < minimum:
+        blockers.append({'code': 'storage_pressure'})
+    return {'schema_version': 1, 'scope': {'daemon': daemon['ID'], 'backend': 'docker'},
+        'coordination': 'same_host_user', 'counts': {'active': active, 'stopped_retained': len(projects)-active, 'total': len(projects)},
+        'limits': {'max_running': maximum, 'max_instances': retained, 'min_free_bytes': minimum},
+        'storage': {'free_bytes': free}, 'blockers': blockers, 'available': not blockers}
+
+
+@contextmanager
+def docker_admission(payload):
+    """Serialize cooperating local callers by daemon identity, not socket alias."""
+    import fcntl
+    observed = docker_capacity(payload)
+    root = Path(payload['admissionRoot'])
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError('The admission directory must be private and owner-controlled.')
+    name = hashlib.sha256(observed['scope']['daemon'].encode()).hexdigest()+'.lock'
+    fd = os.open(root/name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield docker_capacity(payload)
+    finally:
+        os.close(fd)
 
 
 def serialize(value):
@@ -104,6 +167,8 @@ def execute_call(payload):
     identity = payload.get('universeId')
     snapshot = payload.get('snapshot')
     try:
+        if action == 'capacity':
+            return {'ok': True, 'capacity': docker_capacity(payload)}
         if action == 'prepare':
             # Source snapshot is immutable and retained even when launch fails.
             snapshot = serialize(lib.export_repository_snapshot(Path(payload['source']), root / 'source.tar'))
@@ -113,7 +178,15 @@ def execute_call(payload):
             source_identity(identity, snapshot)
             compose = root / 'compose.json'
             compose.write_text(json.dumps(profile(payload['image'])))
-            universe = lib.launch(compose, operation_id=payload['operationId'], timeout_seconds=600, config=config)
+            try:
+                with docker_admission(payload) as capacity:
+                    if not capacity['available']:
+                        return {'ok': False, 'admissionDenied': True, 'status': 'not-started', 'capacity': capacity,
+                            'message': 'Capacity changed before launch. No backend effect was admitted.'}
+                    universe = lib.launch(compose, operation_id=payload['operationId'], timeout_seconds=600, config=config)
+            except BlockingIOError:
+                return {'ok': False, 'admissionDenied': True, 'status': 'not-started',
+                    'message': 'Another cooperating launch owns admission. No environment was started.'}
             identity = universe.id
             lib.push_files(identity, root / 'source.tar', '/artifacts/.source.tar', config=config)
             unpack = lib.execute(identity, 'python -c "import tarfile; tarfile.open(\'/artifacts/.source.tar\').extractall(\'/workspace\', filter=\'data\')" && rm /artifacts/.source.tar',

@@ -51,7 +51,7 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
-    if action in {'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove'}:
+    if action in {'workspace.tests.submit', 'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove'}:
         return 'test_environments', 'session'
     if action in PERSISTENT:
         if 'scope' not in args:
@@ -163,7 +163,7 @@ class ConfigurationAuthority:
                     and metadata.get('requestId') == original.get('requestId')):
                 lineage = metadata
         inputs = lineage.get('sourceInputIds')
-        if (kind not in {'coordination.send', 'coordination.watch', 'coordination.create'}
+        if (kind not in {'coordination.send', 'coordination.watch', 'coordination.create', 'workspace.tests.submit'}
                 or not isinstance(inputs, list) or len(inputs) > 128
                 or any(not isinstance(item, str) or not item for item in inputs)
                 or type(lineage.get('sourceInterruptionRevision')) is not int

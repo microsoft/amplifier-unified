@@ -78,7 +78,30 @@ try{
  await panel.getByRole('button',{name:'Remove environment…',exact:true}).click();
  await panel.getByRole('button',{name:'Save files and remove environment',exact:true}).click();
  await expect(panel.getByText('Environment: removed',{exact:true})).toBeVisible();
- const final=await facts();assert.equal(final.callCounts.start,1);assert.equal(final.callCounts.execute,2);assert.equal(final.callCounts.stop,1);assert.equal(final.callCounts.remove,1);assert.deepEqual(errors,[]);
- await writeFile(output+'/test-environments-browser-report.json',JSON.stringify({passed:true,realHostActionsAndReceipts:true,backend:'controlled fixture',docker:false,providerCalls:false,lostAckReloadNoReplay:true,peerRequestReplacesStaleResult:true,unknownCommandNotReplayed:true,stopBeforeRemove:true,removalConfirmation:true,mobileNoOverflow:true,counts:final.callCounts,errors},null,2));
+ const manual=await facts();assert.equal(manual.callCounts.start,1);assert.equal(manual.callCounts.execute,2);assert.equal(manual.callCounts.stop,1);assert.equal(manual.callCounts.remove,1);
+ await page.request.post(url+'/fixture/environment-mode',{data:{executeTimeout:false,capacityAvailable:false}});
+ await panel.getByRole('form',{name:'Queue isolated check'}).getByLabel('Check command').fill('python check.py');
+ await panel.getByRole('button',{name:'Queue check',exact:true}).click();
+ await expect(panel.getByText('Check: queued',{exact:true})).toBeVisible();
+ assert.equal((await facts()).callCounts.start,1,'Full capacity saves intent without starting another environment');
+ await page.reload();await page.getByText('Managed resources',{exact:true}).click();
+ await expect(panel.getByText('Check: queued',{exact:true})).toBeVisible();
+ await panel.getByRole('button',{name:'Cancel check',exact:true}).click();
+ await expect(panel.getByText('Check: cancelled',{exact:true})).toBeVisible();
+ assert.equal((await facts()).callCounts.start,1,'Cancelling a waiting check starts no backend effects');
+ await panel.getByRole('button',{name:'Queue check',exact:true}).click();
+ await expect(panel.getByText('Check: queued',{exact:true})).toBeVisible();
+ await page.request.post(url+'/fixture/environment-mode',{data:{capacityAvailable:true}});
+ await expect.poll(async()=>(await facts()).callCounts.remove,{timeout:20000}).toBe(2);
+ await panel.getByRole('button',{name:'Refresh test environments',exact:true}).click();
+ await expect(panel.getByText('Check: passed',{exact:true})).toBeVisible();
+ await panel.getByRole('button',{name:'Read check result',exact:true}).click();
+ await expect(panel.getByLabel('Saved check result')).toContainText('workspace check passed');
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Queued checks fit mobile width');
+ await page.screenshot({path:output+'/queued-check-mobile.png'});
+ await page.setViewportSize({width:1280,height:1050});
+ await page.screenshot({path:output+'/queued-check-desktop.png'});
+ const final=await facts();assert.equal(final.callCounts.start,2);assert.equal(final.callCounts.execute,3);assert.equal(final.callCounts.stop,2);assert.equal(final.callCounts.remove,2);assert.deepEqual(errors,[]);
+ await writeFile(output+'/test-environments-browser-report.json',JSON.stringify({passed:true,realHostActionsAndReceipts:true,backend:'controlled fixture',docker:false,providerCalls:false,lostAckReloadNoReplay:true,peerRequestReplacesStaleResult:true,unknownCommandNotReplayed:true,stopBeforeRemove:true,removalConfirmation:true,mobileNoOverflow:true,queuedWaitSurvivesReload:true,cancelledWaitNoEffects:true,automaticCheckExportRemoval:true,retainedCheckOutput:true,counts:final.callCounts,errors},null,2));
 }catch(error){if(page)await page.screenshot({path:output+'/test-environments-failure.png'}).catch(()=>{});throw error}
 finally{await browser?.close();fixture?.kill()}
