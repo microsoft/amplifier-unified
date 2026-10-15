@@ -79,6 +79,26 @@ test('workspace inspection refuses a chat context from a different workspace',as
  assert.deepEqual(calls,['coordination.context']);assert.match(content(root.toJSON()),/no longer belongs to the workspace/);await act(async()=>root.unmount());
 });
 
+test('workspace context refresh hides stale content and follow-up controls after a chat moves',async()=>{
+ let moved=false;const calls=[];let root;
+ const dispatch=async(action,args)=>{calls.push([action,args]);return accepted(action==='coordination.context'?{...context,workspace:moved?'/moved':'/workspace'}:list)};
+ await act(async()=>{root=create(React.createElement(CoordinationPanel,{dispatch,sessionId:'own',session,expectedWorkspace:'/workspace'}))});
+ await toggle(root,'Follow up or watch work');assert.ok(details(root,'Follow up or watch work'));assert.match(content(root.toJSON()),/Library helper/);
+ moved=true;const before=calls.length;await click(root,'Refresh workspace work');
+ assert.deepEqual(calls.slice(before),[['coordination.context',{sessionId:'own'}]]);
+ assert.match(content(root.toJSON()),/no longer belongs to the workspace/);assert.doesNotMatch(content(root.toJSON()),/Library helper|Follow up or watch work|Combine and check work|Review before continuing/);
+ moved=false;await click(root,'Refresh workspace work');assert.ok(details(root,'Follow up or watch work'));await act(async()=>root.unmount());
+});
+
+test('follow-up refresh cannot silently move workspace-scoped targets to another workspace',async()=>{
+ let moved=false;const calls=[];let root;
+ const dispatch=async(action,args)=>{calls.push([action,args]);return accepted(action==='coordination.context'?{...context,workspace:moved?'/moved':'/workspace'}:list)};
+ await act(async()=>{root=create(React.createElement(CoordinationPanel,{dispatch,sessionId:'own',session,expectedWorkspace:'/workspace'}))});
+ await toggle(root,'Follow up or watch work');moved=true;const before=calls.length;await click(root,'Refresh targets');
+ assert.deepEqual(calls.slice(before),[['coordination.context',{sessionId:'own'}]]);assert.match(content(root.toJSON()),/no longer belongs to the workspace/);assert.equal(details(root,'Follow up or watch work'),undefined);assert.doesNotMatch(content(root.toJSON()),/Library helper|Combine and check work|Review before continuing/);
+ await act(async()=>root.unmount());
+});
+
 test('overview reads only bounded workspace projections and leaves messaging controls demand-loaded',async()=>{
  const calls=[];const dispatch=async(action,args)=>{calls.push([action,args]);if(action==='coordination.context')return accepted(context);if(action==='coordination.list')return accepted(list);throw Error('Unexpected action '+action)};let root;
  await act(async()=>{root=create(React.createElement(CoordinationPanel,{dispatch,sessionId:'own',session}))});
