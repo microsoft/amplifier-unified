@@ -3,7 +3,7 @@ import {hasNavigationResource} from './navigation-demand';
 
 // Read retries use the current resource demand. They never replay a user command
 // or establish a polling loop, and obsolete completions cannot update this view.
-export function NavigationResourceStatus({state,resource,label,refresh}){
+export function NavigationResourceStatus({state,resource,label,refresh,quietRefresh=false}){
  const pending=state.navigationResourcePending?.[resource];
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
  const query=Object.fromEntries(Object.entries(state.view||{}).filter(([key])=>key.startsWith('nav')));
@@ -14,6 +14,7 @@ export function NavigationResourceStatus({state,resource,label,refresh}){
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  if(!pending)return null;
  const retained=hasNavigationResource(state,resource)||!!state.navigationResourceRetained?.[resource];
+ if(quietRefresh&&retained&&pending.status!=='retry')return null;
  const retry=async()=>{
   if(flight.current===key)return;
   const requested=key;flight.current=requested;setBusy(true);setError('');
