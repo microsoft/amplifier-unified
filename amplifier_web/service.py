@@ -3829,7 +3829,7 @@ class AppService:
                 # Like a single-event reader fault, stop before later commands.
                 # Preserve the applied prefix, including unknown partial observer
                 # side effects. Neither this prefix nor the failed tail is replayed.
-                self._publish()
+                self._publish_full(reason='Terminal receipt observer failed; preserve unknown partial effects')
                 raise
             # _publish includes all prior progress writers and retains their
             # dirty scope on failure. No reducer/observer is replayed on retry.
