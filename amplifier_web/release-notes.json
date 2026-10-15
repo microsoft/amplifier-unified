@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.163",
+      "title": "Keep pinned items available and sidebar refreshes quiet",
+      "changes": [
+        "Pinned chats remain in Recent, workspace chat lists, and search results. Pinned workspaces remain in the workspace list, with their pin controls available.",
+        "Sidebar lists keep their existing rows without routine Updating messages during background refreshes. Initial loading and failed-read Retry controls remain visible, and refreshes preserve the reading position."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.162",
       "title": "Keep navigation and busy conversations responsive",
       "changes": [
