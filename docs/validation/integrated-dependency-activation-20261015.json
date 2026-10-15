@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "scope": "Private Linux ARM64 candidate dependency activation; not production adoption or live-provider/desktop acceptance",
+  "sources": {
+    "unified": "b4e595b71cf1286fb61adad7266372940623935b",
+    "bash": {
+      "commit": "63c92139c735dc894467c9b74e2c4309413b7f3e",
+      "pr": "https://github.com/microsoft/amplifier-module-tool-bash/pull/24"
+    },
+    "computerUse": {
+      "commit": "63871d4691d44bac4bad25875f19e3909b79ffc7",
+      "pr": "https://github.com/microsoft/amplifier-bundle-computer-use/pull/29"
+    }
+  },
+  "qualification": {
+    "passed": true,
+    "generation": "ded15b45a24c002963871d4691d44bac",
+    "projectKey": "q-d110746e5a0c696e659c611fc14845ed",
+    "normalRuntimeManager": true,
+    "explicitWorkerCommand": false,
+    "fullWorkPrepareAndCreateSession": true,
+    "networkDisabledDuringAcceptance": true,
+    "providerInputs": 0,
+    "desktopActions": 0,
+    "workersRemaining": 0,
+    "stages": [
+      {
+        "name": "full-work-readonly-no-inference",
+        "status": "passed"
+      },
+      {
+        "name": "installed-identity-and-wrapper-policy",
+        "status": "passed"
+      },
+      {
+        "name": "normal-runtime-manager-worker-ready",
+        "status": "passed"
+      }
+    ]
+  },
+  "installedProof": {
+    "passed": true,
+    "bashSafetySha256": "7cd7c0ccf634d0ffed37e7d024e2177430faf8e6dea13e031ca2097360fa33d5",
+    "wrapperCasesBlocked": 4,
+    "harmlessWrapperAllowed": true,
+    "commandsExecuted": 0,
+    "computerPackageIdentities": {
+      "tool": {
+        "distribution": "amplifier-module-tool-computer-use",
+        "module": "amplifier_module_tool_computer_use",
+        "version": "0.1.0",
+        "revision": null,
+        "manifest": {
+          "__init__.py": "210efbdd4437e3794264bfcf28ab14eb78fc892b5999dbeb1ab83700793034a4",
+          "agent_scratch_lease.py": "9439f8199e08fdc9a36648fb67f47948037bc564b0ae82f259a429502d9923a3",
+          "announce_macos.py": "c4504c674b726417888645db711fe62d2ec47ba95bc2eff21bff71e4d7190c93",
+          "backend.py": "0e58edb2982c682691e0a971b93390a2df4b80339956dff10f57405642f84fb1",
+          "bridge.ps1": "f48cb2aa3891944361f8054e2abf7d455012b91d2b75ddfd4d36eae6ff625899",
+          "coexistence_guard.py": "9a0c5c9daa650fa0e2d50b0707ff08e2c913e381b13dda214c70afb9d76d1990",
+          "exclusion.py": "e829fdbf8b6205a1fbb3992178961d77f13db9cde2ccad84d531c4c0a989748e",
+          "foreground.py": "b511cc6cd0e13ecd8cc8674219e28896eaa53f8222ca87b943d915d9603e468e",
+          "geometry.py": "70b2c3071fd5ba0e011c7a86d08f0cc8cb27c464afac745ef50e5fbf4bdab295",
+          "halt_state.py": "f05a55751f9d3eda76da9abc78a8ca97871824e487dc34714f3ee939916bb0c1",
+          "imaging.py": "47619eb3581ab4c949d986c7870de4bc35f353619c66060b38cda991f8812837",
+          "ledger.py": "7fce2cb788c8734d130edb7c698f15a5ba635183563f930b52ad7ed12c037cc0",
+          "linux_x11.py": "b6134d0e1576e6e843db26d028f5ff519798223f3d0b6527dcf2a94e4c167bb2",
+          "macos.py": "f55a254c98f0c82c6bc5f32af45cc81b93f183e34a41ad5e8792b6579108a22e",
+          "monitors.py": "2a6e5ac197ee63a435e9256c032d5442e6848b06e7e3df05f9824cf55b03c299",
+          "overlay_linux.py": "572b127c2e7f1ba5ffc9923500bff2f5152f81fed466e419cdd0138d3732f1b8",
+          "overlay_windows.ps1": "c867bc00a4aa9fbf926109f3b19bed510f0fc50be6c8bd42c8579e344e48b5ce",
+          "overlay_windows.py": "84b2b8058973c5dd44d410f6227d368a9a2ff104787d7fa424f5d02782ff54d9",
+          "pause.py": "be2de86e6f9b40b9389b307b7adaacf09cd8d09cae49650c8a78a8595be39dd3",
+          "presence.py": "450aa6ae72a5b54aeb22b76e381bd3efc489e558381f581a301d952baaf52a87",
+          "registry.py": "d57e2fde71ec5a0f5f69615e3a3b64152be97dfd4c35b6edf646159c81f2bfdc",
+          "remote_agent.py": "a0461b671856ee026bcc34a12d87f20f486f8593898f491c7e49b6cf49dee3d2",
+          "remote_backend.py": "5010524f1fa00d69345ea0db2853243d17a245532f5f5aeb9dce759cc885ce0b",
+          "resume_cli.py": "9280d382c6dbd1c6e01421f541ad2c7e08e756d5280ee15aa9b3044acb59851f",
+          "shared_transport.py": "e914973a476522aa996be2ee013ea6cd35ab42f7d68633e99a85ffdba1aa9b95",
+          "ssh_transport.py": "e3f09a3379e7d52faac97d705ab1aa5eaa30ec01e6945725c6ddf16df0ff10b1",
+          "target_binding.py": "787b5142aa7f98b5d78fb13c1f08ea447a7c2445092fb421d0ee3558ab81d7df",
+          "type_pacing.py": "95faed012a1439e2a7b75ffc9f3f23a9109a2c3f0913061178a95c645bd453c7",
+          "windows.py": "e43fe32d757a6489a7cc082c92bb5fedb6d3714e60d0b793a608279aae5571dc",
+          "wire.py": "2901f008d2a78785e8c06e3d78992ae97280d581bff8655e81d51466a3f95535"
+        }
+      },
+      "hook": {
+        "distribution": "amplifier-module-hook-computer-use",
+        "module": "amplifier_module_hook_computer_use",
+        "version": "0.1.0",
+        "revision": null,
+        "manifest": {
+          "__init__.py": "e4098e273ade0955a938528f43a7afc9ae4190086dbe4b6518bfa762973332ae"
+        }
+      }
+    },
+    "computerCapabilityEnabledInWork": false,
+    "desktopActions": 0
+  },
+  "wheels": [
+    {
+      "file": "amplifier_module_hook_computer_use-0.1.0-py3-none-any.whl",
+      "sha256": "30121693c2d0f13d36ef351fd0ad614d5c79bf847301a889677561047ade885b"
+    },
+    {
+      "file": "amplifier_module_tool_bash-1.0.0-py3-none-any.whl",
+      "sha256": "77906d240f2cc4d440c7cfbc9349eb3e423ef630a881122c5ca51e42613f2e16"
+    },
+    {
+      "file": "amplifier_module_tool_computer_use-0.1.0-py3-none-any.whl",
+      "sha256": "44d21e8826f0e367096f2873f10c4ab629224d4c07b244688efb9effabc16d44"
+    },
+    {
+      "file": "python_xlib-0.33-py2.py3-none-any.whl",
+      "sha256": "c3534038d42e0df2f1392a1b30a15a4ff5fdc2b86cfa94f072bf11b10a164398"
+    }
+  ],
+  "evidence": {
+    "dtu-evidence/evidence/qualification.json": "4e404c4a050a0c639af3403daa92a4987256c5a5c5a62be443ba98fbead43bfe",
+    "dtu-evidence/evidence/installed-proof.json": "6f40659f733a75a9e5baa8be34f06f43d7cc8f47306cba85555549e52edea82b",
+    "dtu-evidence/evidence/work-probe.log": "f622b35401632355b9028784ee337e6e681d4976d7c6e12f4c3d77753ff8de6b",
+    "dtu-evidence/evidence/worker-events.jsonl": "9c74615ea16d9cff9f0003c7196846768f6bf77570a76093a984fdd06bc3e30c",
+    "prepare.py": "9ac0377961deeb2cc0a7dc8fc5bd9046b25268d7e474811642ef1868e7499df1",
+    "namespace.py": "699e2a00f175f76a3c68bc0da6417485c73ca3f4f6bc2f75c54b24fe36cfbbd0"
+  },
+  "preparationNotes": [
+    "Missing python-xlib wheel and universal-lock registry metadata were staged in private prerequisites before the network-disabled acceptance.",
+    "Fixture errors (private release name, cache directory ownership and omitted read-only source-store bindings) were corrected; failed attempts remain separate receipts. No product source was changed for this acceptance.",
+    "Exact candidate wheels were installed into a new private graph, then the canonical freeze/verify_recorded path qualified it. The existing q638 interpreter and preview active pointer were unchanged."
+  ],
+  "limits": [
+    "These single-run functional durations are not comparative performance claims.",
+    "Computer-use PR29 changes qualification tooling; its shipped runtime files are unchanged. Installed package identities include both PowerShell assets. Work does not enable computer-use and no desktop was controlled.",
+    "No paid model request, real provider acceptance, remote Windows acceptance, main merge, release, or production update occurred."
+  ],
+  "integrationOrder": [
+    "Review and merge the canonical Bash24 change before a production dependency refresh. Do not treat separate source tests as an installed fix.",
+    "Review computer-use29 as qualification tooling; retain its separate Windows/platform acceptance limits.",
+    "After dependency merges, create and qualify a new Unified generation using the accepted source commits; never mutate an in-use generation. The private candidate above proves the combined dependency graph can start normally."
+  ]
+}
