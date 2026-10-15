@@ -2052,6 +2052,58 @@
       "limits": [
         "No active worker or filesystem enforcement acceptance; outcome1 remains partial."
       ]
+    },
+    {
+      "workflow": "starters.root",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Workspaces settings and save an owned absolute folder",
+        "Reject relative path with input retained",
+        "Create explicit Blank workspace and compare exact path/original files"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic fixture/private filesystem only; repository definitions are not clone/network acceptance."
+      ]
+    },
+    {
+      "workflow": "starters.edit",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open Manage starters and New starter",
+        "Fill every ordinary field, reject duplicate/traversal child folders",
+        "Save, cancel later edit and reload exact definition"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic fixture/private filesystem only; repository definitions are not clone/network acceptance."
+      ]
+    },
+    {
+      "workflow": "starters.delete",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open exact custom starter and named delete confirmation",
+        "Cancel then explicitly confirm",
+        "Verify only definition removed and workspace files intact"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic fixture/private filesystem only; repository definitions are not clone/network acceptance."
+      ]
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
