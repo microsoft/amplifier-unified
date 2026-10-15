@@ -472,6 +472,12 @@ class Worktrees:
             active = session.get('collaborationGeneration') or {}
             record['resumeRequested'] = bool(active.get('id') and not active.get('terminal')
                 and session.get('status') not in {'stopped', 'stopping', 'interrupted', 'error'})
+            if record['resumeRequested']:
+                # Capture the authenticated calling input now. Neither a later
+                # worker generation nor the completion text creates authority.
+                lineage = self.app.collaboration.lineage(session, origin)
+                record.update(lineage)
+                record['causalDepth'] = self.app.collaboration.causal_depth(session, lineage, origin)
             self.save(record)
             session['configurationBusy'] = True
             self.changed()
@@ -522,7 +528,9 @@ class Worktrees:
             request = {'accepted': True, 'commandAction': 'worktree.handoff',
                 'requestId': identity, 'handoffId': record['id'], 'senderSessionId': record['sessionId'],
                 'target': {'sessionId': record['sessionId']}, 'workspace': record['historyHome'],
-                'origin': 'system', 'protocol': PROTOCOL, 'causalDepth': 0,
+                'origin': record['origin'], 'protocol': PROTOCOL, 'causalDepth': record.get('causalDepth', 0),
+                **{key: copy.deepcopy(record[key]) for key in
+                   ('sourceGenerationId', 'sourceInputIds', 'sourceInterruptionRevision') if key in record},
                 'subscription': owner.saved_wait(session, identity),
                 'terminalOutcome': {'status': 'observed', 'kind': 'observation', 'outcome': 'checkout-ready',
                     'qualified': False, 'outcomeRevision': 1,

@@ -268,3 +268,18 @@ async def test_saved_continuation_is_suppressed_when_authority_changes(tmp_path,
         assert app.worktrees.continuation_guard(request)
     finally:
         await app.close()
+
+
+async def test_backpressured_handoff_notification_retains_an_inbox_slot(tmp_path, monkeypatch):
+    from amplifier_web.service import AppError
+    app, _, _, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+        request = {'commandAction':'worktree.handoff', 'requestId':'move-wait', 'senderSessionId':sid,
+            'subscription':app.collaboration.saved_wait(app._session(sid), 'move-wait', status='backpressured')}
+        app.collaboration.insert('move-wait', 'fixture', request)
+        app.db.commit()
+        with pytest.raises(AppError, match='including reserved replies'):
+            app.collaboration.require_inbox_slot(sid)
+    finally:
+        await app.close()

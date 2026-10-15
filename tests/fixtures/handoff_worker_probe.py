@@ -123,6 +123,11 @@ providers:
         record = app.worktrees.receipts(sid)[0]
         assert record['phase'] == 'applied', record
         assert record['release']['quiesced'] and not record['inputsReplayed']
+        assert record['origin'] == 'agent' and record['sourceInputIds'] == ['native-original']
+        if not cap_one:
+            original = app.collaboration.receipt(record['continuation']['requestId'])
+            assert original['origin'] == 'agent' and original['sourceInputIds'] == ['native-original']
+            assert original['sourceGenerationId'] == record['sourceGenerationId']
         assert session['workspace'] == str(workspace) and session['workingDirectory'] == checkout['path']
         assert app.state['view']['draft'] == 'preserve-unsent-draft'
         from amplifier_foundation.session.history import SessionHistoryStore

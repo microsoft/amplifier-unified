@@ -298,7 +298,7 @@ class Collaboration:
         session = self.service._session(sid)
         task = session.get('task') or self.service.coordination.task(sid)
         waiting = self.service.db.execute("""SELECT count(*) FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND (json_extract(receipt,'$.subscription.status') IN ('waiting','reserved','backpressured')
                 OR json_extract(receipt,'$.subscription.open')=1)

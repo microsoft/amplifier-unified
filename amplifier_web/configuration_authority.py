@@ -163,7 +163,7 @@ class ConfigurationAuthority:
                     and metadata.get('requestId') == original.get('requestId')):
                 lineage = metadata
         inputs = lineage.get('sourceInputIds')
-        if (kind not in {'coordination.send', 'coordination.watch', 'coordination.create'}
+        if (kind not in {'coordination.send', 'coordination.watch', 'coordination.create', 'worktree.handoff'}
                 or not isinstance(inputs, list) or len(inputs) > 128
                 or any(not isinstance(item, str) or not item for item in inputs)
                 or type(lineage.get('sourceInterruptionRevision')) is not int

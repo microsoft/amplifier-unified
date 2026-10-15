@@ -1245,6 +1245,10 @@ Changed authority suppresses continuation. A known placement stays applied even
 if notification persistence fails; the retained notification identity is recovered
 on restart. Completed idle moves do not hydrate old histories at startup.
 Goals that end or exhaust their turn cap while waiting do not get another turn.
+The return retains its original transport-bound input lineage and causal depth.
+Configuration authorization follows that ancestry through the existing grant
+checks; missing lineage stays unverified and an unprivileged peer cannot borrow
+the moved conversation's grants. Backpressured returns retain an inbox slot.
 
 Focused regression coverage includes pending native tools/children, goal progress,
 Stop before and after release, positive-release restart gaps, later placement,

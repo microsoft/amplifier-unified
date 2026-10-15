@@ -92,6 +92,9 @@ the destination. The original input and tool call are not resubmitted. The
 notification preserves the originating user-message, interruption, task and
 placement anchors; Stop, new user input or changed task authority suppresses it.
 An exhausted or ended goal is not re-armed by the move's completion observation.
+The host captures the calling native input lineage at request time and retains
+its origin and causal depth. Configuration grants retain that original ancestry:
+a lower-authority peer cannot borrow the moved chat's grants through its return.
 An outcome does not grant new authority. Failure to deliver that notification
 cannot turn a positively committed placement into an unknown move. Idle explicit
 moves do not start work. Canonical history/configuration homes, drafts, voice,

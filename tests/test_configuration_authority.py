@@ -502,3 +502,55 @@ async def test_older_creation_metadata_still_preserves_lower_authority_ancestry(
     source['collaborationGeneration'] = {'id':'returned','inputIds':['older-return'],'terminal':False}
     with pytest.raises(AppError, match='cannot borrow'):
         await agent(app, source, 'permissions.save', {'scope':'local','allowed':[],'denied':[]}, 'creation-borrow')
+
+
+@pytest.mark.parametrize('ancestry', ['human', 'unprivileged-peer', 'missing'])
+async def test_actual_handoff_return_retains_original_configuration_authority(app, ancestry):
+    from unittest.mock import AsyncMock
+    source, peer = app.state['sessions']
+    await grant(app, ['file_access'], ['local'])
+    app.runtime.quiesce_for_handoff = AsyncMock(return_value={'quiesced': True, 'inputsReplayed': False})
+    app.runtime.collaboration_input = AsyncMock(return_value={'accepted': True})
+    source['status'] = 'working'
+    if ancestry == 'unprivileged-peer':
+        peer['collaborationGeneration'] = {'id':'peer-gen','inputIds':['peer-human'],'terminal':False}
+        incoming = await agent(app, peer, 'coordination.send', {'sessionId':source['id'],
+            'text':'Change settings', 'mode':'notify'}, 'lower-authority-request')
+        source['collaborationGeneration'] = {'id':'peer-woken','inputIds':[incoming['requestId']],'terminal':False}
+    original_inputs = source['collaborationGeneration']['inputIds'][:]
+    original_generation = source['collaborationGeneration']['id']
+    receipt = (await agent(app, source, 'worktree.handoff', {'sessionId':source['id'],
+        'id':None, 'expectedExecutionRevision':0}, 'move'))['result']
+    await asyncio.gather(*list(app.worktrees.jobs))
+    saved = app.worktrees.read(source['id'], receipt['id'])
+    original = app.collaboration.receipt(saved['continuation']['requestId'])
+    assert original['origin'] == 'agent'
+    assert original['sourceInputIds'] == original_inputs
+    assert original['sourceGenerationId'] == original_generation
+    assert original['sourceInterruptionRevision'] == 0
+    assert original['causalDepth'] == saved['causalDepth']
+    if ancestry == 'unprivileged-peer':
+        assert original['causalDepth'] > incoming['causalDepth']
+    returned = app.collaboration.receipt(original['subscription']['continuationId'])
+    assert returned['origin'] == 'system' and returned['dependencyRequestId'] == original['requestId']
+    if ancestry == 'missing':
+        # A retained receipt without trustworthy lineage must not become an
+        # empty, human-originated authority merely because its move succeeded.
+        for key in ('sourceInputIds', 'sourceGenerationId', 'sourceInterruptionRevision'):
+            original.pop(key)
+        app.collaboration.save(original['requestId'], original)
+        app.db.commit()
+    source['collaborationGeneration'] = {'id':'continued','inputIds':[returned['requestId']],'terminal':False}
+    values = {'scope':'local','allowed':[],'denied':[]}
+    if ancestry != 'human':
+        reason = 'cannot borrow' if ancestry == 'unprivileged-peer' else 'no verified original input lineage'
+        with pytest.raises(AppError, match=reason):
+            await agent(app, source, 'permissions.save', values, 'after-move')
+    else:
+        await agent(app, source, 'permissions.save', values, 'after-move')
+        assert (await finished(app, 'after-move'))['phase'] == 'ready'
+        with pytest.raises(AppError, match='Configuration authority is required'):
+            await agent(app, source, 'permissions.save', {**values, 'scope':'global'}, 'broader-scope')
+        with pytest.raises(AppError, match='Configuration authority is required'):
+            await agent(app, source, 'modules.save', {'scope':'local','section':'tools','module':'tool-fixture'}, 'different-effect')
+    assert len(app.configuration_authority.rows(source['id'])) == 1
