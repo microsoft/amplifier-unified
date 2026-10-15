@@ -5,7 +5,7 @@ import pytest
 
 from amplifier_web.native_catalog import NativeCatalog
 from amplifier_web.shell_resources import scope_for
-from test_shell_modules import service
+from test_shell_modules import service, settled_resources
 
 
 @pytest.mark.parametrize('kind', ['worker', 'internal', 'root'])
@@ -26,33 +26,63 @@ async def test_title_only_native_change_reuses_workspace_aggregates(service, tmp
     service.directory.bind(catalog)
     client = service.clients.attach('proof-client')
     client.update(selectedSessionId='alpha', selectedWorkspaceId=workspace['id'])
-    aggregates = []
-    original = service.directory.workspace_counts
-    def counted(*args, **kwargs):
-        result = original(*args, **kwargs)
-        aggregates.append(deepcopy(result))
-        return result
-    monkeypatch.setattr(service.directory, 'workspace_counts', counted)
+    aggregates, reads = [], []
+    queries = service.shell.resources.queries
+    factory = queries.factory
+    def observed_factory(*args, **kwargs):
+        projector = factory(*args, **kwargs)
+        project = projector.project
+        async def observed(inputs, **options):
+            reads.append((inputs['operation'], options['key']))
+            result = await project(inputs, **options)
+            if inputs['operation'] == 'workspace_counts' and result.get('status') == 'complete':
+                aggregates.append(deepcopy(result['value']))
+            return result
+        projector.project = observed
+        return projector
+    monkeypatch.setattr(queries, 'factory', observed_factory)
     with service.clients.bind('proof-client'):
         owner = service.shell.resources
         owner.register('proof-client', 1, ['sidebarRecent', 'workspaceShortcuts'], scope_for(service.state))
-        first = owner.snapshot('proof-client')
+        first = await settled_resources(service, 'proof-client')
         frozen = deepcopy(first)
         aggregate_before = len(aggregates)
+        assert aggregate_before > 0
+        reads_before = len(reads)
         evidence_before = service.performance_diagnostics.snapshot()['shellResourceRebuilds']['total']
         updated = deepcopy(initial)
         updated['sessions'][-1]['title'] = 'Renamed native record'
         catalog.save({'proof': updated}, {'proof': initial}, {}, ())
         service._publish_changes(globals={'workspaces', 'sharedHistory'})
-        following = owner.snapshot('proof-client')
+        following = await settled_resources(service, 'proof-client')
         evidence = service.performance_diagnostics.snapshot()['shellResourceRebuilds']
         attempts = evidence['total'] - evidence_before
-        assert attempts == (2 if kind == 'root' else 0)
+        # Pending/completed host attempts are not physical query executions.
+        # Count exact ready resource changes and real worker reads separately.
+        changed_pages = [(name, resource) for name, instance in first['instances'].items()
+                         for resource, record in instance['resources'].items()
+                         if following['instances'][name]['resources'][resource] != record]
+        new_reads = reads[reads_before:]
+        assert len(changed_pages) == (2 if kind == 'root' else 0)
+        assert all(resource == 'sidebarRecent' for _, resource in changed_pages)
+        if kind == 'root':
+            assert 0 < len(new_reads) <= len(changed_pages)
+            assert all(operation == 'chats' for operation, _ in new_reads)
+            assert len({key for _, key in new_reads}) == len(new_reads), 'No query key may replay'
+        else:
+            assert attempts == 0 and not new_reads
         assert len(aggregates) == aggregate_before
         assert all(row == aggregates[0] for row in aggregates), 'aggregate facts did not change'
         if attempts:
-            assert all(row['reasons'] == ['navigation.native'] for row in evidence['recent'][-attempts:])
-            assert {row['resource'] for row in evidence['recent'][-attempts:]} == {'sidebarRecent'}
+            rebuilds = evidence['recent'][-attempts:]
+            assert {row['resource'] for row in rebuilds} == {'sidebarRecent'}
+            # Each of the two resource owners observes native invalidation,
+            # then completes that same key without another invalidation.
+            by_package = {}
+            for row in rebuilds:
+                by_package.setdefault(row['package'], []).append(row['reasons'])
+            assert len(by_package) == 2
+            assert all(reasons == [['navigation.native'], []] for reasons in by_package.values())
         for name, instance in first['instances'].items():
             before = instance['resources']
             after = following['instances'][name]['resources']
