@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "purpose": "One-time isolated readiness audit; not a new per-release gate",
+  "delivery": {
+    "branch": "integration/readiness-20261015",
+    "pullRequest": "https://github.com/microsoft/amplifier-unified/pull/784",
+    "mainMerged": false,
+    "released": false,
+    "productionAdopted": false
+  },
+  "broadPython": {
+    "source": "e27593c670bd977f74202d8832791fda11302856",
+    "python": "3.13.16",
+    "platform": "Linux aarch64, owned spark-2 DTU",
+    "isolation": "Private PID/proc namespace and private on-disk temporary directory",
+    "passed": 9021,
+    "subtestsPassed": 6,
+    "skipped": 36,
+    "failed": 0,
+    "seconds": 4403.79,
+    "warnings": {
+      "junitRecordPropertyCompatibility": 4,
+      "multiprocessForkDeprecationInTests": 8,
+      "aiohttpStartedAppMutationInTest": 1
+    },
+    "skipPolicy": "Explicit optional runtime, package, platform and external-environment requirements are not counted as passes. Useful warmed-Core controls receive separate source-bound qualification.",
+    "limit": "Later product changes use focused qualification; this result is not relabeled as a full run at a later commit."
+  },
+  "broadFrontend": {
+    "source": "09d6ea084",
+    "passed": 977,
+    "skipped": 0,
+    "seconds": 27.961
+  },
+  "canonicalBrowsers": {
+    "source": "4801878aa",
+    "passed": 72,
+    "seconds": 492.512,
+    "receipt": "canonical-browser-qualification-20261015.json"
+  },
+  "laterFocusedQualification": [
+    {
+      "source": "596a7ff08",
+      "ui": "a8b8c4f8468eb04d",
+      "checks": ["14 ordinary workspace assertions", "4 Smart Canvas owner assertions"],
+      "passed": true
+    },
+    {
+      "source": "17cdccdfd",
+      "ui": "a8b8c4f8468eb04d",
+      "checks": ["Expired and denied sign-in with actual login lifecycle and disposable child", "Image preference inspection/configuration without model or image submission", "Badge preference changes preserve pending Activity, decisions and private draft"],
+      "browserScenariosPassed": 3,
+      "seconds": [5.638, 7.252, 6.081],
+      "limits": ["Synthetic provider and shortened sign-in deadline", "No external account, image generation or OS notification acceptance"]
+    }
+  ],
+  "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
+  "remaining": "The exact ordinary-UX ledger and paired completed-corpus performance report govern final readiness. This test rollup does not declare every issue resolved."
+}
