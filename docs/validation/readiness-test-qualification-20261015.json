@@ -141,10 +141,12 @@
       "focusedCasesPassed": 33,
       "finalCounterOracleCasesPassed": 10,
       "warmTargetMet": false,
-      "warmP95MsBeforeAfter": [
+      "sampledP95MsBeforeAfter": [
         671,
         612
-      ]
+      ],
+      "samplesPerStage": 3,
+      "timingLimit": "Largest of three samples, not a population tail estimate"
     },
     {
       "source": "26533c68cdf4cca9b43d9bb4e5b426407a553ea3",
@@ -274,7 +276,7 @@
     }
   ],
   "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
-  "remaining": "Warm send acknowledgement remains above the desired300ms target. All finite ordinary runtime follow-ups identified by the independent audit have source-bound receipts. Device/account/platform acceptance and universal guarantees retain explicit limits;13 product/authority choices remain decision briefs. All70 issues are dispositioned, not all resolved. Canonical dependency PRs remain unmerged/unadopted; current PR CI is recorded separately.",
+  "remaining": "Warm send acknowledgement remains above the desired300ms target. All finite ordinary runtime follow-ups identified by the independent audit have source-bound receipts. Device/account/platform acceptance and universal guarantees retain explicit limits;13 product/authority choices remain decision briefs. All70 issues are dispositioned, not all resolved. Canonical dependency PRs remain unmerged and unadopted in production; exact private dependency qualification is separately recorded; current PR CI is recorded separately.",
   "coverage": {
     "workflows": 199,
     "outcomes": 669,
