@@ -2638,6 +2638,52 @@
       ],
       "status": "requires-exact-ledger-claims",
       "limits": []
+    },
+    {
+      "workflow": "connections.inspect",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open public saved connection detail",
+        "Check each exact selected instance",
+        "Remove a connection and recover with explicit replacement"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "composer.options",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open narrow Chat options",
+        "Observe held discovery and cached provider choices",
+        "Dismiss without changing selected values"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "composer.reasoning",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open desktop model and reasoning settings",
+        "Save effort with accessible value and reload",
+        "Choose unsupported provider and verify no invented effort"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
