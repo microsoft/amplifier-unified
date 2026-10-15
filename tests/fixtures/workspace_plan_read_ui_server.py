@@ -33,6 +33,11 @@ async def main(home):
         paths.append(path)
     await service.dispatch('session.select', {'id': session['id']})
     selected = session
+    # The remaining saved chats are directory entries, not a resident runtime
+    # working set. Scrolling their public rows must not admit them for badges.
+    service._state['sessions'][:] = [selected]
+    service.projections.invalidate()
+    service._client_snapshots.clear()
     runtime_calls = []
     for name in ('start', 'stop', 'control'):
         original = getattr(runtime, name)
@@ -45,6 +50,7 @@ async def main(home):
 
     async def inspect(_request):
         return web.json_response({'selected': selected['id'], 'runtimeCalls': runtime_calls,
+            'admittedIds': [row['id'] for row in service._state['sessions']],
             'canonical': {str(p.relative_to(home)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}})
 
     app.router.add_get('/fixture/plan-read', inspect)

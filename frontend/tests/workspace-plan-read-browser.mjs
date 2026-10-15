@@ -63,8 +63,8 @@ try{
  await releaseMutation();releaseMutation=null;
  await page.evaluate(()=>Promise.all([window.__firstMutation,window.__secondMutation]));
  assert.deepEqual(mutations,[301,302]);
- const after=await inspect();assert.deepEqual(after.canonical,before.canonical);assert.deepEqual(after.runtimeCalls,[]);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,heldReadDidNotBlockPagingOrFiltering:true,staleReadDidNotReplaceScope:true,canonicalPlanRetained:true,mutationReceiptsRemainOrdered:true,runtimeEffects:0}));
+ const after=await inspect();assert.deepEqual(after.canonical,before.canonical);assert.deepEqual(after.admittedIds,before.admittedIds);assert.equal(before.admittedIds.length,1);assert.deepEqual(after.runtimeCalls,[]);assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({passed:true,heldReadDidNotBlockPagingOrFiltering:true,staleReadDidNotReplaceScope:true,canonicalPlanRetained:true,mutationReceiptsRemainOrdered:true,admittedSessions:1,runtimeEffects:0}));
 }finally{
  await releasePlan?.().catch(()=>{});await releaseMutation?.().catch(()=>{});await browser?.close();
  if(fixture.exitCode===null){const done=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);try{await done}catch{}finally{clearTimeout(timer)}}

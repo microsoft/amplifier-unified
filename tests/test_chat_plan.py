@@ -83,6 +83,7 @@ def test_workspace_plan_summary_uses_recorded_steps_not_tool_payloads():
 
 async def test_workspace_plan_query_avoids_hydration_children_and_transcript_association(app_factory, monkeypatch):
     app = app_factory()
+    initial = app.state['selectedSessionId']
     made = await app.dispatch('session.create', {'title': 'Plans'})
     session = app._session(made['sessionId'])
     identity = session.get('runtimeSessionId') or session['id']
@@ -95,6 +96,13 @@ async def test_workspace_plan_query_avoids_hydration_children_and_transcript_ass
             ('tool:post', 3, {'session_id': identity, 'tool_name': 'todo', 'tool_call_id': 'todo', 'result': {'success': True, 'output': {'status': 'updated'}}})]))
     def forbidden(*args, **kwargs):
         raise AssertionError('Plan listing must not hydrate chat history or project full execution')
+    # A saved but dormant row is the important case: hydrate=False alone still
+    # admits it and expands the shared live overlay on every workspace page.
+    app._state['sessions'][:] = [row for row in app._state['sessions'] if row['id'] != session['id']]
+    app._state['selectedSessionId'] = initial
+    app.projections.invalidate()
+    admitted = [row['id'] for row in app._state['sessions']]
+    monkeypatch.setattr(app, '_admit_session', forbidden)
     monkeypatch.setattr(app.cold_display, 'hydrate', forbidden)
     monkeypatch.setattr(app.event_log_view, 'refresh', forbidden)
     from amplifier_web.event_log_view import EventIndex
@@ -118,6 +126,7 @@ async def test_workspace_plan_query_avoids_hydration_children_and_transcript_ass
     # A browsing query must not acquire an execution worker or alter saved work.
     assert app.state['selectedSessionId'] == selected
     assert app.runtime.started == app.runtime.sent == app.runtime.stopped == []
+    assert [row['id'] for row in app._state['sessions']] == admitted
     assert path.read_bytes() == original_bytes
     assert result['effects'] == detail['effects'] == []
     before_rejections = list(scanned)
@@ -128,3 +137,40 @@ async def test_workspace_plan_query_avoids_hydration_children_and_transcript_ass
         await app.dispatch('session.plans', {'ids': [session['id'], 'another-chat'], 'includeItems': True})
     assert scanned == before_rejections
     assert app.runtime.started == app.runtime.sent == app.runtime.stopped == []
+
+
+async def test_plan_sources_preserve_native_alias_ambiguity_and_delete_guards(app_factory, tmp_path, monkeypatch):
+    from amplifier_web.native_catalog import NativeCatalog
+    from amplifier_web.service import AppError
+    from test_native_directory import seed
+    app = app_factory()
+    await app.dispatch('session.create', {'title': 'Resident deletion guard'})
+    catalog = NativeCatalog(tmp_path / 'catalog.sqlite3', tmp_path / 'native')
+    seed(catalog, tmp_path / 'one', 1)
+    app.directory.bind(catalog)
+    before = [row['id'] for row in app._state['sessions']]
+    sources = []
+    monkeypatch.setattr(app.event_log_view, 'read_plan',
+        lambda source, **kwargs: (sources.append(source), {'sessionId': source['id'], 'plan': None})[1])
+    monkeypatch.setattr(app, '_admit_session', lambda *_: pytest.fail('Plan lookup admitted a dormant chat'))
+    await app.dispatch('session.plans', {'ids': ['saved-00000']})
+    assert sources[-1]['nativeIdentity'] == 'saved-00000' and sources[-1]['nativeProject']
+    seed(catalog, tmp_path / 'two', 1)
+    with pytest.raises(AppError, match='more than one project') as ambiguous:
+        await app.dispatch('session.plans', {'ids': ['saved-00000']})
+    assert ambiguous.value.status == 409
+    one = catalog.lookup('saved-00000')[0]
+    await app.dispatch('session.plans', {'ids': [one['id']]})
+    assert sources[-1]['nativeProject'] == one['nativeProject']
+    assert sources[-1]['id'] == one['id']
+    with pytest.raises(AppError) as missing:
+        await app.dispatch('session.plans', {'ids': ['missing']})
+    assert missing.value.status == 404
+    resident = app._state['sessions'][0]
+    resident['runtimeSessionId'] = 'resident-alias'
+    resident['_deleting'] = True
+    for identity in (resident['id'], 'resident-alias'):
+        with pytest.raises(AppError, match='being deleted') as deleting:
+            await app.dispatch('session.plans', {'ids': [identity]})
+        assert deleting.value.status == 409
+    assert [row['id'] for row in app._state['sessions']] == before

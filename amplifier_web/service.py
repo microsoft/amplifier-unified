@@ -1495,6 +1495,31 @@ class AppService:
             return self.cold_display.hydrate(session) if hydrate else session
         raise AppError("Select or create a conversation first.", 404)
 
+    def _session_read_sources(self, identities, fields):
+        """Read bounded metadata references without admitting dormant owners.
+
+        Optional row labels and plans are not runtime demand. Even
+        _session(hydrate=False) would grow the live overlay by a viewed page.
+        """
+        def collect():
+            known = {row['id']: row for row in self.state['sessions']}
+            missing = [identity for identity in identities if identity not in known]
+            known.update((row['id'], row) for row in self.directory.summary_ids(missing))
+            sources = []
+            for identity in identities:
+                try:
+                    session = known.get(identity) or self.directory.resolve(identity)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                if session is None:
+                    raise AppError('Select or create a conversation first.', 404)
+                session = known.get(session['id'], session)
+                if session.get('_deleting'):
+                    raise AppError('This chat is being deleted. No new work was started.', 409)
+                sources.append({key: session[key] for key in fields if key in session})
+            return sources
+        return self.directory.read_frame(collect)
+
     def _session_destination(self, args):
         selected = next((w for w in self.state.get('workspaces', []) if w['id'] == self.state.get('selectedWorkspaceId')), {})
         if not args.get('workspace') and selected.get('available') is False:
@@ -1787,7 +1812,7 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
-        if resolved_target is not None:
+        if resolved_target is not None and action != 'session.titlePreview':
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -1902,9 +1927,9 @@ class AppService:
             # Copy only catalog identity/name fields. Reading a cold message
             # property here would hydrate a whole chat just to label a row.
             async with self.lock:
-                session = self._session(args['sessionId'], hydrate=False)
-                source = {key: session[key] for key in ('id', 'runtimeSessionId', 'nativeIdentity',
-                    'nativeProject', 'workspace', 'title', 'titleSource', 'nativeNameSource') if key in session}
+                source = self._session_read_sources([args['sessionId']],
+                    ('id', 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'workspace',
+                     'title', 'titleSource', 'nativeNameSource'))[0]
             result = await asyncio.to_thread(read_title, self.data_dir, source)
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action in {'theme.list', 'theme.read'}:
@@ -2142,11 +2167,8 @@ class AppService:
         if action == 'session.plans':
             if args.get('includeItems') and len(args['ids']) != 1:
                 raise AppError('Inspect one chat at a time for plan details.')
-            sources = []
-            for identity in args['ids']:
-                session = self._session(identity, hydrate=False)
-                sources.append({key: session[key] for key in
-                    ('id', 'nativeIdentity', 'runtimeSessionId', 'workspace', 'nativeProject') if key in session})
+            sources = self._session_read_sources(args['ids'],
+                ('id', 'nativeIdentity', 'runtimeSessionId', 'workspace', 'nativeProject'))
             rows = []
             for source in sources:
                 rows.append(await asyncio.to_thread(self.event_log_view.read_plan, source,

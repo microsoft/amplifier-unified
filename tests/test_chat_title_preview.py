@@ -88,21 +88,30 @@ def test_does_not_follow_symlinks_or_block_on_special_files(saved, tmp_path, kin
     assert read(tmp_path, session)['source'] == 'unnamed'
 
 
-async def test_action_does_not_hydrate_or_mutate_or_start_runtime(tmp_path, monkeypatch):
+@pytest.mark.parametrize('dormant', [False, True])
+async def test_action_does_not_hydrate_or_mutate_or_start_runtime(tmp_path, monkeypatch, dormant):
     app = AppService(tmp_path, workspace=tmp_path)
     try:
         await app.dispatch('session.create', {'title': 'Conversation deadbeef'})
         session = app._session()
         session.update(titleSource='native', nativeNameSource='fallback')
+        app._save_changes(sessions={session['id']})
         SessionStore.for_app(tmp_path, tmp_path).save(session['id'], [{'role': 'user', 'content': 'Plan the launch'}], {})
+        if dormant:
+            app._state['sessions'].clear()
+            app._state['selectedSessionId'] = None
+            app.projections.invalidate()
+        admitted = [row['id'] for row in app._state['sessions']]
         def forbidden(*args, **kwargs):
             raise AssertionError('Preview cannot hydrate a chat')
         monkeypatch.setattr(app.cold_display, 'hydrate', forbidden)
+        monkeypatch.setattr(app, '_admit_session', forbidden)
         revision = app.state['revision']
         result = await app.dispatch('session.titlePreview', {'sessionId': session['id']})
         assert result['result'] == {'title': 'Plan the launch', 'source': 'first-message'}
         assert app.state['revision'] == revision
         assert session['title'] == 'Conversation deadbeef'
         assert 'state' not in result
+        assert [row['id'] for row in app._state['sessions']] == admitted
     finally:
         await app.close()
