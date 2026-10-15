@@ -19,12 +19,12 @@ def query_collections(operation):
         ('root_navigation', 'workspace') if operation == 'pinned_navigation' else ('root_navigation',))
 
 
-def durable_stamp(db, namespace=None, operation='chats'):
+def durable_stamp(db, namespace=None, operation='chats', live=None):
     collections = query_collections(operation)
     local = [list(db.execute('SELECT revision FROM history_observation_revisions WHERE collection=?',
                             (name,)).fetchone() or (0,)) for name in collections]
-    native = [list(db.execute('SELECT ' + name + ' FROM history_native.native_revisions WHERE namespace=?',
-                             (namespace,)).fetchone() or (0,)) for name in collections] if namespace is not None else []
+    from .native_query_receipts import receipt
+    native = [receipt(db, namespace, name, live or {}) for name in collections] if namespace is not None else []
     return [local, native]
 
 
@@ -58,7 +58,7 @@ class ShellQueryModel:
                     (Path(native['path']).as_uri() + '?mode=ro',))
             db.set_progress_handler(progress, 10000)
             db.execute('BEGIN')
-            receipt = durable_stamp(db, native['namespace'], inputs['operation'])
+            receipt = durable_stamp(db, native['namespace'], inputs['operation'], inputs['live'])
             if receipt != inputs['durable'] or source_files() != inputs['files']:
                 return {'status': 'retry', 'reason': 'source_changed'}
             state = inputs['state']
