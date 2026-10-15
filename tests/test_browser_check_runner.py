@@ -217,10 +217,19 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     rows = runner.validate_plan(plan)
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
-    added = [row for row in rows if row['id'] == 'sidebar-reading']
-    assert len(added) == 1 and added[0]['command'] == ['node', 'tests/sidebar-reading-browser.mjs']
-    original = [row for row in rows if row['id'] != 'sidebar-reading']
-    assert len(original) == 65 and len(rows) == 66
+    additions = {
+        'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
+        'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
+        'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
+        'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
+    }
+    added = [row for row in rows if row['id'] in additions]
+    assert len(added) == len(additions)
+    for row in added:
+        assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
+        assert row['env'] == additions[row['id']]
+    original = [row for row in rows if row['id'] not in additions]
+    assert len(original) == 65 and len(rows) == 69
     assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == 'ca60c5f5e0a9bf5fd94795d64ea6c8d9c286b2c5f481b7d3c07d5f32fb522173'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
@@ -253,7 +262,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     extended_scripts = {row['command'][1] for row in plan['scenarios']}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
-        'conversation-navigation')}
+        'conversation-navigation', 'workspace-shortcuts')}
     assert source_only <= extended_scripts
     assert not source_only & readiness_scripts
     installed_overlap = {f'tests/{name}-browser.mjs' for name in (
@@ -262,5 +271,5 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     install = next(index for index, line in commands if 'uv pip install' in line and '--reinstall .' in line)
     for script in installed_overlap:
         assert any(index > install and f'node {script}' in line for index, line in commands)
-    # All 108 original scripts and the new sidebar reading regression have a lane.
-    assert len(readiness_scripts | extended_scripts) == 109
+    # All 108 original scripts and the three added navigation regressions have a lane.
+    assert len(readiness_scripts | extended_scripts) == 111
