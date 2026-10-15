@@ -249,6 +249,527 @@
         }
       ],
       "claims": []
+    },
+    {
+      "id": "delta.770",
+      "sourceCommit": "e3b79361fe91994c91536eef259b1140107fd681",
+      "productHead": "257262658",
+      "reason": "Reviewed archive interaction integrated after frozen inventory; raw-action behavior remains separate. Original nav.archive scope note is preserved.",
+      "evidenceContext": "synthetic-standard",
+      "workflowsAdded": [
+        {
+          "id": "nav.archive-progress",
+          "family": "nav",
+          "title": "Archive with truthful progress, guarded navigation, and Undo",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat \u2192 Archive",
+            "Row Details \u2192 Archive"
+          ],
+          "prerequisites": [
+            "Synthetic isolated archive fixture; no real user files or runtime execution"
+          ],
+          "steps": [
+            "Archive current chat while acknowledgement is held",
+            "Observe confirmation and Undo",
+            "Exercise rejected/unknown acknowledgement",
+            "Hold following navigation and Undo before release",
+            "Change selection or browse intent while archive is pending",
+            "Archive another row and invoke raw action independently",
+            "Return to private Canvas edit",
+            "Open Settings while archive is pending and keep unsaved field",
+            "Repeat current archive at390px"
+          ],
+          "expectedResults": [
+            "Confirmed archive of the current chat opens its existing workspace or full chat list without changing another client or selecting a replacement chat.",
+            "Pending, rejected, and unknown archive outcomes are distinct and never imply an unconfirmed navigation or replay.",
+            "Undo is available after archive confirmation even while the following navigation is stalled.",
+            "A newer navigation intention, including A\u2192B\u2192A, prevents the old archive from redirecting.",
+            "Archiving a different row or invoking the raw public action does not navigate the current view.",
+            "Returning to the archived chat preserves private Canvas edit identity, composer draft, and attachment.",
+            "A confirmation arriving after Settings opens preserves its private unsaved field and current view.",
+            "The archive notice and resulting destination remain usable without horizontal overflow at390px."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-touch",
+            "narrow-keyboard"
+          ],
+          "sourceRefs": [
+            {
+              "path": "frontend/src/archive-action.js",
+              "line": 1
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 51
+            }
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            0
+          ],
+          "variantsByExpectedIndex": {
+            "0": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 55
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 60
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 61
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 62
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 64
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 65
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 66
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 67
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 154
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 155
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 156
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            1
+          ],
+          "variantsByExpectedIndex": {
+            "1": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 55
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 56
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 57
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 100
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 101
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 102
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 104
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 105
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 106
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 107
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 108
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 109
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 110
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            2
+          ],
+          "variantsByExpectedIndex": {
+            "2": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 119
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 123
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 124
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 127
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 128
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 129
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 130
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 134
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            3
+          ],
+          "variantsByExpectedIndex": {
+            "3": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 112
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 113
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 114
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 115
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 116
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 131
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 133
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 134
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            4
+          ],
+          "variantsByExpectedIndex": {
+            "4": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 139
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 140
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 141
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 142
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 143
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 145
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 146
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            5
+          ],
+          "variantsByExpectedIndex": {
+            "5": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 73
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 74
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 84
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 86
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 88
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 89
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 90
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 91
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 92
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 93
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 94
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            6
+          ],
+          "variantsByExpectedIndex": {
+            "6": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 163
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 164
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 166
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 167
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 169
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 170
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 171
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 172
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 173
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 174
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            7
+          ],
+          "variantsByExpectedIndex": {
+            "7": [
+              "narrow-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 147
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 148
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 149
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 150
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 151
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        }
+      ]
     }
   ]
 }
