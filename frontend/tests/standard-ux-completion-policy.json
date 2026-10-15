@@ -1619,6 +1619,291 @@
       "limits": [
         "No guided setup capability supplied by fixture."
       ]
+    },
+    {
+      "workflow": "entry.setup",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open the first-use setup with an available connection",
+        "Choose Start a chat",
+        "Observe editable empty composer without creating/sending"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Missing-account branch remains only partially observed."
+      ]
+    },
+    {
+      "workflow": "entry.shell-recovery",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Open the standard navigation recovery link",
+        "Return to Search",
+        "Verify exact selected chat/private draft and saved composition remain"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "settings.dirty",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Edit a standard AI connection private draft",
+        "Close and use Keep, Review, Escape and Discard",
+        "Observe an independent real client publication without losing edit"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "settings.narrow",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Resize standard Settings to390px",
+        "Inspect single active route and visible footer",
+        "Keep then discard the unsaved edit and reopen saved list"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Per-route scroll/focus restoration not yet proven."
+      ]
+    },
+    {
+      "workflow": "entry.boot",
+      "expectedIndices": [
+        0,
+        1,
+        3
+      ],
+      "browserSteps": [
+        "Open the app with its first connection held",
+        "Release real state and inspect exact serving identity and bounded selected messages"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic large retained history; no live remote account."
+      ]
+    },
+    {
+      "workflow": "entry.failed-boot",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Interrupt initial connection",
+        "Use visible Retry connection",
+        "Observe exact saved owners/messages without runtime start"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "work.delegate",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "browserSteps": [
+        "Expand live Work delegate and request/activity",
+        "Receive controlled lifecycle and async answer",
+        "Stop exact worker while another eligible worker remains"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic lifecycle; no actual subprocess termination or full historical child reconstruction."
+      ]
+    },
+    {
+      "workflow": "delivery.error-dismiss",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Dismiss exact reviewed failure",
+        "Observe retained error/transcript/draft",
+        "Receive new failure and explicitly Continue once"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "delivery.diagnostics",
+      "expectedIndices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "browserSteps": [
+        "Open View error details",
+        "Read bounded correlated report",
+        "Deny clipboard and use manual copy without execution"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "notifications.inbox",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open public Activity",
+        "Page exact completion groups",
+        "Mark reviewed and verify reload/peer with no approval response"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "updates.preferences",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Updates and update-preference disclosure",
+        "Toggle auto-check while retaining unknown interval",
+        "Choose explicit interval and reload"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic update callbacks; real preferences storage."
+      ]
+    },
+    {
+      "workflow": "updates.check",
+      "expectedIndices": [
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Updates without triggering checks",
+        "Click Check and observe failed result",
+        "Explicitly retry and observe success without install"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Exact real version identity remains partial; synthetic lookup."
+      ]
+    },
+    {
+      "workflow": "connections.images",
+      "expectedIndices": [
+        0
+      ],
+      "browserSteps": [
+        "Open Image generation from Settings",
+        "Choose exact account, Off and Automatic",
+        "Verify image preference persists and chat default stays intact"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Synthetic catalog and no external image provider."
+      ]
+    },
+    {
+      "workflow": "connections.image-config",
+      "expectedIndices": [
+        0,
+        1
+      ],
+      "browserSteps": [
+        "Expand image model preferences",
+        "Select supported option and handle held rejection/retry",
+        "Verify selected account/model configuration and reload"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Actual generation prevention not instrumented independently."
+      ]
+    },
+    {
+      "workflow": "outputs.inspect",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Canvas then Outputs & review",
+        "Read saved output and exact immutable bytes",
+        "Explicitly open external reference only after review"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "Browser egress observed; server-side egress not instrumented."
+      ]
+    },
+    {
+      "workflow": "outputs.notes",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open saved Git review detail",
+        "Save exact file/line anchored local note",
+        "Verify no remote effect"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": [
+        "External server egress not instrumented."
+      ]
+    },
+    {
+      "workflow": "outputs.attach",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Canvas Outputs & review",
+        "Attach owned file/PNG and read immutable version",
+        "Reject missing file retaining form/prior outputs"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
+    },
+    {
+      "workflow": "outputs.git-review",
+      "expectedIndices": [
+        0,
+        1,
+        2
+      ],
+      "browserSteps": [
+        "Open Canvas Outputs & review",
+        "Save working-tree/branch review snapshots",
+        "Inspect exact base/head/diff without modifying repository"
+      ],
+      "status": "requires-exact-ledger-claims",
+      "limits": []
     }
   ],
   "unmappedOrdinaryPaths": "All remaining workflow paths stay required; some already have outcome evidence but need an explicit ordinary-path mapping. Do not infer completeness from source/test titles.",
@@ -1725,9 +2010,19 @@
     },
     {
       "at": "2026-10-15T18:00:37.343606+00:00",
-      "reason": "Map newly qualified ordinary Smart Tools, composer attachment/dictation and public Chat information paths. API-entered coordination and Advanced screen remain explicitly unmapped ordinary entries.",
+      "reason": "Map newly qualified ordinary Smart Tools, composer attachment/dictation and public Chat information paths. Advanced or fixture-entered coordination and Advanced screen remain explicitly unmapped ordinary entries.",
       "previousOrdinaryPaths": 89,
       "ordinaryPaths": 101
+    },
+    {
+      "at": "2026-10-15T18:14:13.076228+00:00",
+      "reason": "Map actual first-use recovery, Chat information and standard Settings dirty/compact paths. Preserve missing-account, advanced coordination and per-route scroll limitations.",
+      "ordinaryPaths": 105
+    },
+    {
+      "at": "2026-10-15T18:29:20.448591+00:00",
+      "reason": "Reconcile exact root bootstrap, attention and live delegate witnesses; public Canvas output paths and own image/update-preference controls. Advanced or fixture-preopened coordination/managed surfaces retain separate outcome credit without ordinary-entry credit.",
+      "ordinaryPaths": 119
     }
   ]
 }
