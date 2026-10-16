@@ -99,3 +99,67 @@ Machine-readable policy: `frontend/tests/standard-ux-completion-policy.json`.
 Source/control audit: `docs/validation/standard-ux-completeness-audit-20261015.json`.
 The authoritative current ledger and exact claims are
 `output/readiness-day-20261015/ui-inventory/{coverage-ledger,functional-claims}.json`.
+
+## Post-release 166 results
+
+This follow-up is additive to the frozen audit above. The 199/669 counts and
+external/platform residuals remain unchanged. Each case below maps to the
+[existing smoke checklist](standard-ux-inventory-20261015.md#post-release-166-regression-checklist)
+and its routine workflow. Product changes are integrated through `bac4749c4`;
+`270c60be0` rebuilds the committed client. Focused receipts qualify their recorded
+sources, not a future hosted result. **Final rebuilt-head Full Python, Public
+readiness and Extended browser qualification remain pending at this checkpoint.**
+
+The original [166 post-release run](https://github.com/microsoft/amplifier-unified/actions/runs/38845659651)
+retains its failures: Python passed (9,084 tests plus six subtests, 87 skips),
+while execution inspection, mobile navigation, cache cleanup and the first
+readiness history fixture failed. The subsequent
+[extended run](https://github.com/microsoft/amplifier-unified/actions/runs/38849349256)
+passed 70/72 scenarios and exposed appearance preview and active-client failures;
+the [readiness run](https://github.com/microsoft/amplifier-unified/actions/runs/38849351378)
+stopped at missing owned evidence storage. These historical runs are not relabeled
+green. A separate sweep of 30 remaining readiness scripts passed 27 and exposed
+voice following, stale retained-history assumptions and a missing PDF dependency.
+
+| Case | Observed baseline / discovered gap | Current focused result | Desired result / remaining limit |
+| --- | --- | --- | --- |
+| R166-01 | A late preview could reactivate after navigating away. | Preview ownership fix `cec5614f6`; four unit cases and four focused browser flows passed, including held requests, A→B→A, close/reopen and saved-library previews. | No retired preview applies or destroys its successor/draft. Final integrated jobs pending; custom CSS remains supplemental scope. |
+| R166-02 | An unchanged layout receipt waited for unrelated global state, then performed 1,500 ms recovery. The hosted 3,442 ms outlier lost its detailed report and remains unattributed. | Fix `ddd2a66f3`: 16 focused layout/transport tests and the unchanged browser workload passed. Eight repeated no-ops had no state acknowledgement or recovery read; initial changed values retained acknowledgement. | Correct receipt ownership and no needless recovery. Separate measured comparison below; no claim that this explains the original hosted outlier. |
+| R166-03 | The old smoke assumed a complete 5,000-turn rail and shared legacy paging. The corrected bounded journey then exposed lost native reading restoration. | Frontend restoration `6b54df9c3`, no-full-index assertion `a5a3d86c0` and backend cursor `41c7af345`; focused retained-history browser passed in 11.818 s, including independent readers and bounded switch/reload restoration. | Same visible message/offset without full-history hydration or model work. Duration is whole functional scenario, not cold-page latency. |
+| R166-04 | Native page references did not carry the current-page restoration cursor. | Focused native backend qualification passed 38 cases; exact tests reject tampering, another owner, reader restart and changed source, and restore after page-cache eviction with bounded reads. | Refuse stale authority safely. Browser behavior after an expired reference is not newly claimed by backend refusal evidence. |
+| R166-05 | Initial raw-scroll mismatch was a notice-height change; after fixing the fixture boundary, a real browser layout clamp incorrectly paused active-call following. | Fix `bac4749c4`: exact old controller fails the new next-append counterexample by 400 px. Fixed controller passed (2.568 s), full voice journey passed (10.846 s), ordinary chat scroll passed (11.958 s); focus/wheel pause and explicit resume remain checked. | Layout clamp preserves owned follow; user reading intent pauses it. No physical audio or live-provider claim. |
+| R166-06 | Fixture closed the current Work reader, emitted a malformed live model observation and used an ambiguous terminal-row selector. | Fixture/test correction `7b539a36e`: browser passed in 6.83 s; original-reader negative control fails, and separate forced retirement/service-reopen proof preserves canonical terminal model usage. | Current and saved Work show truthful completion/usage. The one-off retirement proof is explicitly separate from routine browser coverage. |
+| R166-07 | An 80-message fixture no longer exceeded the current 100-message initial page. | Expanded fixture and current paging/anchor assertions passed the focused message-render scenario and hosted readiness run `38849351378` before its later evidence-setup failure. | Exercise real older-page loading; preserve visible anchor and unique rows. No pass for obsolete legacy preload assumptions. |
+| R166-08 | Raw scroll changed while a Work notice settled; that alone did not establish lost reading position. | Mobile fixture now distinguishes stable geometry from notice removal, checks message identity/offset and retained Canvas state; focused/extended scenario passed. | Preserve reading and drafts in both cases, while retaining the stricter raw-position assertion for stable geometry. |
+| R166-09 | Cache UI assertions passed but SIGTERM bypassed fixture cleanup; runner found descendants. | Signal-aware shutdown and bounded awaited exit passed the focused strict scenario; runner cleanup still fails on leftovers. | Zero remaining owned descendants. Original cleanup failure remains a failed scenario. |
+| R166-10 | Readiness omitted mandatory evidence ownership; active-client and state-transport reports collided. | Owned readiness evidence/upload repair and focused affected scripts passed; three report/runner contract checks passed and report paths are distinct. | Setup failures and every unrun downstream case remain visible; retain each original report independently. Final workflow execution pending. |
+| R166-11 | The continuation environment lacked declared `pypdf`; PDF failed before its intended coverage. | Same-source PDF browser passed in 3.731 s with the declared artifact dependency environment (`pypdf` 6.20.1). | Qualify the actual declared environment. No PDF product change or physical-device claim. |
+| R166-12 | Final static consistency gate caught frontend source fixes with stale committed assets. | `270c60be0` rebuilds the client; final-head qualification is being repeated against those assets. | Build/source consistency and exact-head checks must pass before claiming the combined candidate. Earlier focused results are retained with their original source/build identities. |
+
+The active-client comparison is recorded in
+[its exact-source receipt](active-client-noop-qualification-20261016.json).
+One before/after run used the same synthetic 22,915-session/3,932-workspace
+catalog, four isolated browser contexts and no inference. With **12 samples**,
+this test's reported p95 equals its maximum: action median/max changed from
+44/1,550 ms to 33/142 ms; admission median/max from 17/147 ms to 21/42 ms;
+health median/max from 7/242 ms to 10/253 ms. Existing limits stayed 2,000 ms
+for actions and 1,500 ms for admission/health. These are bounded local comparison
+results, not proof of global p95, live-provider performance, or the original
+300 ms send-admission target under every workload. Keep correctness counters
+separate from latency, and use matching inputs for future regression warnings.
+
+Private retained evidence is at workspace-root:
+
+- `output/postrelease166/readiness-continuation/`: original 30-scenario results,
+  voice exact-baseline negative control, corrected checks and cleanup receipt.
+- `output/postrelease166/execution-inspection/qualification.json`: current Work
+  browser, negative controls and separate durable-observation proof.
+- `output/post-release166-fixes/retained-history/qualification.json`: bounded
+  native reader qualification and source identity.
+- `output/post-release-fixes-20261016/theme-preview/qualification.json`: preview
+  ownership qualification.
+
+The cases now have named routine owners in the inventory crosswalk. The wider
+result remains pending until those jobs complete on the rebuilt candidate;
+neither a focused pass nor this documentation update closes a historical failure
+report by itself.
