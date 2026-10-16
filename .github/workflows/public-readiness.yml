@@ -95,6 +95,7 @@ jobs:
         working-directory: frontend
         run: |
           node tests/appearance-save-feedback-browser.mjs
+          node tests/appearance-preview-navigation-browser.mjs
           node tests/theme-surfaces-browser.mjs
           node tests/settings-save-feedback-browser.mjs
           node tests/location-feedback-browser.mjs
