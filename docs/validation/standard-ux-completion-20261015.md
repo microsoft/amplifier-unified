@@ -33,6 +33,25 @@ strengthen evidence without proving every dynamic control or external effect.
 Desired behavior remains no lost draft, reachable visible controls, exact scoped
 permission effects and no acknowledged mutation replay.
 
+### Resumed native child follow-up (October 16)
+
+Five actual Core/Foundation child lifecycle checks passed with zero skips in the
+owned Linux DTU. The new witness creates a child under a narrow write ceiling,
+checkpoints it, retires its parent, and opens a new parent mount with one extra
+approved directory. Resuming the saved child preserves its original refusal and
+transcript. A fresh child can write the approved directory, and that child's own
+resume can also write there; every sibling-directory attempt is refused.
+Removing the saved ceiling in a private negative control makes this check fail.
+
+This confirms an intentional retained-permission boundary, not automatic adoption
+of wider authority by an old child. The current issue #712 continuation still
+needs an actionable explanation at the caller/UI boundary and joined Stories
+import/read/native review/export acceptance. The controlled orchestrator makes no
+provider calls; it does not qualify the outer RuntimeManager process. See
+`standard-ux-native-child-grant-20261016.json`. The 669-outcome ledger and its
+36 partial/15 not-run outcomes remain unchanged.
+
+
 ## Original October 15 qualification
 
 The inventory contains **199 workflows and 669 expected outcomes**.
