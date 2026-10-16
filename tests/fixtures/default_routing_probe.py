@@ -9,6 +9,8 @@ DelegateTool and Unified's child launcher are real. Providers, the finite turn
 body and the no-effect desktop configuration probe are synthetic. Desktop
 ceilings cross actual nested Core sessions and saved intermediate-child resume;
 this is not a test of a desktop backend or desktop action enforcement.
+Balanced fallback uses the shipped matrix and real host composition provenance;
+only the routing hook is taken into the finite runtime, not the full app startup.
 
 --preflight exits 77 for absent prerequisites, not for incompatible APIs.
 --negative-control corrupts mounted models in a child lifecycle hook; the same
@@ -25,6 +27,7 @@ import importlib
 import importlib.metadata
 import importlib.util
 import inspect
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -375,11 +378,16 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
 
     @dataclass
     class ProbePrepared(PreparedBundle):
+        automatic_policy: bool = False
+
         async def create_session(self, **kwargs):
             # Do not repair a missing callback here: the real host child/resume
             # path must supply it. Observers only record lifecycle evidence.
             original = kwargs.pop("before_initialize", None)
-            assert original is prepare_default_routing, "Host omitted early default-routing policy"
+            assert ((original is prepare_default_routing and not self.automatic_policy) or (
+                isinstance(original, partial) and original.func is prepare_default_routing
+                and original.args == () and original.keywords == {"automatic": self.automatic_policy}
+            )), "Host omitted expected early default-routing policy"
             audit = {"session_id": kwargs.get("session_id"), "parent_id": kwargs.get("parent_id"),
                      "resumed": kwargs.get("is_resumed", False), "lifecycle": [],
                      "matrix_events": [], "failures": []}
@@ -601,6 +609,279 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
         return {"executions": observations, "checkpoints": checkpoints,
                 "fixture_package": DESKTOP_PACKAGE}
 
+    async def exercise_balanced_fallback(plan, module_paths, root):
+        from unittest.mock import patch
+        from amplifier_foundation.paths.resolution import ResolvedSource
+        from amplifier_foundation.sources import SimpleSourceResolver
+        from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS, ROUTING_BEHAVIOR_URI
+        from amplifier_web.host.config import HostConfig
+        from amplifier_web.host.model_selection import automatic_default_routing, routing_hooks
+        from amplifier_web.host.session import compose_configured_bundle, session_registry
+
+        # Real composition, with only its external source transport replaced.
+        # Do not configure a routing URI override: that is deliberately strict.
+        behavior_path = routing_root / "behaviors/routing.yaml"
+        source_matrix = (routing_root / "routing/balanced.yaml").resolve(strict=True)
+        routing_module = exact_package("amplifier_module_hooks_routing", paths["hooks-routing"])
+        # The hook consumes _bundle_root via config.pop(), so using that test
+        # override would change the origin-bearing hook declaration at mount.
+        # Parent qualification must stage unchanged resources in the installed
+        # hook's documented layout. Never write outside this invocation or
+        # rewrite module.__file__/resolver provenance to simulate that layout.
+        bundled_matrix = Path(routing_module.__file__).parent.parent.parent.parent / "routing/balanced.yaml"
+        assert bundled_matrix.is_file(), (
+            f"Parent must prepare the installed hook's routing/balanced.yaml at {bundled_matrix}; "
+            f"use the unchanged resources from {routing_root / 'routing'}")
+        assert bundled_matrix.read_bytes() == source_matrix.read_bytes(), (
+            "Installed hook's balanced resource differs from warmed source")
+        balanced_path = bundled_matrix.resolve(strict=True)
+        balanced_hash = hashlib.sha256(source_matrix.read_bytes()).hexdigest()
+        admitted = {
+            ROUTING_BEHAVIOR_URI: behavior_path,
+            str(routing_root): routing_root, routing_root.as_uri(): routing_root,
+            "routing-matrix:behaviors/routing.yaml": behavior_path,
+        }
+        source_reads = []
+
+        async def local_source(self, uri):
+            assert uri in admitted, f"Unmapped routing source; no network/cache fallback: {uri}"
+            path = admitted[uri]
+            assert path.exists(), path
+            source_reads.append(uri)
+            return ResolvedSource(active_path=path, source_root=routing_root)
+
+        async def composed_routing(explicit):
+            settings = {
+                "bundle": {"app": []},
+                "web_bundles": {"excluded": [uri for uri in DEFAULT_BEHAVIORS if uri != ROUTING_BEHAVIOR_URI]},
+                "sources": {"bundles": {"routing-matrix": str(routing_root)}},
+            }
+            if explicit:
+                settings["routing"] = {"matrix": "balanced"}
+            before = copy.deepcopy(settings)
+            config = HostConfig(root / "fallback-app", root, settings, root / "fallback-registry")
+            with patch.object(SimpleSourceResolver, "resolve", local_source):
+                loaded = await compose_configured_bundle(
+                    session_registry(config), Bundle(name="fallback-probe", base_path=root), config)
+            assert settings == before
+            assert loaded._host_automatic_routing is (not explicit)
+            hooks = copy.deepcopy(routing_hooks(loaded.to_mount_plan()))
+            assert len(hooks) == 1 and hooks[0]["config"]["default_matrix"] == "balanced"
+            assert "_bundle_root" not in hooks[0]["config"]
+            return hooks, loaded._host_automatic_routing
+
+        selections = {
+            "before": {"instance": "private-service", "model": "private-conversation-v1", "effort": "high"},
+            "after": {"instance": "private-secondary", "model": "private-conversation-v2", "effort": "low"},
+        }
+        observed, saved_rows, rejected, expected = [], [], [], {}
+        mode = None
+
+        class BalancedOrchestrator(BundleLiveOrchestrator):
+            def __init__(self, config, audit):
+                super().__init__(config)
+                self.audit = audit
+
+            async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+                audit = self.audit
+                lifecycle = "session:resume" if audit["resumed"] else "session:start"
+                assert not audit["failures"], audit["failures"]
+                assert audit["lifecycle"] == [lifecycle] and len(audit["matrix_events"]) == 1
+                resolver = coordinator.get_capability("model_role_resolver")
+                assert type(resolver).__module__ == "amplifier_module_hooks_routing.resolver_class"
+                assert resolver.name == "balanced" and resolver.matrix_source == "bundle"
+                assert Path(resolver.matrix_path).resolve() == balanced_path
+                assert not resolver.shadowed_paths
+                automatic = automatic_default_routing(coordinator)
+                assert automatic is (mode != "strict"), "Real mounted provenance lost automatic/explicit distinction"
+                assert all(value.policy_at_mount for value in providers.values())
+                selected = self._select_provider(providers)
+                underlying = selected.original if isinstance(selected, SelectedProvider) else selected
+                instance, = [name for name, value in providers.items() if value is underlying]
+                selection = copy.deepcopy(selected.selection) if isinstance(selected, SelectedProvider) else None
+                info = selected.get_info().defaults
+                actual = (instance, selected.default_model, info.get("reasoning_effort"))
+                wanted, snapshot = expected[prompt]
+                assert actual == wanted, f"Balanced execution selection mismatch for {prompt}: {actual!r}"
+                assert selection == snapshot, f"Balanced selection snapshot mismatch for {prompt}"
+                assert info["model"] == selected.default_model
+                row = {"case": prompt, "session_id": coordinator.session_id,
+                       "parent_id": audit["parent_id"], "lifecycle": lifecycle,
+                       "provider": instance, "model": selected.default_model,
+                       "effort": actual[2], "selection": selection, "automatic": automatic}
+                observed.append(row)
+                await context.add_message({"role": "user", "content": prompt})
+                output = json.dumps(row, sort_keys=True)
+                await context.add_message({"role": "assistant", "content": output})
+                await hooks.emit("orchestrator:complete", {"status": "success", "turn_count": 1})
+                return output
+
+        @dataclass
+        class BalancedPrepared(ProbePrepared):
+            async def create_session(self, **kwargs):
+                session = await super().create_session(**kwargs)
+                audit = creations[-1]
+                assert audit["session_id"] == session.session_id
+                config = session.coordinator.config["session"]["orchestrator"].get("config", {})
+                await session.coordinator.mount("orchestrator", BalancedOrchestrator(config, audit))
+                return session
+
+        for mode in ("automatic", "strict", "resolver-error"):
+            hooks, automatic = await composed_routing(mode == "strict")
+            runtime_plan = copy.deepcopy(plan)
+            runtime_plan["hooks"] = hooks
+            runtime_plan["providers"] = [
+                provider("private-service", "private-default-v1", 0,
+                         ["private-default-v1", "private-conversation-v1", "private-call-pin-v1"]),
+                provider("private-secondary", "secondary-default-v1", 50,
+                         ["secondary-default-v1", "private-conversation-v2", "private-pin-v1"]),
+            ]
+            if mode == "resolver-error":
+                # A synthetic account matches the real matrix. Its explicit
+                # availability failure makes the real resolver raise, without
+                # changing resolve(), its name/source, or any matrix candidates.
+                runtime_plan["providers"].append(provider("openai", "unused-v1", 100, ["unused-v1"]))
+            runtime_plan["agents"] = {
+                "worker": {"model_role": "coding"},
+                "plain": {},
+                "pinned": {"model_role": "coding",
+                           "provider_preferences": preference("private-secondary", "private-pin-v1")},
+            }
+            prepared = BalancedPrepared(
+                runtime_plan, BundleModuleResolver(module_paths),
+                Bundle.from_dict(copy.deepcopy(runtime_plan), base_path=root),
+                automatic_policy=automatic,
+            )
+            parent = await prepared.create_session(
+                session_id="balanced-" + mode, session_cwd=root, approval_system=approvals,
+                before_initialize=partial(prepare_default_routing, automatic=automatic))
+            try:
+                store = SessionStore(root / ("balanced-" + mode))
+                registry = await install_children(parent, prepared, Runtime(parent.session_id), store, approvals)
+                loop = parent.coordinator.get("orchestrator")
+                mounted = parent.coordinator.get("providers")
+                loop.root_provider = SelectedProvider(mounted["private-service"], copy.deepcopy(selections["before"]))
+
+                def expect(case, selection=None, pin=None):
+                    expected[case] = ((pin[0], pin[1], None), None) if pin else (
+                        (selection["instance"], selection["model"], selection["effort"]), selection)
+
+                root_case = mode + "-root"
+                expect(root_case, selections["before"])
+                await parent.execute(root_case)
+                resolver = parent.coordinator.get_capability("model_role_resolver")
+                assert {"coding", "fast"} <= set(resolver.known_roles)
+
+                async def invoke(case, supplied, *, selection=None, pin=None, role=None):
+                    expect(case, selection, pin)
+                    prior = len(observed)
+                    old_messages = copy.deepcopy(store.load(supplied["session_id"])[0]) if "session_id" in supplied else []
+                    wrapper = parent.coordinator.get("tools")["delegate"]
+                    assert isinstance(wrapper, PersistentDelegate)
+                    assert isinstance(wrapper.original, exact_package(
+                        "amplifier_module_tool_delegate", paths["tool-delegate"]).DelegateTool)
+                    result = await wrapper.execute({"instruction": case, "context_depth": "none", **supplied})
+                    assert result.success, f"{case}: {result.error}"
+                    assert len(observed) == prior + 1
+                    assert json.loads(result.output["response"]) == observed[-1]
+                    identity = result.output["session_id"]
+                    assert observed[-1]["session_id"] == identity
+                    messages, metadata = store.load(identity)
+                    assert metadata["parent_id"] == observed[-1]["parent_id"] == parent.session_id
+                    assert metadata["status"] == registry.rows[identity]["status"] == "completed"
+                    assert metadata["automatic_default_routing"] is automatic
+                    assert json.loads(messages[-1]["content"]) == observed[-1]
+                    assert messages[:len(old_messages)] == old_messages
+                    assert metadata["effective_selection"] == selection
+                    if selection:
+                        assert metadata["preferences_source"] == "default_fallback"
+                        assert metadata["provider_preferences"] == []
+                    else:
+                        assert metadata["preferences_source"] == "explicit"
+                        assert [(p["provider"], p["model"]) for p in metadata["provider_preferences"]] == [pin]
+                    if role:
+                        assert metadata["agent_overlay"]["model_role"] == role
+                    saved_rows.append({"case": case, "session_id": identity,
+                                       "source": metadata["preferences_source"],
+                                       "selection": metadata["effective_selection"],
+                                       "role": metadata["agent_overlay"].get("model_role")})
+                    return identity
+
+                async def reject(case, supplied, message, *, exception=None):
+                    before = (len(observed), len(creations), len(registry.rows))
+                    try:
+                        result = await parent.coordinator.get("tools")["delegate"].execute({
+                            "instruction": case, "context_depth": "none", **supplied})
+                    except RuntimeError as error:
+                        # Call-role resolution is before DelegateTool's spawn
+                        # error adapter; assert the exact exception escapes.
+                        assert exception is error and message in str(error)
+                        outcome, detail = "raised", str(error)
+                    else:
+                        assert exception is None, f"{case}: resolver exception was converted"
+                        assert not result.success and message in str(result.error), (case, result.error)
+                        outcome, detail = "tool_error", str(result.error)
+                    assert (len(observed), len(creations), len(registry.rows)) == before
+                    rejected.append({"case": case, "error": detail, "outcome": outcome})
+
+                if mode == "resolver-error":
+                    failure = RuntimeError("synthetic provider availability failure")
+                    checked_accounts = []
+                    def unavailable(instance):
+                        checked_accounts.append(instance)
+                        raise failure
+                    parent.coordinator.register_capability("provider.check_available", unavailable)
+                    try:
+                        await resolver.resolve("coding")
+                    except RuntimeError as error:
+                        assert error is failure
+                    else:
+                        raise AssertionError("Real balanced resolver swallowed availability failure")
+                    await reject("resolver-error-agent", {"agent": "worker"}, str(failure))
+                    await reject("resolver-error-call", {"agent": "plain", "model_role": "fast"},
+                                 str(failure), exception=failure)
+                    assert checked_accounts and set(checked_accounts) == {"openai"}
+                else:
+                    assert await resolver.resolve("coding") == []
+                    assert await resolver.resolve("fast") == []
+                    if mode == "strict":
+                        await reject("strict-agent-role", {"agent": "worker"}, "no available candidates")
+                        await reject("strict-call-role", {"agent": "plain", "model_role": "fast"}, "no available candidates")
+                    else:
+                        identity = await invoke("automatic-agent-role", {"agent": "worker"},
+                                                selection=selections["before"], role="coding")
+                        await invoke("automatic-call-role", {"agent": "worker", "model_role": "fast"},
+                                     selection=selections["before"], role="fast")
+                        await invoke("automatic-agent-pin", {"agent": "pinned", "model_role": "fast"},
+                                     pin=("private-secondary", "private-pin-v1"))
+                        await invoke("automatic-call-pin", {"agent": "pinned", "model_role": "fast",
+                                     "provider_preferences": preference("private-service", "private-call-pin-v1")},
+                                     pin=("private-service", "private-call-pin-v1"))
+                        await reject("automatic-invalid-pin", {"agent": "worker",
+                                     "provider_preferences": preference("not-mounted", "unavailable-v1")},
+                                     "no default was substituted")
+                        # New delegate has no routing cache. Resume must read the
+                        # saved snapshot, not the parent's changed instance/model/effort.
+                        delegate_module = exact_package("amplifier_module_tool_delegate", paths["tool-delegate"])
+                        fresh = delegate_module.DelegateTool(parent.coordinator, copy.deepcopy(plan["tools"][0]["config"]))
+                        await parent.coordinator.mount("tools", fresh, name="delegate")
+                        await registry.install(parent, prepared)
+                        loop.root_provider = SelectedProvider(mounted["private-secondary"], copy.deepcopy(selections["after"]))
+                        expect("automatic-root-changed", selections["after"])
+                        await parent.execute("automatic-root-changed")
+                        assert await invoke("automatic-resume", {"session_id": identity},
+                                            selection=selections["before"], role="coding") == identity
+                        assert await invoke("automatic-resume-new-role", {"session_id": identity, "model_role": "fast"},
+                                            selection=selections["after"], role="fast") == identity
+            finally:
+                await parent.cleanup()
+        assert ROUTING_BEHAVIOR_URI in source_reads
+        assert hashlib.sha256(balanced_path.read_bytes()).hexdigest() == balanced_hash
+        assert hashlib.sha256(source_matrix.read_bytes()).hexdigest() == balanced_hash
+        return {"executions": observed, "saved": saved_rows, "rejected": rejected,
+                "matrix": {"name": "balanced", "source": "bundle", "path": str(balanced_path), "sha256": balanced_hash},
+                "origin": "compose_configured_bundle; routing-only finite runtime"}
+
     async def deny(prompt, choices):
         raise AssertionError("Offline routing should not request approval")
 
@@ -743,6 +1024,7 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
             assert len(executions) == len(expected)
             assert {row["case"] for row in executions} == set(expected)
             nested_desktop = await exercise_nested_desktop(plan, module_paths, root)
+            balanced_fallback = await exercise_balanced_fallback(plan, module_paths, root)
             assert not synthetic.COMPLETION_ATTEMPTS, "A model completion was attempted"
             assert not attempts, f"Forbidden offline effects were attempted: {attempts}"
             wheel = verify_wheel(distribution)
@@ -751,6 +1033,7 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
             report = {"status": "passed", "installed_wheel": wheel,
                       "tool_delegate": str(paths["tool-delegate"]), "routing_hook": str(paths["hooks-routing"]),
                       "executions": executions, "rejected": rejected, "nested_desktop": nested_desktop,
+                      "balanced_fallback": balanced_fallback,
                       "model_calls": 0, "forbidden_effects": attempts}
         finally:
             await parent.cleanup()

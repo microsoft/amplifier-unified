@@ -143,6 +143,48 @@ def test_installed_default_routing_through_real_delegate_and_lifecycle(routing_p
     assert initial["desktop_tools"] == resumed["desktop_tools"] == []
     assert initial["policy"] == resumed["policy"] == ceiling
     assert 0 < initial["message_count"] < resumed["message_count"]
+    fallback = report["balanced_fallback"]
+    assert fallback["origin"] == "compose_configured_bundle; routing-only finite runtime"
+    assert fallback["matrix"]["name"] == "balanced" and fallback["matrix"]["source"] == "bundle"
+    assert len(fallback["matrix"]["sha256"]) == 64
+    selected = {row["case"]: row for row in fallback["executions"]}
+    before = ("private-service", "private-conversation-v1", "high")
+    after = ("private-secondary", "private-conversation-v2", "low")
+    assert {case: (row["provider"], row["model"], row["effort"]) for case, row in selected.items()} == {
+        "automatic-root": before, "automatic-agent-role": before, "automatic-call-role": before,
+        "automatic-agent-pin": ("private-secondary", "private-pin-v1", None),
+        "automatic-call-pin": ("private-service", "private-call-pin-v1", None),
+        "automatic-root-changed": after, "automatic-resume": before, "automatic-resume-new-role": after,
+        "strict-root": before, "resolver-error-root": before,
+    }
+    assert len(fallback["executions"]) == len(selected)
+    assert all(row["automatic"] is (case != "strict-root") for case, row in selected.items())
+    for case, row in selected.items():
+        assert row["lifecycle"] == ("session:resume" if case.startswith("automatic-resume") else "session:start")
+        if case in {"automatic-agent-pin", "automatic-call-pin"}:
+            assert row["selection"] is None
+        else:
+            assert row["selection"] == {"instance": row["provider"], "model": row["model"], "effort": row["effort"]}
+    retained = {row["case"]: row for row in fallback["saved"]}
+    assert len(retained) == len(fallback["saved"]) == 6
+    identity = retained["automatic-agent-role"]["session_id"]
+    for case in ("automatic-agent-role", "automatic-resume", "automatic-resume-new-role"):
+        assert retained[case]["session_id"] == selected[case]["session_id"] == identity
+        assert retained[case]["selection"] == selected[case]["selection"]
+        assert retained[case]["source"] == "default_fallback"
+    assert retained["automatic-resume"]["role"] == "coding"
+    assert retained["automatic-call-role"]["role"] == retained["automatic-resume-new-role"]["role"] == "fast"
+    failures = {row["case"]: row["error"] for row in fallback["rejected"]}
+    assert len(failures) == len(fallback["rejected"]) == 5
+    assert set(failures) == {"automatic-invalid-pin", "strict-agent-role", "strict-call-role",
+                             "resolver-error-agent", "resolver-error-call"}
+    assert all("synthetic provider availability failure" in failures[case]
+               for case in ("resolver-error-agent", "resolver-error-call"))
+    assert {row["case"]: row["outcome"] for row in fallback["rejected"]} == {
+        "automatic-invalid-pin": "tool_error", "strict-agent-role": "tool_error",
+        "strict-call-role": "tool_error", "resolver-error-agent": "tool_error",
+        "resolver-error-call": "raised",
+    }
 
 
 def test_execution_oracle_rejects_lifecycle_model_corruption(routing_probe):
