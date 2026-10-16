@@ -122,12 +122,28 @@ class HostComponents:
             self.roots.setdefault(bundle.name, bundle.base_path)
 
     def select_defaults(self, bundle, base, overrides):
-        """New nested defaults must not repin existing explicit module sources."""
+        """Preserve only base pins that collide with this default's declarations."""
+        declared = getattr(bundle, '_host_default_sources', None)
+        if declared is None:
+            declared = [(row['module'], row.get('source'))
+                        for row in declarations(bundle.to_mount_plan())]
+        modules = {module for module, _ in declared}
+        repositories = set()
+        for module, source in declared:
+            git = git_source(overrides.get(module) or source)
+            if git:
+                repositories.add(git[0])
         self.select_bundle(bundle, overrides)
         for row in declarations(base.to_mount_plan()):
-            source = overrides.get(row["module"]) or row.get("source")
-            if source:
-                self.select(row["module"], source)
+            source = overrides.get(row['module']) or row.get('source')
+            git = git_source(source)
+            if row['module'] not in modules and (not git or git[0] not in repositories):
+                continue
+            # Non-Git sources collide by module only, never by a shared None
+            # repository. Resolve relative base pins against their own bundle.
+            if isinstance(source, str) and source.startswith('./') and base.base_path:
+                source = str((base.base_path / source).resolve())
+            self.select(row['module'], source)
 
     def source(self, module, source, *, installed=False):
         if installed and module in self.installed:
@@ -250,6 +266,10 @@ def capability_defaults(base, behavior, defaults):
                 row.setdefault('config', {}).update(copy.deepcopy(defaults[row['module']]))
 
     plan = behavior.to_mount_plan()
+    # Selection follows duplicate removal. Retain the original collision set,
+    # including a default whose only declaration was an existing root module.
+    behavior._host_default_sources = [(row['module'], row.get('source'))
+                                      for row in declarations(plan)]
     prepare(plan)
     for section in ('tools', 'hooks', 'agents', 'spawn'):
         if section in plan:

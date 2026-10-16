@@ -10,7 +10,8 @@ import yaml
 
 from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
 from amplifier_web.host.components import (
-    ComponentResolver, HostComponentConflict, HostComponents, compose_bundles, merge_modules,
+    ComponentResolver, HostComponentConflict, HostComponents, capability_defaults,
+    compose_bundles, declarations, merge_modules,
 )
 from amplifier_web.host.config import HostConfig
 from amplifier_web.host.session import compose_configured_bundle
@@ -198,3 +199,163 @@ def test_resolver_cannot_reintroduce_an_override_for_an_owned_sibling():
                                             'tool-independent': 'explicit-independent-source'})
     assert module_source(config, False, 'tool-sibling', source(module='tool-sibling'), policy) == source(module='tool-sibling')
     assert module_source(config, False, 'tool-independent', 'original-independent-source', policy) == 'explicit-independent-source'
+
+
+@pytest.mark.parametrize('default_source', [
+    source(repo='desktop', module='tool-computer-use'),
+    '/default/modules/tool-computer-use',
+    'file:///default/modules/tool-computer-use',
+    './modules/tool-computer-use',
+])
+def test_defaults_do_not_own_unrelated_root_or_late_child_sources(tmp_path, default_source):
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.session import module_source
+
+    def row(module, ref):
+        return {'module': module, 'source': source(repo='unrelated', ref=ref, module=module)}
+
+    root = Bundle(name='root', providers=[row('provider-independent', 'provider-pin')],
+        tools=[row('tool-independent', 'tool-pin'),
+               {'module': 'tool-local', 'source': '/root/modules/tool-local'},
+               {'module': 'tool-file', 'source': 'file:///root/modules/tool-file'},
+               # A matching basename is not a matching repository.
+               {'module': 'tool-fork', 'source': source(repo='desktop', ref='fork-pin',
+                   module='tool-fork').replace('/example/', '/another/')}],
+        hooks=[row('hook-independent', 'hook-pin')],
+        session={'context': row('context-independent', 'context-pin')},
+        spawn={'tools': [row('tool-spawn', 'spawn-pin')]},
+        agents={'worker': {'providers': [row('provider-agent', 'agent-provider-pin')],
+                           'tools': [row('tool-agent', 'agent-tool-pin')]}})
+    extra = Bundle(name='desktop', base_path=tmp_path / 'default',
+                   tools=[{'module': 'tool-computer-use', 'source': default_source}])
+    original = root.to_mount_plan()
+    base, behavior = capability_defaults(root, extra, {})
+    policy = HostComponents()
+    policy.select_defaults(behavior, base, {})
+    result = policy.apply(compose_bundles(base, behavior))
+    assert [row for row in declarations(result.to_mount_plan())
+            if row['module'] != 'tool-computer-use'] == list(declarations(original))
+    assert policy.normalize(original) == original
+    assert root.to_mount_plan() == original
+    for item in declarations(original):
+        module, saved = item['module'], item['source']
+        assert module not in policy.sources
+        assert not policy.owns(module, saved)
+        late = source(repo='child-choice', ref='child-pin', module=module)
+        assert policy.source(module, late) == late
+        config = SimpleNamespace(module_sources={module: late})
+        assert module_source(config, False, module, saved, policy) == late
+    # The same root module and a new sibling may both choose later child pins.
+    child = {'providers': [row('provider-independent', 'child-provider-pin')],
+             'tools': [row('tool-independent', 'child-tool-pin'), row('tool-late', 'child-sibling-pin')],
+             'spawn': {'tools': [row('tool-spawn', 'child-spawn-pin')]},
+             'agents': {'worker': {'tools': [row('tool-agent', 'child-agent-pin')]}}}
+    assert policy.normalize(child) == child
+
+
+@pytest.mark.parametrize('nested', [False, True])
+def test_default_collision_pin_survives_removed_duplicate_and_nested_specialist(nested):
+    from amplifier_foundation import Bundle
+    module = 'tool-computer-use'
+    chosen = source(repo='desktop', ref='explicit', module=module)
+    default = source(repo='desktop', ref='main', module=module)
+    root = Bundle(name='root', tools=[{'module': module, 'source': chosen,
+                                      'config': {'read_only': False}}])
+    extra = Bundle(name='desktop', tools=[{'module': module, 'source': default}],
+                   agents={'operator': {'tools': [{'module': module, 'source': default}]}}
+                   if nested else {})
+    base, behavior = capability_defaults(root, extra, {module: {'read_only': True}})
+    assert behavior.tools == []
+    policy = HostComponents()
+    policy.select_defaults(behavior, base, {})
+    result = policy.apply(compose_bundles(base, behavior))
+    assert result.tools == root.tools
+    assert policy.source(module, default) == chosen
+    assert policy.source('tool-late', source(repo='desktop', ref='main', module='tool-late')) == (
+        source(repo='desktop', ref='explicit', module='tool-late'))
+    if nested:
+        assert result.agents['operator']['tools'] == [
+            {'module': module, 'source': chosen, 'config': {'read_only': True}}]
+    assert extra.tools[0]['source'] == default
+
+
+@pytest.mark.parametrize('section', ['providers', 'tools', 'spawn', 'agents'])
+def test_default_repository_collision_preserves_base_pin_and_aligns_default(section):
+    from amplifier_foundation import Bundle
+    pinned = {'module': 'module-existing', 'source': source(
+        repo='desktop', ref='explicit', module='module-existing')}
+    plan = {section: [pinned]}
+    if section == 'spawn':
+        plan = {'spawn': {'tools': [pinned]}}
+    elif section == 'agents':
+        plan = {'agents': {'existing': {'tools': [pinned]}}}
+    root = Bundle(name='root', **plan)
+    extra = Bundle(name='desktop', tools=[{'module': 'tool-computer-use', 'source': source(
+        repo='desktop', ref='main', module='tool-computer-use')}])
+    base, behavior = capability_defaults(root, extra, {})
+    policy = HostComponents()
+    policy.select_defaults(behavior, base, {})
+    result = policy.apply(compose_bundles(base, behavior))
+    added = next(row for row in result.tools if row['module'] == 'tool-computer-use')
+    assert added['source'] == source(repo='desktop', ref='explicit', module='tool-computer-use')
+    assert policy.source('tool-late', source(repo='desktop', ref='main', module='tool-late')) == (
+        source(repo='desktop', ref='explicit', module='tool-late'))
+    assert policy.normalize(root.to_mount_plan()) == root.to_mount_plan()
+
+
+@pytest.mark.parametrize('chosen', [
+    source(repo='desktop-fork', ref='explicit', module='tool-computer-use'),
+    '/chosen/modules/tool-computer-use',
+    'file:///chosen/modules/tool-computer-use',
+    './modules/tool-computer-use',
+    'package-source',
+])
+def test_default_module_collision_preserves_git_and_non_git_base_pins(tmp_path, chosen):
+    from amplifier_foundation import Bundle
+    module = 'tool-computer-use'
+    root = Bundle(name='root', base_path=tmp_path / 'root',
+                  tools=[{'module': module, 'source': chosen}])
+    extra = Bundle(name='desktop', base_path=tmp_path / 'default',
+                   agents={'operator': {'tools': [{'module': module, 'source': './modules/default'}]}})
+    base, behavior = capability_defaults(root, extra, {})
+    policy = HostComponents()
+    policy.select_defaults(behavior, base, {})
+    result = policy.apply(compose_bundles(base, behavior))
+    expected = str((root.base_path / chosen).resolve()) if chosen.startswith('./') else chosen
+    assert result.tools[0]['source'] == expected
+    assert result.agents['operator']['tools'][0]['source'] == expected
+
+
+def test_default_collisions_use_effective_sources_without_owning_unrelated_overrides():
+    from amplifier_foundation import Bundle
+    module = 'tool-computer-use'
+    chosen = source(repo='configured-desktop', ref='explicit', module=module)
+    root = Bundle(name='root', tools=[
+        {'module': 'tool-sibling', 'source': source(
+            repo='configured-desktop', ref='explicit', module='tool-sibling')},
+        {'module': 'tool-independent', 'source': '/independent/original'}])
+    extra = Bundle(name='desktop', tools=[{'module': module, 'source': source(
+        repo='upstream-desktop', ref='main', module=module)}])
+    overrides = {module: chosen, 'tool-independent': '/independent/override'}
+    policy = HostComponents()
+    policy.select_defaults(extra, root, overrides)
+    assert policy.sources[module] == chosen
+    assert policy.sources['tool-sibling'] == root.tools[0]['source']
+    assert not policy.owns('tool-independent', root.tools[1]['source'])
+    assert policy.source('tool-independent', '/independent/child') == '/independent/child'
+
+
+def test_default_collision_selection_keeps_required_loop_and_naming_owners():
+    from amplifier_foundation import Bundle
+    loop, naming = 'loop-live', 'hooks-session-naming'
+    policy = HostComponents({loop: 'qualified-loop'}, {
+        loop: lambda: '/installed/loop', naming: lambda: '/installed/naming'})
+    root = Bundle(name='root', session={'orchestrator': {'module': loop, 'source': 'root-loop'}},
+                  hooks=[{'module': naming, 'source': 'root-naming'}])
+    extra = Bundle(name='desktop', session={'orchestrator': {'module': loop, 'source': 'default-loop'}},
+                   hooks=[{'module': naming, 'source': 'default-naming'}])
+    base, behavior = capability_defaults(root, extra, {})
+    policy.select_defaults(behavior, base, {})
+    assert policy.sources == {loop: 'qualified-loop'}
+    assert policy.source(loop, 'child-loop', installed=True) == '/installed/loop'
+    assert policy.source(naming, 'child-naming', installed=True) == '/installed/naming'
