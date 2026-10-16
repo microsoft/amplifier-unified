@@ -214,12 +214,16 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
         "amplifier_web/installation_health.py": "import json\ndef doctor(home): return {'ok': True}\nasync def status(home, wait=0): return {'ok': False, 'service': 'stopped'}\ndef display(result, **kw): print(json.dumps(result))\n",
         "amplifier_web/app_updates.py": "PROBE = \"import reset_fixture_dependency; assert reset_fixture_dependency.VALUE == 'fresh'\"\n",
     }, [f"reset-fixture-dependency @ {dep.as_uri()}"])
+    # uv tool deliberately ignores virtualenv interpreters while resolving 3.13.
+    # Keep the already-running standalone Python discoverable after HOME changes.
+    interpreter_bin = str(Path(sys._base_executable).resolve().parent)
     env = {**os.environ, "HOME": str(tmp_path), "UV_TOOL_DIR": str(tmp_path / "tools"),
-           "UV_TOOL_BIN_DIR": str(tmp_path / "bin"), "PATH": str(Path(uv).parent) + ":" + os.environ["PATH"],
+           "UV_TOOL_BIN_DIR": str(tmp_path / "bin"), "PATH": os.pathsep.join((str(Path(uv).parent), interpreter_bin, os.environ["PATH"])),
            "AMPLIFIER_WEB_HOME": str(tmp_path / "data")}
     for key in ("AMPLIFIER_SOURCE_STORE", "PYTHONPATH"):
         env.pop(key, None)
-    subprocess.run([uv, "tool", "install", "--no-cache", "--python", "3.13", str(app)], env=env, check=True, capture_output=True)
+    installed = subprocess.run([uv, "tool", "install", "--no-cache", "--python", "3.13", str(app)], env=env, capture_output=True, text=True)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
     prefix = tmp_path / "tools/amplifier-unified"
     sites = next(prefix.glob("lib/python*/site-packages"))
     (sites / "amplifier_web/app_updates.py").write_text("raise RuntimeError('locally hacked app')\n")

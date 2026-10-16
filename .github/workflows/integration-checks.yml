@@ -1,0 +1,131 @@
+name: Owned integration checks
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      revision:
+        type: string
+        required: true
+    secrets:
+      LOOP_LIVE_CI_READ_KEY:
+        required: true
+permissions:
+  contents: read
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      selected: ${{ steps.plan.outputs.selected }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Select owners for changed paths or the full post-release matrix
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          args = ['python', 'scripts/integration_checks.py', 'plan']
+          if os.environ['EVENT'] == 'pull_request':
+              base, head = os.environ['BASE'], os.environ['HEAD']
+              assert all(re.fullmatch(r'[0-9a-f]{40}', value) for value in (base, head))
+              Path('changed-paths.txt').write_bytes(subprocess.check_output(['git', 'diff', '--name-only', base + '...' + head]))
+              args += ['--changed', 'changed-paths.txt']
+          matrix = json.loads(subprocess.check_output(args, text=True))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps(matrix) + '\n')
+              output.write('selected=' + str(len(matrix['include'])) + '\n')
+          PY
+  integration:
+    needs: plan
+    if: needs.plan.outputs.selected != '0'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    services:
+      neo4j:
+        image: ${{ matrix.lane == 'context-intelligence' && 'neo4j:5.26.0-community' || '' }}
+        env:
+          NEO4J_AUTH: none
+          NEO4J_server_memory_heap_initial__size: 256m
+          NEO4J_server_memory_heap_max__size: 512m
+          NEO4J_server_memory_pagecache_size: 128m
+        ports:
+          - 127.0.0.1:17687:7687
+        options: --health-cmd "cypher-shell 'RETURN 1'" --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@v6
+      - name: Resolve the declared runtime revision
+        id: runtime
+        if: contains(fromJSON('["native","cli-interop"]'), matrix.lane)
+        run: |
+          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: contains(fromJSON('["native","cli-interop"]'), matrix.lane)
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ${{ steps.runtime.outputs.revision }}
+          path: .ci/loop-live
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.lane == 'cli-interop'
+        with:
+          repository: microsoft/amplifier-app-cli
+          path: .ci/cli
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.lane == 'context-intelligence'
+        with:
+          repository: microsoft/amplifier-context-intelligence
+          ref: c4fd590e04ebcf9c7db13704dbf273d6049598e6
+          path: .ci/ci-server
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.lane == 'filesystem-aliases'
+        with:
+          repository: microsoft/amplifier-module-tool-filesystem
+          ref: 38e48db57bd9091d4ad439c137240212855d07c8
+          path: .ci/tool-filesystem
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.lane == 'filesystem-aliases'
+        with:
+          repository: microsoft/amplifier-bundle-filesystem
+          ref: d71bb9522c6983c18e803aa43a96bd37dec75d32
+          path: .ci/filesystem-bundle
+          persist-credentials: false
+      - name: Execute owned cases; missing prerequisites or skips fail
+        env:
+          LANE: ${{ matrix.lane }}
+        run: python scripts/run_owned_integration.py --lane "$LANE" --work "$RUNNER_TEMP/integration" --output "$GITHUB_WORKSPACE/output/integration"
+      - name: Retain results and source identities, never private state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-${{ matrix.lane }}
+          path: output/integration/
+          if-no-files-found: warn

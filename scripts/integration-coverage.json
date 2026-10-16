@@ -1,0 +1,768 @@
+{
+  "schemaVersion": 1,
+  "baseline": {
+    "revision": "d1735f82dd9b5c62feeb5d362d4ec794a2687b4d",
+    "skipRecords": 87,
+    "note": "Three collection records cover whole modules, not individual cases. browser_auth is split into automated headless and explicit installed-desktop acceptance."
+  },
+  "commonPaths": [
+    "scripts/integration_checks.py",
+    "scripts/run_owned_integration.py",
+    "tests/conftest.py",
+    "scripts/integration-coverage.json",
+    ".github/workflows/integration-checks.yml",
+    "tests/test_integration_checks.py",
+    "amplifier_web/runtime_deps/**",
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "lanes": {
+    "native": {
+      "runner": "ubuntu-latest",
+      "mode": "automatic",
+      "selectors": [
+        "tests/test_context_continuity.py",
+        "tests/test_native_job_recovery.py",
+        "tests/test_agent_actions.py::test_catalog_and_permissions_fit_real_programmatic_output_limit",
+        "tests/test_attachments.py::test_real_core_loop_live_receives_multimodal_message",
+        "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload",
+        "tests/test_context_source.py::test_real_boundary_import_and_core_loader_remount",
+        "tests/test_history_edit_worker.py::test_current_edit_parks_and_resumes_without_replaying",
+        "tests/test_integration_validation.py::test_real_native_shell_command_and_postapproval_stop",
+        "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity",
+        "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset",
+        "tests/test_kernels.py::test_unknown_termination_never_claims_clean_reset",
+        "tests/test_kernels.py::test_output_budget_and_protocol_damage_remain_honest",
+        "tests/test_kernels.py::test_restart_keeps_cells_but_cannot_replay_or_resume_variables",
+        "tests/test_kernels.py::test_host_agent_and_ui_share_code_approval_state_and_journal",
+        "tests/test_kernels.py::test_exact_cell_and_generation_cannot_be_rewritten_after_approval",
+        "tests/test_kernels.py::test_required_question_blocks_only_exact_dependent_cell",
+        "tests/test_kernels.py::test_saved_kernel_restart_reads_are_passive_and_never_control_unknown",
+        "tests/test_kernels.py::test_completed_cell_cancel_cannot_interrupt_a_new_cell",
+        "tests/test_kernels.py::test_question_dependency_rechecked_after_code_approval",
+        "tests/test_kernels.py::test_reader_cancellation_cannot_lose_a_started_final_receipt",
+        "tests/test_kernels.py::test_only_explicit_create_prepares_owner_never_passive_reads_or_old_cells",
+        "tests/test_live_terminal_runtime.py::test_terminal_clients_follow_detach_reconnect_and_stop_real_worker",
+        "tests/test_native_provider.py::test_supported_instance_wrap_is_opt_in_and_preserves_root_selection",
+        "tests/test_native_provider.py::test_unsupported_selected_model_or_endpoint_falls_back_without_switch",
+        "tests/test_native_provider.py::test_changed_selection_uses_ordinary_transport_without_poisoning_native",
+        "tests/test_native_provider.py::test_selected_observed_surface_native_budget_checkpoint_and_reconnect",
+        "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope",
+        "tests/test_operations.py::test_real_process_output_is_durable_beyond_module_ring_and_cancel_observed",
+        "tests/test_operations.py::test_exact_mount_and_question_recheck_after_approval_before_real_spawn",
+        "tests/test_output_image_pairs.py::test_real_loop_core_selected_provider_serializes_both_exact_images_together",
+        "tests/test_runtime_controls.py::test_real_core_controls_and_tool_approval",
+        "tests/test_warm_worker.py::test_actual_worker_parks_and_reuses_with_real_shared_state"
+      ],
+      "paths": [
+        "tests/fixtures/computation_runtime.py",
+        "amplifier_web/host/**",
+        "amplifier_web/runtime*",
+        "amplifier_web/native*",
+        "amplifier_web/compaction*",
+        "amplifier_web/context*",
+        "amplifier_web/operations*",
+        "amplifier_web/history*",
+        "amplifier_web/attachments*",
+        "amplifier_web/output_image*",
+        "amplifier_web/live_terminal*",
+        "amplifier_web/service.py",
+        "amplifier_kernels/**",
+        "amplifier_operations/**",
+        "scripts/integration_native.py",
+        "tests/test_context_continuity.py",
+        "tests/test_native_job_recovery.py",
+        "tests/test_agent_actions.py",
+        "tests/test_attachments.py",
+        "tests/test_compaction_failure_contract.py",
+        "tests/test_context_source.py",
+        "tests/test_history_edit_worker.py",
+        "tests/test_integration_validation.py",
+        "tests/test_kernels.py",
+        "tests/test_live_terminal_runtime.py",
+        "tests/test_native_provider.py",
+        "tests/test_operations.py",
+        "tests/test_output_image_pairs.py",
+        "tests/test_runtime_controls.py",
+        "tests/test_warm_worker.py",
+        "tests/fixtures/attachments_runtime_probe.py",
+        "tests/fixtures/history_edit_probe.py",
+        "tests/fixtures/live_terminal_probe.py",
+        "tests/fixtures/standalone_controls_probe.py",
+        "tests/fixtures/warm_worker_probe.py"
+      ]
+    },
+    "release-runtime": {
+      "runner": "ubuntu-latest",
+      "mode": "publication",
+      "selectors": [
+        "tests/test_app_guidance.py::test_real_core_receives_canvas_tool_and_ephemeral_instructions",
+        "tests/test_app_guidance.py::test_real_core_receives_fresh_notice_then_typed_surface_image",
+        "tests/test_app_guidance.py::test_real_core_refreshes_workspace_awareness_without_history_accumulation",
+        "tests/test_host_children.py::test_real_foundation_child_lifecycle_and_delegate_contract",
+        "tests/test_host_children.py::test_real_community_recipe_completes_its_report_step",
+        "tests/test_runtime_module_cache.py::test_real_runtime_uses_active_module_cache"
+      ],
+      "paths": [
+        "amplifier_web/app_guidance.py",
+        "amplifier_web/host/**",
+        "amplifier_web/runtime*",
+        "tests/test_app_guidance.py",
+        "tests/test_host_children.py",
+        "tests/test_runtime_module_cache.py"
+      ]
+    },
+    "browser-headless": {
+      "runner": "ubuntu-latest",
+      "mode": "automatic",
+      "selectors": [
+        "tests/test_browser_auth.py::test_external_link_then_same_origin_login",
+        "tests/test_browser_auth.py::test_service_worker_forwarded_external_entry",
+        "tests/test_setup_page.py::test_renderer_fits_narrow_and_wide_chromium_viewports"
+      ],
+      "paths": [
+        "amplifier_web/auth.py",
+        "amplifier_web/server*.py",
+        "amplifier_web/tls.py",
+        "amplifier_web/setup*",
+        "amplifier_web/static/**",
+        "frontend/**",
+        "scripts/integration_clients.py",
+        "tests/test_browser_auth.py",
+        "tests/test_setup_page.py"
+      ]
+    },
+    "browser-installed": {
+      "runner": "desktop",
+      "mode": "manual",
+      "selectors": [
+        "tests/test_browser_auth.py::test_installed_pwa_launch"
+      ],
+      "paths": [
+        "amplifier_web/auth.py",
+        "amplifier_web/server*.py",
+        "amplifier_web/static/pwa*",
+        "frontend/src/pwa*",
+        "tests/test_browser_auth.py"
+      ]
+    },
+    "cli-interop": {
+      "runner": "ubuntu-latest",
+      "mode": "automatic",
+      "selectors": [
+        "tests/test_session_handoff.py::test_cli_unified_cli_preserves_native_history_and_fences_old_worker",
+        "tests/test_session_portability.py::test_installed_cli_round_trip",
+        "tests/test_shared_configuration_interop.py::test_cli_and_web_read_session_provider_choice_and_unknown_fields"
+      ],
+      "paths": [
+        "amplifier_web/session*",
+        "amplifier_web/config*",
+        "amplifier_web/shared*",
+        "amplifier_web/portability*",
+        "amplifier_web/history*",
+        "scripts/integration_clients.py",
+        "tests/test_session_handoff.py",
+        "tests/test_session_portability.py",
+        "tests/test_shared_configuration_interop.py"
+      ]
+    },
+    "filesystem-aliases": {
+      "runner": "macos-latest",
+      "mode": "automatic",
+      "selectors": [
+        "tests/test_file_source_guard.py::test_concurrent_creation_does_not_clobber_aliases"
+      ],
+      "paths": [
+        "amplifier_web/file*",
+        "amplifier_web/canvas_files.py",
+        "scripts/integration_clients.py",
+        "tests/test_file_source_guard.py",
+        "tests/fixtures/file_source_process_probe.py"
+      ]
+    },
+    "uv-reset": {
+      "runner": "ubuntu-latest",
+      "mode": "automatic",
+      "selectors": [
+        "tests/test_reset.py::test_real_uv_repairs_modified_packages_and_missing_dependencies"
+      ],
+      "paths": [
+        "amplifier_web/reset.py",
+        "amplifier_web/runtime_updates.py",
+        "scripts/integration_clients.py",
+        "tests/test_reset.py"
+      ]
+    },
+    "context-intelligence": {
+      "runner": "ubuntu-latest",
+      "mode": "automatic",
+      "selectors": [
+        "tests/test_ci_live.py::test_real_app_stream_routes_auth_and_graph"
+      ],
+      "paths": [
+        "amplifier_web/diagnostics*",
+        "tests/test_ci_live.py",
+        "scripts/integration_external.py"
+      ]
+    },
+    "connected-documents": {
+      "runner": "ubuntu-latest",
+      "mode": "manual",
+      "selectors": [
+        "tests/test_connected_documents_profile.py::test_native_behavior_composition",
+        "tests/test_connected_documents_profile.py::test_shared_ui_agent_native_invocation_and_policy"
+      ],
+      "paths": [
+        "scripts/work_profile/connected_documents.py",
+        "amplifier_web/runtime_controls.py",
+        "amplifier_web/runtime*",
+        "scripts/integration_external.py",
+        "tests/test_connected_documents_profile.py"
+      ],
+      "prerequisite": "Optional developer overlay only; explicit clean upstream checkout. Not a standard shipped runtime dependency."
+    },
+    "profiling": {
+      "runner": "ubuntu-latest",
+      "mode": "manual",
+      "selectors": [
+        "tests/test_profiling_host.py::test_off_and_missing_library_keep_host_usable",
+        "tests/test_profiling_host.py::test_real_http_capture_auth_retries_privacy_and_no_publication",
+        "tests/test_profiling_host.py::test_revocation_shutdown_unknown_target_and_restart_receipt",
+        "tests/test_profiling_host.py::test_revocation_without_followup_request",
+        "tests/test_profiling_host.py::test_agent_bridge_does_not_flush_dirty_progress",
+        "tests/test_profiling_host.py::test_release_retention_without_restart",
+        "tests/test_profiling_host.py::test_download_rechecks_revocation_before_return",
+        "tests/test_profiling_host.py::test_failed_receipt_settlement_reconciles_without_replay"
+      ],
+      "paths": [
+        "amplifier_web/profiling_host.py",
+        "tests/test_profiling_host.py"
+      ],
+      "prerequisite": "Canonical optional amplifier-profiling source must be supplied; no substitute implementation is accepted."
+    }
+  },
+  "baselineRecords": [
+    {
+      "node": "tests/test_browser_auth.py",
+      "kind": "module_collection",
+      "owner": "browser-headless",
+      "prerequisite": "playwright"
+    },
+    {
+      "node": "tests/test_context_continuity.py",
+      "kind": "module_collection",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_native_job_recovery.py",
+      "kind": "module_collection",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_agent_actions.py::test_catalog_and_permissions_fit_real_programmatic_output_limit",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_exec"
+    },
+    {
+      "node": "tests/test_app_guidance.py::test_real_core_receives_canvas_tool_and_ephemeral_instructions",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_app_guidance.py::test_real_core_receives_fresh_notice_then_typed_surface_image",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_app_guidance.py::test_real_core_refreshes_workspace_awareness_without_history_accumulation[persist]",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_app_guidance.py::test_real_core_refreshes_workspace_awareness_without_history_accumulation[tail]",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_attachments.py::test_real_core_loop_live_receives_multimodal_message",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_ci_live.py::test_real_app_stream_routes_auth_and_graph",
+      "kind": "test_case",
+      "owner": "context-intelligence",
+      "prerequisite": "UNIFIED_CI_TEST_URL + UNIFIED_CI_TEST_KEY_FILE"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[native_input_oversized]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[native_checkpoint_invalid]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[native_no_reduction]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[native_measurement_unavailable]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[native_compaction_failed]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[disabled]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[request_context_unavailable]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[invalid_native_contract]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[authoritative_measurement_unavailable]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[summary_output_limit]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[summary_empty]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[previous_failure]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[summary_failed]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload[native_failed]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_connected_documents_profile.py::test_native_behavior_composition",
+      "kind": "test_case",
+      "owner": "connected-documents",
+      "prerequisite": "AMPLIFIER_M365_TEST_SOURCE"
+    },
+    {
+      "node": "tests/test_connected_documents_profile.py::test_shared_ui_agent_native_invocation_and_policy",
+      "kind": "test_case",
+      "owner": "connected-documents",
+      "prerequisite": "AMPLIFIER_M365_TEST_SOURCE"
+    },
+    {
+      "node": "tests/test_context_source.py::test_real_boundary_import_and_core_loader_remount",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_context_managed"
+    },
+    {
+      "node": "tests/test_file_source_guard.py::test_concurrent_creation_does_not_clobber_aliases[case]",
+      "kind": "test_case",
+      "owner": "filesystem-aliases",
+      "prerequisite": "case/unicode-normalization aliasing filesystem"
+    },
+    {
+      "node": "tests/test_file_source_guard.py::test_concurrent_creation_does_not_clobber_aliases[unicode]",
+      "kind": "test_case",
+      "owner": "filesystem-aliases",
+      "prerequisite": "case/unicode-normalization aliasing filesystem"
+    },
+    {
+      "node": "tests/test_history_edit_worker.py::test_current_edit_parks_and_resumes_without_replaying",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "RUN_HISTORY_EDIT_WORKER=1"
+    },
+    {
+      "node": "tests/test_host_children.py::test_real_foundation_child_lifecycle_and_delegate_contract",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_host_children.py::test_real_community_recipe_completes_its_report_step",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON + WARM_RECIPES_PATH"
+    },
+    {
+      "node": "tests/test_integration_validation.py::test_real_native_shell_command_and_postapproval_stop",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity[python]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity[node]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset[python]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset[node]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_unknown_termination_never_claims_clean_reset",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_output_budget_and_protocol_damage_remain_honest",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_restart_keeps_cells_but_cannot_replay_or_resume_variables",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_host_agent_and_ui_share_code_approval_state_and_journal",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_exact_cell_and_generation_cannot_be_rewritten_after_approval",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_required_question_blocks_only_exact_dependent_cell",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_saved_kernel_restart_reads_are_passive_and_never_control_unknown",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_completed_cell_cancel_cannot_interrupt_a_new_cell",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_question_dependency_rechecked_after_code_approval",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_reader_cancellation_cannot_lose_a_started_final_receipt",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_kernels.py::test_only_explicit_create_prepares_owner_never_passive_reads_or_old_cells",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_live_terminal_runtime.py::test_terminal_clients_follow_detach_reconnect_and_stop_real_worker",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_supported_instance_wrap_is_opt_in_and_preserves_root_selection",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_unsupported_selected_model_or_endpoint_falls_back_without_switch[gpt-5.6-terra-None]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_unsupported_selected_model_or_endpoint_falls_back_without_switch[gpt-6-astra-https://proxy.example/v1]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_changed_selection_uses_ordinary_transport_without_poisoning_native",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_selected_observed_surface_native_budget_checkpoint_and_reconnect",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[success-options0]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[success-options1]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[success-options2]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[error-options0]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[error-options1]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[error-options2]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[cancel-options0]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[cancel-options1]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_native_provider.py::test_native_boundary_forwards_options_and_restores_scope[cancel-options2]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_operations.py::test_real_process_output_is_durable_beyond_module_ring_and_cancel_observed",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_operations.py::test_exact_mount_and_question_recheck_after_approval_before_real_spawn",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_tool_bash"
+    },
+    {
+      "node": "tests/test_output_image_pairs.py::test_real_loop_core_selected_provider_serializes_both_exact_images_together",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "amplifier_module_provider_openai"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_off_and_missing_library_keep_host_usable",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_real_http_capture_auth_retries_privacy_and_no_publication",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_revocation_shutdown_unknown_target_and_restart_receipt",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_revocation_without_followup_request[None]",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_revocation_without_followup_request[3: invalid\\n]",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_revocation_without_followup_request[debug: [broken]\\n]",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_agent_bridge_does_not_flush_dirty_progress",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_release_retention_without_restart",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_download_rechecks_revocation_before_return",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_profiling_host.py::test_failed_receipt_settlement_reconciles_without_replay",
+      "kind": "test_case",
+      "owner": "profiling",
+      "prerequisite": "amplifier_profiling"
+    },
+    {
+      "node": "tests/test_reset.py::test_real_uv_repairs_modified_packages_and_missing_dependencies",
+      "kind": "test_case",
+      "owner": "uv-reset",
+      "prerequisite": "AMPLIFIER_RESET_TEST_UV"
+    },
+    {
+      "node": "tests/test_runtime_controls.py::test_real_core_controls_and_tool_approval",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_runtime_module_cache.py::test_real_runtime_uses_active_module_cache[probe]",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_runtime_module_cache.py::test_real_runtime_uses_active_module_cache[fresh-worker]",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_runtime_module_cache.py::test_real_runtime_uses_active_module_cache[resumed-worker]",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_runtime_module_cache.py::test_real_runtime_uses_active_module_cache[failed-worker]",
+      "kind": "test_case",
+      "owner": "release-runtime",
+      "prerequisite": "UNIFIED_RUNTIME_PYTHON"
+    },
+    {
+      "node": "tests/test_session_handoff.py::test_cli_unified_cli_preserves_native_history_and_fences_old_worker",
+      "kind": "test_case",
+      "owner": "cli-interop",
+      "prerequisite": "amplifier_app_cli"
+    },
+    {
+      "node": "tests/test_session_portability.py::test_installed_cli_round_trip",
+      "kind": "test_case",
+      "owner": "cli-interop",
+      "prerequisite": "amplifier_app_cli"
+    },
+    {
+      "node": "tests/test_setup_page.py::test_renderer_fits_narrow_and_wide_chromium_viewports",
+      "kind": "test_case",
+      "owner": "browser-headless",
+      "prerequisite": "playwright"
+    },
+    {
+      "node": "tests/test_shared_configuration_interop.py::test_cli_and_web_read_session_provider_choice_and_unknown_fields",
+      "kind": "test_case",
+      "owner": "cli-interop",
+      "prerequisite": "amplifier_app_cli"
+    },
+    {
+      "node": "tests/test_warm_worker.py::test_actual_worker_parks_and_reuses_with_real_shared_state",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "WARM_FOUNDATION_PATH"
+    }
+  ]
+}

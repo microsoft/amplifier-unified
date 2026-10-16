@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 
-CHECKS = ('resolve', 'installed-package', 'readiness', 'python', 'browser')
+CHECKS = ('resolve', 'installed-package', 'readiness', 'python', 'browser', 'integrations')
 
 
 def gh(*args, payload=None):

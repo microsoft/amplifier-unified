@@ -262,3 +262,10 @@ recovery/retention tests cover backend ownership and archive-validation contract
 Fast's existing release-contract step also runs `test_browser_check_runner.py` and
 `test_active_client_diagnostics.py`, catching scenario ownership/report metadata
 errors before a full Python run. This adds no new workflow or broad gate.
+
+## Integration prerequisites and platform coverage
+
+The [IC-01–IC-10 ownership checklist](integration-coverage.md) extends this
+inventory with real runtime, CLI, browser/PWA, filesystem, reset, diagnostic
+server, connected-document and profiling acceptance. A skipped host test is not
+a passing smoke result; consult its designated owner and recorded limitations.
