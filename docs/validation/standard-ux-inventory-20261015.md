@@ -185,7 +185,9 @@ frozen inventory, add effect passes to its 199-workflow/669-outcome accounting,
 or turn a fixture correction into a product improvement. `R166-*` IDs are stable
 regression cases within the mapped workflows. Their baseline and current results
 are recorded in [the completion report](standard-ux-completion-20261015.md#post-release-166-results).
-Final combined-source qualification is pending at this checkpoint.
+Qualification was pending at this checkpoint; see the
+[completed repair qualification](standard-ux-completion-20261015.md#completed-repair-qualification-october-15-pacific)
+for the subsequent results and exact source limits.
 
 | Case and existing workflow IDs | Required smoke actions and invariant | Regression test and routine coverage |
 | --- | --- | --- |
@@ -218,6 +220,24 @@ process. Existing UX latency targets above remain targets, not newly achieved
 results. Functional scenario duration is not interaction latency. In particular,
 the 12-sample active-client comparison retains its unchanged thresholds and
 sample-size limits; it does not establish the original global p95 targets.
+
+### Image-acquisition failure coverage follow-up
+
+**R166-10** also covers prerequisite failures in the existing managed-update
+handoff check. Record image acquisition failure before application assertions;
+try each official registry at most once for the same pinned OCI index and retain
+the selected digest, operating system, architecture and image configuration ID.
+Never retry the image build, container run or application exercise as an acquisition
+fallback. Reject identity mismatches and preserve every failed attempt.
+
+After acquisition, require the unchanged four real systemd scenarios: managed
+self-restart with successor HTTP identity; rejected restart preserving the original
+process and handoff; legacy erased-marker reconciliation; and the exact historical
+updater's SIGTERM followed by successor reconciliation, preserving the historical
+failure. `scripts/test_systemd_update.py` runs through **Managed update handoff**
+(`systemd-update.yml`). Its 13 acquisition/no-replay controls in
+`tests/test_systemd_update_script.py` are collected by Full Python checks. These
+are additional boundaries of R166-10, not another workflow or broad release gate.
 
 ### PR787 environment-control coverage follow-up
 
