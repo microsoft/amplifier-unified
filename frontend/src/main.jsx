@@ -59,7 +59,7 @@ import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraft
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
 import {createConversationNavigation,isNavigationAction} from './conversation-navigation';
-import {createDestinationHistory,destinationCommand} from './destination-history';
+import {createDestinationHistory,destinationCommand} from './destination-history.js';
 import {onAuthenticationChange} from './api';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';

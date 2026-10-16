@@ -23,7 +23,7 @@ import {sessionStatus} from './session-status';
 import {ownershipState} from './ownership';
 import {hasNavigationResource} from './shell/navigation-demand';
 import {NavigationResourceStatus} from './shell/navigation-resource-status';
-import {DestinationHistory} from './destination-history';
+import {DestinationHistory} from './destination-history.jsx';
 
 export function WorkDialog({label,onClose,children,initialFocus}){
  const ref=useRef(null);useModalFocus(ref,true,onClose);

@@ -10,6 +10,12 @@ const out=process.env.AMPLIFIER_TEST_OUTPUT;
 if(!out)throw Error('Set AMPLIFIER_TEST_OUTPUT to an owned evidence directory.');
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
 let browser,page;
+const pendingGates=new Set();
+function gate(){
+ let resolve;const wait=new Promise(done=>{resolve=done});
+ const release=()=>{pendingGates.delete(release);resolve()};
+ pendingGates.add(release);return {wait,release};
+}
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  await mkdir(out,{recursive:true});
@@ -70,13 +76,97 @@ try{
  await back.click();await expect(page.getByRole('alert').filter({hasText:'Synthetic destination unavailable'})).toBeVisible();
  assert.deepEqual(await saved(),preReject);await page.unroute('**/api/actions');
  // A held selection cannot beat newer browsing: the existing shared intent queue owns order.
- await action('session.select',{id:b});await action('session.select',{id:c});let release,entered;
- const gate=new Promise(resolve=>{release=resolve}),seen=new Promise(resolve=>{entered=resolve});
- await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(body?.action==='session.select'){entered();await gate}await route.continue()});
- await back.click();await seen;
- const newer=action('view.update',{patch:{workSurface:'chats'}});release();await newer;await page.unroute('**/api/actions');
+ await action('session.select',{id:b});await action('session.select',{id:c});let entered=false;
+ const selectionGate=gate();
+ await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(body?.action==='session.select'){entered=true;await selectionGate.wait}await route.continue()});
+ await back.click();await expect.poll(()=>entered).toBe(true);
+ const newer=action('view.update',{patch:{workSurface:'chats'}});selectionGate.release();await newer;await page.unroute('**/api/actions');
  await expect.poll(async()=>(await state()).view.workSurface).toBe('chats');
  await expect.poll(async()=>(await saved()).entries.at(-1).kind).toBe('chats');
+ // Optimistic selections are not visits, even during unrelated state publication.
+ await action('session.select',{id:c});const beforeOptimistic=await saved(),optimisticGate=gate();let optimisticHeld=false;
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='session.select'&&body.args.id===b){optimisticHeld=true;await optimisticGate.wait;await route.fulfill({status:409,contentType:'application/json',body:'{"error":"Synthetic selection rejection"}'})}
+  else await route.continue();
+ });
+ await page.evaluate(id=>{window.optimisticSelection=window.amplifier.dispatch('session.select',{id}).catch(error=>({error:error.message}))},b);
+ await expect.poll(()=>optimisticHeld).toBe(true);
+ await action('session.pin',{id:c,pinned:true});
+ assert.deepEqual(await saved(),beforeOptimistic,'Unrelated authoritative state must not record an optimistic selection');
+ optimisticGate.release();await page.evaluate(()=>window.optimisticSelection);await page.unroute('**/api/actions');
+ assert.deepEqual(await saved(),beforeOptimistic);
+ // Back alone supersedes an older archive browse; Undo/Dismiss must not mask this race.
+ await action('session.select',{id:b});await action('session.select',{id:c});
+ const beforeArchive=await saved(),archiveGate=gate();let archiveHeld=false,workspaceRequests=0;
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='view.update'&&body.args.patch?.workSurface==='workspace')workspaceRequests++;
+  if(body?.action==='view.update'&&body.args.patch?.workSurface==='chat'){archiveHeld=true;await archiveGate.wait}
+  await route.continue();
+ });
+ await page.evaluate(()=>{window.archiveQueueBarrier=window.amplifier.dispatch('view.update',{patch:{workSurface:'chat'}})});
+ await expect.poll(()=>archiveHeld).toBe(true);
+ await page.getByRole('button',{name:'Chat',exact:true}).click();
+ await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Archive',exact:true}).click();
+ await expect(page.locator('[data-archive-notice]')).toContainText('Chat archived');
+ await expect(page.locator('#amp-one')).toHaveAttribute('data-work-surface','workspace');
+ await back.click();archiveGate.release();await page.evaluate(()=>window.archiveQueueBarrier);
+ await expect.poll(async()=>(await saved()).cursor).toBe(beforeArchive.cursor-1);
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(b);
+ assert.equal(workspaceRequests,0);assert.deepEqual((await saved()).entries,beforeArchive.entries);
+ await page.unroute('**/api/actions');
+ await page.locator('[data-archive-notice]').getByRole('button',{name:'Undo',exact:true}).click();
+ await expect(page.locator('[data-archive-notice]')).toContainText('Chat restored');
+ assert.equal((await state()).selectedSessionId,b);
+ // Raw archive changes organization only, not selection, workspace or visits.
+ const rawState=await state(),rawTrail=await saved(),rawArchive=await action('session.archive',{id:b});
+ assert.equal(rawArchive.accepted,true);assert.equal(rawArchive.result.id,b);assert.equal(rawArchive.result.archived,true);
+ assert.equal((await state()).selectedSessionId,rawState.selectedSessionId);
+ assert.equal((await state()).selectedWorkspaceId,rawState.selectedWorkspaceId);
+ assert.equal((await state()).view.workSurface,rawState.view.workSurface);assert.deepEqual(await saved(),rawTrail);
+ await action('session.restore',{id:b});
+ // Dirty Canvas must reject actual history traversal, keeping the exact mounted editor.
+ await action('session.select',{id:a});await action('session.select',{id:b});
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
+ await action('canvas.show',{kind:'markdown',title:'History dirty guard',content:'# Retained source'});
+ const manifest={id:'example.history-dirty',label:'History unsaved editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
+ const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());return React.createElement("label",null,"History unsaved input",React.createElement("input",{"data-mount":mount,value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
+ const digest=(await action('shell.packages.stage',{manifest,source})).result.digest;
+ assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
+ await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
+ const editor=page.getByLabel('History unsaved input');await editor.fill('UNSAVED HISTORY EDIT');
+ const inspect=async()=>(await action('canvas.views.inspect')).result.views.find(row=>row.viewId==='primary');
+ await expect.poll(async()=>(await inspect()).dirty).toBe(true);
+ const mount=await editor.getAttribute('data-mount'),dirtyTrail=await saved();
+ await back.click();await expect(page.getByRole('alert').filter({hasText:/viewer edit/})).toBeVisible();
+ assert.equal((await state()).selectedSessionId,b);assert.deepEqual(await saved(),dirtyTrail);
+ await expect(editor).toHaveValue('UNSAVED HISTORY EDIT');assert.equal(await editor.getAttribute('data-mount'),mount);
+ await action('view.update',{patch:{workSurface:'workspaces'}});await expect(editor).toBeHidden();
+ const browsedDirtyTrail=await saved();
+ await back.click();await expect(editor).toBeVisible();await expect(editor).toHaveValue('UNSAVED HISTORY EDIT');
+ await expect.poll(async()=>(await saved()).cursor).toBe(dirtyTrail.cursor);
+ assert.deepEqual((await saved()).entries,browsedDirtyTrail.entries,'Returning must keep the workspace visit available through Forward');
+ assert.equal(await editor.getAttribute('data-mount'),mount);
+ const recovering=await inspect();
+ await action('canvas.views.recover',Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,recovering[key]])));
+ await action('canvas.close');
+ // Settings in Canvas leaves the header usable; cancelling Back preserves private edits.
+ await action('session.select',{id:a});await action('session.select',{id:b});
+ await action('canvas.show',{kind:'settings'});
+ await action('view.update',{patch:{settingsExpanded:['providers'],settingsCanvas:true,panel:null}});
+ const settings=page.locator('.a-settings-experience[data-settings-page="providers"]');
+ await expect(settings).toBeVisible();await settings.getByRole('button',{name:'Add provider',exact:true}).click();
+ await settings.getByRole('button',{name:'Show advanced configuration',exact:true}).click();
+ const privateEdit=settings.locator('[id$="provider-config"]');await privateEdit.fill('{"unsaved-history-input":');
+ const settingsTrail=await saved();await back.click();
+ await expect(page.getByRole('alertdialog')).toBeVisible();
+ await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ assert.equal((await state()).selectedSessionId,b);assert.deepEqual(await saved(),settingsTrail);
+ await expect(privateEdit).toHaveValue('{"unsaved-history-input":');
+ await page.getByRole('button',{name:'Close tab Settings',exact:true}).click();
+ await page.getByRole('button',{name:'Discard changes',exact:true}).click();
+ await action('canvas.visibility',{open:false});
  // Narrow target dimensions and no reintroduced remembered-chat strip.
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:900});await menu.click();await expect(page.getByRole('menu')).toBeVisible();
@@ -88,5 +178,13 @@ try{
  const captured=await state();assert.equal(Object.hasOwn(captured,'destinationHistory'),false);
  const serialized=JSON.stringify(await saved());assert.doesNotMatch(serialized,/Unsent Alpha draft|Synthetic preview|cHJlc2VydmU=/);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','workspace tabs','file preview','reload','rejection','ordered navigation','keyboard and hold','1440/390 layout'],pageErrors:errors}));
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+ console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','workspace tabs','file preview','reload','rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings','keyboard and hold','1440/390 layout'],pageErrors:errors}));
+}finally{
+ for(const release of pendingGates)release();
+ try{await browser?.close()}finally{
+  if(fixture.exitCode===null&&fixture.signalCode===null)await new Promise((resolve,reject)=>{
+   const timer=setTimeout(()=>reject(Error('Owned fixture did not stop after SIGTERM')),5000);
+   fixture.once('exit',()=>{clearTimeout(timer);resolve()});fixture.kill('SIGTERM');
+  });
+ }
+}
