@@ -393,3 +393,22 @@ this change adds no foreground wait or duplicate test lane. A successor run must
 finish every step and publish its qualified-source receipt before the background
 failure is resolved. A focused rerun of the interrupted checks does not replace
 that complete receipt. See [the failure and focused evidence](readiness-budget169.json).
+
+### Delayed work projection and terminal settlement (October 16)
+
+**R170-01** covers the execution-actions failure in post-release run
+`38961050670` (issue #816): wait for the current canonical Work projection,
+then address each expandable group by its stable identity. Late insertion of
+the saved-event group must not make a positional locator toggle a different
+group. The existing execution-actions browser scenario keeps its full payload,
+reload and narrow-screen checks. Normal execution and a diagnostic 500ms view
+update delay passed; the original release result remains 73 of 74 scenarios.
+
+**R170-02** covers the native terminal fixture's next-turn boundary. Seeing the
+last assistant text alone is not proof of idle. Require the idle snapshot and
+an accepted ordinary-input receipt before the explicit-stop stage. The existing
+IC-01 owner retains the real worker, two clients, detach, duplicate-input and
+cancellation assertions. A 750ms event delay reproduces the old held-steering
+receipt and passes after the fixture waits for idle. These are additive checks;
+the frozen 199/669 inventory remains unchanged. Stories cold initial reconnect
+is separately tracked as ST-07 in its [joined workflow checklist](stories-joined-acceptance.md).

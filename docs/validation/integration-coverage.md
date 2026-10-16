@@ -54,6 +54,19 @@ prove paid-provider latency, real Microsoft 365 authorization, or live Office
 client acceptance. Their integration claims concern the actual native modules
 and host boundaries exercised by the named tests.
 
+### Terminal lifecycle regression, October 16
+
+The PR812 native run `38968575306` timed out waiting for its stop-test provider.
+The fixture sent that new-turn input after seeing assistant text but before the
+previous generation finished. A delayed assistant-event observation reproduced
+an explicit held-steering receipt; it was not evidence that stop had failed.
+The fixture now waits for the terminal client's idle snapshot and asserts an
+accepted, non-steering receipt before waiting for the provider. The actual
+two-client detach, duplicate delivery, reconnect and cancellation checks remain.
+The existing IC-01 native lane owns this check; no additional lane or retry is
+added. Normal execution and the same 750ms delayed-event probe passed locally;
+the original hosted failure remains recorded separately.
+
 ## Running an owned lane
 
 Use an owned disposable DTU locally, with private state, dependencies, services,

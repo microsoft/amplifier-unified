@@ -58,6 +58,7 @@ qualify standard multiprocess Chromium or native desktop dialogs.
 | ST-04 | Packaged Stories MCP App renders the retained storyboard in Unified; browser exports ZIP | Passed; exported structured panels exactly equal original native-file input |
 | ST-05 | Disconnect/reconnect and reload reopen retained content without another import | Passed; read-only backend operation receipt comparison requires exactly one unchanged host import receipt (IDs, hashes and bounded receipts retained), plus browser dispatch observation |
 | ST-06 | No browser errors; evidence names source/build, time, current limits | Passed in Linux ARM headless context; retain that scope on future reports |
+| ST-07 | Open while MCP is offline, explicitly reconnect, and recover in the same iframe without reload; later reconnect preserves initialized edits | Newly discovered failure on Stories `c31ab746`: host reconnect succeeds but its initial read error remains. Separate Stories recovery fix required; ST-05's initialized reconnect pass does not qualify this case. Retry only the failed read, never an import or other mutation. |
 
 Around 20 seconds was observed for the joined warm-runtime synthetic run;
 preparation time is separate. Desired result: correct bounded work, no replay,
