@@ -493,7 +493,7 @@ async def test_native_core_coordinator_mount_obeys_save_and_reset_without_provid
     external = tmp_path.parent/(tmp_path.name+'-native-files')
     external.mkdir()
     seed(app, 'local', {'overrides':{'tool-filesystem':{'config':{'allowed_write_paths':[str(external)]}}}})
-    async def write_on_new_mount(name):
+    async def write_on_new_mount(name, target=external):
         config = load_config(source['workspace'], session_id=native_id(source))
         bundle = SimpleNamespace(tools=[{'module':'tool-filesystem'}], agents={})
         _apply_host_policy(bundle, config)
@@ -505,12 +505,24 @@ async def test_native_core_coordinator_mount_obeys_save_and_reset_without_provid
             native.coordinator.register_capability('session.working_dir', source['workspace'])
             await filesystem.mount(native.coordinator, bundle.tools[0]['config'])
             tools = native.coordinator.get('tools')
-            return await tools['write_file'].execute({'file_path':str(external/name),'content':name})
+            return await tools['write_file'].execute({'file_path':str(target/name),'content':name})
         finally:
             await native.cleanup()
     assert (await write_on_new_mount('initial.txt')).success
     await command(app, 'permissions.save', args(app,allowed=[],denied=[]), 'native-narrow')
     assert not (await write_on_new_mount('denied.txt')).success
+    # The #712 positive case: exact approved session authority and saved policy
+    # become effective on the next native mount without granting a sibling path.
+    await grant(app, ['file_access'], ['session'], 'native-exact-directory-grant')
+    _, saved = await command(app, 'permissions.save',
+        args(app, allowed=[str(external)], denied=[]), 'native-allow', as_agent=True)
+    assert saved['phase'] == 'ready'
+    assert (await write_on_new_mount('approved.txt')).success
+    sibling = external.with_name(external.name + '-unapproved')
+    sibling.mkdir()
+    assert not (await write_on_new_mount('sibling.txt', sibling)).success
+    assert not (sibling/'sibling.txt').exists()
+    assert read(app)['allowed'] == [str(external)]
     await command(app, 'permissions.reset', args(app), 'native-reset')
     assert (await write_on_new_mount('restored.txt')).success
     assert not (external/'denied.txt').exists()

@@ -218,6 +218,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        'standard-ux-keyboard-reflow': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-keyboard-reflow'},
         'smart-tool-updates': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/smart-tool-updates-artifacts'},
         'archive-feedback': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/archive-feedback'},
         'update-restart': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-restart-artifacts'},
@@ -232,7 +233,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row['env'] == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 72
+    assert len(original) == 65 and len(rows) == 73
     assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == '115d865e2934f442582f89f77bde590ebc6101cb535c841efbba8f3e2511807f'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
@@ -280,8 +281,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum(f'node {appearance_preview}' in line for _, line in commands) == 1
     # All 108 original scripts, three navigation regressions, confirmed restart,
     # Smart Tool recovery, archive feedback and appearance preview navigation
-    # each retain their owning lane.
-    assert len(readiness_scripts | extended_scripts) == 115
+    # and sequential keyboard reflow each retain their owning lane.
+    assert len(readiness_scripts | extended_scripts) == 116
 
     # The environment journey belongs to coordination, outside these two lanes.
     environment = 'tests/test-environments-browser.mjs'

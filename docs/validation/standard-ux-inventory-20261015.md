@@ -1,5 +1,21 @@
 # Standard UX inventory and execution plan
 
+## Current follow-up smoke coverage (October 16)
+
+| Case / owner | Current evidence | Desired result and limits |
+| --- | --- | --- |
+| `standard-ux-keyboard-reflow` / extended browser checks after publication | Sequential Tab/Enter entry, all eight ordinary Settings sections, compact Back and Close; 29 focus/geometry witnesses at 1440×1000 and 720×500. Complete run: 7.173 s, zero leftover processes. | Every exercised destination remains keyboard reachable with visible, unclipped focus; no horizontal overflow or lost draft. Half CSS viewport qualifies 200% zoom-equivalent reflow, not browser/OS zoom controls or all widgets. |
+| #712 exact approved storage scope / full Python checks after publication | Existing real Core coordinator mount test now also saves an explicitly authorized session directory, writes there on the next mount, and refuses the sibling. With task-storage acceptance: 35 passed, zero skipped. | Exact scope only; denied/unknown allocation performs no filesystem effects. Joined Stories import/native review/export and actual resumed-delegate continuation remain unrun. |
+| #712 real resumed-native child / Full Python checks after publication | Actual Core/Foundation child checkpoint and resume preserves the old write ceiling after a wider parent grant; a fresh child writes only the approved directory and its own later resume also succeeds. Sibling writes remain refused. Five native child checks passed, zero skipped; removing the retained ceiling fails the new check. | Preserve saved authority and transcript on resume; expose a clear fresh-child continuation when an old child's ceiling excludes the new grant. This does not qualify the outer worker process or original Stories workflow. |
+
+Source identities, original failed setup attempts, limits and observed/desired
+outcomes are in [the additive receipt](standard-ux-followup-20261016.json).
+The original 199-workflow / 669-outcome ledger remains 618 covered-in-context,
+36 partial and 15 unrun. The 51 residual outcomes include broad guarantees and
+external acceptance; they are not 51 ordinary destinations left unvisited.
+
+## Frozen inventory baseline
+
 Frozen source: `1d993e0bb32bc90b75fc66f56f1b9014c2d63f87` (0.20.165 plus PR776).
 Inventory owner: `build_qualify145`. Integration owner: root. This is a source
 inventory and browser execution plan, not a release gate or a passing test report.
@@ -312,3 +328,20 @@ harness; do not make the copied data or provider credentials a hosted-CI fixture
 Use repeated comparable observations for regression decisions. Three sends and
 one sample per workspace action are an early warning, not a stable p95 estimate
 or proof that a particular commit caused a latency change.
+
+### Checkout identity across handoff waits (October 16)
+
+**R168-01** extends checkout handoff coverage: after the initial Git preflight,
+replace the source or destination checkout's `.git` identity while the host waits
+for the saved worker boundary, and separately while runtime release is pending.
+The move must never apply the substituted checkout. Before release, reject it
+without invoking release and clear the preparation state. After confirmed release,
+retain the unresolved receipt and require inspection/reconciliation; preserve the
+original execution placement, messages and execution revision, and replay no input.
+
+The four deterministic real-Git substitution cases in
+`test_multi_repository_worktrees.py::test_repository_replaced_during_handoff_await_never_applies`
+are owned by the existing Task coordination contracts and full Python checks. They model
+runtime waits with explicit asynchronous barriers, not a physical filesystem lock
+or an arbitrary concurrent external writer guarantee. They supplement the original
+preflight replacement regression and do not change the frozen 199/669 inventory.
