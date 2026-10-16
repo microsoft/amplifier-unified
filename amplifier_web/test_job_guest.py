@@ -185,8 +185,10 @@ def supervise(payload):
         selector.register(process.stderr, selectors.EVENT_READ, errors)
         while selector.get_map() or process.poll() is None:
             now = time.monotonic()
-            if ending is None and ((root / 'cancel.json').exists() or now >= deadline):
-                ending = 'cancelled' if (root / 'cancel.json').exists() else 'timed_out'
+            code = process.poll()
+            if ending is None and ((root / 'cancel.json').exists() or now >= deadline or code is not None):
+                ending = ('cancelled' if (root / 'cancel.json').exists() else
+                          'timed_out' if now >= deadline else 'passed' if code == 0 else 'failed')
                 terminate_at = now + 2
                 try:
                     os.killpg(process.pid, signal.SIGTERM)

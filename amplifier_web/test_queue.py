@@ -555,7 +555,8 @@ class TestQueue:
                     'Recovered the recorded check and cleanup results. The owned environment is removed; no command was replayed.')
                 return
             config = environments.resolve_configuration(self.app, row, active)
-            if receipt['job'].get('durableVersion') == 1 and row.get('durableJob'):
+            if (receipt['job'].get('durableVersion') == 1 and row.get('durableJob')
+                    and receipt['job']['status'] not in {'stopping', 'removing'}):
                 await self.monitor(identity, config)
                 return
             # read reconciles any prior abandoned pendingRequest and physical

@@ -167,3 +167,37 @@ async def test_passive_environment_read_does_not_call_running_guest_abandoned(ap
     assert row['environmentState'] == 'running'
     running[0][identity] = 'passed'
     await asyncio.gather(*queue.tasks.values())
+
+
+async def test_restart_during_cleanup_observes_stopped_guest_without_job_read(app, queue, backend, monkeypatch):
+    invoke = environments.invoke
+    physical_stopped = False
+    def lost_stop(config, home, row, action, args):
+        nonlocal physical_stopped
+        if action == 'stop':
+            physical_stopped = True
+            backend.append((action, args))
+            raise TimeoutError('Stop committed but response was lost')
+        if action == 'job_read':
+            pytest.fail('A stopped guest cannot run a job observer')
+        result = invoke(config, home, row, action, args)
+        if action == 'read' and physical_stopped:
+            result['status'] = 'stopped'
+        return result
+    monkeypatch.setattr(environments, 'invoke', lost_stop)
+    effect = queue.effect
+    async def interrupted(*args, **kwargs):
+        result = await effect(*args, **kwargs)
+        if args[2] == 'stop':
+            raise asyncio.CancelledError
+        return result
+    monkeypatch.setattr(queue, 'effect', interrupted)
+    await submit(app)
+    await queue.tick()
+    await asyncio.gather(*queue.tasks.values(), return_exceptions=True)
+    assert record(queue, app)['job']['status'] == 'stopping' and physical_stopped
+    recovered = app.test_queue = TestQueue(app)
+    await drive(recovered)
+    assert record(recovered, app)['job']['status'] == 'passed'
+    assert [action for action, _ in backend].count('stop') == 1
+    assert [action for action, _ in backend][-2:] == ['read', 'remove']

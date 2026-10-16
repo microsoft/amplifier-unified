@@ -144,3 +144,13 @@ def test_crash_after_reservation_does_not_launch_on_observe_or_repeat(owned):
     assert guest.observe(value)['job']['state'] == 'unknown'
     assert guest.start(value)['job']['state'] == 'unknown'
     assert not (owned[0] / 'forbidden').exists()
+
+
+def test_background_pipe_inheritance_does_not_hold_finished_check_until_deadline(owned):
+    value = payload('sleep 90 & printf done', seconds=1200)
+    before = time.monotonic()
+    guest.start(value)
+    result = terminal(value)
+    assert time.monotonic()-before < 5
+    assert result['job']['state'] == 'passed'
+    assert result['result']['stdout'] == 'done'
