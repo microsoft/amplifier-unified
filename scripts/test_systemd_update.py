@@ -19,14 +19,43 @@ import time
 import uuid
 
 IMAGE = "amplifier-update-systemd-test"
-# Docker Official Images are also published by Docker on ECR Public. Avoid
-# Docker Hub anonymous pull limits shared by hosted CI runners.
-DOCKERFILE = """FROM public.ecr.aws/docker/library/python:3.13-slim
+# Both registries publish the same Docker Official Python 3.13-slim OCI index.
+# Pin its bytes so a registry quota fallback cannot change the test environment;
+# Docker still selects the daemon's native platform from that same index.
+BASE_DIGEST = "sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"
+BASE_IMAGES = tuple(f"{registry}@{BASE_DIGEST}" for registry in (
+    "public.ecr.aws/docker/library/python", "docker.io/library/python",
+))
+DOCKERFILE = """FROM {base_image}
 RUN apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv dbus-user-session git ca-certificates libpam0g && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 ENV container=docker
 CMD [\"/sbin/init\"]
 """
+
+
+def acquire_base_image(docker):
+    """Try each immutable mirror once, before any build or application work."""
+    for image in BASE_IMAGES:
+        try:
+            docker("pull", image, timeout=180)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            print(f"Base image acquisition failed for {image}: {exc}", file=sys.stderr)
+            continue
+        # Inspect only public image identity, never a container's environment.
+        identity = json.loads(docker(
+            "image", "inspect", "--format",
+            '{"id":{{json .Id}},"digests":{{json .RepoDigests}},'
+            '"os":{{json .Os}},"architecture":{{json .Architecture}}}',
+            image, capture_output=True, text=True, timeout=15,
+        ).stdout)
+        digests = identity.get("digests") or []
+        if not any(isinstance(value, str) and value.rpartition("@")[2] == BASE_DIGEST
+                   for value in digests) or identity.get("os") != "linux":
+            raise RuntimeError("Acquired base image does not match the pinned Linux image")
+        print("Selected systemd base image: " + json.dumps({"reference": image, **identity}), flush=True)
+        return image
+    raise RuntimeError("Could not acquire the pinned systemd base image from either official registry")
 
 
 def wait_for_systemd(docker, name, *, timeout=60):
@@ -67,7 +96,10 @@ def main():
     def docker(*command, check=True, **kwargs):
         return subprocess.run([args.docker, *command], check=check, **kwargs)
 
-    docker("build", "-t", IMAGE, "-", input=DOCKERFILE, text=True)
+    base_image = acquire_base_image(docker)
+    # BuildKit may resolve this immutable reference again. Never switch back to
+    # a failed mirror or retry a build/container/application operation.
+    docker("build", "-t", IMAGE, "-", input=DOCKERFILE.format(base_image=base_image), text=True)
     docker("run", "-d", "--name", name, "--privileged", "--cgroupns=private",
            "--tmpfs", "/run", "--tmpfs", "/run/lock", "--tmpfs", "/tmp",
            "--mount", f"type=bind,source={root},target=/src,readonly", IMAGE)
