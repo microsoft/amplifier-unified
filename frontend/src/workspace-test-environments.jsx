@@ -75,7 +75,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     {!readOnly&&<button type="button" className="a-soft" disabled={controlsBlocked||!setupOwned||!!setup.operation.cleanup} onClick={()=>mutate('workspace.environments.setup.cleanup',{requestId:setup.requestId})}>Clean up interrupted setup</button>}
    </>}
   </section>}
-  {page?.preparation&&<p role="status">Project preparation: {page.preparation.state?.replaceAll('_',' ')}. {page.preparation.detail}</p>}
+  {page?.preparation&&<p role="status">Project preparation: {page.preparation.status?.replaceAll('_',' ')}. {page.preparation.phase} {page.preparation.reason}</p>}
   {capability?.source&&<p style={{overflowWrap:'anywhere'}}>Working folder: {capability.source}</p>}
   {(page?.checks||[]).length>0&&<section aria-label="Queued checks"><h5>Queued checks</h5>
    <ul>{page.checks.map(check=><li key={check.id}>
@@ -83,7 +83,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     {check.status==='queued'&&<p>Waiting for room to run. You can keep working; this request will start automatically when capacity is available.</p>}
     {check.capacity?.blockers?.some(row=>row.code==='storage_pressure')&&check.status==='queued'&&<p>The test host needs more free storage before this check can start.</p>}
     {check.detail&&<p>{check.detail}</p>}
-    {check.cancelRequested&&['starting','preparing','checking','stopping','removing'].includes(check.status)&&<p>Cancellation requested. An admitted command may continue until its timeout; cleanup keeps its evidence.</p>}
+    {check.cancelRequested&&['starting','preparing','checking','stopping','removing'].includes(check.status)&&<p>Cancellation requested. The runner is stopping the check and will retain its evidence before cleanup.</p>}
     {check.check&&<button type="button" className="a-link" disabled={busy||!active} onClick={()=>readCheck(check.id)}>Read check result</button>}
     {checkOutput?.id===check.id&&<div aria-label="Saved check result">
      <p>Recorded request: {checkOutput.operation?.state?.replaceAll('_',' ')}</p>
@@ -96,17 +96,17 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     <details><summary>Check details</summary><pre className="a-state-view">{JSON.stringify(check,null,2)}</pre></details>
    </li>)}</ul>
   </section>}
-  {!readOnly&&capability?.status==='ready'&&!waiting&&!rows.some(row=>row.status!=='removed')&&<form aria-label="Queue isolated check" onSubmit={event=>{event.preventDefault();mutate('workspace.tests.submit',{profileId:profile.id,command:draft.command,timeoutSeconds:profile.timeoutSeconds,notify:false})}}>
+  {!readOnly&&capability?.status==='ready'&&!waiting&&!rows.some(row=>row.status!=='removed')&&<form aria-label="Queue isolated check" onSubmit={event=>{event.preventDefault();mutate('workspace.tests.submit',{profileId:profile.id,command:draft.command,timeoutSeconds:profile.defaultTimeoutSeconds,notify:false})}}>
    <label htmlFor={form+'-queued-profile'}>Check environment</label><select id={form+'-queued-profile'} disabled={blocked} value={profile?.id||''} onChange={event=>retain({...draft,profileId:event.target.value})}>{profiles.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}</select>
    <label htmlFor={form+'-queued-command'}>Check command</label><textarea id={form+'-queued-command'} value={draft.command} maxLength={16000} disabled={blocked} placeholder="python -m unittest discover" onChange={event=>retain({...draft,command:event.target.value})}/>
-   <p>Runs once in a snapshot of the working folder taken when the check starts. The host saves the working folder and artifacts before removing the test environment. {profile?.timeoutSeconds?`The check has a ${Math.ceil(profile.timeoutSeconds/60)}-minute limit.`:''} {profile?.requiresPreparation?'The first check prepares this project’s locked dependencies before running; preparation may download packages.':''}</p>
-   <button type="submit" className="a-soft" disabled={blocked||!draft.command.trim()||!profile?.timeoutSeconds}>Queue check</button>
+   <p>Runs once in a snapshot of the working folder taken when the check starts. The host saves the working folder and artifacts before removing the test environment. {profile?.defaultTimeoutSeconds?`The check has a ${Math.ceil(profile.defaultTimeoutSeconds/60)}-minute limit.`:''} {profile?.preparationRequired?'The first check prepares this project’s locked dependencies before running; preparation may download packages.':''}</p>
+   <button type="submit" className="a-soft" disabled={blocked||!draft.command.trim()||!profile?.defaultTimeoutSeconds}>Queue check</button>
   </form>}
   {page&&rows.length===0&&<p>No test environment for this chat.</p>}
   <ul>{rows.map(row=>{const cleanupBlocked=controlsBlocked||row.recovery?.available!==true,accounting=row.retention?.accounting,savedBytes=accounting?.verified?storageSize(accounting.totalBytes):null;return <li key={row.id} data-test-environment={row.id} style={{overflowWrap:'anywhere'}}>
    <strong>{row.label||'Test environment'}</strong><p role="status">{row.observation?.status==='unverified'?'Last known environment':'Environment'}: {row.status?.replaceAll('_',' ')||'unknown'}</p>
    {row.reason&&<p>{row.reason}</p>}
-   {row.preparation&&<p role="status">Dependency preparation: {row.preparation.state?.replaceAll('_',' ')}. {row.preparation.detail}</p>}
+   {row.preparation&&<p role="status">Dependency preparation: {row.preparation.status?.replaceAll('_',' ')}. {row.preparation.phase} {row.preparation.reason}</p>}
    {row.observation?.status==='unverified'&&<p>Current state could not be verified. This is a saved observation.</p>}
    {['outcome_unknown','unknown'].includes(row.status)&&<p>The previous outcome is uncertain. Inspect the environment before taking another action.</p>}
    {row.lastRecovery&&<p role="status">Last recovery check: {row.lastRecovery.state?.replaceAll('_',' ')||'unknown'}. {row.lastRecovery.message||'The original request result is kept separately.'}</p>}
@@ -117,7 +117,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     <button type="button" className="a-soft" disabled={cleanupBlocked} onClick={()=>mutate('workspace.environments.reconcile',{id:row.id,expectedRevision:row.revision})}>Check and recover</button>
     <p>Checks the current environment without rerunning commands. Releases ownership only when its absence is confirmed.</p>
     {row.recovery?.available===false&&<p>{row.recovery.reason||'The original environment connection is unavailable. Its files and ownership are kept.'}</p>}
-    <form aria-label="Run environment check" onSubmit={event=>{event.preventDefault();mutate('workspace.environments.execute',{id:row.id,expectedRevision:row.revision,command:draft.command,timeoutSeconds:profiles.find(profile=>profile.id===row.profileId)?.timeoutSeconds||60})}}>
+    <form aria-label="Run environment check" onSubmit={event=>{event.preventDefault();mutate('workspace.environments.execute',{id:row.id,expectedRevision:row.revision,command:draft.command,timeoutSeconds:60})}}>
      <label htmlFor={form+'-command-'+row.id}>Check command</label><textarea id={form+'-command-'+row.id} maxLength={16000} placeholder="python -m unittest discover" value={draft.command} disabled={blocked} onChange={event=>retain({...draft,command:event.target.value})}/>
      <button type="submit" className="a-soft" disabled={blocked||!draft.command.trim()||!['running','ready'].includes(row.status)}>Run check</button>
     </form>

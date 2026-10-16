@@ -164,7 +164,7 @@ test('setup uses the same narrow host action and shows durable progress',async()
 });
 
 test('browser check profile uses its server budget and automatic preparation',async()=>{
- let root;const calls=[],view={items:[],capability:{status:'ready',profiles:[{id:'linux-python',label:'Python',timeoutSeconds:600},{id:'linux-browser',label:'Browser',timeoutSeconds:1200,requiresPreparation:true}]}};
+ let root;const calls=[],view={items:[],capability:{status:'ready',profiles:[{id:'linux-python',label:'Python',defaultTimeoutSeconds:600},{id:'linux-browser',label:'Browser',defaultTimeoutSeconds:1200,preparationRequired:true}]}};
  const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?view:{request:{state:'queued'}})};
  try{
   await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});

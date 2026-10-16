@@ -19,6 +19,7 @@ def app(tmp_path, monkeypatch):
     value = SimpleNamespace(data_dir=home, smart_tools=SimpleNamespace(state={'installations': []}, install=AsyncMock(return_value={'id': 'a' * 24, 'commit': owner.DTU_COMMIT, 'extras': []})))
     monkeypatch.setattr(owner, 'configuration', lambda _: (None, 'disabled', 'Not set up'))
     monkeypatch.setattr(owner, 'validate_configuration_value', lambda _, value: (value, 'ready', 'Verified'))
+    monkeypatch.setattr(setup, 'inspect_base_image', lambda _: None)
     monkeypatch.setattr(setup, 'discover', lambda: [{'id': 'docker', 'label': 'Docker', 'available': True, 'reason': 'Available', 'executable': '/usr/bin/docker', 'dockerHost': 'unix:///run/docker.sock'}, {'id': 'incus', 'label': 'Incus', 'available': False, 'reason': 'Unavailable'}])
     return value
 
@@ -135,6 +136,7 @@ async def test_readiness_cache_expires_and_rechecks_exact_config(app, monkeypatc
     monkeypatch.setattr(owner, 'configuration', lambda _: (config, 'ready', 'Configured'))
     calls = []
     monkeypatch.setattr(owner, 'invoke', lambda *a: calls.append(a) or {'ok': True, 'capacity': {'blockers': []}})
+    setup.retain_verification(app, config, {'probeRemoved': True})
     first = await setup.readiness(app)
     assert first['status'] == 'ready' and first['observedAt']
     assert await setup.readiness(app) == first
@@ -194,7 +196,7 @@ async def test_docker_probe_is_offline_owned_and_absence_verified(app, monkeypat
     assert '--read-only' in run and '--rm' in run and '--label' in run
     assert not any(value in run for value in ['--mount', '-v'])
     assert config['image'] == owner.APPROVED_IMAGE and proof['probeRemoved']
-    assert phases == ['preparing_image', 'checking_profile']
+    assert phases == ['preparing_image', 'checking_profile', 'checking_profile']
 
 
 async def test_interrupted_setup_cleanup_is_owned_and_retains_image(app, monkeypatch):
@@ -274,3 +276,37 @@ async def test_shutdown_holds_setup_ownership_until_inflight_thread_settles(app,
     await closing
     result = setup.read_json(setup.root(app) / (setup.read_json(setup.root(app) / 'latest.json')['id'] + '.json'))
     assert result['state'] == 'outcome_unknown'
+
+
+async def test_existing_config_needs_real_base_probe_without_configuration_change(app, monkeypatch):
+    config = {'enabled': True, 'backend': 'docker'}
+    setup.write_json(app.data_dir / 'test-environments.json', config)
+    monkeypatch.setattr(owner, 'configuration', lambda _: (config, 'ready', 'Configured'))
+    monkeypatch.setattr(owner, 'invoke', lambda *a: {'ok': True, 'capacity': {'blockers': []}})
+    before = await setup.readiness(app)
+    assert before['status'] == 'configured' and before['backendReachable']
+    verify = AsyncMock(return_value={'probeRemoved': True, 'offline': True})
+    monkeypatch.setattr(setup, 'verify_existing', verify)
+    await setup.request(app, args(), {})
+    result = await settle(app)
+    assert result['state'] == 'completed'
+    verify.assert_awaited_once()
+    app.smart_tools.install.assert_not_called()
+    assert setup.read_json(app.data_dir / 'test-environments.json') == config
+    assert (await setup.readiness(app))['status'] == 'ready'
+
+
+def test_unknown_probe_admission_is_not_settled_by_absence(app, monkeypatch):
+    record = {'id': 'a' * 32, 'backend': 'docker'}
+    folder = setup.root(app) / record['id']
+    folder.mkdir(mode=0o700)
+    setup.write_json(folder / 'probe.json', {'name': 'owned', 'dockerHost': 'unix:///owned.sock', 'daemon': 'original'})
+    setup.write_json(folder / 'effect-docker-probe.json', {'kind': 'probe', 'state': 'outcome_unknown'})
+    monkeypatch.setattr(setup, 'executable', lambda _: '/usr/bin/docker')
+    monkeypatch.setattr(setup, 'command', lambda argv, **kw: '{"ID":"original"}' if 'info' in argv else '')
+    with pytest.raises(ValueError, match='Absence alone'):
+        setup.observe_partial(app, record)
+    # Explicit cleanup may close absence only after this exact owned probe was
+    # physically observed and then removed, not from an empty inventory alone.
+    record['cleanup'] = {'observedResources': ['probe']}
+    assert setup.observe_partial(app, record)['absent']

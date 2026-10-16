@@ -134,6 +134,25 @@ def capacity_defaults():
     return {'maxRunning': running, 'maxInstances': running + 2, 'minFreeBytes': 4 * 1024 ** 3}
 
 
+def tracked_command(path, kind, argv, **kwargs):
+    """Persist command settlement inside the executing thread, before reply."""
+    if read_json(path):
+        raise ValueError('This setup effect already has a receipt and cannot be replayed.')
+    row = {'kind': kind, 'state': 'started', 'createdAt': time.time()}
+    write_json(path, row)
+    try:
+        result = command(argv, **kwargs)
+    except Exception as exc:
+        # ValueError is a completely drained, exited client with a known failure.
+        # Timeouts and interrupted clients leave daemon admission uncertain.
+        row.update(state='completed' if isinstance(exc, ValueError) else 'outcome_unknown', success=False, updatedAt=time.time())
+        write_json(path, row)
+        raise
+    row.update(state='completed', success=True, updatedAt=time.time())
+    write_json(path, row)
+    return result
+
+
 def discover():
     if not sys.platform.startswith('linux'):
         reason = 'Automatic local test setup is currently qualified on Linux. Use a supported Linux host; macOS and Windows setup have not been qualified.'
@@ -182,13 +201,19 @@ async def readiness(app, *, force=False):
     config, status, reason = await settled_thread(configuration, app)
     if config is None:
         return {'status': status, 'reason': reason}
+    if read_json(Path(app.data_dir) / 'test-environments.json') != raw:
+        return {'status': 'unavailable', 'reason': 'The runner configuration changed during inspection. Refresh its status.'}
     try:
         observed = await settled_thread(invoke, config, app.data_dir, {}, 'capacity', {})
         if not observed.get('ok') or not isinstance(observed.get('capacity'), dict):
             raise ValueError('The configured daemon did not answer.')
         capacity = observed['capacity']
         blockers = capacity.get('blockers', [])
-        value = {'status': 'ready', 'reason': 'The configured runner is reachable. Each project still needs its own dependency preparation.',
+        await settled_thread(inspect_base_image, config)
+        proof_path = root(app, create=False) / ('verified-' + hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest() + '.json')
+        proof = read_json(proof_path)
+        verified = bool(proof and proof.get('configuration') == raw and proof.get('proof', {}).get('probeRemoved'))
+        value = {'status': 'ready' if verified else 'configured', 'reason': 'The configured runner and approved base image are reachable. Each project still needs its own dependency preparation.' if verified else 'The runner is reachable, but this configuration still needs its isolated readiness check. Run setup to verify it.', 'backendReachable': True,
                  'capacity': capacity, 'available': not blockers, 'backend': config.get('backend', 'docker'), 'observedAt': time.time()}
         app._test_setup_readiness = {'key': key, 'at': time.monotonic(), 'value': value}
         return value
@@ -295,9 +320,26 @@ async def _run(app, record, lock, guard):
             if existing.get('backend', 'docker') != record['backend']:
                 raise ValueError('A different backend is already configured. Existing resources keep their original runner; setup does not silently replace it.')
             state = await readiness(app, force=True)
-            if state['status'] != 'ready':
+            if not state.get('backendReachable'):
                 raise ValueError(state['reason'])
-            record.update(state='completed', phase='ready', detail=state['reason'])
+            if state['status'] == 'ready':
+                record.update(state='completed', phase='ready', detail=state['reason'])
+                return
+            if not state.get('available'):
+                raise ValueError('The runner is busy or low on storage. Wait for capacity before verifying its base environment.')
+            owned = folder / record['id']
+            owned.mkdir(mode=0o700, exist_ok=False)
+            raw = read_json(Path(app.data_dir) / 'test-environments.json')
+            normalized, _, _ = await settled_thread(owner.validate_configuration_value, app, raw)
+            if normalized != existing:
+                raise ValueError('The runner configuration changed before its readiness check.')
+            proof = await verify_existing(existing, raw, owned, record, step)
+            record.update(candidateConfiguration=raw, proof=proof)
+            await step('saving', 'Saving the isolated readiness check for this existing runner.')
+            if read_json(Path(app.data_dir) / 'test-environments.json') != raw:
+                raise ValueError('The runner configuration changed during its readiness check.')
+            retain_verification(app, raw, proof)
+            record.update(state='completed', phase='ready', detail='The existing runner passed an isolated offline check. Its configuration is unchanged.')
             return
         config_before = read_json(Path(app.data_dir) / 'test-environments.json')
         selected = next(row for row in await settled_thread(discover) if row['id'] == record['backend'])
@@ -323,6 +365,7 @@ async def _run(app, record, lock, guard):
             raise ValueError('The prepared runner did not pass host qualification.')
         if read_json(Path(app.data_dir) / 'test-environments.json') != config_before:
             raise ValueError('The runner configuration changed during setup. The new setup result was retained without replacing it.')
+        retain_verification(app, config, proof)
         write_json(Path(app.data_dir) / 'test-environments.json', config)
         record.update(state='completed', phase='ready', detail='Isolated tests are ready. Prepare this project’s dependencies before its first check.', proof=proof)
     except asyncio.CancelledError:
@@ -338,6 +381,60 @@ async def _run(app, record, lock, guard):
         lock.release()
 
 
+def retain_verification(app, config, proof):
+    identity = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+    write_json(root(app) / ('verified-' + identity + '.json'), {'configuration': config, 'proof': proof})
+    app._test_setup_readiness = None
+
+
+def inspect_base_image(config):
+    if config.get('backend', 'docker') == 'docker':
+        binary = executable('docker')
+        if not binary:
+            raise ValueError('The Docker client is unavailable.')
+        info = json.loads(command([binary, '--host', config['dockerHost'], 'image', 'inspect', config['image'], '--format', '{{json .}}']))
+        if not info.get('Id'):
+            raise ValueError('The approved base image is unavailable.')
+    else:
+        current = config['incus']
+        env = {'PATH': os.defpath, 'HOME': current['configDir'], 'LANG': 'C.UTF-8', 'INCUS_CONF': current['configDir']}
+        rows = json.loads(command([current['incusExecutable'], '--force-local', '--project', current['project'], 'image', 'list', 'local:', current['image'], '--format', 'json'], env=env))
+        if not any(row.get('fingerprint') == current['image'] for row in rows):
+            raise ValueError('The approved base image is unavailable.')
+
+
+async def verify_existing(config, raw, owned, record, step):
+    if config.get('backend', 'docker') == 'docker':
+        _, proof = await setup_docker(raw, {'executable': executable('docker'), 'dockerHost': config['dockerHost']}, owned, record, step)
+        return proof
+    current = config['incus']
+    env = {'PATH': os.defpath, 'HOME': str(owned), 'LANG': 'C.UTF-8', 'INCUS_CONF': current['configDir']}
+    prefix = [current['incusExecutable'], '--force-local', '--project', current['project']]
+    name = 'setup-' + record['id'][:16]
+    write_json(owned / 'probe.json', {'backend': 'incus', 'name': name, 'project': current['project'], 'configDir': current['configDir'], 'daemon': current.get('daemonFingerprint'), 'existingProject': True})
+    await step('checking_profile', 'Running a disposable offline readiness check without changing the existing runner.')
+    pools = json.loads(await settled_thread(command, [current['incusExecutable'], '--force-local', 'storage', 'list', '--format', 'json'], env=env))
+    pool = next((item['name'] for item in pools if item.get('status') == 'Created'), None)
+    if not pool:
+        raise ValueError('The existing Incus runner needs an initialized storage pool.')
+    async def effect(args):
+        await step(record['phase'], record['detail'])
+        identity = hashlib.sha256(json.dumps(args).encode()).hexdigest()[:20]
+        return await settled_thread(tracked_command, owned / ('effect-' + identity + '.json'), 'probe', [*prefix, *args], env=env, timeout=120)
+    await effect(['init', 'local:' + current['image'], name, '--no-profiles', '--storage', pool, '-c', 'user.amplifier.setup=' + record['id'], '-c', 'security.privileged=false', '-c', 'security.nesting=false', '-c', 'limits.memory=512MiB', '-c', 'limits.cpu=1'])
+    await effect(['start', name])
+    probe = json.loads(await settled_thread(command, [*prefix, 'exec', name, '--', 'python3', '-c', "import json,sys,tarfile; assert hasattr(tarfile,'data_filter'); print(json.dumps({'python':sys.version.split()[0]}))"], env=env, timeout=60))
+    instance = json.loads(await settled_thread(command, [*prefix, 'query', '/1.0/instances/' + name + '?project=' + current['project']], env=env))
+    if any(device.get('type') == 'nic' for device in instance.get('expanded_devices', {}).values()):
+        raise ValueError('The readiness probe unexpectedly has network access.')
+    await effect(['stop', name])
+    await effect(['delete', name])
+    remaining = json.loads(await settled_thread(command, [*prefix, 'list', name, '--format', 'json'], env=env))
+    if remaining:
+        raise ValueError('The readiness probe absence was not confirmed.')
+    return {'backend': 'incus', 'daemon': current.get('daemonFingerprint'), 'image': current['image'], 'probe': probe, 'offline': True, 'probeRemoved': True, 'checkedAt': time.time()}
+
+
 async def setup_docker(base, selected, owned, record, step):
     from .task_environments import APPROVED_IMAGE
     binary, endpoint = selected['executable'], selected['dockerHost']
@@ -348,7 +445,8 @@ async def setup_docker(base, selected, owned, record, step):
     name = 'unified-setup-' + record['id'][:20]
     daemon = json.loads(await settled_thread(command, [binary, '--host', endpoint, 'info', '--format', '{{json .}}']))
     write_json(owned / 'probe.json', {'backend': 'docker', 'name': name, 'dockerHost': endpoint, 'daemon': daemon['ID']})
-    result = await settled_thread(command, [binary, '--host', endpoint, 'run', '--rm', '--name', name,
+    await step('checking_profile', 'Running a disposable offline Python check in the approved image.')
+    result = await settled_thread(tracked_command, owned / 'effect-docker-probe.json', 'probe', [binary, '--host', endpoint, 'run', '--rm', '--name', name,
         '--label', 'io.amplifier.setup=' + record['id'], '--network', 'none', '--read-only', '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges', '--memory', '256m', '--pids-limit', '64',
         APPROVED_IMAGE, 'python', '-c', "import json,sys,tarfile; assert hasattr(tarfile,'data_filter'); print(json.dumps({'python':sys.version.split()[0],'offline':True}))"], timeout=60)
@@ -387,7 +485,13 @@ async def setup_incus(base, selected, owned, record, step):
         await step(record['phase'], record['detail'])
         if args[0] == 'query' and project_scope:
             args = [args[0], args[1] + ('&' if '?' in args[1] else '?') + 'project=' + project]
-        return await settled_thread(command, [binary, '--force-local', *(['--project', project] if project_scope else []), *args], env=env, timeout=timeout)
+        argv = [binary, '--force-local', *(['--project', project] if project_scope else []), *args]
+        kind = {'project': 'project', 'network': 'network', 'init': 'probe', 'start': 'probe', 'stop': 'probe', 'delete': 'probe'}.get(args[0])
+        mutation = args[0] in {'init', 'start', 'stop', 'delete'} or args[:2] in [['project', 'create'], ['network', 'create']]
+        if mutation:
+            identity = hashlib.sha256(json.dumps(args).encode()).hexdigest()[:20]
+            return await settled_thread(tracked_command, owned / ('effect-' + identity + '.json'), kind, argv, env=env, timeout=timeout)
+        return await settled_thread(command, argv, env=env, timeout=timeout)
     await step('creating_backend', 'Creating a private test project and its dependency-download network.')
     initial_daemon = json.loads(await incus(['query', '/1.0'], project_scope=False))['environment']['certificate_fingerprint']
     write_json(owned / 'resources.json', {'backend': 'incus', 'project': project, 'network': bridge, 'owner': record['id'], 'daemon': initial_daemon})
@@ -468,6 +572,8 @@ def observe_partial(app, record):
     """Read-only inventory of this exact setup, independent of cached status."""
     owned = root(app, create=False) / record['id']
     resources, probe = read_json(owned / 'resources.json'), read_json(owned / 'probe.json')
+    unsettled = {row['kind'] for item in owned.glob('effect-*.json') if (row := read_json(item)) and row['state'] != 'completed'}
+    matched = set(record.get('cleanup', {}).get('observedResources', []))
     if record['backend'] == 'docker':
         if not probe:
             return {'absent': True, 'backend': 'docker'}
@@ -486,7 +592,24 @@ def observe_partial(app, record):
                 labels = dict(value.split('=', 1) for value in labels.split(',') if '=' in value)
             if labels.get('io.amplifier.setup') != record['id']:
                 raise ValueError('The Docker probe owner does not match this setup.')
-        return {'absent': not rows, 'backend': 'docker', 'probe': probe, 'containers': rows, 'prefix': prefix}
+        if not rows and 'probe' in unsettled and 'probe' not in matched:
+            raise ValueError('The original probe launch has not settled. Absence alone cannot close a pending launch; keep this setup receipt and inspect it again after backend recovery.')
+        return {'absent': not rows, 'backend': 'docker', 'probe': probe, 'containers': rows, 'prefix': prefix, 'observedResources': ['probe'] if rows else []}
+    if not resources and probe and probe.get('existingProject'):
+        binary = executable('incus')
+        if not binary:
+            raise ValueError('Incus is unavailable; the readiness probe cannot be inspected.')
+        env = {'PATH': os.defpath, 'HOME': str(owned), 'LANG': 'C.UTF-8', 'INCUS_CONF': probe['configDir']}
+        prefix = [binary, '--force-local']
+        daemon = json.loads(command([*prefix, 'query', '/1.0'], env=env))['environment']['certificate_fingerprint']
+        if probe.get('daemon') and probe['daemon'] != daemon:
+            raise ValueError('The original readiness daemon identity changed.')
+        rows = json.loads(command([*prefix, '--project', probe['project'], 'list', probe['name'], '--format', 'json'], env=env))
+        if any(row['name'] != probe['name'] or row.get('config', {}).get('user.amplifier.setup') != record['id'] for row in rows):
+            raise ValueError('The readiness probe owner does not match this setup.')
+        if not rows and 'probe' in unsettled and 'probe' not in matched:
+            raise ValueError('The original readiness launch remains unsettled; absence is not proof of cancellation.')
+        return {'absent': not rows, 'backend': 'incus', 'resources': {'project': probe['project']}, 'probe': probe, 'instances': rows, 'project': None, 'images': [], 'network': None, 'prefix': prefix, 'env': env, 'observedResources': ['probe'] if rows else []}
     if not resources:
         return {'absent': True, 'backend': 'incus'}
     binary = executable('incus')
@@ -509,9 +632,12 @@ def observe_partial(app, record):
     network = next((row for row in networks if row['name'] == resources['network']), None)
     if network and (network.get('config', {}).get('user.amplifier.setup') != record['id'] or network.get('used_by')):
         raise ValueError('The setup network has another owner or is still in use.')
+    present = {name for name, value in [('project', project), ('network', network), ('probe', instances)] if value}
+    if unsettled - present - matched:
+        raise ValueError('A prior setup admission has not settled. Resource absence alone cannot prove the pending request will not complete; retain this receipt for backend recovery.')
     images = json.loads(command([*prefix, '--project', resources['project'], 'image', 'list', '--format', 'json'], env=env)) if project else []
     return {'absent': not instances and not network, 'backend': 'incus', 'resources': resources, 'probe': probe,
-            'instances': instances, 'project': project, 'images': images, 'network': network, 'prefix': prefix, 'env': env}
+            'instances': instances, 'project': project, 'images': images, 'network': network, 'prefix': prefix, 'env': env, 'observedResources': sorted(present)}
 
 
 async def reconcile(app, args, actor, guard=None):
@@ -572,7 +698,7 @@ async def _cleanup(app, record, path, lock, guard):
         return await settled_thread(command, argv, **kwargs)
     try:
         partial = await settled_thread(observe_partial, app, record)
-        record['cleanup']['state'] = 'running'
+        record['cleanup'].update(state='running', observedResources=partial.get('observedResources', []))
         write_json(path, record)
         if partial['backend'] == 'docker' and not partial['absent']:
             prefix, name = partial['prefix'], partial['probe']['name']
