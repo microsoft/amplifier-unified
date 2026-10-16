@@ -33,6 +33,8 @@ strengthen evidence without proving every dynamic control or external effect.
 Desired behavior remains no lost draft, reachable visible controls, exact scoped
 permission effects and no acknowledged mutation replay.
 
+## Original October 15 qualification
+
 The inventory contains **199 workflows and 669 expected outcomes**.
 The current evidence ledger records **618 outcomes observed in a
 named context, 36 partially observed, and 15 not run**.

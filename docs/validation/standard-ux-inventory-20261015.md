@@ -13,6 +13,8 @@ The original 199-workflow / 669-outcome ledger remains 618 covered-in-context,
 36 partial and 15 unrun. The 51 residual outcomes include broad guarantees and
 external acceptance; they are not 51 ordinary destinations left unvisited.
 
+## Frozen inventory baseline
+
 Frozen source: `1d993e0bb32bc90b75fc66f56f1b9014c2d63f87` (0.20.165 plus PR776).
 Inventory owner: `build_qualify145`. Integration owner: root. This is a source
 inventory and browser execution plan, not a release gate or a passing test report.
