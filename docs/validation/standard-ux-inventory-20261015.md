@@ -465,3 +465,17 @@ a real AppService/media registry and synthetic busy-state publication. It does
 not prove the timing of the originally reported live request. Backend identity
 validation is unchanged. Frozen inventory counts and original browser-plan hash
 remain unchanged; this is explicit additive coverage.
+
+### Combined October 16 qualification
+
+The combined bundle-isolation, media-transition and onboarding-diagnostic source
+`1b56f04d5` passed 196 Python tests plus two subtests and nine client component
+tests in the owned spark-2 DTU. The built client `8adfaa7aa1173f0a` passed the
+bundle browser journey (switch, rollback, history/artifact preservation, scoped
+defaults, reload and narrow layout) and the additive media-transition journey
+(ordinary and folded interim messages, zero discovery requests while busy,
+retained qualified media, one refresh per settled view and no continued polling).
+The media browser uses real AppService/registry behavior with synthetic busy
+publications; real source-revision worker switching is covered by the separate
+no-model-call native probe. These do not establish native-device trust, arbitrary
+crash recovery, or the full proposed onboarding matrix.

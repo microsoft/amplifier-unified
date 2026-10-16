@@ -28,7 +28,7 @@
       "id": "SETUP-TLS-01",
       "priority": "P1",
       "journey": "Fingerprint public CLI",
-      "scenario": "Follow README literally: setup CA, export, plain doctor; compare fingerprint.",
+      "scenario": "Follow the corrected README literally: set up CA, export, run setup-tls status, then compare the fingerprint on the destination device.",
       "currentEvidence": "Fingerprint instructions corrected to setup-tls status. Actual cli.main test and standalone rendered setup instructions pass; native device trust installation remains separate.",
       "desiredResult": "Documented command displays exact X.509 fingerprint without generating/replacing trust material.",
       "ownerAndCoverage": "tests/test_tls_deployment.py + real cli.main entrypoint",
@@ -79,7 +79,7 @@
       "priority": "P2",
       "journey": "Root provenance matrix",
       "scenario": "Fresh app, CLI global, project/local, app override, explicit conversation, import with/without metadata.",
-      "currentEvidence": "Fresh Work; docs say Anchors; old migration/import retain different fallbacks.",
+      "currentEvidence": "Fresh Work fallback documentation is corrected. Old migration/import retain distinct fallbacks; the complete provenance matrix remains unexecuted.",
       "desiredResult": "Current documented precedence agrees with code; saved roots never silently overwritten.",
       "ownerAndCoverage": "tests/test_bundle_selection.py/test_draft_defaults.py",
       "executed": false
