@@ -136,6 +136,30 @@ voice following, stale retained-history assumptions and a missing PDF dependency
 | R166-11 | The continuation environment lacked declared `pypdf`; PDF failed before its intended coverage. | Same-source PDF browser passed in 3.731 s with the declared artifact dependency environment (`pypdf` 6.20.1). | Qualify the actual declared environment. No PDF product change or physical-device claim. |
 | R166-12 | Final static consistency gate caught frontend source fixes with stale committed assets. | `270c60be0` rebuilds the client; final-head qualification is being repeated against those assets. | Build/source consistency and exact-head checks must pass before claiming the combined candidate. Earlier focused results are retained with their original source/build identities. |
 
+The final readiness attempt on `203cab5a4` subsequently exposed the ordinary
+(non-call) half of **R166-05**. The old test reproduced locally: it treated any
+scroll-height growth as streamed content and required an unchanged raw scroll
+position even as a Work notice appeared or disappeared. Diagnostic frames showed
+the same submitted-message anchor at offset −306 px while raw scroll changed
+10362→10292 px with the 70 px notice removal; this did not demonstrate a product
+scroll defect. The corrected test waits for all 25 appended phrases, checks both
+the submitted-message anchor and the first visible uncommitted-stream paragraph,
+and retains the original raw-position invariant at an explicit settled Work
+boundary. Real 80 px scrolling and a real Jump to latest are required to fail
+that same reading-position oracle, followed by restoration and the original
+private-draft/chat-switch/reload checks. This is a test-only correction; all
+application and static assets remain identical to `203cab5a4`. The final focused
+scenario passed in 12.843 s with zero remaining or forcibly terminated children:
+stream paragraph 54 stayed at −2.5 px while notice removal changed raw scroll
+12629→12559 px; settled Work retained raw scroll 12559 px. The two deliberate
+scroll counterchecks exposed paragraphs 56 and 159 and were correctly rejected.
+A separate stream-only 80 px displacement exposed paragraph 52 while the
+identified message and raw pane stayed fixed; the stream witness rejected it.
+These are functional witnesses, not latency measurements. Focused receipts
+and the original failure are retained in
+`output/postrelease166/chat-scrollback/`; the successor hosted readiness result
+remains separate and pending here.
+
 The active-client comparison is recorded in
 [its exact-source receipt](active-client-noop-qualification-20261016.json).
 One before/after run used the same synthetic 22,915-session/3,932-workspace
