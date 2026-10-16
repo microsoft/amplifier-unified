@@ -595,6 +595,9 @@ class Worktrees:
                             self.save(record)
                         break
                     await asyncio.sleep(1)
+                # The saved boundary may take a whole turn. Recheck actual Git
+                # identity after waiting, before releasing the current writer.
+                await asyncio.to_thread(self.preflight, record, self.app._session(record['sessionId']))
             # Persist before crossing the effect boundary. A lost release
             # response is uncertain; a failed read-only preflight is not.
             async with self.app.lock:
@@ -615,8 +618,12 @@ class Worktrees:
             if not evidence.get('quiesced'): raise RuntimeError('Runtime release was not confirmed')
             record.update(step='released', release=evidence)
             self.save(record)
+            # Release is another asynchronous boundary. A replaced checkout
+            # must retain an unresolved receipt rather than become execution.
+            await asyncio.to_thread(self.preflight, record, self.app._session(record['sessionId']))
             async with self.app.lock:
                 current = self.app._session(record['sessionId'])
+                self.check_binding(record, current)
                 if current.get('executionRevision', 0) != record['executionRevision']: raise ValueError('The execution folder changed during handoff')
                 reason = self.authority_changed(record)
                 if reason: raise HandoffSuperseded(reason)
