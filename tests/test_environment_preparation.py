@@ -251,3 +251,26 @@ def test_small_host_memory_accounts_for_existing_container_usage(tmp_path, monke
     assert not preparation.memory_available(config(tmp_path), tmp_path, 'python-project')
     usage[:] = ['1.0GiB / 8GiB']
     assert preparation.memory_available(config(tmp_path), tmp_path, 'python-project')
+
+
+def test_incus_observations_scope_query_uri_without_unsupported_project_flag(tmp_path, monkeypatch):
+    original_path = preparation.Path
+    meminfo = tmp_path / 'meminfo'
+    meminfo.write_text('MemTotal:       8388608 kB\nMemAvailable:   7340032 kB\n')
+    monkeypatch.setattr(preparation, 'Path', lambda value: meminfo if value == '/proc/meminfo' else original_path(value))
+    settings = {'backend': 'incus', 'incus': {'incusExecutable': '/qualified/incus',
+        'project': 'owned-project', 'configDir': str(tmp_path), 'daemonFingerprint': 'exact-daemon'}}
+    observed = []
+    def query(arguments, *args, **kwargs):
+        # Emulate the actual CLI contract that rejected the former invocation.
+        assert '--project' not in arguments
+        assert arguments[:2] == ['/qualified/incus', 'query']
+        assert arguments[2].endswith('?project=owned-project')
+        observed.append(arguments[2])
+        return json.dumps({'memory': {'total': 8 * 1024 ** 3, 'used': 1024 ** 3}} if '/resources?' in arguments[2]
+                          else {'environment': {'project': 'owned-project', 'certificate_fingerprint': 'exact-daemon'}})
+    monkeypatch.setattr(preparation, 'run', query)
+    assert preparation.backend_identity(settings, tmp_path, {}) == {
+        'backend': 'incus', 'daemon': 'exact-daemon', 'project': 'owned-project'}
+    assert preparation.memory_available(settings, tmp_path, 'python-project')
+    assert observed == ['/1.0?project=owned-project', '/1.0/resources?project=owned-project']

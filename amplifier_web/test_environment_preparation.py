@@ -20,6 +20,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote
 
 try:
     import fcntl
@@ -192,10 +193,16 @@ def backend_identity(config, folder, env):
             raise ValueError('The Docker daemon identity is unavailable.')
         return {'backend': 'docker', 'daemon': value['ID']}
     settings = config['incus']
-    value = json.loads(run([settings['incusExecutable'], '--project', settings['project'], 'query', '/1.0'], env, log, timeout=30, watch_cancel=False, require_complete=True))['environment']
+    value = json.loads(run(_incus_query(settings, '/1.0'), env, log, timeout=30, watch_cancel=False, require_complete=True))['environment']
     if value.get('project') != settings['project'] or (settings.get('daemonFingerprint') and value.get('certificate_fingerprint') != settings['daemonFingerprint']):
         raise ValueError('The Incus preparation daemon or project changed.')
     return {'backend': 'incus', 'daemon': value['certificate_fingerprint'], 'project': value['project']}
+
+
+def _incus_query(settings, path):
+    # `incus query` rejects the CLI's global --project flag. Scope raw API
+    # observations through the request URI, including identity verification.
+    return [settings['incusExecutable'], 'query', path + '?project=' + quote(settings['project'], safe='')]
 
 
 def memory_available(config, folder, profile_id):
@@ -228,7 +235,7 @@ def memory_available(config, folder, profile_id):
             available = min(available, total - used)
     else:
         settings = config['incus']
-        memory = json.loads(run([settings['incusExecutable'], '--project', settings['project'], 'query', '/1.0/resources'], env, log, timeout=30, require_complete=True))['memory']
+        memory = json.loads(run(_incus_query(settings, '/1.0/resources'), env, log, timeout=30, require_complete=True))['memory']
         total = int(memory['total'])
         available = min(available, total - int(memory['used']))
     return available >= required + max(1024 ** 3, min(2 * 1024 ** 3, total // 10))
