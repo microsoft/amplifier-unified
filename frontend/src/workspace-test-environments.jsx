@@ -17,7 +17,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
  const form=useId(),visit=useRef(0),inFlight=useRef(false),live=useRef(active),mounted=useRef(false);
  const key='amplifier-test-environment:'+workspaceId+':'+sessionId;
  const [draft,setDraft]=useState(()=>{try{return JSON.parse(sessionStorage.getItem(key))||{profileId:'linux-python',command:'',pending:null}}catch{return {profileId:'linux-python',command:'',pending:null}}});
- const [page,setPage]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[request,setRequest]=useState(null),[removing,setRemoving]=useState(null),[checkOutput,setCheckOutput]=useState(null);
+ const [page,setPage]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[request,setRequest]=useState(null),[removing,setRemoving]=useState(null),[fullCopy,setFullCopy]=useState(false),[checkOutput,setCheckOutput]=useState(null);
  const pending=useRef(draft.pending);
  const retain=(value,required=false)=>{try{sessionStorage.setItem(key,JSON.stringify(value))}catch{if(required)return false}pending.current=value.pending;if(mounted.current)setDraft(value);return true};
  const refresh=async()=>{
@@ -103,9 +103,10 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
      <button type="submit" className="a-soft" disabled={blocked||!draft.command.trim()||!['running','ready'].includes(row.status)}>Run check</button>
     </form>
     <button type="button" className="a-soft" disabled={cleanupBlocked||['stopped','not-started'].includes(row.status)} onClick={()=>mutate('workspace.environments.stop',{id:row.id,expectedRevision:row.revision})}>Stop and keep data</button>
-    {removing!==row.id?<button type="button" className="a-soft" disabled={cleanupBlocked||!['stopped','not-started'].includes(row.status)} onClick={()=>setRemoving(row.id)}>Remove environment…</button>:<div role="group" aria-label="Confirm environment removal">
-     <p>{row.retention?.mode==='full'?'A complete environment export and saved check results will be retained.':'The working folder, artifacts and saved check results will be retained.'} The environment will be removed only after those files are saved. {row.retention?.mode==='files'?'Files elsewhere in the container are not retained.':''}</p>
-     <button type="button" className="a-soft" disabled={cleanupBlocked} onClick={()=>mutate('workspace.environments.remove',{id:row.id,expectedRevision:row.revision})}>Save files and remove environment</button>
+    {removing!==row.id?<button type="button" className="a-soft" disabled={cleanupBlocked||!['stopped','not-started'].includes(row.status)} onClick={()=>{setRemoving(row.id);setFullCopy(row.retention?.mode==='full')}}>Remove environment…</button>:<div role="group" aria-label="Confirm environment removal">
+     <p>{fullCopy?'A complete environment export and saved check results will be retained.':'The working folder, artifacts and saved check results will be retained.'} The environment will be removed only after those files are saved. {!fullCopy?'Files elsewhere in the container are not retained.':''}</p>
+     {row.retention?.fullAvailable&&<details><summary>Save more files</summary><label><input type="checkbox" checked={fullCopy} disabled={cleanupBlocked} onChange={event=>setFullCopy(event.target.checked)}/> Keep a complete copy of the environment</label><p>This uses more storage. Choose it if the smaller export could not preserve your files, or if you need files outside the working folder and artifacts.</p></details>}
+     <button type="button" className="a-soft" disabled={cleanupBlocked} onClick={()=>mutate('workspace.environments.remove',{id:row.id,expectedRevision:row.revision,...(row.retention?.fullAvailable?{retentionMode:fullCopy?'full':'files'}:{})})}>Save files and remove environment</button>
      <button type="button" className="a-soft" disabled={busy} onClick={()=>setRemoving(null)}>Keep environment</button>
     </div>}
    </>}

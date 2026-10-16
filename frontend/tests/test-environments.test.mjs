@@ -46,6 +46,21 @@ test('retained size is shown only from verified accounting and an uncertain oper
  }finally{await act(async()=>root?.unmount())}
 });
 
+for(const full of [false,true])test(`removal keeps ${full?'an explicitly selected complete copy':'the smaller export by default'}`,async()=>{
+ let root;const calls=[],resource={id:'env',revision:8,status:'stopped',recovery:{available:true},retention:{mode:'files',fullAvailable:true}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?{items:[resource],capability:{status:'unavailable'}}:{request:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  await act(async()=>button(root,'Remove environment…').props.onClick());
+  assert.equal(calls.length,1,'opening the choice has no backend effect');
+  const checkbox=root.root.findByProps({type:'checkbox'});assert.equal(checkbox.props.checked,false);
+  if(full)await act(async()=>checkbox.props.onChange({target:{checked:true}}));
+  await act(async()=>button(root,'Save files and remove environment').props.onClick());
+  const mutations=calls.filter(row=>row.action!=='workspace.environments.read');assert.equal(mutations.length,1);
+  assert.equal(mutations[0].action,'workspace.environments.remove');assert.equal(mutations[0].args.retentionMode,full?'full':'files');
+ }finally{await act(async()=>root?.unmount())}
+});
+
 for(const outcome of ['success','transport error','confirmed rejection'])test(`a mutation settled with ${outcome} while hidden releases controls on reopen without replay`,async()=>{
  let settle,root;const calls=[];
  const dispatch=(action,args,meta)=>{

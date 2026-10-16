@@ -105,6 +105,11 @@ The default `files` retention mode streams an uncompressed stopped-instance
 export through a bounded tar filter and saves only `/workspace` and `/artifacts`.
 No guest command is started, and guest paths are never extracted onto the host.
 An explicit `full` retention mode preserves the complete opaque instance export.
+An Incus removal request may deliberately select `retentionMode: "full"` for that
+operation, including after a selected-file export failed. The existing workspace
+removal confirmation offers this choice under “Save more files”. It does not
+replace the original backend configuration or silently enlarge every export.
+Docker rejects full-environment retention before effects.
 Existing complete exports remain unchanged.
 
 Incus may still create a temporary complete backup during export. Smaller retained
