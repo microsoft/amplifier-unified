@@ -3,6 +3,7 @@
 Parent verification owns runtime provisioning. Missing explicit prerequisites
 skip; incompatibility, mount failures, wrong source and routing failures fail.
 No package manager, network preparation or source sys.path injection is used.
+Nested desktop checks mount a no-effect configuration probe, not a real backend.
 """
 import json
 import os
@@ -105,6 +106,43 @@ def test_installed_default_routing_through_real_delegate_and_lifecycle(routing_p
     assert all(row["error"] for row in report["rejected"])
     assert report["installed_wheel"]["checked_modules"] > 0
     assert report["model_calls"] == 0 and report["forbidden_effects"] == []
+    nested = report["nested_desktop"]
+    assert nested["fixture_package"] == "amplifier_module_tool_desktop_ceiling_probe"
+    desktop = {row["case"]: row for row in nested["executions"]}
+    assert len(nested["executions"]) == len(desktop) == 6
+    assert set(desktop) == {
+        "desktop-root", "desktop-middle", "desktop-grandchild",
+        "desktop-root-without-tool", "desktop-middle-resumed", "desktop-grandchild-after-resume",
+    }
+    ceiling = {"read_only": True, "gate_writes": True}
+    root = desktop["desktop-root"]
+    replacement = desktop["desktop-root-without-tool"]
+    assert root["mounted_config"] == ceiling and root["instance_id"] == "desktop-root-instance"
+    assert replacement["session_id"] == root["session_id"]
+    assert replacement["mounted_config"] is None and replacement["policy"] is None
+    first_middle = desktop["desktop-middle"]
+    for middle_case, grandchild_case, lifecycle in (
+        ("desktop-middle", "desktop-grandchild", "session:start"),
+        ("desktop-middle-resumed", "desktop-grandchild-after-resume", "session:resume"),
+    ):
+        middle, grandchild = desktop[middle_case], desktop[grandchild_case]
+        assert middle["session_id"] == first_middle["session_id"]
+        assert middle["parent_id"] == root["session_id"]
+        assert middle["mounted_config"] is None and middle["instance_id"] is None
+        assert middle["policy"] == ceiling and middle["lifecycle"] == lifecycle
+        assert middle["grandchild_id"] == grandchild["session_id"]
+        assert grandchild["parent_id"] == middle["session_id"]
+        assert grandchild["session_id"] not in {middle["session_id"], root["session_id"]}
+        assert grandchild["lifecycle"] == "session:start"
+        assert grandchild["policy"] == grandchild["mounted_config"] == ceiling
+        assert grandchild["instance_id"] == "desktop-grandchild-instance"
+    assert desktop["desktop-grandchild"]["session_id"] != desktop["desktop-grandchild-after-resume"]["session_id"]
+    initial, resumed = nested["checkpoints"]
+    assert initial["resumed"] is False and resumed["resumed"] is True
+    assert initial["session_id"] == resumed["session_id"] == first_middle["session_id"]
+    assert initial["desktop_tools"] == resumed["desktop_tools"] == []
+    assert initial["policy"] == resumed["policy"] == ceiling
+    assert 0 < initial["message_count"] < resumed["message_count"]
 
 
 def test_execution_oracle_rejects_lifecycle_model_corruption(routing_probe):

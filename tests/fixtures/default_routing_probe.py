@@ -4,9 +4,11 @@ The pytest driver supplies UNIFIED_RUNTIME_PYTHON, WARM_FOUNDATION_PATH and
 WARM_ROUTING_PATH. Warmed sources verify installed delegate/router wheel bytes;
 only installed package paths are supplied to Core. No source-checkout fallback,
 bundle.prepare(), activation, installation or live provider calls are permitted.
-Core, Foundation, context,
-loop-live's provider selector, hooks-routing, DelegateTool and Unified's child
-launcher are real. Only providers and the finite turn body are synthetic.
+Core, Foundation, context, loop-live's provider selector, hooks-routing,
+DelegateTool and Unified's child launcher are real. Providers, the finite turn
+body and the no-effect desktop configuration probe are synthetic. Desktop
+ceilings cross actual nested Core sessions and saved intermediate-child resume;
+this is not a test of a desktop backend or desktop action enforcement.
 
 --preflight exits 77 for absent prerequisites, not for incompatible APIs.
 --negative-control corrupts mounted models in a child lifecycle hook; the same
@@ -34,6 +36,9 @@ PREFIX = "DEFAULT_ROUTING_PROBE "
 MATRIX_NAME = "offline-routing-probe"
 PROVIDER_MODULE = "provider-routing-probe"
 PROVIDER_PACKAGE = "amplifier_module_provider_routing_probe"
+DESKTOP_MODULE = "tool-computer-use"
+DESKTOP_PACKAGE = "amplifier_module_tool_desktop_ceiling_probe"
+DESKTOP_CEILING = {"read_only": True, "gate_writes": True}
 UPSTREAM_PACKAGES = {
     "tool-delegate": ("amplifier_module_tool_delegate", "amplifier-module-tool-delegate"),
     "hooks-routing": ("amplifier_module_hooks_routing", "amplifier-module-hooks-routing"),
@@ -82,6 +87,31 @@ async def mount(coordinator, config=None):
         and coordinator.get_capability("web.default_routing_policy") is True
     )
     await coordinator.mount("providers", provider, name="routing-probe")
+'''
+
+# Deliberately a distinct package, resolved under the real desktop module ID.
+# Core validates/mounts this fixture, never the installed desktop implementation.
+# It does NOT enforce or repair policy: the host must supply the restricted config.
+DESKTOP_SOURCE = '''\
+from amplifier_core import ToolResult
+
+__amplifier_module_type__ = "tool"
+
+class DesktopProbeTool:
+    name = "desktop_policy_probe"
+    description = "Inspect synthetic desktop configuration without desktop effects."
+    input_schema = {"type": "object", "properties": {"action": {"const": "inspect"}},
+                    "required": ["action"], "additionalProperties": False}
+
+    def __init__(self, config):
+        self.config = dict(config)
+
+    async def execute(self, input):
+        assert input == {"action": "inspect"}, "No desktop actions exist in this fixture"
+        return ToolResult(success=True, output=dict(self.config))
+
+async def mount(coordinator, config=None):
+    await coordinator.mount("tools", DesktopProbeTool(config or {}), name="desktop_policy_probe")
 '''
 
 
@@ -386,6 +416,191 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
             await session.coordinator.mount("orchestrator", FiniteOrchestrator(config, audit))
             return session
 
+    async def exercise_nested_desktop(plan, module_paths, root):
+        """Observe policy at execution, across Core and disk, without repairing it."""
+        package = root / DESKTOP_PACKAGE
+        package.mkdir()
+        (package / "__init__.py").write_text(DESKTOP_SOURCE, encoding="utf-8")
+        desktop_paths = {**module_paths, DESKTOP_MODULE: package}
+        observations = []
+        checkpoints = []
+        desktop_store = SessionStore(root / "desktop-sessions")
+
+        def desktop_rows(config):
+            return [row for row in config.get("tools", []) if row["module"] == DESKTOP_MODULE]
+
+        class DesktopOrchestrator(BundleLiveOrchestrator):
+            def __init__(self, config, audit):
+                super().__init__(config)
+                self.audit = audit
+
+            async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+                audit = self.audit
+                lifecycle = "session:resume" if audit["resumed"] else "session:start"
+                assert not audit["failures"], audit["failures"]
+                assert audit["lifecycle"] == [lifecycle], audit
+                assert len(audit["matrix_events"]) == 1
+                registry = coordinator.get_capability("live.children")
+                session = registry.sessions[coordinator.session_id]
+                assert isinstance(session, RustSession) and session.initialized
+                assert session.coordinator is coordinator
+                policy = copy.deepcopy(coordinator.config.get("_unified_desktop_policy"))
+                declarations = desktop_rows(coordinator.config)
+                fake = exact_package(DESKTOP_PACKAGE, package)
+                mounted = [tool for tool in tools.values() if isinstance(tool, fake.DesktopProbeTool)]
+                middle = prompt in {"desktop-middle", "desktop-middle-resumed"}
+                grandchild = prompt in {"desktop-grandchild", "desktop-grandchild-after-resume"}
+                assert middle or grandchild or prompt in {"desktop-root", "desktop-root-without-tool"}
+                if middle or grandchild:
+                    assert policy == DESKTOP_CEILING, (
+                        f"Desktop ceiling lost through Core/PreparedBundle at {prompt}: {policy!r}")
+                if middle or prompt == "desktop-root-without-tool":
+                    assert declarations == [] and mounted == [], (
+                        f"{prompt} must omit desktop rather than retain a restrictive tool")
+                    assert "desktop_policy_probe" not in tools and "computer" not in tools
+                    effective = None
+                    instance = None
+                    if not middle:
+                        assert policy is None, "Fresh root must not supply the saved child's ceiling"
+                else:
+                    assert len(declarations) == len(mounted) == 1
+                    instance = declarations[0]["instance_id"]
+                    assert instance == ("desktop-grandchild-instance" if grandchild else "desktop-root-instance")
+                    result = await mounted[0].execute({"action": "inspect"})
+                    assert result.success, result.error
+                    effective = result.output
+                    assert effective["read_only"] is True and effective["gate_writes"] is True, (
+                        f"Mounted desktop ceiling widened at {prompt}: {effective!r}")
+                    assert effective == declarations[0]["config"]
+                row = {"case": prompt, "session_id": coordinator.session_id,
+                       "parent_id": audit["parent_id"], "lifecycle": lifecycle,
+                       "policy": policy, "mounted_config": effective, "instance_id": instance}
+                observations.append(row)
+                if middle:
+                    delegate = tools["delegate"]
+                    assert isinstance(delegate, PersistentDelegate)
+                    assert isinstance(delegate.original, exact_package(
+                        "amplifier_module_tool_delegate", paths["tool-delegate"]).DelegateTool)
+                    nested_prompt = ("desktop-grandchild-after-resume" if audit["resumed"]
+                                     else "desktop-grandchild")
+                    result = await delegate.execute({
+                        "agent": "desktop-grandchild", "instruction": nested_prompt,
+                        "context_depth": "none",
+                    })
+                    assert result.success, f"Nested real delegate failed: {result.error}"
+                    nested = json.loads(result.output["response"])
+                    assert nested == observations[-1] and nested["case"] == nested_prompt
+                    assert nested["parent_id"] == coordinator.session_id
+                    assert nested["session_id"] == result.output["session_id"]
+                    row["grandchild_id"] = nested["session_id"]
+                    saved_messages, saved = desktop_store.load(nested["session_id"])
+                    assert saved["parent_id"] == coordinator.session_id
+                    assert saved["mount_plan"]["_unified_desktop_policy"] == DESKTOP_CEILING
+                    declared = saved["agent_overlay"]["tools"][0]
+                    assert declared["instance_id"] == "desktop-grandchild-instance"
+                    assert declared["config"] == {"read_only": False, "gate_writes": False}
+                    assert saved["agent_overlay"]["_unified_desktop_policy"] == {}
+                    assert nested["mounted_config"] == DESKTOP_CEILING
+                    assert desktop_rows(saved["mount_plan"])[0]["config"] == nested["mounted_config"]
+                    assert json.loads(saved_messages[-1]["content"]) == nested
+                await context.add_message({"role": "user", "content": prompt})
+                output = json.dumps(row, sort_keys=True)
+                await context.add_message({"role": "assistant", "content": output})
+                await hooks.emit("orchestrator:complete", {"status": "success", "turn_count": 1})
+                return output
+
+        @dataclass
+        class DesktopPrepared(ProbePrepared):
+            async def create_session(self, **kwargs):
+                # Keep the same real initialization and lifecycle observers.
+                # Replace only the finite turn body; never copy policy into Core.
+                session = await super().create_session(**kwargs)
+                audit = creations[-1]
+                assert audit["session_id"] == session.session_id
+                config = session.coordinator.config["session"]["orchestrator"].get("config", {})
+                await session.coordinator.mount("orchestrator", DesktopOrchestrator(config, audit))
+                return session
+
+        desktop_plan = copy.deepcopy(plan)
+        desktop_plan["tools"].append({
+            "module": DESKTOP_MODULE, "instance_id": "desktop-root-instance",
+            "config": copy.deepcopy(DESKTOP_CEILING),
+        })
+        # Exclude desktop from inherited tools, including when the intermediate
+        # child resumes. The grandchild explicitly redeclares it after exclusion.
+        desktop_plan["spawn"] = {"exclude_tools": [DESKTOP_MODULE]}
+        delegate_declaration = copy.deepcopy(plan["tools"][0])
+        delegate_declaration["config"]["settings"]["exclude_tools"] = []
+        desktop_plan["agents"].update({
+            # The ordinary root delegate excludes itself; this overlay explicitly
+            # reinstates the real delegate so this child can invoke its own child.
+            "desktop-middle": {"tools": [delegate_declaration]},
+            "desktop-grandchild": {
+                "tools": [{"module": DESKTOP_MODULE, "instance_id": "desktop-grandchild-instance",
+                           "config": {"read_only": False, "gate_writes": False}}],
+                "_unified_desktop_policy": {},
+            },
+        })
+        middle_id = None
+        previous_messages = None
+        for resumed in (False, True):
+            current_plan = copy.deepcopy(desktop_plan)
+            if resumed:
+                # A genuinely fresh Core root/registry has no desktop tool or
+                # policy. Only saved child metadata can retain the old ceiling.
+                current_plan["tools"] = [row for row in current_plan["tools"]
+                                         if row["module"] != DESKTOP_MODULE]
+                assert "_unified_desktop_policy" not in current_plan
+            prepared = DesktopPrepared(
+                current_plan, BundleModuleResolver(desktop_paths),
+                Bundle.from_dict(copy.deepcopy(current_plan), base_path=root),
+            )
+            desktop_parent = await prepared.create_session(
+                session_id="desktop-parent", session_cwd=root, approval_system=approvals,
+                before_initialize=prepare_default_routing,
+            )
+            try:
+                registry = await install_children(
+                    desktop_parent, prepared, Runtime(desktop_parent.session_id), desktop_store, approvals)
+                assert registry.rows == {}
+                await desktop_parent.execute("desktop-root-without-tool" if resumed else "desktop-root")
+                supplied = {"session_id": middle_id} if resumed else {"agent": "desktop-middle"}
+                prompt = "desktop-middle-resumed" if resumed else "desktop-middle"
+                result = await desktop_parent.coordinator.get("tools")["delegate"].execute({
+                    **supplied, "instruction": prompt, "context_depth": "none",
+                })
+                assert result.success, f"{prompt}: real delegate failed: {result.error}"
+                observation = json.loads(result.output["response"])
+                assert observation == next(row for row in observations if row["case"] == prompt)
+                identity = result.output["session_id"]
+                assert observation["session_id"] == identity
+                assert observation["parent_id"] == desktop_parent.session_id
+                assert observation["lifecycle"] == ("session:resume" if resumed else "session:start")
+                if resumed:
+                    assert identity == middle_id
+                else:
+                    middle_id = identity
+                messages, metadata = desktop_store.load(identity)
+                assert metadata["parent_id"] == desktop_parent.session_id
+                assert metadata["status"] == registry.rows[identity]["status"] == "completed"
+                saved_plan = metadata["mount_plan"]
+                assert desktop_rows(saved_plan) == []
+                assert saved_plan["_unified_desktop_policy"] == DESKTOP_CEILING
+                assert json.loads(messages[-1]["content"]) == observation
+                if resumed:
+                    assert messages[:len(previous_messages)] == previous_messages
+                    assert len(messages) > len(previous_messages)
+                previous_messages = copy.deepcopy(messages)
+                checkpoints.append({
+                    "session_id": identity, "resumed": resumed,
+                    "policy": copy.deepcopy(saved_plan["_unified_desktop_policy"]),
+                    "desktop_tools": desktop_rows(saved_plan), "message_count": len(messages),
+                })
+            finally:
+                await desktop_parent.cleanup()
+        return {"executions": observations, "checkpoints": checkpoints,
+                "fixture_package": DESKTOP_PACKAGE}
+
     async def deny(prompt, choices):
         raise AssertionError("Offline routing should not request approval")
 
@@ -527,6 +742,7 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
                 assert executions[-1]["lifecycle"] == "session:resume"
             assert len(executions) == len(expected)
             assert {row["case"] for row in executions} == set(expected)
+            nested_desktop = await exercise_nested_desktop(plan, module_paths, root)
             assert not synthetic.COMPLETION_ATTEMPTS, "A model completion was attempted"
             assert not attempts, f"Forbidden offline effects were attempted: {attempts}"
             wheel = verify_wheel(distribution)
@@ -534,7 +750,7 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
             exact_package("amplifier_module_hooks_routing", paths["hooks-routing"])
             report = {"status": "passed", "installed_wheel": wheel,
                       "tool_delegate": str(paths["tool-delegate"]), "routing_hook": str(paths["hooks-routing"]),
-                      "executions": executions, "rejected": rejected,
+                      "executions": executions, "rejected": rejected, "nested_desktop": nested_desktop,
                       "model_calls": 0, "forbidden_effects": attempts}
         finally:
             await parent.cleanup()
