@@ -8,9 +8,10 @@ from test_chat_save_resources import contents
 from test_scoped_state_records import chats
 
 
+@pytest.mark.parametrize('completion_path', ['runtime_event', 'send_ack'])
 @pytest.mark.parametrize('initial_delivery', ['sending', 'failed'])
 @pytest.mark.parametrize(('changed_fact', 'same_selection'), [(None, False), (None, True), ('status', False), ('peer_attention', False), ('pending_broad', False)])
-async def test_delivery_preserves_other_client_until_shared_facts_change(app_factory, monkeypatch, changed_fact, same_selection, initial_delivery):
+async def test_delivery_preserves_other_client_until_shared_facts_change(app_factory, monkeypatch, changed_fact, same_selection, initial_delivery, completion_path):
     app, rows = chats(app_factory)
     current, peer = rows
     current['status'] = 'working'
@@ -41,7 +42,11 @@ async def test_delivery_preserves_other_client_until_shared_facts_change(app_fac
     elif changed_fact == 'pending_broad':
         peer['streaming'] = 'Pending non-detail progress'
         app._publish_progress(session_ids={peer['id']}, detail_only=False, record_only=True)
-    await app.on_runtime_event('runtime.delivery', {'sessionId': current['id'], 'inputId': 'input-exact'})
+    if completion_path == 'runtime_event':
+        await app.on_runtime_event('runtime.delivery', {'sessionId': current['id'], 'inputId': 'input-exact'})
+    else:
+        with app.clients.bind('0'):
+            await app._send(current, 'private-0', 'input-exact')
     frame = queues[0].get_nowait()
     visible = next(row for row in frame['sessions'] if row['id'] == current['id'])
     assert visible['messages'][0]['delivery']['status'] == 'accepted'
@@ -50,8 +55,14 @@ async def test_delivery_preserves_other_client_until_shared_facts_change(app_fac
     saved_receipt = json.loads(app.db.execute('SELECT receipt FROM commands WHERE id=?', ('input-exact',)).fetchone()[0])
     assert saved_receipt['delivery'] == 'accepted' and saved_receipt['accepted'] is True
     assert 'code' not in saved_receipt and 'error' not in saved_receipt
-    assert app.clients.records['0']['drafts'][current['id']] == 'private-0'
+    assert app.clients.records['0']['drafts'][current['id']] == ('private-0' if completion_path == 'runtime_event' else '')
     assert app.clients.records['1']['drafts'][peer['id']] == 'private-1'
+    if completion_path == 'send_ack':
+        assert visible['draft'] == ''
+        saved_clients = {identity: json.loads(value) for identity, value in
+                         app.db.execute('SELECT id,value FROM client_views')}
+        assert saved_clients['0']['drafts'][current['id']] == ''
+        assert saved_clients['1']['drafts'][peer['id']] == 'private-1'
     if changed_fact is None and not same_selection:
         assert projections == ['0']
         assert queues[1].empty()
@@ -71,3 +82,21 @@ async def test_delivery_preserves_other_client_until_shared_facts_change(app_fac
             assert visible_peer['streaming'] == 'Pending non-detail progress'
             assert contents(app, peer['id'])['streaming'] == visible_peer['streaming']
         assert not app._progress_dirty
+
+
+async def test_unbound_send_ack_persists_legacy_view_draft_clear(app_factory):
+    from amplifier_web.state_records import load
+
+    app = app_factory()
+    current = app._new_session({'title': 'Legacy send'})
+    current['messages'] = [{'id': 'legacy-message', 'role': 'user', 'text': 'Legacy draft',
+                            'inputId': 'legacy-input', 'delivery': {'status': 'sending'}}]
+    app._state['sessions'].append(current)
+    app._state['selectedSessionId'] = current['id']
+    app._state['view']['draft'] = 'Legacy draft'
+    app._publish()
+    assert app.clients.record() is None
+    await app._send(current, 'Legacy draft', 'legacy-input')
+    assert app._state['view']['draft'] == ''
+    assert load(app.db)['view']['draft'] == ''
+    assert contents(app, current['id'])['messages'][0]['delivery']['status'] == 'accepted'

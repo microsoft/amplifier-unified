@@ -171,3 +171,40 @@ def test_activity_counts_skip_idle_native_library_without_decoding_or_changing_m
         print(json.dumps({'nativeRows': 27000, 'localRows': 6, 'activityCounts': measurements}))
     finally:
         observations.close()
+
+
+def test_notice_membership_avoids_activity_join_work(tmp_path):
+    """Read receipts only need canonical owner identity and role, not bodies."""
+    from amplifier_web.history_directory_observations import visible_ids
+    from amplifier_web.native_catalog import NativeCatalog
+    from test_native_directory import seed
+
+    complete, directory, observations = observation_fixture(tmp_path, 258)
+    catalog = NativeCatalog(tmp_path / 'membership-native.sqlite3', tmp_path / 'home')
+    seed(catalog, tmp_path / 'workspace', 27000)
+    directory.bind(catalog)
+    for row in complete['sessions'][:101]:
+        row['manualUnread'] = 'notice-' + row['id']
+    directory.sync(complete['sessions'], complete)
+    directory.db.commit()
+    state = observations.service._state
+    state['sessions'] = complete['sessions'][:6]
+    ids = [row['id'] for row in complete['sessions'][:101]]
+    state['attentionRead'] = dict(directory.db.execute('SELECT key,fingerprint FROM history_directory_notices'))
+    statements = 0
+    def progress():
+        nonlocal statements
+        statements += 100
+        return 0
+    directory.db.set_progress_handler(progress, 100)
+    try:
+        actual = visible_ids(directory, state, ids, notices=True)
+    finally:
+        directory.db.set_progress_handler(None, 0)
+    sql, params = directory.effective(state, public_ids=ids)
+    expected = {row[0] for row in directory.db.execute(sql +
+        " SELECT id FROM directory_rows WHERE session_kind!='internal'", params)}
+    assert actual == expected
+    assert statements < 75000
+    print(json.dumps({'membershipVm': statements, 'localRows': 258, 'noticeOwners': 101}))
+    observations.close()

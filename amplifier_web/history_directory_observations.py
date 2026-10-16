@@ -153,7 +153,12 @@ def visible_ids(directory, state, identities, *, notices=False, roots=False):
     identities = sorted(set(identities))
     result = set()
     for start in range(0, len(identities), PUBLIC_ID_BATCH):
-        sql, params = directory.effective(state, public_ids=identities[start:start + PUBLIC_ID_BATCH])
+        # Membership checks need only identity and role. Projecting full rows
+        # makes SQLite materialize summaries and notice/activity joins for every
+        # read-receipt owner on a changed browser snapshot.
+        fields = {'id', 'session_kind'} if notices or roots else {'id'}
+        sql, params = directory.effective(state, public_ids=identities[start:start + PUBLIC_ID_BATCH],
+                                        fields=fields)
         result.update(row[0] for row in directory.db.execute(sql +
             " SELECT id FROM directory_rows" + (" WHERE session_kind='root'" if roots else
                 " WHERE session_kind!='internal'" if notices else ''), params))

@@ -3818,7 +3818,11 @@ class AppService:
             sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
             self._clear_sent_draft(current, sent, text, preserve_draft)
             current.pop("lockOwner", None)
-            self._publish_changes(sessions={session['id']}, globals={'view'})
+            # A bound client's draft/reply/attachments are saved by clients.save,
+            # not the shared legacy view. Delivery changes only this owner unless
+            # the existing save guard finds changed status/navigation/attention.
+            self._publish_changes(sessions={session['id']}, detail_only=True,
+                                  globals={'view'} if self.clients.record() is None else ())
         return send_result
 
     def _clear_sent_draft(self, current, sent, text, preserve_draft):
