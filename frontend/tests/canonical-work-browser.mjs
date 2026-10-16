@@ -2,11 +2,11 @@ import {openSettingsPage} from './browser-settings.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {readFile,mkdir,mkdtemp} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
-const outputDir=process.env.AMPLIFIER_TEST_OUTPUT_DIR||await mkdtemp(join(tmpdir(),'amplifier-canonical-work-'));
+const outputDir=process.env.AMPLIFIER_TEST_OUTPUT_DIR||(process.env.AMPLIFIER_TEST_ARTIFACTS?join(process.env.AMPLIFIER_TEST_ARTIFACTS,'canonical-work'):null)||await mkdtemp(join(tmpdir(),'amplifier-canonical-work-'));
 await mkdir(outputDir,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe']});
 let log='',fixtureCookie;fixture.stderr.on('data',chunk=>log+=chunk);
@@ -14,9 +14,11 @@ const port=await new Promise((resolve,reject)=>{let output='';const timer=setTim
 const base=`http://127.0.0.1:${port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
 const control=async body=>{const response=await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});if(!response.ok)throw Error(await response.text()+' '+log);return response.json()};
 await control({op:'canonical-work'});
+let page;
 const browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});
 try{
- const page=await browser.newPage({viewport:{width:1280,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers}),errors=[],requestReads=[],responseReads=[];
+ page=await browser.newPage({viewport:{width:1280,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers});
+ const errors=[],requestReads=[],responseReads=[];
  page.on('request',r=>{if(r.url().includes('/api/conversation/detail?')){const field=new URL(r.url()).searchParams.get('field');if(field==='request')requestReads.push(r.url());if(field==='response')responseReads.push(r.url())}});
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
  // Browser-managed downloads use the real signed session cookie; Chromium
@@ -24,8 +26,19 @@ try{
  await page.context().addCookies([{name:'amplifier_unified_session',value:fixtureCookie,url:base,httpOnly:true,sameSite:'Strict'}]);
  await page.goto(base);
  const groups=page.locator('[data-group-id]'),before=page.locator('[data-group-id$="@before"]'),interim=page.locator('[data-group-id$="@interim"]');
- await expect(groups).toHaveCount(2);
- const order=()=>page.locator('.a-messages').evaluate(el=>[...el.children].map(n=>n.dataset.messageId||n.dataset.groupId?.split('@').at(-1)).filter(Boolean));
+ // The bounded saved-event window settles independently of live host groups.
+ // Wait for that real receipt rather than racing its arrival with UI clicks.
+ const saved=page.locator('[data-group-id^="event-window:"]');
+ const checkGroups=async expected=>{
+  await page.waitForFunction(()=>{try{const receipt=JSON.parse(document.querySelector('.a-messages')?.dataset.workProjection);return receipt.status==='ready'&&receipt.current===true&&receipt.receipt?.scope==='recent-events'}catch{return false}});
+  await expect(saved).toHaveCount(1);
+  await expect(saved).toContainText('Recent saved work');
+  await expect(groups).toHaveCount(expected.length+1);
+  assert.deepEqual(await groups.evaluateAll(rows=>rows.map(n=>n.dataset.groupId).filter(id=>!id.startsWith('event-window:'))),expected);
+  assert.equal(await saved.locator('.a-execution-roots').count(),0,'The saved window stays collapsed until requested');
+ };
+ await checkGroups(['canonical@before','canonical@interim']);
+ const order=()=>page.locator('.a-messages').evaluate(el=>[...el.children].map(n=>n.dataset.messageId||(n.dataset.groupId?.startsWith('canonical@')?n.dataset.groupId.split('@').at(-1):null)).filter(Boolean));
  assert.deepEqual(await order(),['before','before','interim','interim','final']);
  const beforeToggle=before.locator('button.a-execution-turn-line'),interimToggle=interim.locator('button.a-execution-turn-line');
  assert.equal(await beforeToggle.count(),1,'Every work section must have a collapse control, even with only two actions');
@@ -102,7 +115,10 @@ try{
  await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
  await expect(model.getByRole('button',{name:/^View request/})).toBeVisible();assert.equal(responseReads.length,1);
  const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No provider request was recorded/);
- await control({op:'canonical-append'});await expect(groups).toHaveCount(3);
+ const priorWindow=await saved.getAttribute('data-group-id');
+ await control({op:'canonical-append'});
+ await expect(saved).not.toHaveAttribute('data-group-id',priorWindow,{timeout:15000});
+ await checkGroups(['canonical@before','canonical@interim','canonical@final']);
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
  const finalGroup=page.locator('[data-group-id$="@final"]'),finalToggle=finalGroup.locator('button.a-execution-turn-line');
  await expect(finalToggle).toHaveAttribute('aria-expanded','false');await finalToggle.click();
@@ -136,6 +152,7 @@ try{
  await page.evaluate(id=>{const expanded=window.amplifier.getState().view.executionExpanded;return window.amplifier.dispatch('view.update',{patch:{executionExpanded:[...expanded,`turn:${id}`]}})},interimId);
  await expect(interimToggle).toHaveAttribute('aria-expanded','true');
  await page.reload();await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','detailed');
+ await checkGroups(['canonical@before','canonical@interim','canonical@final']);
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
  await read15.locator('pre').waitFor();assert.equal(requestReads.length,3);assert.equal(responseReads.length,2);assert.equal(await page.locator('.a-json-viewer').count(),0,'Reloaded expanded calls must not fetch raw payloads');
  await model.getByRole('button',{name:/^View request/}).click();await model.getByRole('button',{name:/^Request Object/}).click();
@@ -144,5 +161,12 @@ try{
  await page.setViewportSize({width:390,height:844});await model.locator('.a-json-viewer').scrollIntoViewIfNeeded();await page.mouse.move(380,830);await page.waitForTimeout(400);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:join(outputDir,'mobile.png')});
  assert.deepEqual(errors,[]);
+ await writeFile(join(outputDir,'work-groups.json'),JSON.stringify({canonicalGroups:await page.locator('[data-group-id^="canonical@"]').evaluateAll(rows=>rows.map(n=>n.dataset.groupId)),savedWindows:await saved.count(),workProjection:JSON.parse(await page.locator('.a-messages').getAttribute('data-work-projection')),errors},null,2));
  console.log('Collapsed one-line actions and richer grouped model details pass; raw requests and responses are click-only, collapsible, paged, retryable and copyable; 15/10 previews, ordering, shared expansion, reload and mobile pass.');
-}catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}
+}catch(error){
+ if(page){
+  await writeFile(join(outputDir,'failure-groups.json'),JSON.stringify(await page.evaluate(()=>({groups:[...document.querySelectorAll('[data-group-id]')].map(n=>n.dataset.groupId),workProjection:document.querySelector('.a-messages')?.dataset.workProjection})),null,2)).catch(()=>{});
+  await page.screenshot({path:join(outputDir,'failure.png')}).catch(()=>{});
+ }
+ console.error(log);throw error
+}finally{await browser.close();fixture.kill()}
