@@ -64,11 +64,36 @@ Reply with the fixture response.
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
         AMPLIFIER_SESSION_STATE_HOME=str(root / "shared"),
     )
+    # The fixture exercises worker lifecycle, not downloading optional community
+    # behaviors. Keep its empty home and declared local provider deterministic.
+    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+    settings = root / "amplifier-home" / "settings.yaml"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"bundle": {"active": str(bundle), "app": []},
+                                   "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]}}))
     events = []
     import amplifier_web.runtime_worker as worker_module
 
-    worker_module.publish = events.append
+    workers = []
+    def publish(event):
+        events.append(event)
+        if event.get('op') == 'bridge':
+            owner = next(worker for worker in workers if event['id'] in worker.bridges)
+            operation = event['operation']
+            if operation == 'context.manifest':
+                result = {'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])}
+            elif operation == 'coordination.current':
+                result = {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True}
+            elif operation == 'memory.context':
+                result = {'items': []}
+            elif operation == 'capacity.admit' and not owner.controls.capacity.policy['enabled']:
+                result = {'allowed': True, 'budgetRevision': owner.controls.capacity.policy['revision']}
+            else:
+                raise AssertionError(f'Unexpected fixture bridge: {operation}')
+            owner.bridges[event['id']].set_result(result)
+    worker_module.publish = publish
     worker = Worker()
+    workers.append(worker)
     config = {"id": "warm-fixture", "workspace": str(workspace), "bundle": str(bundle)}
     cold_started = time.monotonic()
     await worker.start(config)
@@ -104,6 +129,7 @@ Reply with the fixture response.
     assert worker.shutdown.is_set(), events
     await worker.run()
     restored = Worker()
+    workers.append(restored)
     await restored.start(config)
     await restored.command({"op": "send", "id": "three-request", "input_id": "three", "text": "three"})
     for _ in range(200):

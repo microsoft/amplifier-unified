@@ -77,12 +77,19 @@ jobs:
     uses: ./.github/workflows/browser-checks.yml
     with:
       revision: ${{ needs.resolve.outputs.revision }}
+  integrations:
+    needs: resolve
+    uses: ./.github/workflows/integration-checks.yml
+    secrets:
+      LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+    with:
+      revision: ${{ needs.resolve.outputs.revision }}
   report:
     if: >-
       always() && github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
-    needs: [resolve, installed-package, readiness, python, browser]
+    needs: [resolve, installed-package, readiness, python, browser, integrations]
     runs-on: ubuntu-latest
     concurrency:
       group: post-release-report-${{ needs.resolve.outputs.tag || github.event.workflow_run.id }}
