@@ -157,19 +157,6 @@ def test_old_qualified_backend_checks_exact_image_before_fresh_launch(tmp_path, 
             return {'exit_code': 0, 'stdout': json.dumps(observation), 'truncated': False}
         return original(config, env, args, *extra, **kwargs)
     monkeypatch.setattr(worker, 'incus', incus)
-    def export_selected(config, env, name, destination):
-        import tarfile
-        calls.append(('incus', ['export', name, '-']))
-        if state['export_failed']:
-            raise worker.BackendFailure('export_failed', 'fixture')
-        result = []
-        for selection in ('workspace', 'artifacts'):
-            path = destination / (selection + '.tar')
-            with tarfile.open(path, 'w') as archive:
-                item = tarfile.TarInfo(selection); item.type = tarfile.DIRTYPE; archive.addfile(item)
-            result.append({'id': name, 'source': '/' + selection, 'destination': str(path)})
-        return result
-    monkeypatch.setattr(worker, 'export_selected', export_selected)
     result = worker.execute_call(value)
     launches = [args for kind, args in backend[0] if kind == 'cli' and args[0] == 'launch']
     if code:
