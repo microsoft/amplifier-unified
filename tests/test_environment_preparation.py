@@ -1,0 +1,201 @@
+"""Prepared dependency provenance, confinement and interruption contracts."""
+import hashlib
+import io
+import json
+import sys
+import tarfile
+import threading
+import time
+
+import pytest
+
+from amplifier_web import test_environment_initialize_guest as initializer
+from amplifier_web import test_environment_preparation as preparation
+from amplifier_web import test_environment_profiles as profiles
+
+
+def archive(root, files=None):
+    files = files or {'pyproject.toml': '[project]\nname="fixture"\nversion="1"', 'uv.lock': 'version=1'}
+    path = root / 'source.tar'
+    with tarfile.open(path, 'w') as stream:
+        for name, value in files.items():
+            value = value.encode()
+            item = tarfile.TarInfo(name)
+            item.size = len(value)
+            stream.addfile(item, io.BytesIO(value))
+    return {'archive_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def config(root):
+    return {'backend': 'docker', 'image': 'python@sha256:' + '1' * 64,
+            'dockerHost': 'unix:///fixture.sock', 'admissionRoot': str(root / 'admission')}
+
+
+@pytest.fixture
+def backend(monkeypatch, tmp_path):
+    identity = {'backend': 'docker', 'daemon': 'fixture'}
+    (tmp_path / 'backend-binding.json').write_text(json.dumps({'backendIdentity': identity}))
+    monkeypatch.setattr(preparation, 'backend_identity', lambda *args: identity)
+    def build(config, folder, plan, env):
+        return 'sha256:' + '2' * 64, json.dumps({'preparationId': plan['preparationId'], 'sourceSha256': plan['sourceSha256']})
+    monkeypatch.setattr(preparation, '_docker', build)
+    return identity
+
+
+def test_profiles_preserve_small_check_and_fit_browser_workload():
+    assert profiles.get()['maxTimeoutSeconds'] == 300
+    browser = profiles.get('browser-test')
+    assert browser['defaultTimeoutSeconds'] > 11 * 60
+    assert browser['memoryMiB'] >= 4096 and browser['shmMiB'] >= 1024
+    assert browser['environment']['HOME'] == '/artifacts/home'
+    browser['environment']['PATH'] = 'mutated'
+    assert profiles.get('python-project')['environment']['PATH'] != 'mutated'
+
+
+@pytest.mark.parametrize('value', [0, 1801, True, '1200'])
+def test_invalid_time_budgets_rejected(value):
+    with pytest.raises(ValueError):
+        profiles.validate_timeout('browser-test', value)
+
+
+def test_plan_binds_source_locks_and_fixed_recipe(tmp_path):
+    snapshot = archive(tmp_path)
+    value = preparation.plan(tmp_path / 'source.tar', snapshot, 'python-project')
+    assert value['sourceSha256'] == snapshot['archive_sha256']
+    assert [item['path'] for item in value['lockfiles']] == ['pyproject.toml', 'uv.lock']
+    assert len(value['recipeSha256']) == 64
+    assert preparation.plan(tmp_path / 'source.tar', snapshot, 'python-project') == value
+    with pytest.raises(ValueError, match='changed'):
+        preparation.plan(tmp_path / 'source.tar', {'archive_sha256': 'wrong'}, 'python-project')
+
+
+@pytest.mark.parametrize('name', ['../escape', '/absolute', 'frontend/node_modules/lib.js', '.venv/bin/python', '.unified-prepared-dependencies.json'])
+def test_untrusted_archive_layout_rejected(tmp_path, name):
+    snapshot = archive(tmp_path, {'pyproject.toml': 'project', 'uv.lock': 'lock', name: 'data'})
+    with pytest.raises(ValueError):
+        preparation.plan(tmp_path / 'source.tar', snapshot, 'python-project')
+
+
+def test_browser_requires_playwright_in_committed_lock(tmp_path):
+    snapshot = archive(tmp_path, {'pyproject.toml': 'project', 'uv.lock': 'lock', 'frontend/package.json': '{}',
+        'frontend/package-lock.json': json.dumps({'packages': {'node_modules/playwright': {'version': '1.63.0'}}})})
+    value = preparation.plan(tmp_path / 'source.tar', snapshot, 'browser-test')
+    assert value['nodeDirectory'] == 'frontend' and value['playwrightVersion'] == '1.63.0'
+    assert len(value['lockfiles']) == 4
+    snapshot = archive(tmp_path)
+    with pytest.raises(ValueError, match='Playwright'):
+        preparation.plan(tmp_path / 'source.tar', snapshot, 'browser-test')
+
+
+def test_prepare_retains_exact_image_and_never_rebuilds_ready_request(tmp_path, backend, monkeypatch):
+    snapshot = archive(tmp_path)
+    receipt = preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request')
+    assert receipt['image'] == 'sha256:' + '2' * 64
+    assert not (tmp_path / 'preparation/context').exists()
+    monkeypatch.setattr(preparation, '_docker', lambda *args: pytest.fail('unexpected replay'))
+    assert preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request') == receipt
+    with pytest.raises(ValueError, match='different'):
+        preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'another')
+
+
+def test_interrupted_build_is_not_automatically_replayed(tmp_path, backend, monkeypatch):
+    snapshot = archive(tmp_path)
+    def fail(*args):
+        raise TimeoutError('interrupted')
+    monkeypatch.setattr(preparation, '_docker', fail)
+    with pytest.raises(TimeoutError):
+        preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request')
+    monkeypatch.setattr(preparation, '_docker', lambda *args: pytest.fail('unexpected replay'))
+    with pytest.raises(ValueError, match='unfinished'):
+        preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request')
+    assert json.loads((tmp_path / 'preparation/status.json').read_text())['status'] == 'unknown'
+
+
+def test_changed_backend_refuses_preparation(tmp_path, backend, monkeypatch):
+    snapshot = archive(tmp_path)
+    monkeypatch.setattr(preparation, 'backend_identity', lambda *args: {'backend': 'docker', 'daemon': 'another'})
+    with pytest.raises(ValueError, match='backend changed'):
+        preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request')
+
+
+def test_host_credentials_and_proxy_config_are_not_inherited(tmp_path, monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic')
+    monkeypatch.setenv('HTTPS_PROXY', 'synthetic')
+    monkeypatch.setenv('DOCKER_CONFIG', '/private/host/config')
+    value = preparation._environment(tmp_path, config(tmp_path))
+    assert not {'OPENAI_API_KEY', 'HTTPS_PROXY', 'AWS_SECRET_ACCESS_KEY'} & value.keys()
+    assert value['DOCKER_CONFIG'] == str(tmp_path / 'docker-config')
+    assert value['HOME'] == str(tmp_path)
+
+
+@pytest.mark.parametrize('stopped', [True, False])
+def test_cancelled_only_after_builder_stop_confirmation(tmp_path, backend, monkeypatch, stopped):
+    snapshot = archive(tmp_path)
+    def cancel(*args):
+        raise preparation.PreparationCancelled()
+    monkeypatch.setattr(preparation, '_docker', cancel)
+    monkeypatch.setattr(preparation, 'stop_builder', lambda *args: stopped)
+    with pytest.raises(ValueError):
+        preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request')
+    value = json.loads((tmp_path / 'preparation/status.json').read_text())
+    assert value['status'] == ('cancelled' if stopped else 'unknown')
+
+
+def test_real_wait_observes_cancellation_promptly_and_bounds_log(tmp_path):
+    def cancel():
+        time.sleep(0.2)
+        preparation.write(tmp_path / 'cancel.json', {'cancelRequested': True})
+    thread = threading.Thread(target=cancel)
+    thread.start()
+    start = time.monotonic()
+    with pytest.raises(preparation.PreparationCancelled):
+        preparation.run([sys.executable, '-c', 'import time; print("x"*200000, flush=True); time.sleep(20)'],
+                        {'PATH': '/usr/bin:/bin'}, tmp_path / 'build.log')
+    thread.join()
+    assert time.monotonic() - start < 3
+    assert (tmp_path / 'build.log').stat().st_size <= preparation.LOG_BYTES
+
+
+def test_initializer_copies_writable_node_modules_and_rejects_conflicting_source(tmp_path):
+    prefix, workspace, artifacts = [tmp_path / name for name in ('prefix', 'workspace', 'artifacts')]
+    for folder in (prefix / 'node/frontend', workspace / 'frontend'):
+        folder.mkdir(parents=True)
+    (prefix / 'node/frontend/dependency.js').write_text('dependency')
+    (prefix / 'plan.json').write_text(json.dumps({'profileId': 'browser-test', 'preparationId': 'exact', 'nodeDirectory': 'frontend', 'nodeKey': 'frontend'}))
+    initializer.initialize(prefix, workspace, artifacts)
+    target = workspace / 'frontend/node_modules'
+    assert not target.is_symlink() and (target / 'dependency.js').read_text() == 'dependency'
+    (target / 'output').write_text('writable')
+    initializer.initialize(prefix, workspace, artifacts)
+    (workspace / '.unified-prepared-dependencies.json').unlink()
+    with pytest.raises(ValueError, match='already supplies'):
+        initializer.initialize(prefix, workspace, artifacts)
+
+
+def test_docker_builder_has_bounded_resources_no_mounts_and_immutable_commit(tmp_path, monkeypatch):
+    folder = tmp_path / 'preparation'
+    (folder / 'context').mkdir(parents=True)
+    commands = []
+    def call(arguments, *args, **kwargs):
+        commands.append(arguments)
+        return 'sha256:' + '3' * 64 if 'commit' in arguments else '{}'
+    monkeypatch.setattr(preparation, 'run', call)
+    image, _ = preparation._docker(config(tmp_path), folder, {'baseImage': config(tmp_path)['image'], 'resourceName': 'owned'}, {})
+    assert image == 'sha256:' + '3' * 64
+    create = next(row for row in commands if 'create' in row)
+    assert '--memory' in create and '--pids-limit' in create and '--cap-drop' in create
+    assert not {'--volume', '--mount', '-v', '--privileged', '--env-file'} & set(create)
+    assert ['stop', '--time', '5', 'owned'] == commands[-2][3:]
+    assert ['rm', 'owned'] == commands[-1][3:]
+
+
+def test_cleanup_refuses_changed_image_owner(tmp_path, backend, monkeypatch):
+    snapshot = archive(tmp_path)
+    preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request')
+    commands = []
+    def call(arguments, *args, **kwargs):
+        commands.append(arguments)
+        return json.dumps([{'Id': 'sha256:' + '2' * 64, 'Config': {'Labels': {'io.amplifier.preparation': 'foreign'}}}])
+    monkeypatch.setattr(preparation, 'run', call)
+    assert not preparation.cleanup(config(tmp_path), tmp_path)['complete']
+    assert not any('rm' in command for command in commands)
