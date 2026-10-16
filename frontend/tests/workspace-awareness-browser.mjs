@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -20,7 +21,7 @@ try{
  const second=await action('session.create',{workspace:workspace.path,title:'Independent writer',select:false});
  await activity(second.sessionId,'working');
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Private composer content');
- await action('view.update',{patch:{panel:'chat-work'}});
+ await openChatAdvancedPage(page,'Work & automation');
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  const related=page.getByRole('region',{name:'Workspace work overview'}),panel=page.getByRole('region',{name:'Working in this workspace'});
  await expect(panel.locator('[data-active-peer]')).toHaveCount(1);

@@ -2,7 +2,10 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {once} from 'node:events';
+import {writeFile} from 'node:fs/promises';
 import {openSettingsPage} from './browser-settings.mjs';
+const out=process.env.AMPLIFIER_TEST_ARTIFACTS;if(!out)throw Error('Owned artifact directory required');
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/image_setup_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser,page,release;
@@ -11,6 +14,8 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ const commands=[];page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST'){let body=request.postDataJSON();if(body?.action==='shell.command')body=body.args.command||body.args;commands.push(body?.action)}});
+ const effects=()=>page.request.get(url+'/fixture/image-effects').then(response=>response.json());
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await openSettingsPage(page,'image-generation');
  const choice=page.getByLabel('Use for images',{exact:true});
@@ -21,6 +26,7 @@ try{
  await expect(page.getByRole('button',{name:'Image preferences',exact:true})).toHaveCount(0);
  await expect(page.getByLabel('Image provider',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('combobox').filter({visible:true})).toHaveCount(1);
+ const inspection=await effects();assert.deepEqual(inspection.sends,[]);assert.ok(inspection.probes.every(action=>['providers.imageModels','providers.models'].includes(action)));assert.ok(inspection.controls.every(operation=>operation==='configuration.inspect'));
  await choice.selectOption('provider:one');
  await expect(page.getByText('Image settings saved.',{exact:true})).toBeVisible();
  await expect(choice).toHaveValue('provider:one');
@@ -78,13 +84,13 @@ try{
  assert.equal(switched.find(row=>row.id==='one').config.image_generation.enabled,false);
  assert.equal(switched.find(row=>row.id==='three').config.image_generation.enabled,true);
  assert.equal(switched.find(row=>row.id==='three').config.image_generation.model,'auto');
- await page.screenshot({path:'/tmp/image-connection-central.png'});
+ await page.screenshot({path:out+'/central.png'});
  await page.reload();await page.locator('.a-settings-experience[data-settings-page=image-generation]').waitFor({state:'visible'});
  await expect(choice).toHaveValue('provider:three');
  await expect(page.getByText('Checking image connections…',{exact:true})).toHaveCount(0);
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
- await page.screenshot({path:'/tmp/image-connection-settings.png'});
+ await page.screenshot({path:out+'/settings.png'});
  await openSettingsPage(page,'ai-connections');
  await expect(choice).not.toBeVisible();
  await page.locator('[data-part="ai-connections"] .a-everyday-list button').nth(1).click();
@@ -100,6 +106,8 @@ try{
  await page.reload();await expect(choice).toHaveValue('automatic');
  await expect(page.getByText('You have unsaved settings changes.',{exact:false})).toHaveCount(0);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({saved:true,disabled:true,preservedChatModel:true,rejectRetry:true,narrow:true,requests,errors}));
-}catch(error){if(page)await page.screenshot({path:'/tmp/image-connection-failure.png'});throw error}
-finally{release?.();await browser?.close();fixture.kill('SIGTERM');}
+ const finalEffects=await effects();assert.deepEqual(finalEffects.sends,[]);assert.ok(finalEffects.probes.every(action=>['providers.imageModels','providers.models'].includes(action)));assert.ok(finalEffects.controls.every(operation=>['configuration.inspect','configuration.apply'].includes(operation)));assert.ok(!commands.some(action=>/send|generate|testMessage/i.test(action)));
+ const result={saved:true,disabled:true,preservedChatModel:true,rejectRetry:true,narrow:true,requests,errors,inspection,finalEffects,commands,noModelOrImageSubmission:true,limits:['Synthetic catalog and runtime; real settings persistence and browser commands. No external image generation or provider acceptance is claimed.']};
+ await writeFile(out+'/observations.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
+}catch(error){if(page)await page.screenshot({path:out+'/failure.png'});throw error}
+finally{release?.();try{await browser?.close()}finally{if(fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);try{const [code,signal]=await exited;assert.equal(code,0);assert.equal(signal,null)}finally{clearTimeout(timer)}}}}

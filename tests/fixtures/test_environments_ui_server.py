@@ -19,16 +19,21 @@ TOKEN = 'fixture-browser-control-token'
 
 
 class Runtime:
+    def __init__(self):
+        self.calls = []
+
     async def start(self, session, emit, **kwargs):
+        self.calls.append('start')
         await emit('runtime.status', {'sessionId': session['id'], 'status': 'ready'})
 
     async def stop(self, *args, **kwargs):
-        pass
+        self.calls.append('stop')
 
     async def close(self):
         pass
 
     async def control(self, *args, **kwargs):
+        self.calls.append('control')
         return {}
 
 
@@ -40,7 +45,8 @@ async def main(home, port):
     workspace = home / 'workspace'
     workspace.mkdir()
     (workspace / 'check.py').write_text("print('workspace check passed')\n")
-    calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True, 'backendAvailable': True}
+    calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True,
+                                 'backendAvailable': True, 'longOutput': False, 'executeFailure': False}
     lock = threading.Lock()
     config = {'python': '/fixture/managed/python', 'dockerHost': 'unix:///fixture/docker.sock', 'image': environments.APPROVED_IMAGE}
     environments.configuration = lambda app: (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.') if mode['backendAvailable'] else (None, 'unavailable', 'New execution is unavailable in this controlled fixture.')
@@ -65,7 +71,11 @@ async def main(home, port):
                     'message': 'The fixture command timed out. It may still be running; inspect or stop it without replaying this request.'}
             value = {'ok': True, 'universeId': identity, 'status': states.get(row['id'], 'unknown')}
             if action == 'execute':
-                value['result'] = {'exit_code': 0, 'stdout': 'workspace check passed\n', 'stderr': '', 'stdout_truncated': False, 'stderr_truncated': False}
+                output = ('queue-page-start\n' + 'retained check line\n' * 400 + 'queue-page-end\n'
+                          if mode['longOutput'] else 'workspace check passed\n')
+                value['result'] = {'exit_code': 1 if mode['executeFailure'] else 0,
+                    'stdout': output, 'stderr': 'fixture check failed\n' if mode['executeFailure'] else '',
+                    'stdout_truncated': False, 'stderr_truncated': False}
             if action == 'reconcile':
                 value['observation'] = {'backendIdentity': backend_identity, 'rootOwner': row['sessionId'],
                     'operationId': row['launchOperationId'], 'universeId': identity, 'ownership': 'matched', 'absenceConfirmed': False}
@@ -77,11 +87,13 @@ async def main(home, port):
     environments.capacity = lambda app, config: {'available': mode['capacityAvailable'],
         'counts': {'active': 0 if mode['capacityAvailable'] else 1}, 'limits': {'max_running': 1},
         'blockers': [] if mode['capacityAvailable'] else [{'code': 'execution_capacity'}]}
-    app = await create_app(home, workspace=workspace, runtime=Runtime(), voice=False, background_updates=False)
+    runtime = Runtime()
+    app = await create_app(home, workspace=workspace, runtime=runtime, voice=False, background_updates=False)
     app['control_token'] = TOKEN
     app['allowed_origins'] = app['allowed_origins'] | {f'http://127.0.0.1:{port}'}
     service = app['service']
     await service.dispatch('session.create', {'title': 'Test environment acceptance', 'workspace': str(workspace), 'bundle': 'anchors'})
+    await service.dispatch('view.update', {'patch': {'setupJourney': 'done', 'panel': None}})
     def authorize(request):
         if request.headers.get('Authorization') != 'Bearer ' + TOKEN:
             raise web.HTTPForbidden()
@@ -93,6 +105,9 @@ async def main(home, port):
         observed['requests'] = service.operations.requests.list(sid)
         observed['sessionId'] = sid
         observed['workspaceId'] = next(row['id'] for row in service.state['workspaces'] if row['path'] == str(workspace))
+        observed['messages'] = service.state['sessions'][0].get('messages', [])
+        observed['runtimeCalls'] = list(runtime.calls)
+        observed['workspaceFile'] = (workspace / 'check.py').read_text()
         return web.json_response(observed)
     async def change_mode(request):
         authorize(request)
@@ -103,6 +118,11 @@ async def main(home, port):
                 mode['capacityAvailable'] = bool(value['capacityAvailable'])
             if 'backendAvailable' in value:
                 mode['backendAvailable'] = bool(value['backendAvailable'])
+            for key in ('longOutput', 'executeFailure'):
+                if key in value:
+                    if type(value[key]) is not bool:
+                        raise web.HTTPBadRequest(text=key + ' must be boolean')
+                    mode[key] = value[key]
         service.test_queue.backoff.clear()
         service.test_queue.wakeup.set()
         return web.json_response(mode)

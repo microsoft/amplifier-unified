@@ -1,3 +1,4 @@
+import {openSettingsPage} from './browser-settings.mjs';
 import './composer-test-helpers.mjs';
 // Real host, production assets and filesystem; synthetic runtime only.
 import {spawn} from 'node:child_process';
@@ -88,7 +89,7 @@ try{
  const folder=current.view.newSessionDraft.workspace;
  await expect.poll(async()=>readFile(folder+'/AGENTS.md','utf8').catch(()=>'')).toBe('Use the team conventions. Preserve source files.\n');
  assert.equal(await readFile(folder+'/.amplifier/AGENTS.md','utf8'),'@../AGENTS.md\n@../SCRATCH.md\n');
- assert.deepEqual((await readdir(folder)).sort(),['.amplifier','.git','.gitignore','AGENTS.md','SCRATCH.md']);
+ await expect.poll(async()=>(await readdir(folder)).sort()).toEqual(['.amplifier','.git','.gitignore','AGENTS.md','SCRATCH.md']);
  assert.match(await readFile(folder+'/.git/info/exclude','utf8'),/\/\*\/[\s\S]*keys\.env/);
  await action('view.update',{patch:{panel:'settings',settingsExpanded:['workspaces']}});
  await expect(settings.getByRole('region',{name:'Workspace readiness'})).toHaveCount(0);
@@ -114,8 +115,10 @@ try{
  await expect(settings.getByRole('region',{name:'Workspace resources'})).toHaveCount(0);
  await expect(settings.getByRole('region',{name:'Workspace readiness'})).toHaveCount(0);
  await action('view.update',{patch:{settingsExpanded:['conversation']}});
- await expect(settings.getByRole('button',{name:'Open Chat details',exact:true})).toBeVisible();
- await expect(settings.getByLabel('Conversation title',{exact:true})).toHaveCount(0);
+ const chatInfo=page.getByRole('dialog',{name:'Chat info',exact:true});
+ await expect(chatInfo.getByText('Select a chat to see its information and options.',{exact:true})).toBeVisible();
+ await chatInfo.getByRole('button',{name:'Close panel',exact:true}).click();await expect(chatInfo).toBeHidden();
+ await openSettingsPage(page,'defaults');
  await action('view.update',{patch:{settingsExpanded:['defaults'],bundleDefaultsDraft:{scope:'workspace',bundle:'private-draft'}}});
  await expect(settings.locator('#bundle-default-scope')).toHaveValue('app');
  await expect(settings.locator('#bundle-default-scope option[value="workspace"]')).toHaveCount(0);

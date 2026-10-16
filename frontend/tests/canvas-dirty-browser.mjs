@@ -30,7 +30,7 @@ try {
  const first=await view('primary');
  const manifest={id:'example.dirty-editor',label:'Unsaved editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
  // The edit deliberately lives only in React state, exercising the public dirty contract.
- const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");return React.createElement("label",null,"Unsaved renderer edit",React.createElement("input",{value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
+ const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());return React.createElement("label",null,"Unsaved renderer edit",React.createElement("input",{"data-mount":mount,value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
  const digest=(await action('shell.packages.stage',{manifest,source})).result.digest;
  assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
  // Primary edits block all transitions that would replace the primary mount.
@@ -55,6 +55,7 @@ try {
  await page.unroute('**/api/actions',holdDirty);
  await expect.poll(async()=>(await view('primary')).dirty).toBe(true);
  const before=(await inspect()).map(target);
+ const mount=await primary.getAttribute('data-mount');assert.ok(mount);
  // Browsing retains the dirty mount; explicitly reopening the same chat must
  // neither block nor discard its edit just because return shortcuts are gone.
  await action('view.update',{patch:{workSurface:'workspaces'}});
@@ -69,12 +70,13 @@ try {
   await expect(primary).toBeHidden();
   assert.equal(await primary.evaluate(el=>el.closest('.a-canvas-workspace').inert),true);
   await page.getByRole('button',{name:'Chat overview',exact:true}).click();
-  await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
+  await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');assert.equal(await primary.getAttribute('data-mount'),mount);
  }
  await page.getByRole('button',{name:'Close canvas panel'}).click();
  await expect(primary).toBeHidden();
  await page.getByRole('button',{name:'Open canvas',exact:true}).click();
  await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
+ assert.equal(await primary.getAttribute('data-mount'),mount);
 
  await page.getByRole('button',{name:'Chat overview',exact:true}).click();
  await page.getByRole('button',{name:/Other artifact.*markdown/}).click();
@@ -89,7 +91,7 @@ try {
   assert.equal((await state()).selectedSessionId,session);
   assert.equal((await state()).view.draft,'Keep composer target and draft');
   assert.deepEqual((await inspect()).map(target),before);
-  await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
+  await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');assert.equal(await primary.getAttribute('data-mount'),mount);
  }
  // Explicit recovery discards just the targeted local edit and retains sources.
  await action('canvas.views.recover',target(await view('primary')));
@@ -101,4 +103,4 @@ try {
  assert.equal((await state()).canvasArtifacts.length,2);
  assert.deepEqual(errors,[]);
  console.log('Canvas single viewer: dirty edits, delayed navigation, visibility retention, recovery and saved sources passed');
-} finally {await browser?.close();fixture.kill();}
+} finally {try{await browser?.close()}finally{fixture.kill();}}

@@ -143,6 +143,74 @@ async def test_service_fork_uses_durable_transcript_and_rechecks_busy_status(tmp
     await app.close()
 
 
+@pytest.mark.parametrize('anchor,expected_turn', [('u-first', 1), ('u-second', 2)])
+def test_exact_saved_message_fork_keeps_canonical_tool_boundary(tmp_path, anchor, expected_turn):
+    store = SessionStore.for_app(tmp_path, source()['workspace'])
+    store.save('source-session', transcript(), {}, preserve_system=True)
+    src = source()
+    for row, identity in zip(src['messages'], ['u-first', 'a-first', 'u-second', 'a-second']):
+        row['id'] = identity
+    before = copy.deepcopy(src)
+    result = fork_session(tmp_path, src, 'anchored', after_message_id=anchor)
+    saved, metadata = store.load('anchored')
+    assert saved == (transcript()[:6] if expected_turn == 1 else transcript())
+    assert metadata['fork']['through_user_turn'] == expected_turn
+    assert metadata['fork']['jobs_replayed'] is False
+    assert len(result['messages']) == expected_turn * 2
+    assert src == before and store.load(src['id'])[0] == transcript()
+
+
+@pytest.mark.parametrize('fault', ['missing', 'assistant', 'duplicate', 'display-only', 'ordinal'])
+def test_exact_message_fork_refuses_ambiguous_or_unowned_boundary(tmp_path, fault):
+    store = SessionStore.for_app(tmp_path, source()['workspace'])
+    store.save('source-session', transcript(), {}, preserve_system=True)
+    src = source()
+    for row, identity in zip(src['messages'], ['u-first', 'a-first', 'u-second', 'a-second']):
+        row['id'] = identity
+    anchor = {'missing': 'other-session-user', 'assistant': 'a-first'}.get(fault, 'u-first')
+    if fault == 'duplicate':
+        src['messages'][2]['id'] = anchor
+    if fault == 'display-only':
+        src['messages'][0]['displayOnly'] = True
+    before = copy.deepcopy(src)
+    with pytest.raises(ValueError, match='message boundary|saved user message'):
+        fork_session(tmp_path, src, 'refused', after_message_id=anchor,
+                     **({'turn': 1} if fault == 'ordinal' else {}))
+    assert not store.directory('refused').exists()
+    assert src == before and store.load(src['id'])[0] == transcript()
+
+
+async def test_explicit_message_fork_resolves_after_canonical_load_not_page_offset(tmp_path):
+    from unittest.mock import AsyncMock
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        src = app._session()
+        src.update({**source(), 'id': src['id'], 'workspace': str(tmp_path)})
+        for row, identity in zip(src['messages'], ['u-first', 'a-first', 'u-second', 'a-second']):
+            row['id'] = identity
+        complete = copy.deepcopy(src['messages'])
+        store = SessionStore.for_app(tmp_path, tmp_path)
+        store.save(src['id'], transcript(), {}, preserve_system=True)
+        src['messages'] = complete[-2:]
+        src['sharedHistoryUserTurnOffset'] = None
+
+        async def canonical(identity):
+            assert identity == src['id']
+            src['messages'] = complete
+            src['sharedHistoryUserTurnOffset'] = 0
+
+        app.history.ensure_loaded = AsyncMock(side_effect=canonical)
+        await app.dispatch('session.fork', {'id': src['id'], 'afterMessageId': 'u-second'})
+        app.history.ensure_loaded.assert_awaited_once_with(src['id'])
+        target = app._session()
+        assert target['id'] != src['id']
+        assert store.load(target['id'])[0] == transcript()
+        assert [row['id'] for row in target['messages']] == [row['id'] for row in complete]
+    finally:
+        await app.close()
+
+
 def test_edit_boundary_keeps_prior_tools_but_excludes_original_prompt_and_later_context(tmp_path):
     store=SessionStore.for_app(tmp_path,source()['workspace']);store.save('source-session',transcript(),{},preserve_system=True)
     src=source()

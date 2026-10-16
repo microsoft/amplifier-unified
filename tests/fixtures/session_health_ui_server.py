@@ -15,12 +15,15 @@ async def main(home):
     service._message(source,'user','Investigate the browser')
     service._message(source,'assistant','Checking the browser')
     source.update(status='error',error='RuntimeError: Manager turn failed; no automatic replay',errorAt=1789926000)
+    from amplifier_web.session_health import failure_details
+    source['failure']={**failure_details(source['error'],'RuntimeError'),'generationId':'image-generation','recordedAt':1789926000}
+    source['generations']=[{'event':'generation.started','generation_id':'image-generation','at':1789925800}]
     rows=[{'role':'user','content':'Investigate the browser'},
           {'role':'assistant','content':'Checking the browser','tool_calls':[{'id':'blocked','name':'computer'}]},
           {'role':'tool','tool_call_id':'blocked','content':'halted: human confirmation required'}]
     store=SessionStore.for_app(home,source['workspace']);store.save(source['id'],rows,{})
     folder=store.directory(source['id'])/'context-intelligence';folder.mkdir(exist_ok=True)
-    (folder/'events.jsonl').write_text(json.dumps({'event':'provider:error','data':{'session_id':source['id'],'error':{'type':'InvalidRequestError','msg':'Invalid image_url: invalid base64-encoded value'}}})+'\n')
+    (folder/'events.jsonl').write_text(json.dumps({'event':'provider:error','timestamp':1789925990,'generation_id':'image-generation','data':{'session_id':source['id'],'error':{'type':'InvalidRequestError','msg':'Invalid image_url: invalid base64-encoded value'}}})+'\n')
     if os.environ.get('BRIDGE_TIMEOUT_FIXTURE'):
         from amplifier_web.session_health import failure_details
         source['failure'] = {**failure_details('Manager failed', 'TimeoutError'),

@@ -1,10 +1,13 @@
 import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
-import {writeFile} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
+const output=process.env.AMPLIFIER_TEST_ARTIFACTS;
+if(output)await mkdir(output,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--canvas-versions'],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
@@ -16,6 +19,7 @@ try{
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1500,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ const commands=[];page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const body=request.postDataJSON();commands.push(body?.action==='shell.command'?(body.args.command||body.args):body)}});
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
@@ -25,6 +29,9 @@ try{
  await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,draft:'Keep this unsent draft'}});
  const first=(await action('canvas.show',{kind:'markdown',title:'Versioned plan',content:'# Original plan\n\nKeep the first facts.'})).result;
  await send(`[Open original plan](${first.reference})`);
+ const sentBeforeVersions=(await(await page.request.get(url+'/fixture')).json()).sent;
+ assert.equal(sentBeforeVersions.length,2,'Both declared setup messages were delivered');
+ const commandsBeforeVersions=commands.length;
  await action('canvas.versions.revise',{id:first.id,expectedRevision:1,content:'# Revised plan\n\nKeep the second facts.'});
  await action('view.update',{patch:{draft:'Keep this unsent draft'}});
  await expect(page.getByRole('tab',{name:'Versioned plan',exact:true})).toHaveCount(1);
@@ -38,7 +45,7 @@ try{
  await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
  await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('latest');
  await expect(page.getByRole('heading',{name:'Revised plan',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Versioned plan · Version 1',exact:true}).click();
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('1');
  await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Restore as new version',exact:true}).click();
  await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toHaveValue('latest');
@@ -72,7 +79,13 @@ try{
  await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('2');
  await expect(frame().getByRole('heading',{name:'Large second',exact:true})).toBeVisible();
  assert.equal((await state()).view.draft,'Keep this unsent draft');
+ const sentAfterVersions=(await(await page.request.get(url+'/fixture')).json()).sent;
+ assert.deepEqual(sentAfterVersions,sentBeforeVersions,'Browsing, reloading and explicitly restoring saved versions never replay model input');
+ const versionCommands=commands.slice(commandsBeforeVersions);
+ assert.equal(versionCommands.filter(row=>row.action==='canvas.versions.restore').length,1,'Only the explicit Restore gesture submits a restore command');
+ assert.deepEqual(versionCommands.filter(row=>['conversation.send','session.send'].includes(row.action)),[],'Version controls submit no conversation input');
  assert.deepEqual(errors,[]);
- await page.screenshot({path:'/tmp/canvas-versions-browser.png',fullPage:true});
+ await page.screenshot({path:output?output+'/canvas-versions-browser.png':'/tmp/canvas-versions-browser.png',fullPage:true});
+ if(output)await writeFile(output+'/observations.json',JSON.stringify({passed:true,setupInputs:sentBeforeVersions,afterInputs:sentAfterVersions,explicitRestores:1,checks:['Public saved-version selection, original-turn link, reload and explicit restore preserve exact runtime input receipts and private draft.','Only one deliberate Restore gesture produces a restore command; version browsing produces no model sends.'],limits:['Synthetic runtime and artifacts; does not claim exactly-once external tool execution.']},null,2)+'\n');
  console.log('Canvas saved versions: exact Markdown/turn links, single tab, Latest, reload, restore, small/large HTML transitions and unsent draft passed');
-}finally{await browser?.close();fixture.kill()}
+}finally{await browser?.close();if(fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);try{const [code,signal]=await exited;assert.equal(code,0,'Fixture exits cleanly');assert.equal(signal,null)}finally{clearTimeout(timer)}}}

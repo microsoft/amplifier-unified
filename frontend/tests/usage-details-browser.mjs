@@ -51,7 +51,8 @@ try{
   const line=call.locator(':scope > button');
   if(level!=='minimal'){
    const phase=await line.locator('.a-execution-phase').boundingBox(),usageBox=await line.locator('.a-execution-usage').boundingBox();
-   assert.ok(Math.abs(phase.y-usageBox.y)<2,'Duration must align with first usage line');
+   if(Math.abs(phase.y-usageBox.y)>=2)await page.screenshot({path:`/tmp/unified-usage-alignment-${scheme}-${level}.png`,fullPage:true});
+   assert.ok(Math.abs(phase.y-usageBox.y)<2,'Duration must align with first usage line: '+JSON.stringify({scheme,level,phase,usageBox,markup:await line.innerHTML()}));
   }
   await page.screenshot({path:`/tmp/unified-usage-${scheme}-${level}.png`,fullPage:true});
   await page.setViewportSize({width:390,height:844});

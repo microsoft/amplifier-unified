@@ -38,8 +38,17 @@ try{
  await expect(frame().getByRole('textbox')).toHaveValue('Keep the green, soften the contrast');
  assert.equal((await state()).canvasArtifacts.length,1);await expect(page.getByRole('tab',{name:'Your custom themes',exact:true})).toHaveCount(1);
  const before=(await state()).theme;
+ const originalAccent=await page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-accent').trim());
  await frame().getByRole('button',{name:'Preview',exact:true}).click();
  await page.getByRole('button',{name:'Review theme change',exact:true}).click({timeout:10000}).catch(async e=>{console.log('host alerts',await page.getByRole('alert').allTextContents(),'frame status',await frame().locator('#status').textContent(),'requests',(await inspect()).app.requests);throw e});
+ assert.equal(await page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-accent').trim()),originalAccent);
+ assert.deepEqual((await state()).theme,before);assert.notEqual((await state()).view.themePreview,true);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
+ const pendingPreview=(await inspect()).app.requests.find(r=>r.status==='pending');assert.ok(pendingPreview);
+ await page.getByRole('region',{name:'Review requested theme change',exact:true}).getByRole('button',{name:'Back',exact:true}).click();
+ assert.equal((await inspect()).app.requests.find(r=>r.id===pendingPreview.id).status,'pending');
+ assert.equal(await page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-accent').trim()),originalAccent);
+ await page.getByRole('button',{name:'Review theme change',exact:true}).click();
  await page.getByRole('button',{name:'Approve theme change',exact:true}).click();
  await expect.poll(async()=>(await state()).view.themePreview).toBe(true);
  assert.deepEqual((await state()).theme,before);
@@ -54,15 +63,30 @@ try{
  const inner=page.frames().find(f=>f.url().includes('/document'));
  assert.equal(await inner.evaluate(()=>{try{return parent.document.body.textContent}catch{return 'isolated'}}),'isolated');
  assert.equal(await inner.evaluate(async()=>{try{await fetch('/api/state');return 'accessible'}catch{return 'blocked'}}),'blocked');
+ const effectsBeforeReload=(await inspect()).app.requests.map(r=>({id:r.id,status:r.status}));
  await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ assert.deepEqual((await inspect()).app.requests.map(r=>({id:r.id,status:r.status})),effectsBeforeReload);
  await expect(frame().getByRole('radio',{name:'Ember',exact:true})).toBeChecked();
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
  await frame().getByRole('button',{name:'Revert',exact:true}).click();await page.getByRole('button',{name:'Review theme change',exact:true}).click();await page.getByRole('button',{name:'Approve theme change',exact:true}).click();
  await expect.poll(async()=>(await state()).theme.name).toBe(before.name);
+ const effectsBeforeRestore=(await inspect()).app.requests.map(r=>({id:r.id,status:r.status}));
  await action('canvas.apps.restore',{...await cas(),version:1});
+ assert.deepEqual((await inspect()).app.requests.map(r=>({id:r.id,status:r.status})),effectsBeforeRestore);
  await expect(frame().getByRole('heading',{name:'A different kind of atmosphere.'})).toBeVisible();
  await expect(frame().getByRole('radio',{name:'Ember',exact:true})).toBeChecked();
  assert.equal((await state()).canvasArtifacts.length,1);
+ // Declining a request and revising its source cannot grant old approval authority.
+ await frame().getByRole('button',{name:'Preview',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Decline',exact:true})).toBeVisible();
+ const declined=(await inspect()).app.requests.find(r=>r.status==='pending');
+ await page.getByRole('button',{name:'Decline',exact:true}).click();
+ await expect.poll(async()=>(await inspect()).app.requests.find(r=>r.id===declined.id).status).toBe('rejected');
+ await assert.rejects(()=>cas().then(c=>action('canvas.apps.resolve',{...c,requestId:declined.id,approve:true})),/resolved|superseded/);
+ assert.deepEqual((await state()).theme,before);
+ await frame().getByRole('button',{name:'Preview',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Review theme change',exact:true})).toBeVisible();
+ const superseded=(await inspect()).app.requests.find(r=>r.status==='pending');
  // Protect a form edit even when its dirty declaration races a remote revision.
  const pendingCas=await cas(),clientId=(await state()).client.id;
  let releaseDirty;const blocked=new Promise(resolve=>{releaseDirty=resolve});
@@ -81,6 +105,10 @@ try{
  await page.getByRole('button',{name:/Discard unfinished input and load revision/}).click();
  await expect(frame().getByRole('heading',{name:'Your palette, refined.'})).toBeVisible();
  await expect(frame().getByRole('textbox')).toHaveValue('Keep the green, soften the contrast');
+ await expect.poll(async()=>(await inspect()).app.requests.find(r=>r.id===superseded.id).status).toBe('superseded');
+ await expect(page.getByRole('button',{name:'Review theme change',exact:true})).toHaveCount(0);
+ await assert.rejects(()=>cas().then(c=>action('canvas.apps.resolve',{...c,requestId:superseded.id,approve:true})),/resolved|superseded/);
+ assert.deepEqual((await state()).theme,before);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
  assert.deepEqual(errors,[]);
  await mkdir(root+'output/canvas-proof',{recursive:true});await page.screenshot({path:root+'output/canvas-proof/conversation-surface.png',fullPage:true});
  await writeFile(root+'output/canvas-proof/conversation-surface.json',JSON.stringify({passed:true,checks:['one tab','shared controls','input preservation','revision restore','theme preview/apply/revert','refresh','composer draft','sandbox isolation']},null,2));
@@ -105,4 +133,4 @@ try{
  await expect.poll(()=>protectedHost.evaluate(()=>window.blockedSurfaceNavigation)).toBeGreaterThan(0);
  assert.equal(hostNavigationRequests,0,'Sandbox navigation cannot access other host endpoints');
  console.log('Conversation surface browser acceptance passed.');
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+}finally{try{await browser?.close()}finally{fixture.kill('SIGTERM')}}

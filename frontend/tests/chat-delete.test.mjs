@@ -52,3 +52,13 @@ test('workspace or active-work refusal never offers a delete button',async()=>{
  assert.equal(root.root.findAllByProps({'data-action':'session.delete'}).length,0);
  await renderAct(async()=>root.unmount());
 });
+test('review distinguishes same titles by authoritative workspace, activity and scoped identity',async()=>{
+ let root;const calls=[];
+ const act=async(name,args)=>{calls.push({name,args});return {...preview(args.nativeId),result:{...preview(args.nativeId).result,reviewIdentity:{scope:'session',workspace:'/projects/one',sessionId:args.nativeId,lastActivityAt:1791979200}}}};
+ try{
+  await renderAct(async()=>{root=create(React.createElement(ChatDelete,{id:'history-one',historySelection:{project:'projects-one',nativeId:'one'},act,cancel:()=>{}}))});
+  const rendered=JSON.stringify(root.toJSON());assert.match(rendered,/\/projects\/one/);assert.match(rendered,/Session ID/);
+  assert.equal(root.root.findByType('code').children.join(''),'one');assert.equal(root.root.findByType('time').props.dateTime,'2026-10-14T12:00:00.000Z');
+  assert.deepEqual(calls,[{name:'storage.historyDeletePreview',args:{project:'projects-one',nativeId:'one'}}]);
+ }finally{if(root)await renderAct(async()=>root.unmount())}
+});

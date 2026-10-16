@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+const out=process.env.AMPLIFIER_TEST_ARTIFACTS;if(!out)throw Error('Owned artifact directory required');
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_collections_server.py',import.meta.url))]);
 let browser,page,stderr='';fixture.stderr.on('data',data=>stderr+=data);
 try{
@@ -18,7 +19,8 @@ try{
  await visible().getByRole('button',{name:'Send test message',exact:true}).click();
  await expect(visible().getByText('Test message succeeded',{exact:true})).toBeVisible();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().sessions.length),before);
- const receipt=await page.evaluate(()=>window.amplifier.dispatch('providers.testMessage',{id:'two'}));
+ // The public global Settings surface and agent request must name the same configuration owner.
+ const receipt=await page.evaluate(()=>window.amplifier.dispatch('providers.testMessage',{id:'two',configurationTarget:{kind:'global'}}));
  assert.equal(receipt.accepted,true);
  await page.waitForFunction(()=>window.amplifier.getState().setup.messageTests?.two?.error==='insufficient_quota');
  await openSettingsPage(page,'providers');
@@ -31,9 +33,9 @@ try{
  assert.ok(!(await page.content()).includes('fixture-private-key'));
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
- await page.screenshot({path:'/tmp/provider-message-test-mobile.png'});
+ await page.screenshot({path:out+'/mobile.png'});
  await page.setViewportSize({width:1280,height:920});
- await page.screenshot({path:'/tmp/provider-message-test-desktop.png'});
+ await page.screenshot({path:out+'/desktop.png'});
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({actualTestAction:true,successAndError:true,noChatCreated:true,sharedActions:true,advancedAndEveryday:true,mobile:true,fullSecretsAbsent:true,browserErrors:0}));
-}catch(error){if(page){await page.screenshot({path:'/tmp/provider-message-test-failure.png'});console.log('Saved synthetic fixture screenshot to /tmp/provider-message-test-failure.png')}throw error}finally{await browser?.close();fixture.kill('SIGTERM')}
+}catch(error){if(page){await page.screenshot({path:out+'/failure.png'});console.log('Saved synthetic fixture failure screenshot')}throw error}finally{try{await browser?.close()}finally{fixture.kill('SIGTERM')}}

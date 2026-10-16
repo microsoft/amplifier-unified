@@ -32,8 +32,11 @@ class FixtureProvider:
     def parse_tool_calls(self, response): return []
     async def complete(self, request, **kwargs):
         users = [str(m.content) for m in request.messages if m.role == "user"]
-        text = users[-1] if users else ""
-        marker = next((key for key in ("terminal-first", "terminal-detach", "terminal-stop") if key in text), "other")
+        # Host context may follow the input as an ephemeral user-role message.
+        # Select the newest owned fixture marker, not that context trailer.
+        marker = next((key for text in reversed(users)
+                       for key in ("terminal-first", "terminal-detach", "terminal-stop")
+                       if key in text), "other")
         with (Path(GATES) / (marker + ".calls")).open("a") as stream:
             stream.write("call\\n")
         if marker in {"terminal-detach", "terminal-stop"}:
@@ -71,6 +74,15 @@ Reply with the fixture response.
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
         AMPLIFIER_SESSION_STATE_HOME=str(root / "shared"),
     )
+    # This terminal acceptance exercises local runtime semantics, not fetching
+    # the ordinary optional community behaviors into an empty test home.
+    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+    settings = root / "amplifier-home" / "settings.yaml"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({
+        "bundle": {"active": str(bundle), "app": []},
+        "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]},
+    }))
     from aiohttp import web
     from amplifier_web.server import create_app
     from amplifier_web.session_client import SessionClient
@@ -94,12 +106,22 @@ Reply with the fixture response.
             latest[client.client_id] = snapshot
 
     async def until(predicate):
-        async with asyncio.timeout(45):
-            while not predicate():
-                for task in tasks:
-                    if task.done() and not task.cancelled():
-                        task.result()
-                await asyncio.sleep(.02)
+        try:
+            async with asyncio.timeout(45):
+                while not predicate():
+                    for task in tasks:
+                        if task.done() and not task.cancelled():
+                            task.result()
+                    await asyncio.sleep(.02)
+        except TimeoutError:
+            # Retain a small, credential-free explanation instead of losing
+            # preparation/transport evidence behind a generic polling timeout.
+            print(json.dumps({"terminal_timeout": {
+                client: {key: snapshot.get('session', {}).get(key)
+                         for key in ('status', 'error', 'activity', 'historyError')}
+                for client, snapshot in latest.items()
+            }, "workerCount": len(service.runtime.workers)}), file=sys.stderr)
+            raise
 
     def complete(client, marker):
         return any(m.get("text") == "completed " + marker for m in
@@ -114,6 +136,14 @@ Reply with the fixture response.
                 tasks.extend(asyncio.create_task(follow(client, sid)) for client in (a, b))
                 await until(lambda: len(latest) == 2)
                 await a.command(sid, "conversation.send", {"text": "terminal-first"}, command_id="first")
+                await until(lambda: all(
+                    snapshot.get('session', {}).get('status') == 'idle'
+                    and any(m.get('role') == 'assistant' for m in snapshot.get('session', {}).get('messages', []))
+                    for snapshot in latest.values()))
+                assert all(complete(c, "terminal-first") for c in ("terminal-a", "terminal-b")), {
+                    "messages": {client: snapshot.get('session', {}).get('messages', []) for client, snapshot in latest.items()},
+                    "calls": [path.name for path in gates.glob('*.calls')],
+                }
                 await until(lambda: all(complete(c, "terminal-first") for c in ("terminal-a", "terminal-b")))
                 await until(lambda: latest["terminal-b"]["session"]["status"] == "idle")
                 # Idle return plus host control is the activation-race regression path.

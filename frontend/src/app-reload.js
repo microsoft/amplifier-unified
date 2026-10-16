@@ -61,7 +61,10 @@ export function createBuildDiscovery({loaded,onInstalled,read=readInstalledFront
  };
 }
 
-export async function reloadWhenSaved({prepare,reload}){
+export async function reloadWhenSaved({prepare,reload,assertReady=()=>{}}){
+ assertReady();
  await prepare();
+ // Preparation may yield while a surface receives another local edit.
+ assertReady();
  reload();
 }

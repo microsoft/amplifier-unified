@@ -77,6 +77,9 @@ class ShellQueryModel:
                 value = query.workspace_counts(directory, state, archive=args['archive'])
             elif operation == 'pinned_navigation':
                 value = query.pinned_navigation(directory, state, args['workspaces'])
+            elif operation == 'naming_candidates':
+                from .automatic_naming_query import candidate_page
+                value = candidate_page(directory, state, args['cursor'])
             else:
                 raise ValueError('Unknown directory read')
             check_budget()

@@ -1,11 +1,62 @@
 import asyncio
 from copy import deepcopy
 import json
+import pytest
 
 from amplifier_web.state_transport import delta
 from amplifier_web.browser_detail import project
 from amplifier_web.server import create_app
 from test_service import Runtime
+
+
+@pytest.mark.parametrize('compact', [False, True])
+async def test_plan_receipt_has_no_unrelated_state_ack(authenticated_client, tmp_path, compact):
+    from amplifier_web.event_log_view import event_path
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=Runtime(), voice=False, background_updates=False)
+    service = app['service']
+    await service.history.close()
+    await service.event_log_view.close()
+    made = await service.dispatch('session.create', {'title': 'Exact plan'})
+    session = service._session(made['sessionId'])
+    identity = session.get('runtimeSessionId') or session['id']
+    path = event_path(session, identity)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'event': 'tool:post', 'timestamp': 1, 'data': {
+        'session_id': identity, 'tool_name': 'todo', 'tool_call_id': 'exact-plan',
+        'result': {'success': True, 'output': {'todos': [
+            {'content': 'Retain the actual plan', 'status': 'completed'}]}}}}) + '\n')
+    original = path.read_bytes()
+    client = await authenticated_client(app)
+    headers = {'X-Amplifier-State-Transport': 'delta-v1'} if compact else {}
+    # No publication can acknowledge this unrelated private revision. A pure
+    # read must return its own result instead of assigning it to that domain.
+    service._state['revision'] += 100
+    result = await (await client.post('/api/actions', headers=headers, json={
+        'action': 'session.plans', 'args': {'ids': [session['id']], 'includeItems': True}})).json()
+    assert result['accepted'] and 'stateRevision' not in result
+    assert '_stateIndependent' not in result
+    plan = result['result']['items'][0]['plan']
+    assert (plan['done'], plan['total']) == (1, 1)
+    assert plan['items'] == [{'content': 'Retain the actual plan', 'status': 'completed'}]
+    assert path.read_bytes() == original and service._session()['id'] == session['id']
+    # Mutations still retain their authoritative state acknowledgement, even
+    # when the caller tries to supply the internal read-only marker.
+    mutation = await (await client.post('/api/actions', headers=headers, json={
+        'action': 'view.update', 'args': {'patch': {'navWidth': 301}},
+        '_stateIndependent': True})).json()
+    if compact:
+        assert mutation['stateRevision'] == mutation['revision']
+    else:
+        assert mutation['state']['view']['navWidth'] == 301
+    assert '_stateIndependent' not in mutation
+    # The shell does not declare this capability; no wider delegation grant
+    # is introduced merely to optimize the ordinary workspace's direct read.
+    await client.post('/api/clients/attach', json={'clientId': 'plan-reader'})
+    denied = await client.post('/api/actions', headers={**headers, 'X-Amplifier-Client': 'plan-reader'}, json={
+        'action': 'shell.command', 'args': {'clientId': 'plan-reader', 'instanceId': 'chats',
+            'action': 'session.plans', 'args': {'ids': [session['id']]}}})
+    assert denied.status == 403
 
 
 def apply(previous, patch):

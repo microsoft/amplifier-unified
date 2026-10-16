@@ -16,7 +16,7 @@ export function newestMessageIds(messages){
 
 export function completedTurnEnds(session){
  const messages=session?.messages||[],ends=new Map();
- if(session?.messageWindow?.mode==='cursor'&&!Number.isInteger(session?.sharedHistoryUserTurnOffset))return ends;
+ const numbered=session?.messageWindow?.mode!=='cursor'||Number.isInteger(session?.sharedHistoryUserTurnOffset);
  let turn=Number(session?.sharedHistoryUserTurnOffset)||0;
  for(let i=0;i<messages.length;i++){
   if(messages[i].role!=='user')continue;
@@ -25,7 +25,7 @@ export function completedTurnEnds(session){
   const last=messages.slice(i+1,end).findLast(m=>m.role==='assistant');if(!last)continue;
   const record=session.execution?.turns?.find(t=>t.inputId===messages[i].inputId&&messages[i].inputId);
   const finished=record?['completed','complete','done'].includes(record.phase||record.status):end<messages.length||!['working','running','starting','stopping','error'].includes(session.status);
-  if(finished)ends.set(last.id,turn);
+  if(finished&&messages[i].id&&!messages[i].displayOnly&&!last.displayOnly)ends.set(last.id,{messageId:messages[i].id,turn:numbered?turn:null});
  }
  return ends;
 }
@@ -87,5 +87,5 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  </article>;
 }
 export function ForkTurn({session,turn,act,working}){
- return <button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':working?'Wait for the current work to finish':'Fork a new chat from here')} aria-label={`Fork conversation after turn ${turn}`} disabled={working||session.configurationBusy||session.workspaceAvailable===false||!!session.historyReadOnlyReason} data-action="session.fork" onClick={()=>act('session.fork',{id:session.id,turn})}><GitBranch/></button>;
+ return <button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':working?'Wait for the current work to finish':'Fork a new chat from here')} aria-label={turn.turn===null?'Fork conversation after this turn':`Fork conversation after turn ${turn.turn}`} disabled={working||session.configurationBusy||session.workspaceAvailable===false||!!session.historyReadOnlyReason} data-action="session.fork" onClick={()=>act('session.fork',{id:session.id,afterMessageId:turn.messageId})}><GitBranch/></button>;
 }

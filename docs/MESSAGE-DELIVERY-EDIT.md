@@ -8,6 +8,15 @@ The new browser clears its scoped draft before submitting and sends `preserveDra
 
 `message.edit` accepts `mode: current | fork`. The UI defaults to the current conversation, including the last user message. An explicit checkbox creates a new conversation instead. Omitted mode retains the legacy fork behavior for existing callers.
 
+Per-turn Fork uses `session.fork` with `afterMessageId`, the exact saved user
+message anchoring that turn. A bounded message page does not invent a global turn
+number. Only the explicit command loads canonical history and resolves that ID;
+missing, duplicate, non-user or display-only anchors are refused. The existing
+ordinal `turn` API remains available but cannot be combined with a message anchor.
+Native display-only observations do not gain fork authority. A fork preserves the
+canonical context through the chosen turn without replaying work or changing the
+original conversation.
+
 Current-conversation edits require idle execution and exclusive Foundation ownership. The worker checks pending inputs, interactions and delegated work, prepares a reliable transcript boundary, records revision evidence, replaces the active context and submits the edited input once. The original event log and pre-edit context evidence remain available. External tool effects are never undone or replayed. Earlier message identities and execution records remain in the active conversation. Older compacted history without a reliable boundary returns an error and leaves the original intact.
 
 Prepared revision evidence is private and durable. After interruption, recovery classifies the saved transcript; it never overwrites a newer owner's changes or automatically retries the edited input. A committed edit with an unconfirmed response is shown as interrupted for review.

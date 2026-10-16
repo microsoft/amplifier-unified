@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "b4e595b71cf1286fb61adad7266372940623935b",
+  "status": "passed-profile-warm-worker-cold",
+  "dtu": "dtu-unified-codex-dev-20261014",
+  "normalRuntimeManager": true,
+  "commandOverride": false,
+  "profile": {
+    "parent": "1502bc86abc54ee3b8b953aa77d1b78a",
+    "selected": "30f5821775e64f29bc558320c9a846ce",
+    "bundle": "work",
+    "provider": "local deterministic dev-synthetic",
+    "configuration": "Existing synthetic Work composition, including its existing excluded shell behavior; no behavior changed to make the probe pass.",
+    "qualificationReceiptsUnchanged": true
+  },
+  "cases": [
+    {
+      "case": "first-owner-cold",
+      "readyMs": 1343.02,
+      "phaseMs": {
+        "ensure": 6.152,
+        "spawn": 0.56,
+        "foundation.prepare": 64.064,
+        "foundation.create_session": 345.204
+      }
+    },
+    {
+      "case": "same-owner-reopened",
+      "readyMs": 1170.04,
+      "phaseMs": {
+        "ensure": 3.177,
+        "spawn": 0.618,
+        "foundation.prepare": 61.342,
+        "foundation.create_session": 334.69
+      }
+    },
+    {
+      "case": "second-owner-cold",
+      "readyMs": 1279.93,
+      "phaseMs": {
+        "ensure": 2.201,
+        "spawn": 0.479,
+        "foundation.prepare": 66.556,
+        "foundation.create_session": 338.384
+      }
+    }
+  ],
+  "providerCompleteCalls": 0,
+  "providerGuardsInstalled": 3,
+  "inputSubmitted": false,
+  "workersRemaining": 0,
+  "isolation": [
+    "Private mount/PID/network namespace and private app/config/HOME/cache; no shared-preview mutations.",
+    "Same logical source paths preserve the real profile cache identity. Qualified environments and actual source trees are read-only.",
+    "Source-binding metadata and sibling lock directories are private writable copies; no histories, schedules or credentials copied.",
+    "Normal uv command uses --locked --no-sync, with offline mode and interpreter downloads disabled. Missing cache qualification is a failed prerequisite, never an installer fallback."
+  ],
+  "failedSetupAttemptsPreserved": [
+    {
+      "failure": "Whole Foundation bind made source-binding lock directory read-only",
+      "resolution": "Kept source trees immutable; separated private writable cache bookkeeping."
+    },
+    {
+      "failure": "Probe selection used provider rather than the normal instance key",
+      "resolution": "Passed documented instance key with the already-mounted dev-synthetic identity."
+    }
+  ],
+  "limitations": [
+    "Three finite starts are not a p95 or sustained-load qualification.",
+    "Existing profile/dependencies and filesystem caches are warm; this does not measure a fully cold installation or changed-composition requalification.",
+    "No browser input acknowledgment, model request, paid provider, external tool, or copied conversation was executed.",
+    "Timing wrappers observe actual methods. Spawn duration is subprocess creation only; total ready includes interpreter import, bundle load, activation and mounting. Phase measurements need not cover or sum to the total."
+  ],
+  "evidence": [
+    {
+      "name": "normal-runtime-evidence/evidence/measure-result.json",
+      "sha256": "c028d582d4f422bbd36982333fa4a55ffd9d8319c38052cb826220052d6012bc"
+    },
+    {
+      "name": "normal-runtime-evidence/evidence/measure-timing.jsonl",
+      "sha256": "e24c72bb2272125af6c211e6272d44765d057984d1b210316bdcd8230d07b6dc"
+    },
+    {
+      "name": "normal-runtime-evidence/evidence/preflight-result.json",
+      "sha256": "6b2d754cca511cf410497c7a8a46ab1f354d54b6667c9415144994a6f29b651d"
+    },
+    {
+      "name": "normal-runtime-probe.py",
+      "sha256": "2bf160a6f94c1a9e937130919e23c49f8dabf3ce29a4f565f05db4c7c3a83c05"
+    },
+    {
+      "name": "normal-runtime-namespace.py",
+      "sha256": "e0fd6cce64a52f941eb0d9c48bc2c9c3a60a07e55e2126ad5a63f2b745864524"
+    },
+    {
+      "name": "normal-runtime-sitecustomize.py",
+      "sha256": "c79aad4fba4a680a4dc2ad3b10ee4024883191488ada5854db3abe9149f3d50c"
+    }
+  ]
+}

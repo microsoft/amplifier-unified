@@ -20,10 +20,15 @@ export function ReplyPreview({quote,sessionId,dispatch}){
 
 export function MessageInteractions({message,sessionId,dispatch}){
  const [open,setOpen]=useState(false),[below,setBelow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const chosen=message.reactions||[];
+ const owner=sessionId+':'+message.id,current=useRef(owner),[receipt,setReceipt]=useState(null);current.current=owner;
+ useEffect(()=>()=>{current.current=null},[]);
+ const chosen=receipt?.owner===owner&&receipt.revision>(message.annotationRevision??-1)?receipt.reactions:message.reactions||[];
  async function action(name,args){
   if(busy)return;setBusy(true);setError('');
-  try{await dispatch(name,{sessionId,messageId:message.id,...args});if(name==='message.reply')document.querySelector('[aria-label="Message Amplifier"]')?.focus();}
+  try{const result=await dispatch(name,{sessionId,messageId:message.id,...args});
+   const value=result?.result;
+   if(name==='message.reaction'&&current.current===owner&&result?.accepted===true&&value?.sessionId===sessionId&&value.messageId===message.id&&Array.isArray(value.reactions)&&Number.isSafeInteger(value.annotationRevision))setReceipt({owner,reactions:[...value.reactions],revision:value.annotationRevision});
+   if(name==='message.reply'&&current.current===owner)document.querySelector('[aria-label="Message Amplifier"]')?.focus();}
   catch(e){setError(e.message)}finally{setBusy(false)}
  }
  return <><button type="button" className="a-icon" aria-label="Reply to message" title="Reply to message" data-action="message.reply" disabled={busy} onClick={()=>action('message.reply',{})}><Reply/></button><div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>

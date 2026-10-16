@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "applicationBase": "8e7730f8af0958b5665a92df28b4fa9ddb085512",
+  "context": "Owned DTU synthetic local files/pages, actual built viewers; shared-load functional checks, no performance claim.",
+  "build": {
+    "version": "0.20.165",
+    "id": "20909ea1a05ec437"
+  },
+  "runs": [
+    {
+      "batch": "viewers",
+      "scenario": "pdf",
+      "status": "passed",
+      "durationSeconds": 4.979,
+      "scriptSha256": "ac172b2eb1dc3dc4788a2111f472f2e5eac0186e0fba8d91af8ab39645558d77",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "viewers",
+      "scenario": "babylon",
+      "status": "failed",
+      "durationSeconds": 35.313,
+      "scriptSha256": "9b12887783e5343960fd31088a35f348ce0c010d291e5c6ea2e5540c2dbb30a9",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 2
+      }
+    },
+    {
+      "batch": "viewers",
+      "scenario": "standard-ux-browser-preview",
+      "status": "failed",
+      "durationSeconds": 32.671,
+      "scriptSha256": "83ab33e1c07d25c542dce766fab5d8bb6909d6bc991102f20d7c14f42752a473",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "viewers-corrected",
+      "scenario": "babylon",
+      "status": "failed",
+      "durationSeconds": 4.967,
+      "scriptSha256": "f77b0720f2b3b4c45d6f204f2e8582b94483c8f90b1769b53839678141dda6c9",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "viewers-corrected",
+      "scenario": "standard-ux-browser-preview",
+      "status": "passed",
+      "durationSeconds": 3.164,
+      "scriptSha256": "0fd8ced8a73164a2f0a6906effaba349bd872ea7ca2cb9976bf790ef2c5e1d2e",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "viewers-corrected",
+      "scenario": "inline-media-preservation",
+      "status": "passed",
+      "durationSeconds": 11.89,
+      "scriptSha256": "c9c722907f668aa577c8bb08e251db2e763198545e4271cf5629e0a566e137c5",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "babylon-download",
+      "scenario": "babylon",
+      "status": "failed",
+      "durationSeconds": 5.07,
+      "scriptSha256": "c2cd077cf388cdeeb2316cee59f2401689582c95082ab8432b9322adc9bd449b",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "babylon-cookie",
+      "scenario": "babylon",
+      "status": "failed",
+      "durationSeconds": 36.068,
+      "scriptSha256": "40b982a70aaee483240b4d73d2c64451344cc9638ae23301def9c79fe498298a",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    },
+    {
+      "batch": "babylon-final",
+      "scenario": "babylon",
+      "status": "passed",
+      "durationSeconds": 6.126,
+      "scriptSha256": "308e8053808ab95d98da573ae74e443a094215aa6ded974d866cf40187db6465",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    }
+  ],
+  "finalSourceHashes": {
+    "frontend/tests/pdf-browser.mjs": "ac172b2eb1dc3dc4788a2111f472f2e5eac0186e0fba8d91af8ab39645558d77",
+    "frontend/tests/babylon-browser.mjs": "308e8053808ab95d98da573ae74e443a094215aa6ded974d866cf40187db6465",
+    "frontend/tests/standard-ux-browser-preview-browser.mjs": "0fd8ced8a73164a2f0a6906effaba349bd872ea7ca2cb9976bf790ef2c5e1d2e",
+    "frontend/tests/inline-media-browser.mjs": "c9c722907f668aa577c8bb08e251db2e763198545e4271cf5629e0a566e137c5",
+    "tests/fixtures/empty_host_ui_server.py": "2e7db5a33b7c03e07141c78c39726aed32011727ba8744d92e3ad640a973b20b"
+  },
+  "observations": [
+    "PDF.js renders actual two-page raster/text; public page/zoom/fit controls, exact original download after file changes, reload, single-page disabled Next, damaged and encrypted-file fallbacks pass.",
+    "Babylon renders real software-WebGL frames and mesh; camera pointer drag, host-defined DOM action, public bundled-runtime export with exact current filename, reload and navigation pin retention pass.",
+    "Local browser preview executes exact local control in opaque frame; public Reload makes one new request; both allowed and X-Frame-Options denied pages remain honestly unverified. Help explains limits and Open in browser opens exact local denied page outside the frame.",
+    "GIF offscreen playback pauses/unmounts; two independent clients preserve exact message/media pane-relative anchors and drafts during attachment publication, then saved media survives source removal/reload/reopen. Worker-history phase explicitly NOT_RUN."
+  ],
+  "failureClassification": [
+    {
+      "batch": "viewers",
+      "scenario": "babylon",
+      "cause": "New dynamic fixture starts Canvas controls collapsed; legacy Download action locator did not expose them. Unhandled download waiter aborted node; runner retired two owned remnants, none remained."
+    },
+    {
+      "batch": "viewers",
+      "scenario": "standard-ux-browser-preview",
+      "cause": "New test also omitted public Canvas options before Reload."
+    },
+    {
+      "batch": "viewers-corrected/babylon-download",
+      "scenario": "babylon",
+      "cause": "Native Chromium download canceled with renderer-injected bearer authentication, even with acceptDownloads true. Normal signed fixture browser cookie makes same public download complete; no product auth bypass."
+    },
+    {
+      "batch": "babylon-cookie",
+      "scenario": "babylon",
+      "cause": "All viewer/export/reload assertions passed, then old Pin navigation open label failed. Current Open navigation/Close navigation retains same pin-state contract."
+    }
+  ],
+  "optionalFixtureDependency": {
+    "package": "pypdf==6.19.0",
+    "wheelSha256": "7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14",
+    "source": "uv.lock",
+    "scope": "Separate owned DTU pdf-deps target only; shared environment unchanged"
+  },
+  "limits": [
+    "PDF fixtures and generator are synthetic; no real confidential documents.",
+    "Babylon uses Chromium software WebGL; no device/GPU/platform parity claim.",
+    "Local preview uses only owned loopback server; no remote account, cross-machine or HTTPS mixed-content claim.",
+    "All other GIF phases explicitly NOT_RUN; no new worker-history or platform codec qualification.",
+    "Offscreen pause/disposal is observed; arbitrary hidden-network read absence is not proven by this phase.",
+    "Unknown external-effect outcomes and dirty dialog cancellation focus remain unobserved; custom renderer replaces through refusal/recovery, not a Cancel dialog."
+  ],
+  "privateEvidence": "output/readiness-day-20261015/canvas-ordinary/"
+}

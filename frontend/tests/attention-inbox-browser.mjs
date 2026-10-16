@@ -17,8 +17,9 @@ try{
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
  const initial=await control({op:'many',count:13}),sid=initial.alpha,other=initial.beta;
  const sessions=Object.fromEntries(initial.state.sessions.filter(s=>s.id.startsWith('library-')).map((s,i)=>[s.id,{completion:{id:'g1',at:100+i}}]));
- await control({op:'patch',sessions,view:{panel:'activity'}});
+ await control({op:'patch',sessions});
  await page.goto(vite.resolvedUrls.local[0]);
+ await page.getByRole('button',{name:'Activity',exact:true}).click();
  const inbox=page.getByRole('region',{name:'Activity to review',exact:true});await expect(inbox).toBeVisible();
  await page.waitForFunction(()=>window.amplifier?.getState()?.attention?.badgeUnread===0);
  await expect(inbox.getByRole('region',{name:'Finished responses',exact:true}).locator('.a-attention-item')).toHaveCount(10);
@@ -59,6 +60,7 @@ try{
  assert.equal(after.state.sessions.find(s=>s.id===sid).questions[0].status,'pending');
  assert.equal(after.state.sessions.find(s=>s.id===other).approvals[0].status,'pending');
  assert.equal(after.state.sessions.find(s=>s.id===other).error,'Synthetic failed request');
+ assert.equal(after.state.selectedSessionId,initial.state.selectedSessionId,'Reviewing notices must not navigate to their conversations');
  assert.equal(after.runtimeStarts,initial.runtimeStarts);assert.equal(after.runtimeSends,initial.runtimeSends);
  assert.deepEqual(errors,[]);
  console.log('PASS: bounded completion list; quiet/persistent badge setting; retry; group and bulk review without navigation; cross-client read state; pending questions/approvals and history retained; mobile layout.');

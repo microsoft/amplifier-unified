@@ -7,6 +7,7 @@ import {BrowserPreview} from './canvas-library';
 import {McpAppViewer} from './mcp-app-viewer';
 import {A2UISurface} from './a2ui';
 import './canvas-workspace.css';
+import {useCanvasReloadGuard} from './canvas-reload-guard.jsx';
 
 const Surface=({canvas,act})=><A2UISurface surface={canvas.surface} act={act}/>;
 // Every built-in format and every contributed renderer enters the same host.
@@ -32,6 +33,7 @@ class RendererBoundary extends React.Component{
 function Mounted({report}){useEffect(()=>{report('ready','Renderer mounted')},[report]);return null}
 
 export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
+ const reloadGuard=useCanvasReloadGuard();
  const targetKey=JSON.stringify(targetOf(view));
  const target=useMemo(()=>JSON.parse(targetKey),[targetKey]);
  const listeners=useRef(new Set()),snapshot=useMemo(()=>({visible:!!canvas.open,viewId:view.viewId,resource:{id:canvas.id,kind:canvas.kind,title:canvas.title,content:canvas.content,surface:canvas.surface,url:canvas.url,path:canvas.path,revision:view.resourceRevision},view:canvas.view||{}}),[canvas,view.viewId,view.resourceRevision]);
@@ -44,8 +46,8 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
    const mapped={'view.update':'canvas.view','view.report':'canvas.report'}[action];
    if(!mapped)return Promise.reject(Error('Unsupported renderer capability.'));
    return dispatch('canvas.views.command',{...target,action:mapped,args});
-  },setDirty:dirty=>dispatch('canvas.views.dirty',{...target,dirty:!!dirty})
- }),[target,dispatch]);
+  },setDirty:dirty=>reloadGuard.declare(!!dirty,()=>dispatch('canvas.views.dirty',{...target,dirty:!!dirty}))
+ }),[target,dispatch,reloadGuard]);
  const report=useMemo(()=> (status,message)=>{
   const result=dispatch('canvas.views.status',{...target,status,message:String(message).slice(0,2000)});
   result.catch(()=>{});return result; // Observe ignored mount reports; preserve settlement for media.

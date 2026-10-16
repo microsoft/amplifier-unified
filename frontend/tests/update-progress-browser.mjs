@@ -5,8 +5,8 @@ import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {openSettingsPage} from './browser-settings.mjs';
 const python=process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url));
+const output=process.env.UNIFIED_BROWSER_EVIDENCE||(process.env.AMPLIFIER_TEST_ARTIFACTS+'/update-progress');if(!process.env.UNIFIED_BROWSER_EVIDENCE&&!process.env.AMPLIFIER_TEST_ARTIFACTS)throw Error('Owned artifact directory required');
 const fixture=spawn(python,['-u',fileURLToPath(new URL('../../tests/fixtures/update_progress_server.py',import.meta.url))]);
-const output=process.env.UNIFIED_BROWSER_EVIDENCE||'/tmp/update-progress';
 let browser,page,log='';const result={status:'pending',syntheticTransitions:true,realHTTPAndSSE:true,paidCalls:0};
 fixture.stderr.on('data',data=>log+=data);
 try{
@@ -101,6 +101,24 @@ try{
  await updates.getByRole('button',{name:'Return to chat',exact:true}).click();
  await expect(page.locator('.a-settings-experience')).not.toBeVisible();
  await openSettingsPage(page,'updates');await expect(overview).toContainText('Finishing your update');
- assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,noPrematureActivation:true,waitingDistinct:true,activationBusy:true,duplicateInstallDisabled:true,reducedMotion:true,retryAfterFailure:true,completionRestoresControls:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
+ // Ordinary preferences retain an unfamiliar saved interval until explicitly changed.
+ await stage('installed');
+ const observations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};
+ assert.deepEqual((await observations()).calls,{check:0,install:0,rollback:0});
+ if(!await advanced.getByText('Update preferences',{exact:true}).isVisible())await advanced.locator('summary').first().click();
+ await updates.getByText('Update preferences',{exact:true}).click();
+ const frequency=updates.getByLabel('Check for updates',{exact:true}),automatic=updates.getByRole('checkbox',{name:'Automatically check for updates',exact:true});
+ await expect(frequency).toHaveValue('');await expect(updates.getByText('Your saved schedule checks every 7 hours. It stays in effect until you choose a new interval.',{exact:true})).toBeVisible();
+ await automatic.click();await expect.poll(async()=>(await observations()).preferences.autoCheck).toBe(false);await expect(automatic).not.toBeChecked();assert.equal((await observations()).preferences.intervalHours,7);
+ await page.reload();await openSettingsPage(page,'updates');if(!await updates.getByText('Update preferences',{exact:true}).isVisible())await advanced.locator('summary').first().click();if(!await frequency.isVisible())await updates.getByText('Update preferences',{exact:true}).click();
+ await expect(automatic).not.toBeChecked();await expect(frequency).toHaveValue('');assert.equal((await observations()).preferences.intervalHours,7);
+ await frequency.selectOption('24');await expect.poll(async()=>(await observations()).preferences.intervalHours).toBe(24);await automatic.click();
+ await expect.poll(async()=>(await observations()).preferences.autoCheck).toBe(true);await expect(automatic).toBeChecked();assert.deepEqual((await observations()).calls,{check:0,install:0,rollback:0});
+ await page.reload();await openSettingsPage(page,'updates');if(!await updates.getByText('Update preferences',{exact:true}).isVisible())await advanced.locator('summary').first().click();if(!await frequency.isVisible())await updates.getByText('Update preferences',{exact:true}).click();
+ await expect(automatic).toBeChecked();await expect(frequency).toHaveValue('24');
+ // Explicit checks carry their own outcome. A failed attempt cannot remain green.
+ await check.click();await expect(overview).toContainText('Updates need attention');await expect(updates).toContainText('Synthetic update lookup failed. Check again.');assert.equal((await observations()).calls.check,1);
+ await check.click();await expect(overview).toContainText('You’re up to date');await expect(updates.getByText('Synthetic update lookup failed. Check again.',{exact:true})).toHaveCount(0);assert.deepEqual((await observations()).calls,{check:2,install:0,rollback:0});
+ assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,savedPreferences:true,unknownIntervalPreserved:true,explicitCheckFailureRetry:true,noInstallEffects:true,noPrematureActivation:true,waitingDistinct:true,activationBusy:true,duplicateInstallDisabled:true,reducedMotion:true,retryAfterFailure:true,completionRestoresControls:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
 }catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:output+'-failed.png'});throw error}
-finally{await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},10000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})});result.fixtureLog=log;await writeFile(output+'.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));}
+finally{try{await browser?.close()}finally{fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},10000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})});result.fixtureLog=log;await writeFile(output+'.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));}}

@@ -134,3 +134,44 @@ source={registry="https://pypi.org/simple"}
     qualification.lock_overrides(root, old)
     assert subprocess.run([*command, str(old), str(wheel)], capture_output=True).returncode != 0
     subprocess.run([*command, str(target), str(wheel)], check=True, capture_output=True)
+
+
+@pytest.mark.parametrize("marker", ["", " ; sys_platform == 'win32'"])
+async def test_export_names_local_wheel_policy_from_exact_lock(tmp_path, marker):
+    wheel = tmp_path / 'wheel store' / 'fixture_local-1.0-py3-none-any.whl'
+    wheel.parent.mkdir()
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        archive.writestr('fixture_local-1.0.dist-info/METADATA', 'Metadata-Version: 2.3\nName: fixture-local\nVersion: 1.0\n')
+        archive.writestr('fixture_local-1.0.dist-info/WHEEL', 'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n')
+        archive.writestr('fixture_local-1.0.dist-info/RECORD', '')
+    dependency = '{name="fixture-local"' + (',marker="sys_platform == \'win32\'"' if marker else '') + '}'
+    root, target = project(tmp_path, '\n[[package]]\nname="fixture-local"\nversion="1.0"\nsource={path="../wheel store/fixture_local-1.0-py3-none-any.whl"}\n', dependency)
+    before = (root / 'uv.lock').read_bytes()
+    await qualification.prepare_overrides(root, target)
+    row = Requirement(target.read_text().strip())
+    assert row.name == 'fixture-local'
+    assert row.url == wheel.as_uri()
+    assert (row.marker is not None) == bool(marker)
+    if marker:
+        assert row.marker.evaluate({'sys_platform': 'win32'})
+        assert not row.marker.evaluate({'sys_platform': 'linux'})
+    assert (root / 'uv.lock').read_bytes() == before
+
+
+@pytest.mark.parametrize('exported', ['file:///unknown/fixture.whl', '-e file:///unknown/module'])
+async def test_export_cannot_invent_unlocked_local_source(tmp_path, monkeypatch, exported):
+    from unittest.mock import AsyncMock
+    root, target = project(tmp_path, '', '')
+    monkeypatch.setattr('amplifier_web.updates.process', AsyncMock(return_value=exported + '\n'))
+    with pytest.raises(ValueError, match='did not match its worker lock'):
+        await qualification.prepare_overrides(root, target)
+    assert not target.exists()
+
+
+async def test_export_refuses_ambiguous_local_source_names(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    root, target = project(tmp_path, '\n[[package]]\nname="first"\nversion="1.0"\nsource={path="../same.whl"}\n[[package]]\nname="second"\nversion="1.0"\nsource={path="../same.whl"}\n', '')
+    monkeypatch.setattr('amplifier_web.updates.process', AsyncMock(return_value=(tmp_path / 'same.whl').as_uri() + '\n'))
+    with pytest.raises(ValueError, match='ambiguous names'):
+        await qualification.prepare_overrides(root, target)
+    assert not target.exists()

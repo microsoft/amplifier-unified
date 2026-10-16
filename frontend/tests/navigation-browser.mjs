@@ -49,6 +49,7 @@ try{
  const more=chatrow(selected).getByRole('button',{name:/Details and actions/});
  await more.focus();await page.keyboard.press('Enter');await details.waitFor();await page.keyboard.press('Escape');await expect(more).toBeFocused();
  await chatSearch.fill(initial.quietSession);await chatrow(initial.quietSession).waitFor();
+ await chatrow(initial.quietSession).hover();
  await chatrow(initial.quietSession).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
  assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,initial.quietSession]);await page.keyboard.press('Escape');
  await chatSearch.fill('');await expect(recent.locator('.a-nav-chat')).toHaveCount(40);
@@ -71,6 +72,7 @@ try{
  const workspaceBrowser=page.locator('.a-work-browser'),search=workspaceBrowser.getByRole('searchbox',{name:'Filter workspaces',exact:true});
  await search.fill('*/playground');await expect(workspaceBrowser.locator('.a-workspace-row')).toHaveCount(2);
  assert.equal(new Set(await workspaceBrowser.locator('.a-workspace-result-path').allTextContents()).size,2);
+ await workspaceBrowser.locator('.a-workspace-row').first().hover();
  await workspaceBrowser.locator('.a-workspace-row').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
  await page.screenshot({path:out+'/workspace-flyout.png'});await page.keyboard.press('Escape');
  await workspaceBrowser.getByRole('button',{name:'Open chats in '+initial.paths.two,exact:true}).click();
@@ -129,6 +131,7 @@ try{
  // A pinned chat also present in workspace drill-in gets one editor at the clicked row.
  await workspaces.getByRole('button',{name:'Open chats in '+initial.paths.one,exact:true}).click();
  const selectedPin=pinned.locator('[data-session-id="'+selected+'"]');
+ await selectedPin.hover();
  await selectedPin.getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
  await details.getByRole('button',{name:/^Rename /}).click();await expect(details).toHaveCount(1);
  await expect(details.getByRole('textbox',{name:/New name for/})).toBeVisible();
@@ -146,6 +149,7 @@ try{
    await page.setViewportSize({width,height:844});
    await expect(page.locator('.a-nav-slot')).toHaveAttribute('role','dialog');
    if(!(await page.locator('.a-nav-slot').isVisible()))await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+   await pinned.locator('.a-nav-chat').first().hover();
    await pinned.locator('.a-nav-chat').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
    const rect=await details.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width+1&&rect.y+rect.height<=844+1);
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));

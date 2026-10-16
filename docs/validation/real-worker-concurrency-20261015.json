@@ -1,0 +1,241 @@
+{
+  "schemaVersion": 1,
+  "title": "Actual-worker streaming and navigation baseline, 2026-10-15",
+  "applicationSource": {
+    "baseline": "bcc095fca",
+    "changes": [
+      "db57273f7",
+      "48132b59a"
+    ],
+    "builtClient": "bcc095fca",
+    "harness": [
+      "1418fbad3",
+      "fd1425de8"
+    ]
+  },
+  "runtimeVersions": {
+    "amplifier-core": "2.0.1",
+    "amplifier-foundation": "1.0.0",
+    "amplifier-module-loop-live": "0.2.0",
+    "amplifier-module-context-simple": "1.0.0"
+  },
+  "browser": "153.0.8010.12",
+  "status": "Measured fixture passed correctness and250ms streaming target; other goals and live provider acceptance remain explicit.",
+  "workload": {
+    "sessions": 14,
+    "history": "short synthetic top-level chats; no large-history replica",
+    "provider": "local deterministic250ms deltas through installed Core/Foundation/loop-live and real subprocess workers",
+    "workerQualification": "explicit already-qualified interpreter; qualification/install excluded",
+    "loadStages": "0idle then1foreground;5background+1foreground;11background+1foreground",
+    "actions": "actual browser Send, Stop, selected-chat switch, activity status; warm sample proves same process after a completed turn",
+    "measurement": "provider timestamp\u2192visible DOM; HTTP health, request bytes, event-loop lag, host CPU, residency; ~35stream observations/stage",
+    "isolation": "owned spark-2 DTU; other owned test lanes paused and data capture frozen; ambient host workload uncontrolled"
+  },
+  "targetsMs": {
+    "streamP95": 250,
+    "selectionP95": 500,
+    "healthP95": 100,
+    "stopUiReady": 1000,
+    "warmAcknowledgmentPreferred": 300,
+    "warmAcknowledgmentHarnessCeiling": 500,
+    "warmFirstVisible": 1000,
+    "coldWorkerAcknowledgment": 3000,
+    "coldWorkerFirstVisible": 3000
+  },
+  "rows": [
+    {
+      "active": 0,
+      "priorStreamP95Ms": 315,
+      "currentStreamP95Ms": 101,
+      "warmStreamP95Ms": 95,
+      "phaseMs": {
+        "providerToHost": {
+          "count": 36,
+          "p50": 1.0,
+          "p95": 2,
+          "max": 2
+        },
+        "hostToWebSocket": {
+          "count": 36,
+          "p50": 77.5,
+          "p95": 85,
+          "max": 88
+        },
+        "webSocketToDom": {
+          "count": 36,
+          "p50": 9.0,
+          "p95": 19,
+          "max": 19
+        }
+      },
+      "hostCpuCorePercent": 8.810325686022898,
+      "publicationRate": 4.724684729003999,
+      "currentHttpRequests": 32,
+      "priorHttpRequests": 42,
+      "currentHttpBytes": 146894,
+      "priorHttpBytes": 154147,
+      "currentSocketBytes": 377769,
+      "priorSocketBytes": 387260,
+      "currentSocketFrames": 207,
+      "priorSocketFrames": 174,
+      "residentSessions": 9,
+      "priorResidentSessions": 9,
+      "residentJsonBytes": 18197,
+      "priorResidentJsonBytes": 18122,
+      "eventLoopLagMs": {
+        "count": 203,
+        "p50": 0.5162887275218936,
+        "p95": 2.4470778182148907,
+        "max": 112.93108277022839
+      },
+      "coldAckMs": 697.3274169999995,
+      "warmAckMs": 225.66460500000176,
+      "selectionP95Ms": 83.16915900000004,
+      "healthP95Ms": 2.657114999999976,
+      "stopUiReadyMs": 289.5252099999998,
+      "hostRssKiB": 101696,
+      "workerRssKiB": 70604,
+      "providerWorkerCount": 1
+    },
+    {
+      "active": 6,
+      "priorStreamP95Ms": 388,
+      "currentStreamP95Ms": 139,
+      "warmStreamP95Ms": 139,
+      "phaseMs": {
+        "providerToHost": {
+          "count": 35,
+          "p50": 1,
+          "p95": 17,
+          "max": 47
+        },
+        "hostToWebSocket": {
+          "count": 35,
+          "p50": 109,
+          "p95": 129,
+          "max": 208
+        },
+        "webSocketToDom": {
+          "count": 35,
+          "p50": 9,
+          "p95": 20,
+          "max": 20
+        }
+      },
+      "hostCpuCorePercent": 14.706861268315336,
+      "publicationRate": 5.365503731067586,
+      "currentHttpRequests": 41,
+      "priorHttpRequests": 52,
+      "currentHttpBytes": 409685,
+      "priorHttpBytes": 418760,
+      "currentSocketBytes": 956987,
+      "priorSocketBytes": 944342,
+      "currentSocketFrames": 241,
+      "priorSocketFrames": 223,
+      "residentSessions": 9,
+      "priorResidentSessions": 13,
+      "residentJsonBytes": 101374,
+      "priorResidentJsonBytes": 104515,
+      "eventLoopLagMs": {
+        "count": 170,
+        "p50": 0.967991352081296,
+        "p95": 58.289072290062904,
+        "max": 135.80087553709745
+      },
+      "coldAckMs": 914.649556999997,
+      "warmAckMs": 319.107971999998,
+      "selectionP95Ms": 123.6672010000002,
+      "healthP95Ms": 42.31103599999915,
+      "stopUiReadyMs": 361.19393200000195,
+      "hostRssKiB": 105112,
+      "workerRssKiB": 423136,
+      "providerWorkerCount": 6
+    },
+    {
+      "active": 12,
+      "priorStreamP95Ms": 500,
+      "currentStreamP95Ms": 210,
+      "warmStreamP95Ms": 196,
+      "phaseMs": {
+        "providerToHost": {
+          "count": 35,
+          "p50": 1,
+          "p95": 88,
+          "max": 92
+        },
+        "hostToWebSocket": {
+          "count": 35,
+          "p50": 165,
+          "p95": 190,
+          "max": 193
+        },
+        "webSocketToDom": {
+          "count": 35,
+          "p50": 11,
+          "p95": 19,
+          "max": 19
+        }
+      },
+      "hostCpuCorePercent": 21.360306472055825,
+      "publicationRate": 5.048489018383568,
+      "currentHttpRequests": 47,
+      "priorHttpRequests": 57,
+      "currentHttpBytes": 443362,
+      "priorHttpBytes": 495139,
+      "currentSocketBytes": 1121625,
+      "priorSocketBytes": 1073212,
+      "currentSocketFrames": 262,
+      "priorSocketFrames": 217,
+      "residentSessions": 12,
+      "priorResidentSessions": 14,
+      "residentJsonBytes": 216290,
+      "priorResidentJsonBytes": 242687,
+      "eventLoopLagMs": {
+        "count": 142,
+        "p50": 1.241833716630933,
+        "p95": 107.2690112516284,
+        "max": 179.84292544424534
+      },
+      "coldAckMs": 1234.0249670000048,
+      "warmAckMs": 386.2280079999982,
+      "selectionP95Ms": 73.71021299999848,
+      "healthP95Ms": 2.803486000004341,
+      "stopUiReadyMs": 473.0804229999994,
+      "hostRssKiB": 109984,
+      "workerRssKiB": 847580,
+      "providerWorkerCount": 12
+    }
+  ],
+  "finding": "The original unconditional250ms progress wait dominated visible text latency. Only assistant text with a live interested subscriber now uses a50ms maximum batch wait; background-only progress remains250ms. An already-pending batch can be advanced, never postponed. Terminal evidence still publishes immediately.",
+  "phaseCaveat": "A navigation snapshot can expose newer text before its periodic durable publication, so negative transport-minus-publication differences are not summarized as phase latency. Host receive\u2192WebSocket and WebSocket\u2192DOM remain direct ordered observations.",
+  "cpuComparison": {
+    "scope": "shared-load short trace runs; not quiet baseline",
+    "0workersCorePercentBeforeAfter": [
+      11.8,
+      12.0
+    ],
+    "12workersCorePercentBeforeAfter": [
+      20.8,
+      23.9
+    ],
+    "publicationPerSecondBeforeAfter": [
+      4.1,
+      5.3
+    ]
+  },
+  "remaining": [
+    "Warm acknowledgement319/386ms at6/12 exceeds preferred300ms; no all-goals pass.",
+    "At12, host event-loop lag p95107ms remains an optimization signal; not mistaken for network/provider latency.",
+    "No claim for external-provider latency, runtime installation, large-history replica, macOS browser or remote network.",
+    "One bounded run per revision is a regression baseline, not a tail-latency guarantee.",
+    "The final after run has phase probes enabled; original before run did not. Additional same-probe short comparisons are explicitly shared-load diagnostics."
+  ],
+  "tests": {
+    "red": "stream-latency-red.log:5failed2passed",
+    "initialGreen": "stream-latency-green.log:72passed1child-view fixture assertion mismatch",
+    "finalFocused": "stream-latency-focused-green.log:7passed;73distinct qualified across initial+corrected batches",
+    "covered": "selected and second client, direct session subscriber, child history view, disconnected client, unchanged background250ms, promotion of pending background deadline, no burst starvation, terminal flush/revision/state-scope tests"
+  },
+  "cleanup": "All fixture workers exited and no owned benchmark process remains; retained receipts and recoverable source.",
+  "rawEvidence": "Task evidence/readiness-day-20261015/issues/{concurrency-final,stream-latency}; synthetic artifacts retained separately."
+}

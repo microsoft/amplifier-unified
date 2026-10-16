@@ -1,4 +1,5 @@
 import {WorkspaceWork} from './workspace-work';
+import {ArchiveButton} from './archive-feedback.jsx';
 import {WorkspaceConfiguration} from './workspace-configuration';
 import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
@@ -68,7 +69,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
     <button onClick={()=>open('chat-help')}><Bug/>Help &amp; diagnostics</button>
     <button onClick={()=>open('chat-advanced')}><Settings/>Advanced<ChevronRight/></button>
     <hr/>
-    <button data-action={Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'session.restore':'session.archive'} onClick={()=>act(Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'session.restore':'session.archive',{id:session.id})}><Archive/>{Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'Restore':'Archive'}</button>
+    <ArchiveButton chat={session} archived={Object.hasOwn(state.conversationOrganization?.archived||{},session.id)}/>
     {session.location?.kind==='managed'&&isTopLevelChat(session)&&<button className="a-danger" onClick={()=>open('delete-session')}><Trash2/>Delete</button>}
    </ActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
   </div>
@@ -110,7 +111,7 @@ function WorkBrowser({host,workspaceHost,state,act}){
  const page=surface==='chats'||surface==='workspace'&&tab==='chats'?chatPage({...model.state,view},model.workspace,{section:surface==='chats'?'search':'workspace'}):null;
  const pageResource=surface==='chats'?'sidebarSearch':'sidebarWorkspace';
  const viewAct=(name,args)=>{if(name!=='view.update'||surface!=='chats')return model.act(name,args);const next={...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,...args.patch};if(!Object.hasOwn(args.patch,'navChatPage'))delete next.navChatPage;return model.act(name,{patch:{navRecentView:next}})};
- return <div className="a-work-browser" data-part="work-browser"><NavigationEditor model={model}/><NavigationEditor model={workspaceModel}/>{active&&<>
+ return <div className="a-work-browser" data-part="work-browser"><NavigationEditor model={model} deleteOwner={active}/><NavigationEditor model={workspaceModel}/>{active&&<>
   <div className="a-work-browser-heading"><div><h1>{surface==='workspace'?workspacePending?'Loading workspace…':workspace?.name||'Workspace unavailable':surface==='workspaces'?'Your workspaces':'Search chats'}</h1><p>{surface==='workspace'?'A place for related chats and files.':surface==='workspaces'?'Keep related work together. Each workspace has its own chats and files.':'Find a chat by name, workspace or saved description.'}</p></div><button type="button" className="a-primary" disabled={surface==='workspace'&&(workspacePending||!workspace)} onClick={()=>surface==='workspaces'?nav.create():nav.newChat(surface==='workspace'?workspace?.path:undefined)}><Plus/>{surface==='workspaces'?'New workspace':'New chat'}</button></div>
  </>}<WorkspaceResources state={state} act={act} workspaceId={surface==='workspace'&&tab==='details'?workspace?.id:undefined}/>{active&&<>
   {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceBundleDefault key={workspace.id} workspace={workspace} state={state} act={act}/>}

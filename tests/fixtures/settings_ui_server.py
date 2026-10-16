@@ -78,6 +78,11 @@ async def main(home):
  app.router.add_get('/fixture/settings-tool-observations',tool_observations)
  service.state['updates']['items']=group_sources([{'id':str(i),'label':f'fixture-source-{i}','status':'current'} for i in range(86)]+[{'id':'copy-'+str(i),'label':'github.com/example/amplifier-bundle-computer-use','kind':'bundle / module','ref':'main','current':'123456789','latest':'abcdefghi','status':'update'} for i in range(2)])
  service.state['updates']['available']=1
+ if os.environ.get('SETTINGS_RELEASE_FIXTURE'):
+  service.state['releaseNoticeStartVersion']='0.21.0'
+  service.state['updates']['application']={'current':'0.21.0','latest':'0.21.0','status':'current','releaseNotes':[
+   {'version':'0.21.0','title':'Fixture release','changes':['Settings are simpler.'],'notices':[{'id':key,'title':title,'detail':'Fixture change details.','action':'Review your preferences.'} for key,title in [('settings','Settings scope updated'),('permissions','File access updated')]]},
+   {'version':'0.11.0','title':'Earlier fixture release','changes':['Earlier settings release.'],'notices':[{'id':'old-settings','title':'Settings now apply across Amplifier apps','detail':'Earlier change details.','action':'Review earlier guidance.'}]}]}
  return app
 if __name__=='__main__':
  with tempfile.TemporaryDirectory(prefix='amplifier-settings-ui-') as tmp:

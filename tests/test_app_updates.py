@@ -28,7 +28,12 @@ def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
     # Model the observed wheel's undeclared import in a fresh child process.
     # A candidate with a usable server but broken PAM must not replace the host.
     (tmp_path / 'pam.py').write_text('raise ModuleNotFoundError("missing PAM dependency")\n')
-    env = {**os.environ, 'PYTHONPATH': str(tmp_path)}
+    # Keep the app under test importable when this checkout uses dependencies
+    # from a separate environment. Otherwise an unrelated namespace package can
+    # fail before the deliberately broken login dependency is even reached.
+    source = str(Path(app_updates.__file__).resolve().parent.parent)
+    env = {**os.environ, 'PYTHONPATH': os.pathsep.join(
+        [str(tmp_path), source, os.environ.get('PYTHONPATH', '')])}
     result = subprocess.run([sys.executable, '-c', app_updates.PROBE],
                             cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode != 0

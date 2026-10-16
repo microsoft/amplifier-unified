@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "scenario": "Public recovery and local ownership boundaries",
+  "sourceRevision": "3a50b226ad1f512587f3c94c4e166a120f85352e",
+  "productSourceScope": "Same read-only source snapshot as archive-running-worker-20261015.json; ordinary Python/runtime behavior included, optional Unified-shell assets excluded",
+  "runtime": {
+    "manager": "Normal RuntimeManager, no command override",
+    "generation": "ded15b45a24c002963871d4691d44bac",
+    "qualifiedProject": "q-d110746e5a0c696e659c611fc14845ed",
+    "history": "Private synthetic transcript with one prior local process file effect",
+    "network": "Private network namespace, loopback only",
+    "externalInference": false,
+    "providerCalls": 0
+  },
+  "transport": "Authenticated public HTTP /api/actions",
+  "actions": [
+    "session.recover",
+    "session.takeover"
+  ],
+  "checks": [
+    {
+      "name": "public recovery, same-command retry and service reopen preserve original bytes and prior effect without starting worker or replay",
+      "passed": true
+    },
+    {
+      "name": "public takeover refusal preserves separate owner lock, exact prior transcript/effect and admits no model input",
+      "passed": true
+    },
+    {
+      "name": "explicit successful handoff creates one normal worker; duplicate receipt keeps same worker and no input/effect replay",
+      "passed": true
+    }
+  ],
+  "priorEffect": {
+    "sha256": "07af0c563427b27882b771d5d063a7cdc994ace322ba92bb3fc35271448b728b",
+    "bytes": 32
+  },
+  "ownerReleaseResults": [
+    false,
+    true
+  ],
+  "workersRemaining": 0,
+  "passed": true,
+  "harnessSha256": {
+    "namespace.py": "cbe8966d71cb0424abaa20e5496af8c967b3b02b58b3ef93ecdb53dab324b0b0",
+    "probe.py": "625c64d410cb36def9bcb490bc1c4cfb4ad91a859b5a3ae5623655dd3abdcecc",
+    "setup.py": "e267aa207b1dec5e228ae1a80e1f794d8f45f418fc58e9b641661ecc96b8e2a1",
+    "owner.py": "bafacc53121c2b18d9fc237b2d8ba17d880d35e7d1f3c31ae3bcf849d40a3b0f"
+  },
+  "limits": [
+    "Competing owner is a separate real Foundation lock/release process, not the complete Amplifier CLI runtime.",
+    "Recovery retained an actual prior local file effect with synthetic committed tool history; arbitrary remote tool effects are not exercised.",
+    "Recovery itself and same-command retries/reopen run without starting a worker; explicit takeover starts one normal worker without input.",
+    "Existing independent browser witnesses qualify the UI entry; this receipt covers the runtime boundary, not additional browser gestures.",
+    "No live provider account, production history, device acceptance or performance claim."
+  ]
+}

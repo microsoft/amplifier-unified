@@ -1,0 +1,424 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "scope": "Canonical72 browser regression on isolated synthetic fixtures; separate from complete UX outcome inventory, live-provider acceptance, full Python suite and released-package acceptance",
+  "status": "passed",
+  "source": {
+    "revision": "4801878aa3153037f96671bf9fd7e71292542f6d",
+    "tree": "c4a6d8c630baac84a2059ea4452ca8e272d3ee3e",
+    "trackedBlobsVerified": 2047,
+    "planSha256": "d51055119604874e29e2ad4a4cf57d60474df054b5ea9756373b1a0e6fdd1bc1",
+    "runnerSha256": "b3fcbce305c7b3680aa3e80afed2c869ffc1e36f7941cd3f5a44cf888f6e7bff",
+    "buildMetadata": {
+      "version": "0.20.165",
+      "id": "4a3fb2863d2e680a"
+    },
+    "buildMetadataSha256": "ae62bc890e3f7fdc95639551271e1c9650f7ecce779544011bf98e694b6b617c",
+    "approvedTestDeltas": {
+      "tests/fixtures/smart_tool_update_server.py": {
+        "gitBlobId": "a571a33076bc30d59adddeb192f462b1de89a9a3",
+        "sha256": "bbe3758b72dd62851e6442af2b37e7d7b75772a05d9d3f6ed90b00a21da3b57a",
+        "scope": "test-only correction; no product source changes"
+      },
+      "tests/test_browser_check_runner.py": {
+        "gitBlobId": "4494f6b86a2a2f6a99d06622c58a240f04ee71a2",
+        "sha256": "12ec819a62532143ea99a8be9fb88ba8555d21a0175b5c0c8c2ebecd90573abf",
+        "scope": "test-only correction; no product source changes"
+      },
+      "tests/test_app_updates.py": {
+        "gitBlobId": "a0e8ab84a9652b96f35870d2d02385d683c20ef2",
+        "sha256": "ef3ab1c5841363a87ee2e25c4d1ef529459797cc7b8523634d143e980bbaa201",
+        "scope": "test-only correction; no product source changes"
+      }
+    }
+  },
+  "environment": {
+    "host": "spark-2 owned development DTU",
+    "processIsolation": "private PID namespace and proc mount; strict runner cleanup unchanged",
+    "temporaryFiles": "private /tmp tmpfs; screenshots retained before namespace exit",
+    "childImport": "Mandatory import from frontend cwd resolves amplifier_web and shell_query_worker to exact candidate source root",
+    "timing": "Shared-load functional observations, not controlled performance baselines"
+  },
+  "result": {
+    "scenarios": 72,
+    "passed": 72,
+    "failed": 0,
+    "unrun": 0,
+    "aggregateScenarioSeconds": 492.512,
+    "ownedDescendantsTerminated": 0,
+    "remainingDescendants": []
+  },
+  "scenarios": [
+    {
+      "id": "smart-tool-updates",
+      "status": "passed",
+      "seconds": 2.115
+    },
+    {
+      "id": "update-restart",
+      "status": "passed",
+      "seconds": 2.464
+    },
+    {
+      "id": "active-client-performance",
+      "status": "passed",
+      "seconds": 14.137
+    },
+    {
+      "id": "state-transport",
+      "status": "passed",
+      "seconds": 7.828
+    },
+    {
+      "id": "demand",
+      "status": "passed",
+      "seconds": 5.417
+    },
+    {
+      "id": "scoped-navigation",
+      "status": "passed",
+      "seconds": 16.46
+    },
+    {
+      "id": "navigation-details-context",
+      "status": "passed",
+      "seconds": 2.91
+    },
+    {
+      "id": "sidebar-reading",
+      "status": "passed",
+      "seconds": 5.232
+    },
+    {
+      "id": "selected-context",
+      "status": "passed",
+      "seconds": 3.175
+    },
+    {
+      "id": "registry-validation",
+      "status": "passed",
+      "seconds": 3.965
+    },
+    {
+      "id": "empty-host",
+      "status": "passed",
+      "seconds": 2.959
+    },
+    {
+      "id": "empty-host-fail-create",
+      "status": "passed",
+      "seconds": 3.015
+    },
+    {
+      "id": "empty-host-lost-create",
+      "status": "passed",
+      "seconds": 3.77
+    },
+    {
+      "id": "new-chat",
+      "status": "passed",
+      "seconds": 5.277
+    },
+    {
+      "id": "draft-provider-refresh",
+      "status": "passed",
+      "seconds": 2.618
+    },
+    {
+      "id": "draft-discovery-recovery",
+      "status": "passed",
+      "seconds": 16.809
+    },
+    {
+      "id": "new-chat-recovery",
+      "status": "passed",
+      "seconds": 7.417
+    },
+    {
+      "id": "feedback",
+      "status": "passed",
+      "seconds": 7.996
+    },
+    {
+      "id": "feedback-followup",
+      "status": "passed",
+      "seconds": 6.008
+    },
+    {
+      "id": "composer-readiness",
+      "status": "passed",
+      "seconds": 1.561
+    },
+    {
+      "id": "composer-primary-action",
+      "status": "passed",
+      "seconds": 3.328
+    },
+    {
+      "id": "surface-context",
+      "status": "passed",
+      "seconds": 1.714
+    },
+    {
+      "id": "desktop-readiness",
+      "status": "passed",
+      "seconds": 4.928
+    },
+    {
+      "id": "memory-personalization",
+      "status": "passed",
+      "seconds": 3.223
+    },
+    {
+      "id": "publishing",
+      "status": "passed",
+      "seconds": 15.502
+    },
+    {
+      "id": "portability",
+      "status": "passed",
+      "seconds": 4.026
+    },
+    {
+      "id": "settings",
+      "status": "passed",
+      "seconds": 11.74
+    },
+    {
+      "id": "settings-completeness",
+      "status": "passed",
+      "seconds": 53.118
+    },
+    {
+      "id": "settings-collections",
+      "status": "passed",
+      "seconds": 9.637
+    },
+    {
+      "id": "settings-mobile",
+      "status": "passed",
+      "seconds": 34.06
+    },
+    {
+      "id": "workspace-starters",
+      "status": "passed",
+      "seconds": 6.125
+    },
+    {
+      "id": "theme-definitions",
+      "status": "passed",
+      "seconds": 4.673
+    },
+    {
+      "id": "appearance-startup",
+      "status": "passed",
+      "seconds": 2.671
+    },
+    {
+      "id": "appearance-library",
+      "status": "passed",
+      "seconds": 7.435
+    },
+    {
+      "id": "review-during-send",
+      "status": "passed",
+      "seconds": 2.918
+    },
+    {
+      "id": "execution-inspection",
+      "status": "passed",
+      "seconds": 4.376
+    },
+    {
+      "id": "execution-actions",
+      "status": "passed",
+      "seconds": 3.368
+    },
+    {
+      "id": "canonical-work",
+      "status": "passed",
+      "seconds": 5.923
+    },
+    {
+      "id": "interim-replies",
+      "status": "passed",
+      "seconds": 4.421
+    },
+    {
+      "id": "tool-outcomes",
+      "status": "passed",
+      "seconds": 1.765
+    },
+    {
+      "id": "navigation",
+      "status": "passed",
+      "seconds": 10.452
+    },
+    {
+      "id": "archive-feedback",
+      "status": "passed",
+      "seconds": 6.286
+    },
+    {
+      "id": "pin-retention",
+      "status": "passed",
+      "seconds": 5.506
+    },
+    {
+      "id": "workspace-shortcuts",
+      "status": "passed",
+      "seconds": 11.122
+    },
+    {
+      "id": "chat-title",
+      "status": "passed",
+      "seconds": 2.75
+    },
+    {
+      "id": "message-outbox",
+      "status": "passed",
+      "seconds": 17.882
+    },
+    {
+      "id": "message-delivery",
+      "status": "passed",
+      "seconds": 2.507
+    },
+    {
+      "id": "canvas-media",
+      "status": "passed",
+      "seconds": 3.556
+    },
+    {
+      "id": "app-toolbar",
+      "status": "passed",
+      "seconds": 6.743
+    },
+    {
+      "id": "smart-tools",
+      "status": "passed",
+      "seconds": 7.198
+    },
+    {
+      "id": "shell-components",
+      "status": "passed",
+      "seconds": 8.79
+    },
+    {
+      "id": "mobile-navigation",
+      "status": "passed",
+      "seconds": 13.666
+    },
+    {
+      "id": "cache-usage",
+      "status": "passed",
+      "seconds": 2.521
+    },
+    {
+      "id": "bundle",
+      "status": "passed",
+      "seconds": 2.979
+    },
+    {
+      "id": "markdown-composer",
+      "status": "passed",
+      "seconds": 4.821
+    },
+    {
+      "id": "draft-switch",
+      "status": "passed",
+      "seconds": 1.564
+    },
+    {
+      "id": "draft-reload",
+      "status": "passed",
+      "seconds": 2.568
+    },
+    {
+      "id": "live-history",
+      "status": "passed",
+      "seconds": 2.416
+    },
+    {
+      "id": "conversation-navigation",
+      "status": "passed",
+      "seconds": 7.796
+    },
+    {
+      "id": "live-clients",
+      "status": "passed",
+      "seconds": 2.678
+    },
+    {
+      "id": "ownership",
+      "status": "passed",
+      "seconds": 2.614
+    },
+    {
+      "id": "canvas-dirty",
+      "status": "passed",
+      "seconds": 3.372
+    },
+    {
+      "id": "canvas-apps",
+      "status": "passed",
+      "seconds": 4.222
+    },
+    {
+      "id": "canvas-drawing",
+      "status": "passed",
+      "seconds": 2.477
+    },
+    {
+      "id": "session-health",
+      "status": "passed",
+      "seconds": 4.072
+    },
+    {
+      "id": "session-health-context-limit",
+      "status": "passed",
+      "seconds": 4.279
+    },
+    {
+      "id": "session-health-context-limit-active-worker",
+      "status": "passed",
+      "seconds": 3.927
+    },
+    {
+      "id": "session-health-module-failure",
+      "status": "passed",
+      "seconds": 4.232
+    },
+    {
+      "id": "activity-feedback",
+      "status": "passed",
+      "seconds": 4.954
+    },
+    {
+      "id": "capacity",
+      "status": "passed",
+      "seconds": 2.772
+    },
+    {
+      "id": "coordination",
+      "status": "passed",
+      "seconds": 19.517
+    },
+    {
+      "id": "connectors",
+      "status": "passed",
+      "seconds": 6.189
+    }
+  ],
+  "retainedAttemptPolicy": "Earlier attempts retain original failures/partial outcomes. Corrected run addresses erroneous candidate/src child import binding, unrelated protected-process ownership visibility and stale global /tmp screenshot permissions. No earlier result is relabeled. Smart Tool update fixture and two migration counts were repaired test-only in3400181f9.",
+  "evidence": {
+    "privateRoot": "output/readiness-day-20261015/issues/canonical-final",
+    "resultSha256": "d42a174a3a978f9a9cde104c8fce4f65e84843ec0d093b80a8e933a4b2e815ef",
+    "correctionReceipt": "output/readiness-day-20261015/issues/canonical-environment-correction.json"
+  },
+  "limits": [
+    "No main merge, release or live spark-1 adoption was performed.",
+    "Later dirty-Canvas Reload product change is qualified separately by focused tests and final frontend build; this report retains frozen480 source identity.",
+    "Synthetic connectors/providers do not establish live-account or Mac PWA acceptance."
+  ]
+}

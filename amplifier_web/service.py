@@ -118,7 +118,7 @@ ACTION_DEFINITIONS = {
     "session.titlePreview": ("Read a bounded first-message label for one unnamed chat without loading its history or running work.", schema({"sessionId": string(200)}, ["sessionId"])),
     "session.inspect": ("Inspect conversation identity, status and recorded failure without running work.", schema({"id": string(200)}, ["id"])),
     "session.recover": ("Create an independent recovery copy with readable history, excluding old native tool/image payloads. Preserve the original and safety stops. Never start or replay work.", schema({"id": string(200)}, ["id"])),
-    "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
+    "session.fork": ("Fork conversation history through an optional user turn or exact saved user message", schema({"id": string(100),"turn":{"type":"integer","minimum":1},"afterMessageId":string(200)},["id"])),
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
@@ -207,6 +207,8 @@ ACTION_DEFINITIONS = {
     "updates.app": ("Stage a published application release and restart when idle",schema()),
     "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
     "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
+    "updates.smartToolRetry": ("Retry one failed Smart Tool update by its current installation ID. Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
+    "updates.smartToolSkip": ("Skip one failed Smart Tool revision and retain its current installation. Newer revisions remain eligible.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
@@ -832,6 +834,14 @@ class AppService:
 
     @measured('browser.snapshot')
     def browser_state(self, session_id=None):
+        # Full/session and non-web reads may hydrate an existing owner in place
+        # midway through projection. Only the bound web display is read-only.
+        client = self.clients.record()
+        if session_id is not None or client is None or client['kind'] != 'web':
+            return self._browser_state(session_id)
+        return self.directory.read_frame(self._browser_state, session_id)
+
+    def _browser_state(self, session_id=None):
         self._refresh_shared_preferences()
         client_id = self.clients.current.get()
         selected = session_id or self.state.get('selectedSessionId')
@@ -1241,7 +1251,7 @@ class AppService:
         except (OSError, ValueError, sqlite3.Error):
             logging.getLogger(__name__).warning('History owner retirement deferred; saved and resident state retained.', exc_info=True)
 
-    def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
+    def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=(), stream=False):
         """Batch stream/progress updates; final responses and approvals flush now."""
         if getattr(self, 'event_log_view', None) is not None:
             self.event_log_view.invalidate(session_ids)
@@ -1260,8 +1270,38 @@ class AppService:
             self._progress_global_keys = getattr(self, '_progress_global_keys', set()) | set(global_keys)
         self._progress_dirty = True
         self._progress_scope_known = True
+        # Only a live subscriber viewing this text needs the shorter batch.
+        # Retained/offline clients and hidden workers keep the background window.
+        delay = .05 if stream and self._stream_is_observed(session_ids) else .25
+        due = asyncio.get_running_loop().time() + delay
         if getattr(self, '_progress_publish_task', None) is None:
+            self._progress_publish_due = due
+            self._progress_publish_wake = asyncio.Event()
             self._progress_publish_task = self._task(self._flush_progress())
+        elif due < getattr(self, '_progress_publish_due', float('inf')):
+            self._progress_publish_due = due
+            wake = getattr(self, '_progress_publish_wake', None)
+            if wake is not None:
+                wake.set()
+
+    def _stream_is_observed(self, session_ids):
+        if not session_ids or not self.queues:
+            return False
+        affected = self._affected_detail(session_ids)
+        for queue in self.queues:
+            session = self.queue_sessions.get(queue)
+            if session is not None:
+                if session in affected:
+                    return True
+                continue
+            client = self.queue_clients.get(queue)
+            record = self.clients.records.get(client, {}) if client is not None else self._state
+            interests = {record.get('selectedSessionId'),
+                         self._state.get('voice', {}).get('sessionId'),
+                         (record.get('view', {}).get('subagentHistory') or {}).get('sessionId')}
+            if interests.intersection(affected):
+                return True
+        return False
 
     def _publish_smart_tool_update(self, *, defer_publish=False):
         """Commit tool receipts before effects/results, batching only the UI snapshot."""
@@ -1273,7 +1313,17 @@ class AppService:
 
     async def _flush_progress(self):
         try:
-            await asyncio.sleep(.25)
+            # A newly observed stream may shorten an existing background wait.
+            # Later events never move the deadline out, so bursts cannot starve it.
+            while True:
+                remaining = self._progress_publish_due - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(self._progress_publish_wake.wait(), remaining)
+                    self._progress_publish_wake.clear()
+                except asyncio.TimeoutError:
+                    break
             async with self.lock:
                 if self._progress_dirty and not self.closed:
                     try:
@@ -1444,6 +1494,31 @@ class AppService:
                 raise AppError('This chat is being deleted. No new work was started.', 409)
             return self.cold_display.hydrate(session) if hydrate else session
         raise AppError("Select or create a conversation first.", 404)
+
+    def _session_read_sources(self, identities, fields):
+        """Read bounded metadata references without admitting dormant owners.
+
+        Optional row labels and plans are not runtime demand. Even
+        _session(hydrate=False) would grow the live overlay by a viewed page.
+        """
+        def collect():
+            known = {row['id']: row for row in self.state['sessions']}
+            missing = [identity for identity in identities if identity not in known]
+            known.update((row['id'], row) for row in self.directory.summary_ids(missing))
+            sources = []
+            for identity in identities:
+                try:
+                    session = known.get(identity) or self.directory.resolve(identity)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                if session is None:
+                    raise AppError('Select or create a conversation first.', 404)
+                session = known.get(session['id'], session)
+                if session.get('_deleting'):
+                    raise AppError('This chat is being deleted. No new work was started.', 409)
+                sources.append({key: session[key] for key in fields if key in session})
+            return sources
+        return self.directory.read_frame(collect)
 
     def _session_destination(self, args):
         selected = next((w for w in self.state.get('workspaces', []) if w['id'] == self.state.get('selectedWorkspaceId')), {})
@@ -1627,7 +1702,7 @@ class AppService:
                 except (ValueError, OSError) as exc:
                     raise AppError(str(exc), 409) from None
         try:
-            if action in {'session.create', 'coordination.create'} and command_id:
+            if action in {'session.create', 'coordination.create', 'workspace.setup.reconcile'} and command_id:
                 lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
                 async with lock:
                     return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -1737,7 +1812,7 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
-        if resolved_target is not None:
+        if resolved_target is not None and action != 'session.titlePreview':
             self._admit_session(resolved_target)
         if (origin not in {'ui', 'user'} or 'scope' in args) and action in {'history.list', 'history.shared.list', 'history.shared.view'}:
             reader = caller_session_id or (self.state.get('selectedSessionId') if origin in {'ui','user'} else None)
@@ -1852,9 +1927,9 @@ class AppService:
             # Copy only catalog identity/name fields. Reading a cold message
             # property here would hydrate a whole chat just to label a row.
             async with self.lock:
-                session = self._session(args['sessionId'], hydrate=False)
-                source = {key: session[key] for key in ('id', 'runtimeSessionId', 'nativeIdentity',
-                    'nativeProject', 'workspace', 'title', 'titleSource', 'nativeNameSource') if key in session}
+                source = self._session_read_sources([args['sessionId']],
+                    ('id', 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'workspace',
+                     'title', 'titleSource', 'nativeNameSource'))[0]
             result = await asyncio.to_thread(read_title, self.data_dir, source)
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action in {'theme.list', 'theme.read'}:
@@ -2092,16 +2167,16 @@ class AppService:
         if action == 'session.plans':
             if args.get('includeItems') and len(args['ids']) != 1:
                 raise AppError('Inspect one chat at a time for plan details.')
-            sources = []
-            for identity in args['ids']:
-                session = self._session(identity, hydrate=False)
-                sources.append({key: session[key] for key in
-                    ('id', 'nativeIdentity', 'runtimeSessionId', 'workspace', 'nativeProject') if key in session})
+            sources = self._session_read_sources(args['ids'],
+                ('id', 'nativeIdentity', 'runtimeSessionId', 'workspace', 'nativeProject'))
             rows = []
             for source in sources:
                 rows.append(await asyncio.to_thread(self.event_log_view.read_plan, source,
                     include_items=args.get('includeItems', False)))
-            return {'accepted': True, 'result': {'items': rows}, 'effects': []}
+            # The result is this read's complete receipt. It does not publish
+            # app state, and cannot require a later unrelated stream revision.
+            return {'accepted': True, 'result': {'items': rows}, 'effects': [],
+                    '_stateIndependent': True}
         prepared_export = None
         prepared_share = None
         if action == 'session.sharePreview':
@@ -2356,6 +2431,9 @@ class AppService:
                         if action == 'workspace.setup.retry' and diagnostic_result['status'] == 'pending':
                             pending.append((self._provision_workspace, (identity,)))
                         if action == 'workspace.setup.reconcile':
+                            # Admission is durable before yielding, but is not a
+                            # completed inspection or a usable retry revision.
+                            diagnostic_result = {**diagnostic_result, 'inspectionStatus': 'pending'}
                             pending.append((self._provision_workspace, (identity, True)))
                 except (ValueError, OSError) as exc:
                     raise AppError(str(exc), 409) from None
@@ -2762,7 +2840,7 @@ class AppService:
                 from .session_store import fork_session
                 media_origins = {} if source.get('nativeProject') else None
                 try:
-                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"),
+                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"),after_message_id=args.get('afterMessageId'),
                                                 recovery=action == "session.recover", media_origins=media_origins))
                 except ValueError as exc:
                     raise AppError(str(exc),409) from exc
@@ -3117,7 +3195,7 @@ class AppService:
                         'updatedAt':time.time(), 'detail':'Feature installation requested; awaiting qualification.'}
                     while len(rows) > 20:
                         rows.pop(next(iter(rows)))
-                pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action in {'updates.featureInstall', 'updates.forceRestart'} else (action.split(".")[1],)))
+                pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id)))
             elif action == "settings.update":
                 patch = dict(args["patch"])
                 if set(patch) - {"preferredVoice", "fallbackVoice", "voiceName", "fallbackVoiceName", "voiceInterruptions", "bundle", "workspace", "notifications", "updates", "workspaces"}:
@@ -3295,7 +3373,27 @@ class AppService:
                 self._publish_changes(sessions=session_ids, globals=global_keys)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
-            if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current or action in {"question.answer", "worker.message", "conversation.delivery", "conversation.retry"}:
+            if action == 'workspace.setup.reconcile':
+                # Local Git inspection runs off-loop and outside self.lock.
+                # Return its final revision; queuing alone lets Retry race the
+                # later subscription projection and submit the obsolete one.
+                inspection_error = None
+                try:
+                    setup = await fn(*values)
+                    receipt['result'] = {**setup, 'inspectionStatus': 'complete'}
+                except Exception as exc:
+                    inspection_error = str(exc) or 'Retained workspace inspection failed.'
+                    receipt.update(accepted=False, error=inspection_error, status=409)
+                    receipt['result'] = {**diagnostic_result, 'inspectionStatus': 'failed'}
+                async with self.lock:
+                    receipt['revision'] = self.state['revision']
+                    if command_id:
+                        self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
+                        self.db.commit()
+                    result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
+                if inspection_error:
+                    raise AppError(inspection_error, 409)
+            elif action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current or action in {"question.answer", "worker.message", "conversation.delivery", "conversation.retry"}:
                 # Runtime progress callbacks acquire self.lock. Admission must
                 # run outside it, and the HTTP receipt waits for the actual ack.
                 try:
@@ -3350,7 +3448,7 @@ class AppService:
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
     async def _provision_workspace(self, identity, reconcile=False):
-        """Background completion updates facts only, never selection or drafts."""
+        """Provisioning or awaited inspection updates facts, never selection/drafts."""
         from . import workspace_provisioning
         try:
             if reconcile:
@@ -3369,8 +3467,11 @@ class AppService:
                     return not self.closed
                 setup = await asyncio.to_thread(workspace_provisioning.run, self.data_dir, identity, progress)
         except Exception:
+            if reconcile:
+                raise  # An acknowledged inspection must report its actual outcome.
             setup = workspace_provisioning.recover(self.data_dir, identity)
         await self._setup_progress(setup)
+        return setup
 
     async def _setup_progress(self, setup):
         async with self.lock:
@@ -4142,7 +4243,8 @@ class AppService:
             observe_steering(self, session, kind, payload)
             if progress:
                 self._publish_progress(session_ids={session['id']},
-                                       detail_only=kind in {'assistant.delta', 'execution.event'}, record_only=True)
+                                       detail_only=kind in {'assistant.delta', 'execution.event'}, record_only=True,
+                                       stream=kind == 'assistant.delta')
             elif kind == 'execution.event':
                 # Terminal call evidence must commit immediately, but changes
                 # only this session. Reuse the catalog when the save guard
@@ -4152,7 +4254,11 @@ class AppService:
                 # Lifecycle may update an originating schedule or a peer's
                 # saved receipt reference on another chat.
                 changed = self.schedules.sync()
-                self._publish_changes(sessions={session['id']} | changed | collaboration_changed)
+                # An exact input receipt normally changes only its message.
+                # Keep every affected owner; the save guard still widens for
+                # status, attention, or accumulated progress changing navigation.
+                self._publish_changes(sessions={session['id']} | changed | collaboration_changed,
+                                      detail_only=kind == 'runtime.delivery')
 
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""

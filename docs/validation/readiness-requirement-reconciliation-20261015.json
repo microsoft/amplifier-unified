@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "reviewedIntegration": "5e9e3f424",
+  "summary": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 618,
+      "partially-observed": 36,
+      "not-run": 15
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 168,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "remainingOutcomes": 51,
+  "archiveReceipt": "docs/validation/archive-running-worker-20261015.json",
+  "remainingFiniteRuntimeAcceptance": [],
+  "requirementReview": {
+    "schemaVersion": 1,
+    "reviewer": "/root/completion_scope_audit",
+    "originalPlan": "plans/2026-10-15-standard-ux-scale-readiness.md",
+    "scope": "Original full AFK request; current disposition labels are evidence classification, not a replacement scope.",
+    "baselineIntegrationRevision": "6341681aec4c295a20e4c2e19abe0df241ebd66f",
+    "latestProductRevisionReviewed": "697fa66ac0be490dfd4edb7358b251163cd460d7",
+    "requirements": [
+      {
+        "requirement": "Owned spark-2 editable DTU, representative private history, no main/release/production mutation",
+        "status": "owned-isolation-and-scale-capture-supported",
+        "evidence": [
+          "WORKSPACE-MANIFEST.json",
+          "output/readiness-day-20261015/replica/events-complete.json",
+          "output/editable-development20261014/readiness-preview/combined-final/qualification.json",
+          "unified-readiness-day/docs/validation/integrated-preview-worker-fixes-20261015.json",
+          "unified-readiness-day/docs/validation/integrated-preview-final-20261015.json"
+        ],
+        "findings": [
+          "27,508 native sessions across5,272 projects;32/32 event batches,40,403 verified files,776,931,427,576bytes; no detected unstable files",
+          "Snapshot taken from running source is not globally atomic",
+          "Owned private derived state and retained synthetic preview remain distinct; no provider credentials, schedules or outbound automation enabled",
+          "Final owned preview source697fa66ac includes the fresh-profile local-wheel correction; saved8 files and4 synthetic chats remain, schedules0, automatic check/install disabled. One authenticated browser launch481ms, no browser errors; no dependency reinstall or frontend rebuild."
+        ],
+        "remaining": "Retain the review preview and evidence; finish scoped obsolete-resource cleanup and record intentional retention."
+      },
+      {
+        "requirement": "Inventory first and actual complete ordinary public-path smoke, including narrow/input variants where material",
+        "status": "ordinary-path-accounting-and-named-local-boundaries-supported",
+        "evidence": [
+          "output/readiness-day-20261015/ui-inventory/coverage-ledger.json",
+          "output/readiness-day-20261015/ui-inventory/functional-claims.json",
+          "output/readiness-day-20261015/completion-audit/finite-control-qualification.json",
+          "unified-readiness-day/docs/validation/normal-worker-control-boundaries-20261015.json",
+          "unified-readiness-day/docs/validation/work-required-modules-20261015.json",
+          "unified-readiness-day/docs/validation/archive-running-worker-20261015.json",
+          "unified-readiness-day/docs/validation/recovery-ownership-worker-20261015.json"
+        ],
+        "findings": [
+          "199 workflows and669 outcomes:618 covered in named contexts,36 partial,15 not run;168 workflows have all outcomes observed.",
+          "189 ordinary paths observed, one ordinary platform partial, three Advanced/boundary rows, six crosscutting audit rows.",
+          "Claim IDs are unique after preserving and normalizing four identical notification-ID records; all claim evidence exists.",
+          "Finite keyboard/coarse-touch Pin/Unpin and connection-removal draft/history retention are qualified.",
+          "Actual normal worker qualifies Stop durability and active configuration boundaries; named Work required modules are mounted.",
+          "Public Archive preserves running work/history/sentinel files. Explicit later Stop is separate; browser entry/draft and runtime effects have independent source-bound witnesses.",
+          "Public recovery/retry/reopen does not start a worker or replay a prior local file effect. An actual separate Foundation lock owner refuses takeover; explicit successful handoff starts one normal worker and duplicate receipts retain it without input. This is not a full CLI-runtime or arbitrary-remote-effect proof."
+        ],
+        "remaining": "Physical/account/platform acceptance and the51 bounded or universal residual outcomes remain explicit. Newly discovered feasible ordinary gaps remain in scope."
+      },
+      {
+        "requirement": "Record current baseline versus desired performance, then investigate/fix regressions at realistic load",
+        "status": "current-baselines-and-fresh-profile-proof-recorded; desired-targets-remain",
+        "evidence": [
+          "output/readiness-day-20261015/replica/remaining-perf",
+          "output/readiness-day-20261015/cold-activation",
+          "output/readiness-day-20261015/replica/remaining-perf/delivery-hint-summary.json",
+          "unified-readiness-day/docs/validation/normal-runtime-worker-start-20261015.json",
+          "unified-readiness-day/docs/validation/profile-cold-worker-start-20261015.json"
+        ],
+        "findings": [
+          "Workspace15 gestures at1/6/12 owners260\u2013859ms and constant resident16 support bounded navigation.",
+          "Guarded delivery-publication candidate36ba434c records three one-worker acknowledgement samples554\u2013612ms (before632\u2013671ms), but not p95 population evidence and not the desired300ms target.",
+          "Normal RuntimeManager command=None Work profile-warm/worker-cold readiness is1,170\u20131,343ms across three finite starts atb4e595b71; no model inputs and no workers remain.",
+          "Separate fresh normal Work profile qualification plus worker startup passed in one7,729.2ms sample (ensure5,874.41ms), dependency/source caches warm, at3a50 plus73817 local-wheel policy correction (integrated697fa66ac). The prior dependency conflict and failure remain retained; no model calls or workers remained.",
+          "Functional scenario elapsed duration is not interaction latency."
+        ],
+        "remaining": "Retain the desired300ms acknowledgement target as unmet. The one7.729s cache-warm qualification is below the provisional10s cold target but is not fresh-download or p95 evidence."
+      },
+      {
+        "requirement": "Resolve confirmed nonjudgment defects and provide decision-ready material for remaining proposals",
+        "status": "confirmed-app-and-canonical-recipe-fixes-qualified; review-delivery-pending",
+        "evidence": [
+          "unified-readiness-day/docs/validation/closing-issue-dispositions-20261015.json",
+          "output/readiness-day-20261015/dependencies/recipe-context-inventory.json",
+          "unified-readiness-finite-controls-20261015/docs/validation/recipe-cli-checker-acceptance-20261015.json",
+          "output/readiness-day-20261015/dependencies/frozen-620d786a.json",
+          "output/readiness-day-20261015/dependencies/gates-620d786a/results.json",
+          "output/readiness-day-20261015/dependencies/recipe-corpus-qualification-2.json",
+          "output/readiness-day-20261015/dependencies/skip-supplement-620d786a/results.json",
+          "output/readiness-day-20261015/dependencies/skip-supplement-620d786a/module-portable-test.json",
+          "recipes-readiness-20261015/docs/validation/shell-source-qualification-20261015.json"
+        ],
+        "findings": [
+          "Confirmed app fixes are integrated with exact-source evidence;13 product/authority decisions remain explicit.",
+          "Recipe630 is implemented in canonical620d786a with both engines and18 byte-identical mirrored helper modules. Four repository gates:1,646 module passes/1 skip,590 runner passes/1 skip,19 kit passes/1 skip,5 unchanged goldens. Supplemental exact activation closes the historical Git-metadata skip; the isolated native cross-engine node passes with the exact counterpart path.",
+          "Actual CLI d408797 verifies exact frozen620d786a recipe engine and validates its example without network/inference. Independent unchanged checker passes all14 generated engine/converter pairs before safe local Bash execution; prior b6 four-pair refusal is preserved.",
+          "All199 retained corpus source paths are hash-verified;1,227 rows/519 templates accounted for. Actual historical outputs/user inputs remain unavailable where not saved; literal defaults and synthetic typed contexts are separately identified.",
+          "Recipe is absent from inspected ordinary Work graph; canonical task completion is required by this user scope but is not mislabeled a current Unified runtime dependency.",
+          "Stories712 exact incident and real audio258 retain their actual acceptance limits.",
+          "The module skip exposed a hardcoded unrelated checkout path in the diagram example test. Test-only commitfc18ee4 uses the repository-relative path;22 shipped-example cases pass on frozen620 with explicit test overlay, other403 files unchanged. Original skip and failed node-path probe are retained.",
+          "Whole retained source census covers1,227 rows/519 templates,3,492 role-admitted/default cases across both actual converters,6,984 emitted-source witnesses verified and zero refusals. No retained original recipe commands were executed. Seven independent checker safe fixtures remain a separate effect tier."
+        ],
+        "remaining": "Publish the canonical recipe draft PR and corrected source-bound receipt. Keep13 product/authority decisions explicit; do not count disposition labels as implemented features."
+      },
+      {
+        "requirement": "One integrated qualified candidate, including fixes proposed in canonical dependency repositories",
+        "status": "private-actual-mounted-dependency-graph-qualified; delivery-order-explicit",
+        "evidence": [
+          "output/readiness-day-20261015/dependencies/bash-repair/qualification.json",
+          "output/readiness-day-20261015/dependencies/computer-use/qualification/qualification/wheel-proof.json",
+          "output/readiness-day-20261015/dependency-activation",
+          "unified-readiness-finite-controls-20261015/docs/validation/integrated-dependency-activation-20261015.json",
+          "unified-readiness-day/docs/validation/work-required-modules-20261015.json"
+        ],
+        "findings": [
+          "Bash24 exact63c92139 and computer29 exact63871d469 are staged into private generationded15b45/q-d110.",
+          "Original installed-only receipt did not prove mounted source: actual worker initially loaded old Foundation-cache Bash. That failure is preserved, and the private source mapping now binds exact candidate source.",
+          "Corrected actual normal worker imports Bash safety SHA7cd7c0cc; full Work prepares/creates/starts with no command override or inference, network disabled and zero retained workers.",
+          "Computer29 changes qualification harness/docs; its31 runtime files and PowerShell assets are hash-verified installed, but normal Work does not enable computer-use and no desktop action was run.",
+          "Named Work source50deb9 mounts all13 declared required tool capabilities plus actual loop-live/context-managed/provider; no arbitrary-bundle or individual-tool acceptance inferred.",
+          "Application dependency proof is atb4e595b71; later actual-worker controls, Archive and recovery/ownership have independent exact-source receipts. Final review preview is source-bound to697fa66ac."
+        ],
+        "remaining": "Retain the actual mounted-source correction and dependency merge/qualification order. Canonical merges and new production generation remain user-controlled; optional desktop execution is not inferred from package identity."
+      },
+      {
+        "requirement": "Efficient, meaningful verification with explicit source boundaries and reviewable integration",
+        "status": "integrated-review-candidate-qualified; final-delivery-reconciliation-pending",
+        "evidence": [
+          "unified-readiness-day/docs/validation/readiness-test-qualification-20261015.json",
+          "unified-readiness-day/docs/validation/canonical-browser-qualification-20261015.json",
+          "https://github.com/microsoft/amplifier-unified/pull/784",
+          "unified-readiness-day/docs/validation/integrated-preview-worker-fixes-20261015.json",
+          "unified-readiness-day/docs/validation/integrated-preview-final-20261015.json"
+        ],
+        "findings": [
+          "Broad frozen checks remain source-bound:9,021 Python/6subtests with36skips13warnings ate275;977frontend at09d6;72canonical browser at4801878. Later focused deltas are not relabeled as broad reruns.",
+          "Final integrated preview at697fa66ac preserves8 files and4 chats, schedules0, automatic updates disabled, no browser errors; one481ms authenticated load is functional evidence only.",
+          "Parent confirmed all7 CI checks successful at3a50b226a. Later local-wheel product fix697fa66ac has separate focused/fresh-profile acceptance; current integrated PR status must be recorded separately.",
+          "No redundant9k rerun for test/evidence-only changes; changed product paths receive focused verification."
+        ],
+        "remaining": "Attach canonical draft PR and final integration CI/resource records. No main merge, release or spark-1 adoption is authorized."
+      }
+    ],
+    "finiteWorkerControls": [
+      "composer.stop:0",
+      "composer.stop:2",
+      "privacy.file-policy:1",
+      "connections.default-model:1",
+      "configuration.sources:2"
+    ],
+    "legitimateLimits": [
+      "Real provider account/transport, physical microphone/audio and target-device acceptance require actual external capabilities",
+      "Windows execution is not proved by Linux package identity",
+      "Nested workspace environment allocation has actual UI synthetic-manager evidence, not physical nested platform allocation",
+      "Advanced-only/nonexistent control boundaries retain explicit reviewed rationale",
+      "Universal arbitrary extension/security/redaction/hidden-read claims are not finite clickthrough acceptance"
+    ],
+    "completionDecision": "Implementation and named ordinary acceptance are qualified with explicit residual limits. Required closeout still includes canonical recipe draft PR, current integrated CI/resource reconciliation and final parent review. No broad all-platform/provider/security or desired-performance-target completion is claimed.",
+    "finiteWorkerControlsStatus": "closed-by-70b4896f7-with-explicit-installed-source-activation-limit",
+    "latestOutcomeLedgerSummary": {
+      "workflows": 199,
+      "outcomes": 669,
+      "outcomeStatus": {
+        "covered-in-context": 618,
+        "partially-observed": 36,
+        "not-run": 15
+      },
+      "workflowsWithOutcomeEvidence": 197,
+      "workflowsAllOutcomesObservedInContext": 168,
+      "ordinaryPathStatus": {
+        "observed-in-context": 189,
+        "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+        "reviewed-advanced-boundary-proposed": 1,
+        "reviewed-advanced-only-proposed": 2,
+        "reviewed-crosscutting-audit-not-destination": 6
+      },
+      "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+    },
+    "previousOutcomeLedgerSummary": {
+      "workflows": 199,
+      "outcomes": 669,
+      "outcomeStatus": {
+        "covered-in-context": 616,
+        "partially-observed": 36,
+        "not-run": 17
+      },
+      "workflowsWithOutcomeEvidence": 197,
+      "workflowsAllOutcomesObservedInContext": 166,
+      "ordinaryPathStatus": {
+        "observed-in-context": 189,
+        "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+        "reviewed-advanced-boundary-proposed": 1,
+        "reviewed-advanced-only-proposed": 2,
+        "reviewed-crosscutting-audit-not-destination": 6
+      },
+      "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+    },
+    "resolvedNormalWorkerOutcomeIds": [
+      "bundles.selection:2",
+      "composer.stop:0",
+      "composer.stop:2",
+      "configuration.sources:2",
+      "connections.default-model:1",
+      "delivery.context:2",
+      "delivery.ownership:2",
+      "nav.archive:0",
+      "privacy.file-policy:1"
+    ],
+    "additionalFiniteAcceptanceAfterWorkerReconciliation": [
+      {
+        "outcome": "delivery.ownership:2",
+        "status": "closed-in-named-context",
+        "receipt": "docs/validation/recovery-ownership-worker-20261015.json"
+      },
+      {
+        "outcome": "delivery.context:2",
+        "status": "closed-in-named-context",
+        "receipt": "docs/validation/recovery-ownership-worker-20261015.json"
+      },
+      {
+        "outcome": "nav.archive:0",
+        "status": "closed-by-actual-running-worker-receipt",
+        "receipt": "docs/validation/archive-running-worker-20261015.json"
+      },
+      {
+        "outcome": "bundles.selection:2",
+        "status": "closed-for-named-Work-required-modules",
+        "receipt": "docs/validation/work-required-modules-20261015.json"
+      }
+    ],
+    "reviewedAt": "2026-10-15T23:39:46.158153+00:00",
+    "latestIntegratedReceiptRevision": "5e9e3f424"
+  },
+  "limits": [
+    "This audit is a completion checkpoint, not a completed-goal claim.",
+    "Counts describe named contexts, not all possible platforms/accounts/input variants."
+  ],
+  "recoveryOwnershipReceipt": {
+    "receipt": "docs/validation/recovery-ownership-worker-20261015.json",
+    "resolvedOutcomes": [
+      "delivery.ownership:2",
+      "delivery.context:2"
+    ],
+    "remainingOutcomes": 51,
+    "limits": [
+      "Competing owner is a separate real Foundation lock/release process, not the complete Amplifier CLI runtime.",
+      "Recovery retained an actual prior local file effect with synthetic committed tool history; arbitrary remote tool effects are not exercised.",
+      "Recovery itself and same-command retries/reopen run without starting a worker; explicit takeover starts one normal worker without input.",
+      "Existing independent browser witnesses qualify the UI entry; this receipt covers the runtime boundary, not additional browser gestures.",
+      "No live provider account, production history, device acceptance or performance claim."
+    ]
+  },
+  "profileColdReceipt": "docs/validation/profile-cold-worker-start-20261015.json"
+}

@@ -1,0 +1,50 @@
+{
+  "source": "c5c4b3c176f7ea41c4b2b20dc8ce9d07c08b0559",
+  "build": {
+    "version": "0.20.165",
+    "id": "5f136e8e69c99e41"
+  },
+  "savedFileBytesUnchanged": true,
+  "savedFileCount": 8,
+  "browser": {
+    "authenticated": true,
+    "cssProbe": "none",
+    "loadMs": 2300,
+    "url": "http://127.0.0.1:8941/",
+    "errors": []
+  },
+  "servedBuild": {
+    "version": "0.20.165",
+    "id": "5f136e8e69c99e41"
+  },
+  "sessionCount": 4,
+  "schedules": 0,
+  "autoUpdates": {
+    "autoCheck": false,
+    "autoInstall": false
+  },
+  "dependenciesReinstalled": false,
+  "spark1Mutation": false,
+  "url": "http://127.0.0.1:39471/",
+  "purpose": "Owned integrated review preview; no release",
+  "limits": [
+    "Initial page load 2300ms, immediate repeated launches 342/330ms; finite functional observations, not a matched baseline or sustained performance measurement",
+    "Preview uses synthetic state; scale and worker/dependency checks have separate receipts"
+  ],
+  "browserRepeats": [
+    {
+      "authenticated": true,
+      "cssProbe": "none",
+      "loadMs": 342,
+      "url": "http://127.0.0.1:8941/",
+      "errors": []
+    },
+    {
+      "authenticated": true,
+      "cssProbe": "none",
+      "loadMs": 330,
+      "url": "http://127.0.0.1:8941/",
+      "errors": []
+    }
+  ]
+}

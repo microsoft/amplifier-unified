@@ -240,6 +240,34 @@ async def test_selected_checkout_replaced_by_unrelated_git_repository_rejects_be
         marker.write_bytes(original)
 
 
+async def test_source_checkout_repository_changed_after_receipt_rejects_before_release(multi):
+    app, sid, workspace, repos = multi
+    checkout = await create(app, sid, repos[0], 'source-copy')
+    assert (await move(app, sid, checkout, 'outbound'))['phase'] == 'applied'
+    app.runtime.quiesce_for_handoff.reset_mock()
+    before = copy.deepcopy(app._session(sid))
+    pending = (await app.dispatch('worktree.handoff', {
+        'sessionId': sid, 'id': None, 'expectedExecutionRevision': 1,
+    }, command_id='return-after-source-replacement'))['result']
+    marker = Path(checkout['path']) / '.git'
+    original = marker.read_bytes()
+    try:
+        # The receipt exists, but its background preflight has not run yet.
+        marker.write_text(f'gitdir: {repos[1] / ".git"}\n')
+        await settle(app)
+        receipt = app.worktrees.read(sid, pending['id'])
+        assert receipt['phase'] == 'rejected' and receipt['step'] == 'preflight'
+        assert 'source' in receipt['detail'] and 'recorded repository' in receipt['detail']
+        assert not app.runtime.quiesce_for_handoff.called
+        current = app._session(sid)
+        for key in ('workspace', 'workingDirectory', 'executionRevision', 'messages'):
+            assert current[key] == before[key]
+        assert not current['configurationBusy']
+        assert not receipt['inputsReplayed']
+    finally:
+        marker.write_bytes(original)
+
+
 async def test_legacy_reconciliation_cannot_choose_an_unassociated_repository(multi):
     app, sid, _, repos = multi
     checkout = await create(app, sid, repos[0], 'selected-copy')

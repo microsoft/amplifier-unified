@@ -30,7 +30,7 @@ export function useSettingsDrafts(){
  useEffect(()=>()=>{waiting.current?.resolve(false)},[]);
  const dialog=prompt&&<div className="a-settings-draft-overlay"><div className="a-settings-draft-confirm" role="alertdialog" aria-modal="true" aria-labelledby="settings-unsaved-title" onKeyDown={event=>{
   if(event.key==='Escape'){event.preventDefault();event.stopPropagation();settle(false)}
-  if(event.key==='Tab'){const buttons=[...event.currentTarget.querySelectorAll('button')],index=buttons.indexOf(document.activeElement);event.preventDefault();buttons[(index+(event.shiftKey?-1:1)+buttons.length)%buttons.length]?.focus()}
+  if(event.key==='Tab'){const buttons=[...event.currentTarget.querySelectorAll('button')],index=buttons.indexOf(document.activeElement);event.preventDefault();event.stopPropagation();buttons[(index+(event.shiftKey?-1:1)+buttons.length)%buttons.length]?.focus()}
  }}>
   <h3 id="settings-unsaved-title">Unsaved settings changes</h3>
   <p>Your changes have not been saved. Review them before closing Settings, or discard them.</p>

@@ -1435,3 +1435,34 @@ def test_projection_stage_failure_closes_measurement_and_preserves_retry(source,
     assert view.read(session)['nodes'][0]['output'] == 'saved'
     assert diagnostics.snapshot()['operations']['events.rows']['count'] == 2
     assert 'private diagnostic sentinel' not in json.dumps(diagnostics.snapshot())
+
+
+@pytest.mark.parametrize('observed', [False, True])
+def test_current_worker_observation_survives_canonical_refresh_without_reviving_other_runs(source, observed):
+    from amplifier_web.work_windows import WorkWindows
+    session, path = source
+    for call, at in [('earlier', 10), ('current', 20)]:
+        append(path, 'tool:pre', {'tool_call_id': call, 'tool_name': 'delegate'}, at)
+        append(path, 'delegate:agent_spawned',
+               {'tool_call_id': call, 'sub_session_id': 'child', 'agent': 'reviewer'}, at + 1)
+        append(path, 'tool:post', {'tool_call_id': call, 'tool_name': 'delegate', 'result': 'done'}, at + 2)
+    original = path.read_bytes()
+    session['execution'] = EventLogView(None).read(session)
+    workers = [row for row in session['execution']['nodes'] if row['kind'] == 'worker']
+    assert len(workers) == 2
+    current = next(row for row in workers if row['parentId'].endswith(':current'))
+    current.update(liveObservation=observed, rootSessionId='app', phase='completed', endedAt=24,
+                   runId='current-run', summary='The current review is complete.')
+    current_id = current['id']
+    # Rebuilding the canonical display must retain the observed worker's place
+    # in the bounded live tree. A separate run in the same child stays historic.
+    for _ in range(2):
+        session['execution'] = EventLogView(None).read(EventLogView.projection_input(session))
+        view = WorkWindows(None).live_view(session)
+        visible = [row for row in view['execution']['nodes'] if row['kind'] == 'worker']
+        assert [row['id'] for row in visible] == ([current_id] if observed else [])
+        if observed:
+            assert visible[0]['runId'] == 'current-run'
+            assert visible[0]['phase'] == 'completed'
+            assert visible[0]['parentId'].endswith(':current')
+    assert path.read_bytes() == original

@@ -17,7 +17,12 @@ test('AI setup welcome is only shown after an authoritative empty provider read'
  assert.match(render({operations:{'providers.list:':{phase:'error',error:'Offline'}}}),/Retry loading connections/);
  assert.doesNotMatch(render({providers:[{id:'one',module:'provider-openai',enabled:true,config:{model:'test'}}],providersLoadedAt:1}),/Use for images/);
 });
-test('notification toggle writes one preference without committing or clearing private connection drafts',async()=>{
+test('notification toggle writes one preference without committing or clearing private connection drafts',async t=>{
+ // The permission hook observes browser events; provide that environment while
+ // keeping these tests focused on saved preferences and private draft receipts.
+ const prior={window:globalThis.window,document:globalThis.document};
+ globalThis.window=new EventTarget();globalThis.document=new EventTarget();
+ t.after(()=>{for(const [key,value] of Object.entries(prior)){if(value===undefined)delete globalThis[key];else globalThis[key]=value}});
  const calls=[];let renderer;
  let state={view:{maintenanceDraft:{notifyServer:'https://unfinished.example'}},notificationSettings:{desktop:true,preview:false,enabled:false,server:'https://ntfy.sh'}};
  const send=async(action,args)=>{calls.push([action,args]);return {accepted:true,operationId:'toggle'}};

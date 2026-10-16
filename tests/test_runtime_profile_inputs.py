@@ -571,3 +571,30 @@ async def test_new_lazy_bundle_registration_still_requires_qualification(profile
     assert len(h.calls) == 3
     assert await runtime_profiles.ensure(h.home, h.generation, session) == selected
     assert len(h.calls) == 3
+
+
+@pytest.mark.parametrize('kind', ['module', 'bundle'])
+async def test_removing_last_source_reuses_original_qualified_profile(profile_inputs, kind):
+    from amplifier_web.registry import RegistryManager
+    h = profile_inputs
+    manager = RegistryManager(h.home)
+    args = {'kind': kind, 'name': 'temporary', 'scope': 'global',
+            'workspace': str(h.workspace), 'source': 'git+https://example.invalid/temporary'}
+    baseline = runtime_profiles.configuration_key(h.settings)
+    await manager.perform('sources.save', args)
+    edited = manager.store.read(h.workspace, 'global')
+    assert runtime_profiles.configuration_key(edited) != baseline
+    await manager.perform('sources.remove', args)
+    assert manager.store.read(h.workspace, 'global')['sources'][kind+'s'] == {}
+    session = {'id': 'restored', 'workspace': str(h.workspace), 'bundle': 'work'}
+    assert await runtime_profiles.ensure(h.home, h.generation, session) == h.generation
+    assert not h.calls and not h.scans
+
+
+def test_empty_source_normalization_keeps_nonempty_and_unknown_declarations():
+    key = runtime_profiles.configuration_key
+    assert key({'sources': {'modules': {}, 'bundles': {}}}) == key({})
+    for sources in ({'modules': {'provider-one': '/private/source'}},
+                    {'bundles': {'work': 'git+https://example.invalid/work'}},
+                    {'unknown': {}}):
+        assert key({'sources': sources}) != key({})

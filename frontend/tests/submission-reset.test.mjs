@@ -35,7 +35,12 @@ test('schedule completion preserves newer drafts and stale previews never become
  }finally{await act(()=>renderer.unmount())}
 });
 
-test('notification secrets wait for confirmed completion and preserve edits per field',async()=>{
+test('notification secrets wait for confirmed completion and preserve edits per field',async t=>{
+ // The permission hook observes browser events; provide that environment while
+ // keeping these tests focused on saved preferences and private draft receipts.
+ const prior={window:globalThis.window,document:globalThis.document};
+ globalThis.window=new EventTarget();globalThis.document=new EventTarget();
+ t.after(()=>{for(const [key,value] of Object.entries(prior)){if(value===undefined)delete globalThis[key];else globalThis[key]=value}});
  let renderer,request,state={view:{}},sequence=0;
  const send=()=>{request=deferred();return request.promise};
  const render=()=>React.createElement(NotificationSettings,{state,act:send});
