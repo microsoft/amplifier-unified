@@ -7,9 +7,10 @@ function memory(seed){
  const values=new Map(seed),writes=[];
  return {values,writes,getItem:key=>values.get(key)||null,setItem:(key,value)=>{writes.push(value);values.set(key,value)},removeItem:key=>values.delete(key)};
 }
+let harnessSequence=0;
 function harness(store=memory()){
- let sequence=0;const notifications=[];
- const history=createDestinationHistory({storage:()=>store,key:()=>`visit-${++sequence}`,changed:value=>notifications.push(value)});
+ const instance=++harnessSequence;let sequence=0;const notifications=[];
+ const history=createDestinationHistory({storage:()=>store,key:()=>`visit-${instance}-${++sequence}`,changed:value=>notifications.push(value)});
  return {history,store,notifications};
 }
 function frame(name,revision=1,{scope='scope-a',surface='chat',tab='chats',host='host-a',title=name}={}){
@@ -76,6 +77,13 @@ test('reload restores only this scope, duplicated tabs evolve independent copies
  assert.equal(reloaded.snapshot().cursor,1);assert.equal(reloaded.snapshot().entries.length,3);
  reloaded.observe(frame('b',1,{host:'restarted'}),{baseline:true});assert.equal(reloaded.snapshot().entries.length,3);
  duplicated.observe(frame('d',21));assert.deepEqual(reloaded.snapshot().entries.map(row=>row.id),['a','b','c']);
+ assert.equal(new Set(duplicated.snapshot().entries.map(row=>row.key)).size,duplicated.snapshot().entries.length);
+ assert.equal(back(duplicated,22).id,'b');
+ const forward=duplicated.begin(duplicated.snapshot().forwardKey);
+ assert.equal(forward.id,'d');duplicated.observe(frame('d',23));assert.equal(duplicated.finish(receipt(23)),true);
+ const reloadedCopy=harness(copy).history;reloadedCopy.observe(frame('d',24),{baseline:true});
+ assert.deepEqual(reloadedCopy.snapshot().entries,duplicated.snapshot().entries);
+ assert.equal(reloadedCopy.snapshot().cursor,duplicated.snapshot().cursor);
  const other=harness(store).history;other.observe(frame('private-other',1,{scope:'scope-b'}));
  assert.deepEqual(other.snapshot().entries.map(row=>row.id),['private-other']);
 });

@@ -9,15 +9,38 @@ import {chromium,expect} from '@playwright/test';
 const out=process.env.AMPLIFIER_TEST_OUTPUT;
 if(!out)throw Error('Set AMPLIFIER_TEST_OUTPUT to an owned evidence directory.');
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
-let browser,page;
+let browser,page,scenarioFailure;
 const pendingGates=new Set();
 function gate(){
  let resolve;const wait=new Promise(done=>{resolve=done});
  const release=()=>{pendingGates.delete(release);resolve()};
  pendingGates.add(release);return {wait,release};
 }
+function stopFixture(){
+ if(fixture.exitCode!==null||fixture.signalCode!==null||!fixture.pid)return Promise.resolve();
+ return new Promise((resolve,reject)=>{
+  let escalation,deadline,settled=false;
+  const finish=error=>{
+   if(settled)return;settled=true;
+   clearTimeout(escalation);clearTimeout(deadline);
+   fixture.off('exit',exited);fixture.off('error',failed);
+   if(error)reject(error);else resolve();
+  };
+  const exited=()=>finish(),failed=error=>finish(error);
+  const signal=value=>{try{fixture.kill(value)}catch(error){finish(error)}};
+  fixture.once('exit',exited);fixture.once('error',failed);
+  console.error(`Stopping owned fixture PID ${fixture.pid}`);
+  escalation=setTimeout(()=>{
+   if(fixture.exitCode!==null||fixture.signalCode!==null){exited();return}
+   console.error(`Escalating owned fixture PID ${fixture.pid} to SIGKILL`);
+   deadline=setTimeout(()=>finish(Error(`Could not confirm exit of owned fixture PID ${fixture.pid}`)),5000);
+   signal('SIGKILL');
+  },5000);
+  signal('SIGTERM');
+ });
+}
 try{
- const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
+ const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('error',error=>{clearTimeout(timer);reject(error)});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  await mkdir(out,{recursive:true});
  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
  const context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
@@ -179,12 +202,14 @@ try{
  const serialized=JSON.stringify(await saved());assert.doesNotMatch(serialized,/Unsent Alpha draft|Synthetic preview|cHJlc2VydmU=/);
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({status:'passed',checks:['traversal','draft and attachment retention','detached New chat','workspace tabs','file preview','reload','rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings','keyboard and hold','1440/390 layout'],pageErrors:errors}));
-}finally{
+}catch(error){scenarioFailure=error;throw error}finally{
  for(const release of pendingGates)release();
- try{await browser?.close()}finally{
-  if(fixture.exitCode===null&&fixture.signalCode===null)await new Promise((resolve,reject)=>{
-   const timer=setTimeout(()=>reject(Error('Owned fixture did not stop after SIGTERM')),5000);
-   fixture.once('exit',()=>{clearTimeout(timer);resolve()});fixture.kill('SIGTERM');
-  });
+ // Start fixture termination even if browser cleanup itself stalls. Keep the
+ // original assertion and a separate cleanup failure instead of replacing it.
+ const cleanup=await Promise.allSettled([Promise.resolve().then(()=>browser?.close()),stopFixture()]);
+ const failures=cleanup.filter(row=>row.status==='rejected').map(row=>row.reason);
+ if(failures.length){
+  if(scenarioFailure)for(const error of failures)console.error('Cleanup also failed:',error);
+  else throw new AggregateError(failures,'Owned browser fixture cleanup failed');
  }
 }
