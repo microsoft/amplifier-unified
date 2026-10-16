@@ -178,6 +178,21 @@ The reconnect control preserves the mounted iframe and unfinished input. Reload
 is a separate explicit control because it resets local inputs and reruns the
 authored document's initialization code.
 
+An initialized MCP App receives the SDK's `notifications/tools/list_changed` and
+`notifications/resources/list_changed` when its host binding moves from a
+non-ready state to verified ready. Repeated ready observations do not repeat the
+notifications. Discovery stays limited to the saved grants. A cooperating app
+can refresh its safe reads on that signal; the host never repeats initialization
+input, a prior tool result or a mutation. This does not repair an app that ignores
+the notifications, and it does not make a deliberately selected saved version live.
+
+Agent `smartTools.viewStatus` is passive and scoped to the calling conversation.
+It distinguishes no connected client, an unavailable supplied client, multiple
+connected clients, and a document not selected by the matching client. Persisted
+disconnected clients do not count as live viewers. Without a selected live view,
+the receipt still reports the latest saved source and binding state under
+`savedView`; it does not select a tab, attach a client or connect a server.
+
 Older views lack a saved contract fingerprint. Reconnect returns `review_required`
 with the current definitions for the already-granted action names. After reviewing
 them, the user or authorized agent can supply that exact `review.fingerprint` as
@@ -188,8 +203,11 @@ This recovery path does not introduce artifact revision history or merge tabs by
 
 Local acceptance: `npm --prefix frontend run test:mcp-recovery-browser` uses an
 actual MCP SDK fixture and restarts the host over isolated synthetic state. It
-checks source identity, launch receipts, mutation counts, input preservation and
-changed-schema denial. `AMPLIFIER_TEST_PYTHON` selects the test interpreter.
+checks source identity, launch receipts, mutation counts, input preservation,
+cooperative safe-read recovery, deliberate historical selection and changed-schema
+denial. It also runs once in the extended browser plan after publication or manual
+dispatch. `AMPLIFIER_TEST_PYTHON` selects the test interpreter. See the
+[807–809 qualification and remaining decision](validation/mcp-recovery-807-809.md).
 
 ## Supported protocol profile
 

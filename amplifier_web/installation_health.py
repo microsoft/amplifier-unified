@@ -121,8 +121,10 @@ async def _status_once(home, wait=0):
                             if not ok and asyncio.get_running_loop().time() < deadline:
                                 continue
                             return {"ok": ok, "responding": True, "service": state,
-                                    "message": "Unified is running and responding." if ok else "Unified responds, but its background service is " + state + ".",
-                                    "url": (config['public_origins'] or [url.removesuffix('/api/health')])[0]}
+                                    "message": "Unified is running and responding on this computer." if ok else "Unified responds on this computer, but its background service is " + state + ".",
+                                    "url": url.removesuffix('/api/health'),
+                                    "publicUrls": config['public_origins'],
+                                    "publicUrlsVerified": False}
                 except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
                     pass
             if asyncio.get_running_loop().time() >= deadline:
@@ -146,7 +148,11 @@ def display(result, *, as_json=False, verbose=False):
     else:
         print(result['message'])
         if result.get('ok') and result.get('url'):
-            print('Open: ' + result['url'])
+            print('Host listener: ' + result['url'])
+        for url in result.get('publicUrls', []):
+            print('Configured public address (not checked): ' + url)
+        if result.get('publicUrls'):
+            print('Check DNS, network access and certificate trust on the device you will use.')
         if result.get('nextStep'):
             print(result['nextStep'])
         if verbose and result.get('detail'):

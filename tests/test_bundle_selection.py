@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from amplifier_web.bundle_selection import BundleTransaction, defaults, switch
+from amplifier_web.bundle_selection import BundleTransaction, defaults, prepare_switch
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.preferences import SettingsStore
 from amplifier_web.service import AppService, AppError
@@ -86,62 +86,43 @@ def test_fork_with_bundle_keeps_tools_voice_and_original_but_replaces_instructio
     assert (store.directory('source')/'transcript.jsonl').read_bytes()==before
 
 
-@pytest.mark.parametrize('fail',[False,True])
-@pytest.mark.parametrize('reviewed',[False,True])
-async def test_worker_switch_commits_only_after_mount_and_rolls_back_failure(tmp_path,monkeypatch,fail,reviewed):
-    home=tmp_path/'app';store,messages=seed(home,tmp_path)
-    result={'bundle':'work','fingerprint':'same','selection':None,'modelCompatible':True}
-    candidate=object()
-    async def inspect(*args): return result.copy(),candidate
-    monkeypatch.setattr('amplifier_web.bundle_selection.inspect_bundle',inspect)
-    class Controls:
-        def require_idle(self): pass
-        async def checkpoint(self): pass
-        async def close(self): pass
-        def configuration(self): return {'plan':{}}
-        async def perform(self,*args): return {'providers':[]}
-    class Session:
-        async def cleanup(self): pass
-    class Worker:
-        def __init__(self):
-            self.home=home;self.workspace=tmp_path;self.runtime=SimpleNamespace(session_id='source')
-            self.start_config={'id':'source','bundle':'anchors'}
-            self.bundle_preview={**result,'previewId':'reviewed'}
-            self.controls=Controls();self.session=Session();self.execution=None;self.remounting=False
-            self.started=[]
-        async def start(self,config,**kw):
-            self.started.append(config['bundle'])
-            assert kw.get('resolved_root') is (candidate if config['bundle']=='work' else None)
-            if fail and config['bundle']=='work': raise ValueError('module did not mount')
-            self.controls=Controls();self.session=Session()
-    worker=Worker()
-    args={'bundle':'work',**({'previewId':'reviewed'} if reviewed else {})}
-    if fail:
-        with pytest.raises(ValueError,match='did not mount'): await switch(worker,args)
-        assert store.load('source')[0]==messages
-        assert store.load('source')[1]['bundle_name']=='anchors'
-        assert worker.started==['work','anchors']
-    else:
-        assert (await switch(worker,args))['historyPreserved']
-        assert store.load('source')[0]==messages[1:]
-        assert store.load('source')[1]['bundle_name']=='work'
-    assert not worker.remounting
+@pytest.mark.parametrize('reviewed', [False, True])
+async def test_prepare_switch_checkpoints_without_loading_candidate_or_mutating_history(tmp_path, monkeypatch, reviewed):
+    from unittest.mock import AsyncMock
+    home = tmp_path/'app'; store, messages = seed(home, tmp_path)
+    result = {'bundle': 'work', 'fingerprint': 'same', 'selection': None, 'modelCompatible': True}
+    async def inspect(*args): return result.copy(), object()
+    monkeypatch.setattr('amplifier_web.bundle_selection.inspect_bundle', inspect)
+    checkpoint = AsyncMock()
+    worker = SimpleNamespace(controls=SimpleNamespace(require_idle=lambda: None, checkpoint=checkpoint),
+        workspace=tmp_path, bundle_preview={**result, 'previewId': 'reviewed'})
+    before = {key: path.read_bytes() if path.exists() else None
+              for key, path in BundleTransaction(home, tmp_path, 'source').paths.items()}
+    args = {'bundle': 'work', **({'previewId': 'reviewed'} if reviewed else {})}
+    assert (await prepare_switch(worker, args))['replacement'] == {**result, 'resetModel': False}
+    checkpoint.assert_awaited_once()
+    assert {key: path.read_bytes() if path.exists() else None
+            for key, path in BundleTransaction(home, tmp_path, 'source').paths.items()} == before
+    assert store.load('source')[0] == messages
     assert not (home/'sessions/source/bundle-transition.json').exists()
 
 
 class Runtime:
-    def __init__(self): self.calls=[];self.preview=None;self.fail=False
-    async def start(self,session,emit): await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
-    async def stop(self,*args,reason="stopped"): pass
+    def __init__(self): self.calls=[];self.preview=None;self.fail=False;self.starts=[];self.stops=[]
+    async def start(self,session,emit, *, guard=None):
+        if guard is not None: guard()
+        self.starts.append(copy.deepcopy(session))
+        if self.fail and session.get('bundleReplacement'): raise ValueError('Load failed; original restored')
+        await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
+    async def stop(self,*args,reason="stopped"): self.stops.append((args, reason))
     async def close(self): pass
     async def control(self,sid,operation,args):
         self.calls.append((sid,operation,args))
         if operation=='bundle.preview':
             self.preview={'previewId':'token','bundle':args['bundle'],'fingerprint':'same','selection':None,'modelCompatible':True,'changes':{}}
             return self.preview
-        if operation=='bundle.switch':
-            if self.fail: raise ValueError('Load failed; original restored')
-            return {'bundle':args['bundle'],'configuration':{'plan':{}},'providers':{'providers':[]}}
+        if operation=='bundle.prepare':
+            return {'replacement': {'bundle': args['bundle'], 'fingerprint': 'same', 'selection': None, 'modelCompatible': True, 'resetModel': args.get('resetModel',False)}}
         if operation=='history.snapshot': return {'messages':[{'role':'user','content':'keep'}]}
         if operation=='configuration.inspect':return {'plan':{}}
         return {'providers':[]}
@@ -172,7 +153,7 @@ async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path):
         await app.dispatch('bundle.switch',args,command_id='switch-once');await settled(app)
         await app.dispatch('bundle.switch',args,command_id='switch-once');await settled(app)
         assert app._session()['bundle']=='work'
-        assert len([row for row in runtime.calls if row[1]=='bundle.switch'])==2
+        assert len([row for row in runtime.calls if row[1]=='bundle.prepare'])==2
         assert app._session()['messages']==[{'role':'user','text':'keep'}]
         app._session()['status']='working'
         await app.dispatch('bundle.preview',{'sessionId':sid,'bundle':'anchors'})
@@ -202,12 +183,13 @@ async def test_agent_fork_is_independent_and_duplicate_does_not_repeat(tmp_path,
     finally: await app.close()
 
 
-async def test_generic_runtime_action_cannot_bypass_root_switch_policy(tmp_path):
+@pytest.mark.parametrize('operation', ['bundle.switch', 'bundle.prepare'])
+async def test_generic_runtime_action_cannot_bypass_root_switch_policy(tmp_path, operation):
     runtime=Runtime();app=AppService(tmp_path,runtime=runtime,workspace=tmp_path);app.management=Management(app)
     try:
         await app.dispatch('session.create',{})
         sid=app._session()['id']
-        await app.dispatch('runtime.control',{'sessionId':sid,'operation':'bundle.switch','args':{'bundle':'work'}})
+        await app.dispatch('runtime.control',{'sessionId':sid,'operation':operation,'args':{'bundle':'work'}})
         await settled(app)
         assert app.state['actionStatus']['runtime.control']['phase']=='error'
         assert not runtime.calls
@@ -221,7 +203,7 @@ async def test_unavailable_model_requires_explicit_reset_before_any_mutation(tmp
     monkeypatch.setattr('amplifier_web.bundle_selection.inspect_bundle',inspect)
     worker=SimpleNamespace(controls=SimpleNamespace(require_idle=lambda:None),workspace=tmp_path,
                            bundle_preview={**inspected,'previewId':'token'})
-    result=await switch(worker,{'bundle':'work'})
+    result=await prepare_switch(worker,{'bundle':'work'})
     assert result['requiresModelChoice'] and not result['preview']['modelCompatible']
     assert worker.bundle_preview['previewId']==result['preview']['previewId']
     assert store.load('source')[0]==messages
@@ -231,7 +213,7 @@ async def test_unavailable_model_requires_explicit_reset_before_any_mutation(tmp
 async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(tmp_path):
     class ModelRuntime(Runtime):
         async def control(self,sid,operation,args):
-            if operation=='bundle.switch' and not args.get('resetModel'):
+            if operation=='bundle.prepare' and not args.get('resetModel'):
                 self.calls.append((sid,operation,args))
                 return {'requiresModelChoice':True,'preview':{'bundle':'work','previewId':'model-choice','modelCompatible':False}}
             return await super().control(sid,operation,args)
@@ -263,7 +245,7 @@ async def test_stale_reviewed_preview_rejected_before_checkpoint(tmp_path,monkey
     worker=SimpleNamespace(controls=SimpleNamespace(require_idle=lambda:None),workspace=tmp_path,
                            bundle_preview={**checked,'fingerprint':'old','previewId':'token'})
     with pytest.raises(ValueError,match='Preview it again'):
-        await switch(worker,{'bundle':'work','previewId':'token'})
+        await prepare_switch(worker,{'bundle':'work','previewId':'token'})
 
 
 def test_resolved_root_is_one_use_and_rejects_changed_settings(tmp_path):
@@ -313,7 +295,8 @@ async def test_inspected_bundle_binds_effective_execution_checkout(tmp_path, mon
 async def test_unavailable_bundle_can_be_previewed_and_replaced_without_starting_it(tmp_path, monkeypatch, compatible):
     runtime = Runtime()
     starts = []
-    async def start(session, emit):
+    async def start(session, emit, *, guard=None):
+        if guard is not None: guard()
         starts.append(copy.deepcopy(session))
         assert session['bundle'] == 'work'
         assert session['bundleReplacement']['bundle'] == 'work'
@@ -389,3 +372,121 @@ async def test_replacement_resolves_characteristics_without_loading_saved_root(t
     journal.commit()
     assert store.load('source')[1]['bundle_name'] == 'new-root'
     assert loaded and set(loaded) == {'new-root'}
+
+
+@pytest.mark.parametrize('interruption', ['after-prepare', 'during-stop'])
+async def test_stopped_conversation_is_not_restarted_by_bundle_switch(tmp_path, interruption):
+    from amplifier_web.bundle_actions import perform
+    runtime = Runtime(); app = AppService(tmp_path, runtime=runtime, workspace=tmp_path)
+    app.management = Management(app)
+    source = app._new_session({'bundle':'anchors'}); app.state['sessions'].append(source)
+    control, stop = runtime.control, runtime.stop
+    async def controlled(sid, operation, args):
+        result = await control(sid, operation, args)
+        if operation == 'bundle.prepare' and interruption == 'after-prepare':
+            source['interruptionRevision'] = 1
+        return result
+    async def stopped(*args, **kwargs):
+        await stop(*args, **kwargs)
+        if interruption == 'during-stop': source['interruptionRevision'] = 1
+    runtime.control, runtime.stop = controlled, stopped
+    try:
+        with pytest.raises(ValueError, match='stopped before changing bundles'):
+            await perform(app.management, 'bundle.switch', {'sessionId':source['id'],'bundle':'work'})
+        assert len(runtime.starts)==1 and not runtime.starts[0].get('bundleReplacement')
+        assert source['bundle']=='anchors' and not source['configurationBusy']
+    finally: await app.close()
+
+
+def test_real_bundle_switch_isolates_module_revisions_and_preserves_history(tmp_path):
+    import os
+    import subprocess
+    import sys
+    python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
+    if not python:
+        pytest.skip('Set UNIFIED_RUNTIME_PYTHON for the owned Core/Foundation bundle-switch integration')
+    result = subprocess.run([sys.executable, str(Path(__file__).parent/'fixtures/bundle_switch_probe.py'), str(tmp_path/'probe')],
+        capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"fresh_worker_per_revision": true' in result.stdout
+    assert '"model_calls": 0' in result.stdout
+
+
+@pytest.mark.parametrize('revocation', ['after-prepare', 'during-stop'])
+async def test_revoked_bundle_authority_cannot_restart_worker(tmp_path, monkeypatch, revocation):
+    from amplifier_web.bundle_actions import perform
+    revoked = False
+    def check():
+        if revoked: raise ValueError('Configuration authority revoked')
+    monkeypatch.setattr('amplifier_web.configuration_authority.check_current', check)
+    runtime = Runtime(); app = AppService(tmp_path, runtime=runtime, workspace=tmp_path)
+    app.management = Management(app)
+    source = app._new_session({'bundle':'anchors'}); app.state['sessions'].append(source)
+    control, stop = runtime.control, runtime.stop
+    async def controlled(sid, operation, args):
+        nonlocal revoked
+        result = await control(sid, operation, args)
+        if operation == 'bundle.prepare' and revocation == 'after-prepare': revoked = True
+        return result
+    async def stopped(*args, **kwargs):
+        nonlocal revoked
+        await stop(*args, **kwargs)
+        if revocation == 'during-stop': revoked = True
+    runtime.control, runtime.stop = controlled, stopped
+    try:
+        with pytest.raises(ValueError, match='authority revoked'):
+            await perform(app.management, 'bundle.switch', {'sessionId':source['id'],'bundle':'work'})
+        assert len(runtime.starts)==1 and not runtime.starts[0].get('bundleReplacement')
+        assert source['bundle']=='anchors' and not source['configurationBusy']
+    finally: await app.close()
+
+
+async def test_becoming_busy_during_bundle_resolution_cannot_checkpoint(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    busy = False
+    def idle():
+        if busy: raise ValueError('Current turn is busy')
+    async def inspect(*args):
+        nonlocal busy
+        busy = True
+        return {'bundle':'work','fingerprint':'same','selection':None,'modelCompatible':True}, object()
+    monkeypatch.setattr('amplifier_web.bundle_selection.inspect_bundle', inspect)
+    checkpoint = AsyncMock()
+    worker = SimpleNamespace(controls=SimpleNamespace(require_idle=idle, checkpoint=checkpoint), workspace=tmp_path)
+    with pytest.raises(ValueError, match='busy'):
+        await prepare_switch(worker, {'bundle':'work'})
+    checkpoint.assert_not_awaited()
+
+
+@pytest.mark.parametrize('boundary', ['history', 'service-lock'])
+async def test_restart_guard_rechecks_after_history_and_service_lock_waits(tmp_path, boundary):
+    runtime = Runtime(); app = AppService(tmp_path, runtime=runtime, workspace=tmp_path)
+    management = Management(app)
+    source = app._new_session({'bundle': 'anchors'})
+    source.update(historyManaged=True, historyLoaded=False)
+    app.state['sessions'].append(source)
+    entered, release = asyncio.Event(), asyncio.Event()
+    revoked = False
+    async def load(_):
+        entered.set()
+        if boundary == 'history': await release.wait()
+    app.history.ensure_loaded = load
+    def guard():
+        if revoked: raise ValueError('Restart no longer authorized')
+    if boundary == 'service-lock': await app.lock.acquire()
+    task = asyncio.create_task(management.ensure_runtime(copy.deepcopy(source),
+        bundle_replacement={'bundle':'work'}, restart_guard=guard))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        revoked = True
+        if boundary == 'history': release.set()
+        else: app.lock.release()
+        with pytest.raises(ValueError, match='no longer authorized'):
+            await asyncio.wait_for(task, 2)
+        assert not runtime.starts
+        assert source['historyManaged'] and source['bundle'] == 'anchors'
+    finally:
+        release.set()
+        if app.lock.locked(): app.lock.release()
+        await asyncio.gather(task, return_exceptions=True)
+        await app.close()

@@ -32,7 +32,7 @@ _BOOTSTRAP = """
 <ol>
   <li><strong>Before using this HTTPS address in a browser</strong>, on the trusted host that already owns the CA, export its existing public certificate: <code>amplifier-unified setup-tls export &gt; amplifier-unified-ca.crt</code>.</li>
   <li>Transfer that file over verified SSH or a local trusted path. For example, after verifying the SSH host, use <code>scp &lt;trusted-host&gt;:/secure/path/amplifier-unified-ca.crt .</code>. Do not obtain the first copy from this page.</li>
-  <li>On the device, run <code>openssl x509 -in amplifier-unified-ca.crt -noout -fingerprint -sha256</code> and compare the result character-for-character with <code>amplifier-unified doctor</code> on the trusted host.</li>
+  <li>On the device, run <code>openssl x509 -in amplifier-unified-ca.crt -noout -fingerprint -sha256</code> and compare the result character-for-character with <code>amplifier-unified setup-tls status</code> on the trusted host.</li>
 </ol>
 <p class="warning">The fingerprint displayed here is not independent proof. HSTS has no HTTP fallback: do not disable HSTS, accept a TLS warning, or use a browser workaround to bootstrap trust.</p>
 <p class="note">Managed devices may require their approved administrator path. Do not bypass that policy.</p>

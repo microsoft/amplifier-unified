@@ -1,4 +1,4 @@
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -19,7 +19,17 @@ try{
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base);
  const turn=page.locator('[data-group-id="inspect@long-answer"]');
- await turn.waitFor();for(const group of await page.locator('button.a-execution-turn-line').all())await group.click();
+ // Wait for canonical groups before clicking; positional locators can retarget as history arrives.
+ await expect.poll(async()=>{
+  const value=await page.locator('.a-messages').getAttribute('data-work-projection');
+  return value?JSON.parse(value):null;
+ }).toMatchObject({status:'ready',current:true,receipt:{scope:'recent-events'}});
+ for(const id of ['inspect@question','inspect@long-answer']){
+  const group=page.locator(`[data-group-id="${id}"] > button.a-execution-turn-line`);
+  await group.waitFor();
+  if(await group.getAttribute('aria-expanded')==='false')await group.click();
+  await expect(group).toHaveAttribute('aria-expanded','true');
+ }
  const action=id=>turn.locator(`[data-node-id$=":${id}"]`),open=async id=>{const row=action(id);await row.waitFor();const button=row.locator(':scope > button.a-execution-action-line');if(await button.getAttribute('aria-expanded')==='false')await button.click();return row};
  const patch=await open('patch');await patch.locator('.a-execution-diff').waitFor();
  assert.equal(await patch.locator('.a-execution-diff-row.add').count(),2);assert.equal(await patch.locator('.a-execution-diff-row.remove').count(),1);

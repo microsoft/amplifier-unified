@@ -20,7 +20,13 @@ async def perform(management, action, args):
         current['configurationBusy'] = True
         current['bundleChange'] = {'phase': 'working', 'action': action, 'bundle': args['bundle']}
         source = copy.deepcopy(current)
+        interruption_revision = current.get('interruptionRevision', 0)
         app._publish_changes(sessions={sid})
+    def restart_guard():
+        check_current()
+        if app._session(sid).get('interruptionRevision', 0) != interruption_revision:
+            raise ValueError('The conversation was stopped before changing bundles. It was not restarted.')
+
     try:
         recovering = (source.get('errorType') == 'RuntimeStartupError'
                       or source.get('failure', {}).get('category') == 'worker_startup')
@@ -41,26 +47,39 @@ async def perform(management, action, args):
                 if not checked['modelCompatible'] and not args.get('resetModel'):
                     raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
                 replacement = {**checked, 'resetModel': args.get('resetModel', False)}
-                check_current()
-                await management.ensure_runtime(source, bundle_replacement=replacement)
+                restart_guard()
+                await management.ensure_runtime(source, bundle_replacement=replacement, restart_guard=restart_guard)
         else:
-            await management.ensure_runtime(source)
+            await management.ensure_runtime(source, restart_guard=restart_guard)
         if action == 'bundle.preview':
             result = checked if recovering else await app.runtime.control(sid, action, {'bundle': args['bundle']})
             async with app.lock:
                 app._session(sid)['bundlePreview'] = result
         elif action == 'bundle.switch':
-            if replacement is not None:
-                result = {'bundle': args['bundle'], 'historyPreserved': True,
-                    'configuration': await app.runtime.control(sid, 'configuration.inspect', {}),
-                    'providers': await app.runtime.control(sid, 'configuration.providers', {})}
-            else:
+            if replacement is None:
                 check_current()
-                result = await app.runtime.control(sid, action, args)
-            if result.get('requiresModelChoice'):
-                async with app.lock:
-                    app._session(sid)['bundlePreview'] = result['preview']
-                raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
+                prepared = await app.runtime.control(sid, 'bundle.prepare', args)
+                if prepared.get('requiresModelChoice'):
+                    async with app.lock:
+                        app._session(sid)['bundlePreview'] = prepared['preview']
+                    raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
+                replacement = prepared['replacement']
+                restart_guard()
+                await app.runtime.stop(sid, reason='configuration')
+                restart_guard()
+                try:
+                    await management.ensure_runtime(copy.deepcopy(source), bundle_replacement=replacement, restart_guard=restart_guard)
+                except Exception:
+                    # The candidate restores the journal before exiting. Confirm
+                    # its process is gone before restoring the previous worker;
+                    # never reuse candidate imports or replay a user input.
+                    await app.runtime.stop(sid, reason='configuration')
+                    restart_guard()
+                    await management.ensure_runtime(copy.deepcopy(source), restart_guard=restart_guard)
+                    raise
+            result = {'bundle': args['bundle'], 'historyPreserved': True,
+                'configuration': await app.runtime.control(sid, 'configuration.inspect', {}),
+                'providers': await app.runtime.control(sid, 'configuration.providers', {})}
             async with app.lock:
                 current = app._session(sid)
                 current.update(bundle=result['bundle'], configuration=result['configuration'])

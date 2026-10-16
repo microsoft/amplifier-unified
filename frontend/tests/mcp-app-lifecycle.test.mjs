@@ -155,5 +155,46 @@ test('explicit reconnect uses the reviewed binding and retains the mounted frame
   assert.deepEqual(sent[0].args,{canvasId:'retained',expectedBindingRevision:'saved-binding'});
   assert.equal(mcpTestBridges.length,count);assert.equal(frame.src,src);assert.equal(frame.draft,'unsaved');
   assert.equal(component.root.findByProps({'data-phase':'ready'}).props.role,'status');
+  assert.equal(bridge.toolListChanges,1);assert.equal(bridge.resourceListChanges,1);
+  await act(async()=>component.root.findByProps({'aria-label':'Reconnect tool view'}).props.onClick());
+  assert.equal(bridge.toolListChanges,2,'A second explicit disconnected-to-ready recovery emits one new notification');
  }finally{await act(async()=>component.unmount())}
+});
+
+test('shared connection recovery notifies an initialized app once without a reload or grant change',async()=>{
+ const frame={contentWindow:{},draft:'unsaved'},canvas={id:'shared-recovery',open:true,mcp:{allowedTools:['read']}},sent=[];
+ let component,connectionKey='offline',availability={...available,status:'disconnected'};
+ globalThis.fetch=async path=>{assert.ok(path.endsWith('/status'));sent.push(path);return response(availability)};
+ const render=()=>React.createElement(McpAppViewer,{canvas,connectionKey,act:async()=>({})});
+ await act(async()=>{component=create(render(),{createNodeMock:node=>node.type==='iframe'?frame:null})});
+ const bridge=mcpTestBridges.at(-1),src=frame.src,count=mcpTestBridges.length;
+ try{
+  await act(async()=>bridge.oninitialized());
+  assert.equal(bridge.toolListChanges,undefined);
+  availability={...available};connectionKey='online';
+  await act(async()=>component.update(render()));
+  assert.equal(bridge.toolListChanges,1);assert.equal(bridge.resourceListChanges,1);
+  connectionKey='online-again';await act(async()=>component.update(render()));
+  assert.equal(bridge.toolListChanges,1,'Repeated ready status must not repeat startup reads');
+  assert.equal(bridge.resourceListChanges,1);
+  assert.equal(frame.src,src);assert.equal(frame.draft,'unsaved');assert.equal(mcpTestBridges.length,count);
+  assert.deepEqual(canvas.mcp.allowedTools,['read']);assert.equal(sent.length,3);
+  assert.deepEqual(bridge.args[2].serverTools,{listChanged:true});
+  assert.deepEqual(bridge.args[2].serverResources,{listChanged:true});
+ }finally{await act(async()=>component.unmount())}
+});
+
+test('historical and denied tool views explain disabled recovery and send no availability notification',async()=>{
+ for(const status of ['saved_version','contract_changed','account_review_required','configuration_changed']){
+  globalThis.fetch=async()=>response({...available,status,canReconnect:false,message:'Review the saved view before using live features.'});
+  let component;
+  await act(async()=>{component=create(React.createElement(McpAppViewer,{canvas:{id:status,open:true,readOnlyVersion:status==='saved_version'},act:async()=>({})}),{createNodeMock:node=>node.type==='iframe'?{contentWindow:{}}:null})});
+  const bridge=mcpTestBridges.at(-1);
+  try{
+   await act(async()=>bridge.oninitialized());
+   const button=component.root.findByProps({'aria-label':'Reconnect tool view'});
+   assert.equal(button.props.disabled,true);assert.equal(button.props.title,'Review the saved view before using live features.');
+   assert.equal(bridge.toolListChanges,undefined);assert.equal(bridge.resourceListChanges,undefined);
+  }finally{await act(async()=>component.unmount())}
+ }
 });

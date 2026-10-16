@@ -59,7 +59,16 @@ export function McpAppViewer({canvas,act,connectionKey}){
  const frame=useRef(null),current=useRef(canvas),bridgeRef=useRef(null),hostContext=useRef(null),themeRef=useRef(),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
  const connection=useRef(null),booted=useRef(false),[recovery,setRecovery]=useState(null),[recovering,setRecovering]=useState(false);
  const renderReport=useRef(null),resetCatalog=useRef(null),refreshConnection=useRef(null),lastConnection=useRef(null);
- const rememberConnection=value=>{connection.current=value;setRecovery(value)};
+ const rememberConnection=value=>{
+  const previous=connection.current;connection.current=value;setRecovery(value);
+  if(booted.current&&previous&&previous.status!=='ready'&&value?.status==='ready'){
+   // The allowed lists become available again. Notify the existing app using
+   // SDK catalog notifications; never replay input/results or remount its draft.
+   resetCatalog.current?.();
+   const bridge=bridgeRef.current;
+   if(bridge)Promise.all([bridge.sendToolListChanged(),bridge.sendResourceListChanged()]).catch(error=>renderReport.current?.('error',error.message));
+  }
+ };
  const theme=useHostTheme(useMcpAppTheme());
  const visible=useMcpAppVisibility(canvas.open!==false&&!canvas.visibilityPending),visibleRef=useRef(visible);
  visibleRef.current=visible;
@@ -104,7 +113,7 @@ export function McpAppViewer({canvas,act,connectionKey}){
    if(availability.source!=='available'){report('error',availability.message);return}
    hostContext.current={theme:themeRef.current,[MCP_VISIBILITY]:visibleRef.current,displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language};
    bridge=new AppBridge(null,{name:'Amplifier Unified',version:'0.6.0'},
-    {serverTools:{},serverResources:{},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
+    {serverTools:{listChanged:true},serverResources:{listChanged:true},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
     {hostContext:hostContext.current});
    bridge.oncalltool=async params=>{
     const callAvailabilityRevision=availabilityRevision;
@@ -186,7 +195,7 @@ export function McpAppViewer({canvas,act,connectionKey}){
  return <div className="a-mcp-app-viewer" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
   <CanvasControl inline={status.phase==='error'}><div data-phase={status.phase} className={`a-mcp-status a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">
    {status.phase==='error'?<AlertCircle/>:status.phase==='ready'?<Check/>:<Loader className="a-progress-spinner"/>}<span>{status.text}</span>
-   <button type="button" className="a-icon" aria-label="Reconnect tool view" data-action="smartTools.reconnectView" disabled={recovering||recovery?.canReconnect===false} onClick={()=>reconnect()}><RefreshCw/></button>
+   <button type="button" className="a-icon" aria-label={recovering?'Reconnecting tool view…':'Reconnect tool view'} title={recovery?.canReconnect===false?recovery.message:'Reconnect without resetting unfinished inputs'} data-action="smartTools.reconnectView" disabled={recovering||recovery?.canReconnect===false} onClick={()=>reconnect()}><RefreshCw/></button>
    {status.phase==='error'&&recovery?.source==='available'&&<button type="button" className="a-link" style={{whiteSpace:'nowrap'}} title="Reloading resets unfinished inputs in this tool view" data-action="canvas.view" onClick={()=>act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}>Reload saved view</button>}
   </div></CanvasControl>
   {recovery?.review&&<div className="a-canvas-result" role="region" aria-label="Review saved tool connection"><p>This older view did not save its action schemas. Reconnecting keeps its saved document and existing action names. Review the current definitions before enabling them; no previous calls will run.</p><details><summary>Existing tool actions ({recovery.review.tools.length})</summary><pre>{JSON.stringify(recovery.review.tools,null,2)}</pre></details><button type="button" disabled={recovering} data-action="smartTools.reconnectView" onClick={()=>reconnect(recovery.review.fingerprint)}>Use reviewed actions in this tab</button></div>}
