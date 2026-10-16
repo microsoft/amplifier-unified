@@ -22,9 +22,11 @@ async def main():
     home = root/'app'
     os.environ.update(AMPLIFIER_HOME=str(root/'shared'), AMPLIFIER_WEB_HOME=str(home),
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'))
-    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+    from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
     settings = root/'shared/settings.yaml'; settings.parent.mkdir()
-    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': [IMAGEGEN_BEHAVIOR_URI]}}))
+    # Exercise revision isolation using only the local modules defined below.
+    # Ordinary defaults have their own installed-runtime acceptance coverage.
+    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
     provider = root/'provider/amplifier_module_provider_fixture'; provider.mkdir(parents=True)
     calls = root/'model-calls'
     provider.joinpath('__init__.py').write_text('''from pathlib import Path
