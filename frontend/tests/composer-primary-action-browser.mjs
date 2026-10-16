@@ -1,13 +1,14 @@
 import {clearComposer} from './composer-test-helpers.mjs';
 // Packaged application and real action dispatch, synthetic media/runtime only.
 import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/voice_visual_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser;
+let browser,failure;
 const output=process.env.AMPLIFIER_SCREENSHOT_DIR||'/tmp/amplifier-composer-primary-action';
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data.url)}}catch{}})});
@@ -62,4 +63,25 @@ try{
   await clearComposer(composer);await activity('working');await matches('Stop response','conversation.stop','x');assert.deepEqual(await primary.boundingBox(),box);await expect(primary).toBeInViewport();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:output+`/cancel-${width}.png`});
  }
  assert.deepEqual(errors,[]);assert.equal(calls.filter(row=>row.action==='conversation.send').length,1);console.log('Composer primary action passed: voice/send/cancel, connecting cancellation, text/attachments during voice, agent drafts, work versus call cancellation, keyboard, permission recovery, stable desktop/mobile geometry. Synthetic media only; no physical audio claim.');
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+}catch(error){failure=error;throw error}
+finally{
+ const cleanupErrors=[];
+ try{await browser?.close()}catch(error){cleanupErrors.push(error)}
+ try{
+  if(fixture.exitCode===null&&fixture.signalCode===null){
+   const exited=once(fixture,'exit');let timer;
+   fixture.kill('SIGTERM');
+   try{
+    await Promise.race([exited,new Promise((_,reject)=>{
+     timer=setTimeout(()=>{
+      fixture.kill('SIGKILL');
+      reject(Error('Composer fixture did not finish graceful shutdown within 5 seconds'));
+     },5000);
+    })]);
+   }finally{clearTimeout(timer)}
+  }
+  assert.equal(fixture.exitCode,0,'Composer fixture must finish its cleanup');
+  assert.equal(fixture.signalCode,null,'Composer fixture must exit normally');
+ }catch(error){cleanupErrors.push(error)}
+ if(cleanupErrors.length)throw new AggregateError([...(failure?[failure]:[]),...cleanupErrors],'Composer cleanup failed');
+}
