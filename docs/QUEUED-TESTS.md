@@ -26,10 +26,13 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   into every queue row or workspace catalog.
 - `workspace.tests.result` pages that exact recorded output after cleanup,
   preserving the exit code and any capture-limit indicator.
-- Cancellation before admission starts no command. An already admitted command
-  may run until its specified timeout, at most five minutes. The host then stops
-  its exact environment and preserves evidence. Cancelling a model alone does
-  not retroactively undo a command.
+- Cancellation before admission starts no command. New admitted checks run in a
+  durable guest supervisor, independent of host request/connection lifetime.
+  Cancellation requests termination of the exact command group; the supervisor
+  escalates from terminate to kill after two seconds and records the actual
+  exit before cleanup. Cancelling a model alone does not undo an admitted check.
+  Cancellation during dependency preparation requests the exact owned builder
+  to stop, without waiting for the full preparation timeout.
 - Stop, moved placement, assignment cancellation, revoked capability and changed
   backend configuration invalidate waiting admission. Cleanup of an admitted
   owned check is part of the original request and can still stop/export/remove
@@ -38,6 +41,13 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   operation receipts to recover known results, never reruns a test to discover
   its result, and resumes only authorized cleanup. Unknown cleanup remains
   inspectable; no age-based deletion or global prune occurs.
+- New checks retain a guest job identity bound to the root, launch, environment,
+  command hash and guest deadline. Exclusive admission precedes process creation.
+  Restart during a check reattaches observation; a lost start response never
+  calls start again. Missing admission, an incomplete launch, a dead supervisor,
+  or changed owner becomes unknown and preserves the environment. Automatic
+  stop/export/remove requires a recorded terminal guest result. Old queue
+  receipts retain their original bounded-execute recovery behavior.
 - A host admits FIFO among its eligible roots. One physical capacity observation
   is shared by a batch; unavailable backends back off to at most one observation
   per minute. Local cleanup wakes the queue immediately. Physical backend
@@ -64,8 +74,31 @@ deletes someone else's environment to gain room.
 The legacy Incus backend needs the separately qualified adapter and launcher.
 An older CLI invocation does not become a queued request automatically. Updated
 agent guidance must prefer `workspace.tests.submit` for bounded checks. Existing
-manual environment controls remain available for longer interactive/browser
-sessions, whose caller owns lifecycle and cleanup.
+manual environment controls remain available for interactive sessions, whose
+caller owns lifecycle and cleanup. The original direct execute action remains
+bounded to five minutes. Prepared Python and browser queue profiles default to
+twenty minutes and accept up to thirty minutes; the small standard-library
+profile remains limited to five minutes. The guest enforces this deadline while
+host observations remain short, so longer work does not hold one host request
+open for the duration.
+
+## Guest result ownership
+
+The supervisor's control directory is root-owned and separate from writable
+source/artifacts. Commands run as uid/gid 65534 with no supplementary groups.
+Docker retains a read-only root, no-new-privileges, no host mounts and no exposed
+ports; only CHOWN, SETUID, SETGID and KILL capabilities are available to its root
+supervisor. Incus remains unprivileged and offline. Prepared dependencies must
+be readable by the workload user; writable project dependencies are initialized
+inside the owned source snapshot.
+
+Output is drained continuously with an 8 KiB limit per stream. Exact bounded
+output and terminal status are retained in the operation journal before cleanup;
+queue lists expose only compact job progress. Linux boot identity and process
+start ticks distinguish the supervisor from a reused PID. The command group is
+terminated before terminal publication; final owned-environment cleanup also
+contains processes that intentionally detached from that group. This provides
+bounded check evidence, not a security verdict about the tested source.
 
 ## Qualification boundaries
 

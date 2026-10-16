@@ -4781,6 +4781,8 @@ class AppService:
         await self.shell.resources.close()
         self.collaboration.close()
         await self.test_queue.close()
+        from .test_environment_setup import close as close_test_setup
+        await close_test_setup(self)
         await self.performance_diagnostics.close()
         if getattr(self, "profiling_host", None):
             await self.profiling_host.close()
