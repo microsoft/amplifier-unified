@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 import inspect
 import json
 import os
@@ -486,7 +487,9 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
 
 async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
     """Snapshots are complete plans; ordinary roots inherit host composition."""
+    from .model_selection import explicit_routing_settings, routing_hooks
     snapshot = is_snapshot(loaded)
+    automatic_routing = False
     root_identity = {key: getattr(loaded, key) for key in ('name', 'version') if hasattr(loaded, key)}
     components = required_components()
     if not snapshot:
@@ -496,6 +499,11 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
             default_behavior_uri, resolve_builtin_behavior,
         )
         from ..session_files import capture_dir, project_slug
+        # App lists may contain saved defaults, but without explicit provenance
+        # we cannot distinguish those from a deliberate selection. Stay strict.
+        explicit_routing = bool(routing_hooks(loaded.to_mount_plan())) or any(
+            default_behavior_uri(uri) == ROUTING_BEHAVIOR_URI
+            for uri in config.settings.get("bundle", {}).get("app", []))
         context_repository = 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence'
         # The capture fallback must share an explicit root sibling's revision,
         # even when no capability default registers the root's sources. Seed
@@ -509,6 +517,13 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
         for behavior in config.app_bundles:
             selected, _ = await load_configured_bundle(registry, config, resolve_builtin_behavior(behavior))
             canonical = default_behavior_uri(behavior)
+            if routing_hooks(selected.to_mount_plan()):
+                if (behavior == ROUTING_BEHAVIOR_URI and not explicit_routing
+                        and config.resolve_source(behavior) is None):
+                    automatic_routing = True
+                else:
+                    explicit_routing = True
+                    automatic_routing = False
             if canonical == IMAGEGEN_BEHAVIOR_URI:
                 loaded, selected = imagegen_defaults(loaded, selected)
             elif canonical in {COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
@@ -564,6 +579,13 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
     for key in (("providers", "tools", "hooks", "session", "agents") if snapshot else ("session", "agents")):
         setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
+    # This Python attribute is host provenance, not bundle/configuration data.
+    # Recomputed from raw intent on root resume; never imported from snapshots.
+    hooks = routing_hooks(loaded.to_mount_plan())
+    loaded._host_automatic_routing = (
+        automatic_routing and len(hooks) == 1
+        and hooks[0].get("config", {}).get("default_matrix") == "balanced"
+        and not explicit_routing_settings(config.settings, hooks))
     return loaded
 
 
@@ -663,6 +685,10 @@ class ResolvedRoot:
 def apply_runtime_plan(loaded, edited, config, execution_workspace):
     from ..runtime_controls import validate_plan
     validate_plan(edited)
+    if "hooks" in edited:
+        # Even a same-valued balanced selection is explicit. An effective saved
+        # plan has no authority to restore the automatic-origin exception.
+        loaded._host_automatic_routing = False
     from ..provider_environment import rebind_provider_credentials
     edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan())
     loaded._host_provider_credentials_bound = bound
@@ -868,7 +894,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     catalog_keys=mounted_catalog_keys(config.home,config.workspace,prepared.mount_plan.get('providers',[]),catalog_sources)
     try:
         from .model_selection import prepare_default_routing
-        routing_policy = ({"before_initialize": prepare_default_routing}
+        routing_policy = ({"before_initialize": partial(
+            prepare_default_routing, automatic=getattr(loaded, "_host_automatic_routing", False))}
                           if not snapshot and any(row.get("module") == "hooks-routing" for row in loaded.hooks) else {})
         session = await prepared.create_session(session_id=runtime.session_id,
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,

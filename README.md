@@ -134,8 +134,13 @@ restrictions.
 Context Intelligence forwarding requires explicit destination configuration;
 ambient server credentials alone do not enable it. Explicit routing matrices,
 agent provider choices, and per-delegation model pins take precedence over
-default role routing. Unavailable requested child routes fail visibly rather
-than silently substituting the session default.
+default role routing. When only automatically added routing has no candidate,
+the child inherits the conversation's selected provider, model, and effort
+(retaining that snapshot on resume). If there is no selected model to inherit,
+the delegation fails visibly. Explicit matrices, including an explicitly chosen
+`balanced` matrix or a user-authored override, remain strict, as do unavailable
+provider/model pins and resolver errors. A saved explicit app-behavior list is
+treated as explicit routing when its original intent is ambiguous.
 
 For ordinary roots already including the upstream logging behavior, its ambient
 URL/key placeholders alone no longer opt into forwarding; configure a destination

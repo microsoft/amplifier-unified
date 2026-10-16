@@ -337,3 +337,374 @@ async def test_existing_root_ambient_placeholders_are_not_explicit_forwarding(tm
     assert ci['destinations'] == {}
     assert ci['context_intelligence_server_url'] == ''
     assert ci['context_intelligence_api_key'] == ''
+
+
+@pytest.mark.parametrize('intent', [
+    'automatic', 'root-balanced', 'root-other', 'app-default', 'app-pin', 'other-app',
+    'settings-balanced', 'settings-other', 'settings-overrides', 'module-config',
+    'scoped-config', 'scoped-source', 'snapshot',
+])
+async def test_fallback_origin_is_decided_before_composition(tmp_path, monkeypatch, intent):
+    from amplifier_web.host.model_selection import prepare_default_routing, child_preferences, ProviderSelectionError
+    settings = {'bundle': {'app': []},
+                'web_bundles': {'excluded': [uri for uri in DEFAULT_BEHAVIORS if uri != ROUTING_BEHAVIOR_URI]}}
+    root = Bundle(name='chosen')
+    if intent.startswith('root-'):
+        root.hooks = [{'module': 'hooks-routing', 'config': {
+            'default_matrix': 'balanced' if intent == 'root-balanced' else 'private'}}]
+    elif intent == 'app-default':
+        settings['bundle']['app'] = [ROUTING_BEHAVIOR_URI]
+    elif intent == 'app-pin':
+        settings['bundle']['app'] = [ROUTING_BEHAVIOR_URI.replace('@main', '@chosen')]
+    elif intent == 'other-app':
+        settings['bundle']['app'] = ['explicit-routing']
+    elif intent.startswith('settings-'):
+        settings['routing'] = ({'overrides': {'coding': {'candidates': []}}}
+                               if intent == 'settings-overrides' else
+                               {'matrix': 'balanced' if intent == 'settings-balanced' else 'private'})
+    elif intent == 'module-config':
+        settings['config'] = {'hooks': [{'module': 'hooks-routing', 'config': {'default_matrix': 'balanced'}}]}
+    elif intent == 'scoped-config':
+        settings['overrides'] = {'hooks-routing': {'config': {'default_matrix': 'balanced'}}}
+    elif intent == 'scoped-source':
+        settings['sources'] = {'modules': {'hooks-routing': 'chosen-source'}}
+    elif intent == 'snapshot':
+        root = Bundle(name='saved', version=SNAPSHOT_VERSION,
+                      hooks=addition(ROUTING_BEHAVIOR_URI).hooks)
+    async def load(registry, config, reference):
+        return addition(ROUTING_BEHAVIOR_URI), reference
+    monkeypatch.setattr('amplifier_web.host.session.load_configured_bundle', load)
+    original = copy.deepcopy(settings)
+    config = HostConfig(tmp_path / 'app', tmp_path, settings, tmp_path / 'registry')
+    result = await compose_configured_bundle(None, root, config)
+    assert result._host_automatic_routing is (intent == 'automatic')
+    assert settings == original
+    h = routing_fixture()
+    h.coordinator.config = result.to_mount_plan()
+    await prepare_default_routing(h.parent, automatic=result._host_automatic_routing)
+    # Same resolver name/content does not make an explicit balanced choice auto.
+    if intent == 'automatic':
+        assert await child_preferences(h.coordinator, {'model_role': 'coding'}, []) == []
+    else:
+        with pytest.raises(ProviderSelectionError, match='no available candidates'):
+            await child_preferences(h.coordinator, {'model_role': 'coding'}, [])
+
+
+def routing_fixture(*, selection=True):
+    """Policy unit fixture only; no Core mount, provider or model execution."""
+    from unittest.mock import AsyncMock
+    choice = {'instance': 'private-service', 'model': 'conversation-v1', 'effort': 'high'}
+    loop = SimpleNamespace(config={'inherit_effective_model': True},
+                           root_provider=SimpleNamespace(selection=choice) if selection else None)
+    resolver = SimpleNamespace(name='balanced', matrix_source='bundle', resolve=AsyncMock(return_value=[]))
+    capabilities = {'model_role_resolver': resolver}
+    mounts = {'orchestrator': loop, 'providers': {'private-service': object()}, 'tools': {}}
+    coordinator = SimpleNamespace(session_id='parent', config={'hooks': addition(ROUTING_BEHAVIOR_URI).hooks},
+                                  get=mounts.get, get_capability=capabilities.get,
+                                  register_capability=capabilities.__setitem__)
+    return SimpleNamespace(parent=SimpleNamespace(session_id='parent', coordinator=coordinator),
+                           coordinator=coordinator, loop=loop, choice=choice, mounts=mounts,
+                           capabilities=capabilities, resolver=resolver)
+
+
+async def test_unmatched_automatic_route_inherits_exact_conversation_snapshot():
+    from amplifier_web.host.model_selection import (
+        prepare_default_routing, child_preferences, inherited_selection, child_routing,
+    )
+    h = routing_fixture()
+    await prepare_default_routing(h.parent, automatic=True)
+    overlay = {'model_role': 'coding'}
+    preferences = await child_preferences(h.coordinator, overlay, [])
+    assert preferences == []
+    selection = inherited_selection(h.parent, overlay, preferences, default_fallback=True)
+    assert selection == h.choice and selection is not h.choice
+    assert child_routing(h.parent, overlay, preferences, selection)['selectionSource'] == 'inherited_conversation'
+    assert inherited_selection(h.parent, overlay, preferences) is None
+    assert h.resolver.resolve.await_args.args == ('coding',)
+    routed = [{'provider': 'supported', 'model': 'matrix-model'}]
+    h.resolver.resolve.return_value = routed
+    assert await child_preferences(h.coordinator, overlay, []) is routed
+    assert inherited_selection(h.parent, overlay, routed, default_fallback=True) is None
+
+
+@pytest.mark.parametrize('change', ['user-balanced', 'unknown-source', 'different-matrix', 'changed-hook',
+                                  'capability-overrides', 'overlay-hook', 'spoofed-marker', 'old-save', 'explicit-save'])
+async def test_automatic_exception_cannot_widen_explicit_or_unknown_routing(change):
+    from amplifier_web.host.model_selection import prepare_default_routing, child_preferences, ProviderSelectionError
+    h = routing_fixture()
+    await prepare_default_routing(h.parent, automatic=True)
+    overlay, saved = {'model_role': 'coding'}, None
+    if change in {'user-balanced', 'unknown-source'}:
+        h.resolver.matrix_source = 'user' if change == 'user-balanced' else None
+    elif change == 'different-matrix':
+        h.resolver.name = 'other'
+    elif change == 'changed-hook':
+        h.coordinator.config['hooks'][0]['config']['overrides'] = {'coding': {}}
+    elif change == 'capability-overrides':
+        h.capabilities['session.routing'] = {'overrides': {'coding': {}}}
+    elif change == 'overlay-hook':
+        overlay['hooks'] = addition(ROUTING_BEHAVIOR_URI).hooks
+    elif change == 'spoofed-marker':
+        marker = h.capabilities.pop('web.default_routing_fallback')
+        h.coordinator.config['web.default_routing_fallback'] = marker
+        overlay.update(automatic_default_routing=True, _host_automatic_routing=True)
+        saved = {'automatic_default_routing': True}
+    else:
+        saved = {} if change == 'old-save' else {'automatic_default_routing': False}
+    with pytest.raises(ProviderSelectionError, match='no available candidates'):
+        await child_preferences(h.coordinator, overlay, [], saved=saved)
+
+
+async def test_default_fallback_does_not_convert_resolver_failures_or_missing_resolver():
+    from amplifier_web.host.model_selection import prepare_default_routing, child_preferences, ProviderSelectionError
+    h = routing_fixture()
+    await prepare_default_routing(h.parent, automatic=True)
+    error = RuntimeError('resolver unavailable')
+    h.resolver.resolve.side_effect = error
+    with pytest.raises(RuntimeError) as raised:
+        await child_preferences(h.coordinator, {'model_role': 'coding'}, [])
+    assert raised.value is error
+    h.resolver.resolve.side_effect = None
+    h.resolver.resolve.return_value = None  # Malformed result is not an empty candidate list.
+    with pytest.raises(ProviderSelectionError, match='no available candidates'):
+        await child_preferences(h.coordinator, {'model_role': 'coding'}, [])
+    h.capabilities.pop('model_role_resolver')
+    with pytest.raises(ProviderSelectionError, match='no mounted resolver'):
+        await child_preferences(h.coordinator, {'model_role': 'coding'}, [])
+
+
+async def test_auto_fallback_never_replaces_explicit_preferences_or_provider_declarations():
+    from amplifier_web.host.model_selection import prepare_default_routing, child_preferences, inherited_selection
+    h = routing_fixture()
+    await prepare_default_routing(h.parent, automatic=True)
+    pin = [{'provider': 'not-mounted', 'model': 'explicit-pin'}]
+    agent_pin = [{'provider': 'other', 'model': 'agent-pin'}]
+    overlay = {'model_role': 'coding', 'provider_preferences': agent_pin}
+    assert await child_preferences(h.coordinator, overlay, pin) is pin
+    assert await child_preferences(h.coordinator, overlay, []) == agent_pin
+    assert inherited_selection(h.parent, overlay, pin, default_fallback=True) is None
+    overlay = {'model_role': 'coding', 'providers': [{'module': 'provider-specialist'}]}
+    assert await child_preferences(h.coordinator, overlay, []) == []
+    assert inherited_selection(h.parent, overlay, [], default_fallback=True) is None
+    h.resolver.resolve.assert_not_awaited()
+
+
+@pytest.mark.parametrize('selection', [None, {}, {'instance': 'private-service'}, {'model': 'model-only'}])
+async def test_no_selected_conversation_never_falls_back_to_provider_priority(selection):
+    from amplifier_web.host.model_selection import prepare_default_routing, child_preferences, inherited_selection, ProviderSelectionError
+    h = routing_fixture(selection=False)
+    h.loop.root_provider = SimpleNamespace(selection=selection)
+    await prepare_default_routing(h.parent, automatic=True)
+    overlay = {'model_role': 'coding'}
+    assert await child_preferences(h.coordinator, overlay, []) == []
+    with pytest.raises(ProviderSelectionError, match='no selected provider/model'):
+        inherited_selection(h.parent, overlay, [], default_fallback=True)
+
+
+async def test_saved_fallback_retains_selection_but_never_grants_current_parent_authority():
+    from amplifier_web.host.model_selection import prepare_default_routing, child_preferences, inherited_selection, ProviderSelectionError
+    h = routing_fixture()
+    await prepare_default_routing(h.parent, automatic=True)
+    overlay = {'model_role': 'coding'}
+    saved = {'automatic_default_routing': True, 'preferences_source': 'default_fallback',
+             'agent_overlay': overlay, 'effective_selection': copy.deepcopy(h.choice)}
+    h.loop.root_provider.selection = {**h.choice, 'model': 'conversation-v2', 'effort': 'low'}
+    h.resolver.resolve.return_value = [{'provider': 'new-route', 'model': 'different'}]
+    assert await child_preferences(h.coordinator, overlay, [], saved=saved) == []
+    assert inherited_selection(h.parent, overlay, [], saved, default_fallback=True) == saved['effective_selection']
+    h.resolver.resolve.assert_not_awaited()
+    h.capabilities.pop('web.default_routing_fallback')
+    h.resolver.resolve.return_value = []
+    with pytest.raises(ProviderSelectionError, match='no available candidates'):
+        await child_preferences(h.coordinator, overlay, [], saved=saved)
+
+
+async def test_explicit_effective_hook_plan_cannot_restore_automatic_origin(tmp_path):
+    from amplifier_web.host.session import apply_runtime_plan
+    config = HostConfig(tmp_path / 'app', tmp_path, {}, tmp_path / 'registry')
+    loaded = addition(ROUTING_BEHAVIOR_URI)
+    loaded.session = {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}
+    loaded.providers = [{'module': 'provider-test', 'config': {'default_model': 'test-model'}}]
+    loaded._host_automatic_routing = True
+    result = apply_runtime_plan(loaded, loaded.to_mount_plan(), config, tmp_path)
+    assert result.hooks[0]['config']['default_matrix'] == 'balanced'
+    assert result._host_automatic_routing is False
+
+
+@pytest.fixture
+def fallback_lifecycle(tmp_path, monkeypatch):
+    """Exercise host lifecycle wiring with stub mounts, not a real Core runtime."""
+    import asyncio
+    from dataclasses import dataclass
+    from unittest.mock import AsyncMock, Mock
+    from amplifier_web.host.children import Children
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.host.model_selection import automatic_default_routing
+    h = routing_fixture()
+    h.capabilities['session.working_dir'] = str(tmp_path)
+    h.coordinator.config.update(
+        providers=[{'module': 'provider-private-service', 'instance_id': 'private-service',
+                    'config': {'default_model': 'bundle-default'}}],
+        agents={'worker': {'model_role': 'coding'}})
+    h.observations = []
+    @dataclass
+    class Prepared:
+        mount_plan: dict
+        bundle: Bundle
+
+        async def create_session(self, **kwargs):
+            caps = {}
+            context = SimpleNamespace(get_messages=AsyncMock(return_value=[]), set_messages=AsyncMock())
+            mounts = {'context': context, 'providers': h.mounts['providers'], 'tools': {},
+                      'orchestrator': SimpleNamespace(config={'inherit_effective_model': True}, root_provider=None)}
+            coordinator = SimpleNamespace(config=copy.deepcopy(self.mount_plan), get=mounts.get,
+                get_capability=caps.get, register_capability=caps.__setitem__,
+                hooks=SimpleNamespace(register=Mock(return_value=Mock())))
+            async def execute(instruction):
+                h.observations.append({
+                    'selection': copy.deepcopy(mounts['orchestrator'].root_provider.selection),
+                    'automatic': automatic_default_routing(coordinator),
+                    'coordinator': coordinator,
+                })
+                return 'done'
+            child = SimpleNamespace(session_id=kwargs['session_id'], coordinator=coordinator,
+                                    execute=AsyncMock(side_effect=execute), cleanup=AsyncMock())
+            if kwargs.get('before_initialize'):
+                await kwargs['before_initialize'](child)
+            return child
+    h.store = SessionStore(tmp_path / 'sessions')
+    h.children = Children(SimpleNamespace(inbox=asyncio.Queue()), h.store, None)
+    h.children.prepared['parent'] = Prepared(
+        copy.deepcopy(h.coordinator.config), Bundle.from_dict(h.coordinator.config, base_path=tmp_path))
+    h.children.install = AsyncMock()
+    monkeypatch.setattr('amplifier_web.provider_recording.install_request_redaction', lambda *a, **kw: None)
+    monkeypatch.setattr('amplifier_web.context_continuity.install', lambda *a, **kw: None)
+    async def expand(coordinator, instruction, **kwargs):
+        return instruction
+    monkeypatch.setattr('amplifier_web.host.mentions.expand_input', expand)
+    return h
+
+
+async def test_host_fallback_propagates_and_resumes_exact_saved_selection(fallback_lifecycle):
+    from amplifier_web.host.model_selection import prepare_default_routing, child_preferences, ProviderSelectionError
+    h = fallback_lifecycle
+    await prepare_default_routing(h.parent, automatic=True)
+    result = await h.children.spawn('worker', 'first', h.parent, sub_session_id='fallback-child')
+    assert result['status'] == 'success'
+    original = copy.deepcopy(h.choice)
+    assert h.observations[-1]['selection'] == original
+    assert h.observations[-1]['automatic'] is True
+    metadata = h.store.load('fallback-child')[1]
+    assert metadata['automatic_default_routing'] is True
+    assert metadata['preferences_source'] == 'default_fallback'
+    assert metadata['effective_selection'] == original
+    assert metadata['provider_preferences'] == []
+    assert metadata['agent_overlay']['model_role'] == 'coding'
+    assert h.children.rows['fallback-child']['routing']['selectionSource'] == 'inherited_conversation'
+    # The child got its own host-created capability, usable by a nested spawn.
+    assert await child_preferences(h.observations[-1]['coordinator'], {'model_role': 'coding'}, []) == []
+    h.loop.root_provider.selection = {**original, 'model': 'conversation-v2', 'effort': 'low'}
+    h.resolver.resolve.return_value = [{'provider': 'new-route', 'model': 'new-model'}]
+    h.resolver.resolve.reset_mock()
+    await h.children.resume('fallback-child', 'second', h.parent)
+    assert h.observations[-1]['selection'] == original
+    assert h.observations[-1]['automatic'] is True
+    h.resolver.resolve.assert_not_awaited()
+    saved = h.store.load('fallback-child')
+    # A later explicit matrix cannot be widened by that old automatic receipt.
+    h.capabilities.pop('web.default_routing_fallback')
+    h.resolver.resolve.return_value = []
+    with pytest.raises(ProviderSelectionError, match='no available candidates'):
+        await h.children.resume('fallback-child', 'must fail', h.parent)
+    assert h.store.load('fallback-child') == saved
+    assert len(h.observations) == 2
+
+
+@pytest.mark.parametrize('automatic', [False, True])
+async def test_call_role_survives_delegate_empty_result_without_using_agent_role(fallback_lifecycle, automatic):
+    from amplifier_web.host.children import PersistentDelegate, _CALL_ROLE
+    from amplifier_web.host.model_selection import prepare_default_routing, ProviderSelectionError
+    h = fallback_lifecycle
+    await prepare_default_routing(h.parent, automatic=automatic)
+    class Original:
+        provider_selection_enabled = True
+        async def execute(self, supplied):
+            # Mimic the upstream seam: an unmatched call role reaches spawn
+            # with no preferences and without a model_role keyword.
+            return await h.children.spawn('worker', 'call role', h.parent, sub_session_id='call-child')
+    tool = PersistentDelegate(Original(), h.children, h.coordinator)
+    if automatic:
+        await tool.execute({'agent': 'worker', 'model_role': 'review'})
+        assert h.store.load('call-child')[1]['agent_overlay']['model_role'] == 'review'
+        assert h.observations[-1]['selection'] == h.choice
+    else:
+        with pytest.raises(ProviderSelectionError, match='no available candidates'):
+            await tool.execute({'agent': 'worker', 'model_role': 'review'})
+        assert not h.observations
+    assert h.resolver.resolve.await_args.args == ('review',)
+    assert _CALL_ROLE.get() is None
+
+
+async def test_new_resume_role_still_surfaces_resolver_errors_after_saved_fallback(fallback_lifecycle):
+    from amplifier_web.host.model_selection import prepare_default_routing
+    h = fallback_lifecycle
+    await prepare_default_routing(h.parent, automatic=True)
+    await h.children.spawn('worker', 'first', h.parent, sub_session_id='fallback-child')
+    saved = h.store.load('fallback-child')
+    error = RuntimeError('new role resolver failed')
+    h.resolver.resolve.side_effect = error
+    with pytest.raises(RuntimeError) as raised:
+        await h.children.resume('fallback-child', 'new role', h.parent, model_role='coding')
+    assert raised.value is error
+    assert h.store.load('fallback-child') == saved
+    assert len(h.observations) == 1
+
+
+async def test_unavailable_explicit_pin_stays_strict_with_automatic_routing(fallback_lifecycle, monkeypatch):
+    from amplifier_web.host.model_selection import prepare_default_routing, ProviderSelectionError
+    h = fallback_lifecycle
+    await prepare_default_routing(h.parent, automatic=True)
+    async def unresolved(plan, preferences, coordinator):
+        return plan
+    monkeypatch.setattr('amplifier_foundation.apply_provider_preferences_with_resolution', unresolved)
+    with pytest.raises(ProviderSelectionError, match='No requested child provider/model'):
+        await h.children.spawn('worker', 'must fail', h.parent,
+                               provider_preferences=[{'provider': 'not-mounted', 'model': 'explicit-pin'}])
+    h.resolver.resolve.assert_not_awaited()
+    assert not h.observations
+
+
+@pytest.mark.parametrize('saved_source,call_kind,expected_source,expected_model', [
+    ('explicit', 'role', 'explicit', 'saved-pin'),
+    ('role', 'role', 'role', 'new-route'),
+    ('role', 'cached', 'role', 'saved-pin'),
+    ('explicit', 'explicit', 'explicit', 'caller-pin'),
+])
+async def test_resume_keeps_explicit_vs_derived_preferences(fallback_lifecycle, saved_source, call_kind,
+                                                         expected_source, expected_model):
+    from unittest.mock import AsyncMock
+    from amplifier_web.host.children import PersistentDelegate
+    from amplifier_web.host.model_selection import prepare_default_routing
+    h = fallback_lifecycle
+    await prepare_default_routing(h.parent, automatic=True)
+    saved_pin = [{'provider': 'private-service', 'model': 'saved-pin'}]
+    h.store.save('saved-child', [], {'parent_id': 'parent', 'agent_name': 'worker',
+        'agent_overlay': {'model_role': 'coding'}, 'provider_preferences': saved_pin,
+        'preferences_source': saved_source, 'automatic_default_routing': True})
+    h.children._execute = AsyncMock(return_value={'status': 'success'})
+    class Original:
+        provider_selection_enabled = True
+        async def execute(self, supplied):
+            prefs = (supplied.get('provider_preferences')
+                     or ([{'provider': 'private-service', 'model': 'new-route'}] if call_kind == 'role' else saved_pin))
+            return await h.children.resume('saved-child', 'resume', h.parent,
+                provider_preferences=prefs, model_role=supplied.get('model_role', 'coding'))
+    supplied = {'session_id': 'saved-child'}
+    if call_kind == 'role':
+        supplied['model_role'] = 'review'
+    elif call_kind == 'explicit':
+        supplied['provider_preferences'] = [{'provider': 'private-service', 'model': 'caller-pin'}]
+    await PersistentDelegate(Original(), h.children, h.coordinator).execute(supplied)
+    kwargs = h.children._execute.await_args.kwargs
+    assert kwargs['provider_preferences'][0]['model'] == expected_model
+    assert kwargs['session_metadata']['preferences_source'] == expected_source

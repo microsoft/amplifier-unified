@@ -6,12 +6,14 @@ import contextvars
 import copy
 import inspect
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 import uuid
 
 from .model_selection import (
     inherited_selection, child_routing, child_preferences,
     pinned_delegate_input, prepare_default_routing, ProviderSelectionError,
+    automatic_default_routing, routing_hooks,
 )
 from .components import merge_modules, compose_bundles
 from amplifier_module_loop_live.host import HostAdapter
@@ -20,6 +22,7 @@ from amplifier_module_loop_live.scope import JOB_CALL
 
 _PERSISTENT = contextvars.ContextVar("amplifier_unified_persistent_child", default=False)
 _PREFERENCES_SOURCE = contextvars.ContextVar("amplifier_unified_preferences_source", default=None)
+_CALL_ROLE = contextvars.ContextVar("amplifier_unified_call_role", default=None)
 _SUBPROCESS_UNSUPPORTED = (
     "Subprocess child sessions are not supported by Unified yet. "
     "Use an in-process recipe step (omit spawn_mode: subprocess) or run this recipe in amplifier-app-cli."
@@ -301,8 +304,25 @@ class Children:
         retained_preferences = metadata.get("provider_preferences")
         if model_role is not None and metadata.get("preferences_source") == "role":
             retained_preferences = None
+        call_role = _CALL_ROLE.get()
+        from_delegate = call_role is not None and call_role[0] is parent_session.coordinator
+        call_source = _PREFERENCES_SOURCE.get() if from_delegate else None
+        if (model_role is not None and (not from_delegate or call_source == "role")
+                and metadata.get("preferences_source") == "default_fallback"):
+            # An actual new role request replaces a derived fallback just as it
+            # replaces derived preferences. A delegate replaying its cached role
+            # on ordinary resume is not a new request.
+            metadata = {**metadata, "preferences_source": "role"}
+            metadata.pop("effective_selection", None)
+        if call_source == "role" and (
+                (metadata.get("preferences_source") == "explicit" and retained_preferences)
+                or overlay.get("provider_preferences") or overlay.get("providers")):
+            # The delegate may already have resolved its call role. That derived
+            # list still cannot override a saved explicit pin/provider declaration.
+            provider_preferences = None
         if provider_preferences:
-            metadata = {**metadata, "preferences_source": "explicit"}
+            source = (call_source or metadata.get("preferences_source", "explicit")) if from_delegate else "explicit"
+            metadata = {**metadata, "preferences_source": source}
         return await self._execute(sub_session_id, instruction, parent_session,
             metadata.get("agent_name", "resumed"), overlay, provider_preferences=provider_preferences or retained_preferences,
             parent_messages=messages, resumed=True, session_metadata=metadata)
@@ -317,6 +337,14 @@ class Children:
         prepared = self.prepared.get(parent.session_id)
         if prepared is None:
             raise RuntimeError("Parent bundle is not attached to the standalone host")
+        call_role = _CALL_ROLE.get()
+        call_source = (_PREFERENCES_SOURCE.get()
+                       if call_role and call_role[0] is parent.coordinator else None)
+        if call_role and call_role[0] is parent.coordinator and call_role[1]:
+            # Delegate resolves call roles before spawn and can pass None for
+            # an empty route. Retain that role so it cannot look unspecified,
+            # fall back under an explicit matrix, or resolve the agent's old role.
+            overlay = {**overlay, "model_role": call_role[1]}
         working_dir = getattr(parent.coordinator, "get_capability", lambda _: None)("session.working_dir")
         cwd = Path(working_dir or Path.cwd())
         retained_plan = (session_metadata or {}).get("mount_plan") if resumed else None
@@ -359,7 +387,10 @@ class Children:
                 raise ValueError("Agent orchestrator must be configured as a module declaration")
             orchestrator.setdefault("config", {}).update(copy.deepcopy(orchestrator_config))
         routing_policy = parent.coordinator.get_capability("web.default_routing_policy") is True
-        preferences_source = ((None if resumed else _PREFERENCES_SOURCE.get())
+        routing_saved = session_metadata if resumed else None
+        automatic_routing = routing_policy and automatic_default_routing(
+            parent.coordinator, overlay, saved=routing_saved)
+        preferences_source = ((None if resumed else call_source)
                               or ((session_metadata or {}).get("preferences_source", "explicit")
                                   if provider_preferences else
                                   "explicit" if overlay.get("provider_preferences") else "role"))
@@ -367,13 +398,19 @@ class Children:
             if not provider_preferences and not overlay.get("provider_preferences") and overlay.get("providers"):
                 from .model_selection import prioritize_agent_providers
                 plan = prioritize_agent_providers(plan, overlay["providers"])
-            provider_preferences = await child_preferences(parent.coordinator, overlay, provider_preferences)
+            provider_preferences = await child_preferences(
+                parent.coordinator, overlay, provider_preferences, saved=routing_saved)
             # The child selection below is authoritative. Do not retain a parent
             # role or an old agent pin for a lifecycle hook to reapply afterward.
             plan.pop("provider_preferences", None)
             plan.pop("model_role", None)
         preferences = [ProviderPreference.from_dict(p) if isinstance(p, dict) else p for p in provider_preferences or []]
-        selection = inherited_selection(parent, overlay, preferences, session_metadata)
+        default_fallback = bool(automatic_routing and overlay.get("model_role")
+                                and not preferences and not overlay.get("providers"))
+        selection = inherited_selection(parent, overlay, preferences, session_metadata,
+                                        default_fallback=default_fallback)
+        if default_fallback:
+            preferences_source = "default_fallback"
         from ..provider_recording import apply_provider_recording, install_request_redaction
         if preferences:
             apply_provider_recording(plan, enabled=False)
@@ -415,9 +452,15 @@ class Children:
                     "tool_call_id": call_id,
                     "agent_overlay": copy.deepcopy(overlay), "workspace": str(cwd), "persistent": persistent,
                     "provider_preferences": [p.to_dict() for p in preferences],
-                    "preferences_source": preferences_source, "mount_plan": plan}
+                    "preferences_source": preferences_source, "mount_plan": plan,
+                    "automatic_default_routing": bool(
+                        automatic_routing and routing_hooks(plan) == routing_hooks(parent.coordinator.config))}
         if selection:
             metadata["effective_selection"] = selection
+        else:
+            # SessionStore merges metadata: omission would resurrect a prior
+            # fallback snapshot after an explicit/role selection replaced it.
+            metadata["effective_selection"] = None
         continuity = None
         checkpoint_ready = False
         async def checkpoint(status=None):
@@ -438,7 +481,9 @@ class Children:
             child = await child_prepared.create_session(session_id=identity, parent_id=parent.session_id,
                 approval_system=self.approvals, display_system=getattr(parent.coordinator, "display_system", None),
                 session_cwd=cwd, is_resumed=resumed,
-                **({"before_initialize": prepare_default_routing} if routing_policy else {}))
+                **({"before_initialize": partial(
+                    prepare_default_routing, automatic=metadata["automatic_default_routing"])}
+                   if routing_policy else {}))
             coordinator = child.coordinator
             from ..session_files import capture_dir
             history_workspace = parent.coordinator.get_capability('web.history_workspace') or cwd
@@ -614,19 +659,31 @@ class PersistentDelegate:
         token = _PERSISTENT.set(persistent)
         self.registry.reserved += int(persistent)
         origin_token = None
+        role_token = None
         try:
             supplied = {key: value for key, value in input.items() if key != "persistent"}
             if (self.coordinator is not None
                     and self.coordinator.get_capability("web.default_routing_policy") is True
                     and getattr(self.original, "provider_selection_enabled", False)):
-                supplied = pinned_delegate_input(self.coordinator, supplied)
+                saved = None
+                if supplied.get("session_id") and supplied.get("model_role") and not supplied.get("provider_preferences"):
+                    retained = self.registry.store.load(supplied["session_id"])
+                    if retained:
+                        metadata = retained[1]
+                        owner = metadata.get("parent_id") or metadata.get("parent_session_id")
+                        if owner and owner == getattr(self.coordinator, "session_id", None):
+                            saved = metadata
+                supplied = pinned_delegate_input(self.coordinator, supplied, saved=saved)
                 origin = ("explicit" if supplied.get("provider_preferences")
                           else "role" if supplied.get("model_role") else None)
                 origin_token = _PREFERENCES_SOURCE.set(origin)
+                role_token = _CALL_ROLE.set((self.coordinator, supplied.get("model_role")))
             return await self.original.execute(supplied)
         finally:
             if origin_token is not None:
                 _PREFERENCES_SOURCE.reset(origin_token)
+            if role_token is not None:
+                _CALL_ROLE.reset(role_token)
             self.registry.reserved -= int(persistent)
             _PERSISTENT.reset(token)
 
