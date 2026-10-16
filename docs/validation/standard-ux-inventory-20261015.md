@@ -1,5 +1,20 @@
 # Standard UX inventory and execution plan
 
+## Current follow-up smoke coverage (October 16)
+
+| Case / owner | Current evidence | Desired result and limits |
+| --- | --- | --- |
+| `standard-ux-keyboard-reflow` / extended browser checks after publication | Sequential Tab/Enter entry, all eight ordinary Settings sections, compact Back and Close; 29 focus/geometry witnesses at 1440×1000 and 720×500. Complete run: 7.173 s, zero leftover processes. | Every exercised destination remains keyboard reachable with visible, unclipped focus; no horizontal overflow or lost draft. Half CSS viewport qualifies 200% zoom-equivalent reflow, not browser/OS zoom controls or all widgets. |
+| #712 exact approved storage scope / full Python checks after publication | Existing real Core coordinator mount test now also saves an explicitly authorized session directory, writes there on the next mount, and refuses the sibling. With task-storage acceptance: 35 passed, zero skipped. | Exact scope only; denied/unknown allocation performs no filesystem effects. Joined Stories import/native review/export and actual resumed-delegate continuation remain unrun. |
+
+Source identities, original failed setup attempts, limits and observed/desired
+outcomes are in [the additive receipt](standard-ux-followup-20261016.json).
+The original 199-workflow / 669-outcome ledger remains 618 covered-in-context,
+36 partial and 15 unrun. The 51 residual outcomes include broad guarantees and
+external acceptance; they are not 51 ordinary destinations left unvisited.
+
+## Frozen inventory baseline
+
 Frozen source: `1d993e0bb32bc90b75fc66f56f1b9014c2d63f87` (0.20.165 plus PR776).
 Inventory owner: `build_qualify145`. Integration owner: root. This is a source
 inventory and browser execution plan, not a release gate or a passing test report.

@@ -1,5 +1,40 @@
 # Standard UX qualification
 
+## October 16 follow-up
+
+The **51 residual outcomes are not 51 unvisited ordinary controls**. The frozen
+ledger still has 199 workflows / 669 outcomes: 618 covered in a named context,
+36 partial and 15 unrun; 189 ordinary paths were observed. Residual rows include
+physical/provider/platform acceptance, Advanced or nonexistent controls, and
+universal assertions that finite browser checks cannot establish. Preserve the
+original rows and their limits rather than converting them to passes.
+
+[The additive October 16 receipt](standard-ux-followup-20261016.json) adds 29
+actual sequential-focus witnesses across all eight ordinary Settings sections.
+At 1440×1000 and 720×500 CSS viewports, Tab/Enter can reach and open each section;
+focus is visible, focused controls fit, panels do not overflow horizontally, and
+Back/Close preserve the private draft. The smaller viewport is a 200% browser-zoom
+**reflow equivalent**, not a test of browser zoom controls or an OS magnifier.
+The complete scenario passed in 7.173 seconds with no forced or leftover child
+processes. This duration is functional-test runtime, not interaction latency.
+The scenario now belongs to routine extended browser checks after publication.
+
+For issue #712, 35 focused checks passed with zero skips. The strengthened native
+Core/filesystem check proves that an exact approved session grant is effective
+on a fresh native mount and does not allow an adjacent directory. Current task
+storage also allocates in the execution checkout and refuses denied/unknown
+mounted access before creating files. These qualify concrete parts of the
+original failure, but do **not** complete the original Stories import, retained
+native review/export, or actual resumed-delegate workflow. Keep #712 open for
+that joined acceptance; a substitute artifact is not the requested result.
+
+The broad ledger counts are unchanged: these finite shared-pattern witnesses
+strengthen evidence without proving every dynamic control or external effect.
+Desired behavior remains no lost draft, reachable visible controls, exact scoped
+permission effects and no acknowledged mutation replay.
+
+## Original October 15 qualification
+
 The inventory contains **199 workflows and 669 expected outcomes**.
 The current evidence ledger records **618 outcomes observed in a
 named context, 36 partially observed, and 15 not run**.

@@ -29,6 +29,13 @@ can be decided independently of the qualified fixes.
 
 ## Reproduced dependency defects
 
+**October 16 status update:** Bash PR24 merged on October 16 at 03:05 UTC.
+Recipes PR121 and computer-use PR29 remain open drafts; their upstream reviews
+are user-owned follow-ups. Keep them on the next handoff until reviewed. No
+scheduled reminder was available in this session. The table below retains the
+original qualification checkpoint; its historical “unmerged” Bash status is
+superseded by this update, not a claim of production dependency adoption.
+
 The original probes ran inside the owned spark-2 DTU against exact public source
 revisions. Three canonical repairs now have unmerged review PRs. Exact Bash and
 computer-use candidates were also staged in a private combined dependency
