@@ -10,6 +10,7 @@ import uuid
 # Only host code installs this callback; never accept it in action arguments.
 CURRENT = ContextVar('configuration_authority', default=None)
 EFFECTS = {
+    'test_host_setup': 'Set up managed isolated testing on this host using its existing Docker or Incus service',
     'test_environments': 'Copy this task’s current Git working area into an isolated test environment, run checks, stop it, and remove it after retaining source and artifacts',
     'file_access': 'Change file-access settings',
     'connections': 'Change provider connections, executable sources and credentials',
@@ -51,6 +52,8 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
+    if action in {'workspace.environments.setup', 'workspace.environments.setup.cleanup'}:
+        return 'test_host_setup', 'global'
     if action in {'workspace.tests.submit', 'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove', 'workspace.environments.reconcile'}:
         return 'test_environments', 'session'
     if action in PERSISTENT:

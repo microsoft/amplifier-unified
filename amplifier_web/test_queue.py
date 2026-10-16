@@ -342,7 +342,9 @@ class TestQueue:
                 capacity = await asyncio.to_thread(environments.capacity, self.app, config)
                 limits, counts = capacity.get('limits', {}), capacity.get('counts', {})
                 maximum = limits.get('max_running', 1)
-                free = max(0, maximum-counts.get('active', 0)) if maximum else 64
+                preparing = sum(item['job']['status'] == 'starting' and item['job']['backendKey'] == key
+                                for item in self.rows(active=True))
+                free = max(0, maximum-counts.get('active', 0)-preparing) if maximum else max(0, 64-preparing)
                 capacities[key] = [capacity, free if capacity.get('available') else 0]
                 if not capacity.get('available'):
                     self.backoff[key] = (time.time()+delay, min(60, delay*2))
@@ -420,30 +422,30 @@ class TestQueue:
                     return
                 job.update(resourceId=row['id'], status='starting')
                 self.save(receipt)
-                launch = await self.effect(receipt, config, 'start')
-                receipt = self.get(identity)
-                receipt['job']['launch'] = self.summary(launch)
-                if launch['state'] != 'completed':
-                    if (launch.get('result') or {}).get('admissionDenied'):
-                        # Proven refusal before launch is retryable. Retire only
-                        # the unused logical allocation; its source stays on disk.
-                        row = environments.get(self.app.data_dir, receipt['senderSessionId'], job['resourceId'])
-                        environments.save(self.app.data_dir, row, status='retired')
-                        receipt['job'].pop('resourceId', None)
-                        receipt['job']['attempt'] = receipt['job'].get('attempt', 0)+1
-                        receipt['job']['status'] = 'queued'
-                        self.save(receipt)
-                        return
-                    if launch['state'] == 'failed':
-                        row = environments.get(self.app.data_dir, receipt['senderSessionId'], job['resourceId'])
-                        if not row.get('backendAdmitted'):
-                            environments.save(self.app.data_dir, row, status='retired')
-                    elif launch['state'] == 'outcome_unknown':
-                        await self.recover(identity)
-                        return
-                    self.finish(receipt, 'unknown' if launch['state']=='outcome_unknown' else 'failed',
-                        'Environment admission did not complete. Inspect its exact saved receipt; it was not retried.')
+            launch = await self.effect(receipt, config, 'start')
+            receipt = self.get(identity)
+            receipt['job']['launch'] = self.summary(launch)
+            if launch['state'] != 'completed':
+                if (launch.get('result') or {}).get('admissionDenied'):
+                    # Proven refusal before launch is retryable. Retire only
+                    # the unused logical allocation; its source stays on disk.
+                    row = environments.get(self.app.data_dir, receipt['senderSessionId'], job['resourceId'])
+                    environments.save(self.app.data_dir, row, status='retired')
+                    receipt['job'].pop('resourceId', None)
+                    receipt['job']['attempt'] = receipt['job'].get('attempt', 0)+1
+                    receipt['job']['status'] = 'queued'
+                    self.save(receipt)
                     return
+                if launch['state'] == 'failed':
+                    row = environments.get(self.app.data_dir, receipt['senderSessionId'], job['resourceId'])
+                    if not row.get('backendAdmitted') and not row.get('preparationPending'):
+                        environments.save(self.app.data_dir, row, status='retired')
+                elif launch['state'] == 'outcome_unknown':
+                    await self.recover(identity)
+                    return
+                self.finish(receipt, 'unknown' if launch['state']=='outcome_unknown' else 'cancelled' if receipt['job'].get('cancelRequested') else 'failed',
+                    'Environment admission did not complete. Inspect its exact saved receipt; it was not retried.')
+                return
             try:
                 self.guard(receipt)
                 receipt['job']['status'] = 'checking'
