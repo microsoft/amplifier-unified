@@ -187,3 +187,86 @@ The cases now have named routine owners in the inventory crosswalk. The wider
 result remains pending until those jobs complete on the rebuilt candidate;
 neither a focused pass nor this documentation update closes a historical failure
 report by itself.
+
+### Image-acquisition failures: additive current qualification
+
+**R166-10** exposed a second setup failure: the official image registry returned
+HTTP 429 before the managed-update image could build. All three attempts of
+[the original run](https://github.com/microsoft/amplifier-unified/actions/runs/38860417902)
+remain failed, with no application assertions executed. The acquisition-only
+[repair #791](https://github.com/microsoft/amplifier-unified/pull/791) pins the same
+verified OCI index across two official registries, permits one bounded acquisition
+attempt per registry, checks the pinned digest and Linux OS, records architecture
+and image ID, and never retries application work.
+
+All 13 focused acquisition controls passed in the owned DTU, including fallback,
+identity mismatch and refusal to retry after build/run/exercise failure. The
+[hosted run at `2e5ff936`](https://github.com/microsoft/amplifier-unified/actions/runs/38862448238)
+then passed all four unchanged real systemd scenarios using Linux/amd64 and
+CPython 3.13.16. Its pinned index was
+`sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f`.
+The merge at `9d3bc35ec` has the identical tracked tree. That hosted run used the
+primary registry; alternate-registry execution is covered by focused controls,
+not claimed as a hosted observation. BuildKit may resolve the selected immutable
+reference again; acquisition success is not an offline-build guarantee, and no
+build/container/application retry is performed. Application source and the systemd fixture
+are unchanged by this repair. Receipts and original failures are retained in
+`output/post-release-fixes-20261016/handoff-registry/`.
+
+### PR787 environment controls: additive current qualification
+
+| Check | Previous evidence | Current follow-up | Desired result |
+| --- | --- | --- | --- |
+| **R166-13** `workspace.environment` recovery and saved-copy choice | The old browser entered Details programmatically, used Docker capability, omitted the conditional full-copy checkbox, and had no routine workflow owner. Component tests already covered both confirmation modes. | Public entry, exact recovery ownership, complete-copy default/toggle/cancel/reset/confirm, retained backend and next-check default are exercised by the existing environment browser in Task coordination contracts. Focused browser passed in 10.254 s with zero leftover descendants; a deliberately rewritten removal mode failed at `files != full`. Existing component tests passed 14/14 and workflow/metadata contracts passed 134 with one unrelated packaging prerequisite skip. | Only the explicitly confirmed resource/mode changes; recovery does not replay unknown work; cancellation has no effect; original files/history remain intact. |
+
+The original 199/669 inventory baseline is preserved. This is an expanded assertion
+crosswalk for an existing workflow, not an added workflow or a historical pass.
+The browser uses controlled Incus transport and synthetic retained-byte accounting;
+real archive bytes, physical touch, complete keyboard traversal, and live providers
+are outside this result. Whole-scenario time is functional-test duration, not an
+interaction-performance measurement. The unchanged component suite supplies the
+unchecked-confirmation branch; it is not claimed as a second browser journey.
+
+The shared fixture's existing default-Docker queued-check journey also passes,
+covering cancellation, failed/unknown results and reload without replay. The
+skipped ancillary test is the real source-distribution build (`uv` absent from
+this isolated lane's restricted PATH); no packaging source changed and no pass
+is inferred for it. Source-bound receipts, including original setup failures,
+are retained in `output/post-release166-fixes/pr787-followup/`. These focused
+checks use unchanged product source/assets from `e861b67d8`; no release, production
+update, or real backend allocation is part of this follow-up.
+
+### Completed repair qualification, October 15 (Pacific)
+
+This checkpoint supersedes the pending qualification statements above; those
+statements retain the evidence available when they were written. The application
+repair [#789](https://github.com/microsoft/amplifier-unified/pull/789) merged as
+`905a44230`, whose full tracked tree equals the final tested repair head
+`d1735f82dd9b5c62feeb5d362d4ec794a2687b4d`.
+
+| Check | Recorded result and actual source | Scope |
+| --- | --- | --- |
+| [Full Python](https://github.com/microsoft/amplifier-unified/actions/runs/38860437273) | 9,191 passed, six subtests passed, 87 skipped, 13 warnings at `d1735f82d`; 2,033.31 s. | All 28 retained failing test identities from .164/.165 are present and pass. Skips remain skips. |
+| [Fast release checks](https://github.com/microsoft/amplifier-unified/actions/runs/38860439483) | 157 release-contract checks and 986 frontend tests passed at `d1735f82d`; committed client consistency passed. | Includes the rebuilt client, build ID `dcf0d90c8d04ae03`. |
+| [Extended browser](https://github.com/microsoft/amplifier-unified/actions/runs/38853050383) | All 72 scenarios passed at `203cab5a4`, with zero cleanup survivors or forced terminations. | All 21 known historical browser failure scenarios are represented. |
+| [Public readiness](https://github.com/microsoft/amplifier-unified/actions/runs/38855093643) | All browser groups and final receipt passed at `7d1e241e7`. | Includes the corrected ordinary-stream reading oracle. |
+| [Environment controls](https://github.com/microsoft/amplifier-unified/actions/runs/38861708547) | The R166-13 public-entry, recovery and saved-copy journey passed in its assigned routine job at `66fe6b192`, with zero browser errors. | Exact recorded removal modes were `full`, then `files`; controlled transport limits above still apply. |
+
+The browser/readiness runs executed at the ancestor revisions shown, not at the
+final head. Carry-forward checks compare every tracked path, mode and blob outside
+the reviewed smoke-document and isolated test-only exceptions. The shared
+transport-test module permits only the exact four-line startup-snapshot insertion;
+all remaining bytes and its three helper imports are unchanged. Full Python and
+Fast passed at the final repair head itself. Exact source proofs and run receipts
+are retained in `output/post-release166-fixes/` and
+`output/post-release-fixes-20261016/final-ci/`.
+
+The original failures remain failed. Later coverage-only and image-acquisition
+follow-ups have their own focused/routine results and are not retroactively
+credited to this full Python run. These results support closing the inventoried
+historical verification reports as covered by the current repair; they do not
+claim every old run was reproduced individually. Physical media, native controls,
+visibility/keyboard-at-200% acceptance, live providers and the existing scale
+latency targets remain separate limits. The next published package still needs
+its normal installed-package validation. No new release or spark-1 update is
+claimed by this checkpoint.

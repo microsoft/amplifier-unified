@@ -46,6 +46,17 @@ on:
       - 'amplifier_web/canvas_files.py'
       - 'amplifier_web/worktrees.py'
       - 'amplifier_web/workspace_resources.py'
+      - 'amplifier_web/task_environments.py'
+      - 'amplifier_web/environment_retention.py'
+      - 'amplifier_web/incus_environment_worker.py'
+      - 'amplifier_web/test_environment_*.py'
+      - 'amplifier_web/test_queue.py'
+      - 'frontend/src/workspace-managed-resources.jsx'
+      - 'frontend/src/workspace-test-environments.jsx'
+      - 'frontend/src/work-shell.jsx'
+      - 'tests/fixtures/test_environments_ui_server.py'
+      - 'frontend/tests/test-environments-browser.mjs'
+      - 'frontend/tests/standard-ux-inventory.json'
       - 'frontend/src/workspace-resource-*.jsx'
       - 'tests/test_resource_reservations.py'
       - 'tests/test_multi_repository_worktrees.py'
@@ -116,3 +127,15 @@ jobs:
       - name: Exercise active work and private file declarations through the browser
         working-directory: frontend
         run: node tests/workspace-awareness-browser.mjs
+      - name: Exercise owned test environment recovery and saved-copy choices
+        working-directory: frontend
+        env:
+          AMPLIFIER_TEST_OUTPUT_DIR: ${{ runner.temp }}/test-environments
+        run: node tests/test-environments-browser.mjs
+      - name: Retain test environment browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-environments-browser-evidence
+          path: ${{ runner.temp }}/test-environments
+          if-no-files-found: warn

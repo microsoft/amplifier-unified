@@ -185,7 +185,9 @@ frozen inventory, add effect passes to its 199-workflow/669-outcome accounting,
 or turn a fixture correction into a product improvement. `R166-*` IDs are stable
 regression cases within the mapped workflows. Their baseline and current results
 are recorded in [the completion report](standard-ux-completion-20261015.md#post-release-166-results).
-Final combined-source qualification is pending at this checkpoint.
+Qualification was pending at this checkpoint; see the
+[completed repair qualification](standard-ux-completion-20261015.md#completed-repair-qualification-october-15-pacific)
+for the subsequent results and exact source limits.
 
 | Case and existing workflow IDs | Required smoke actions and invariant | Regression test and routine coverage |
 | --- | --- | --- |
@@ -218,3 +220,45 @@ process. Existing UX latency targets above remain targets, not newly achieved
 results. Functional scenario duration is not interaction latency. In particular,
 the 12-sample active-client comparison retains its unchanged thresholds and
 sample-size limits; it does not establish the original global p95 targets.
+
+### Image-acquisition failure coverage follow-up
+
+**R166-10** also covers prerequisite failures in the existing managed-update
+handoff check. Record image acquisition failure before application assertions;
+try each official registry at most once for the same pinned OCI index and retain
+the selected digest, operating system, architecture and image configuration ID.
+Never retry the image build, container run or application exercise as an acquisition
+fallback. Reject identity mismatches and preserve every failed attempt.
+
+After acquisition, require the unchanged four real systemd scenarios: managed
+self-restart with successor HTTP identity; rejected restart preserving the original
+process and handoff; legacy erased-marker reconciliation; and the exact historical
+updater's SIGTERM followed by successor reconciliation, preserving the historical
+failure. `scripts/test_systemd_update.py` runs through **Managed update handoff**
+(`systemd-update.yml`). Its 13 acquisition/no-replay controls in
+`tests/test_systemd_update_script.py` are collected by Full Python checks. These
+are additional boundaries of R166-10, not another workflow or broad release gate.
+
+### PR787 environment-control coverage follow-up
+
+**R166-13** extends the existing `workspace.environment` checklist without changing
+its three outcomes or the frozen **199 workflows / 669 outcomes** baseline.
+From the workspace heading, open **Details → Managed resources → Test environments**.
+Start and run a harmless check; inspect an unknown result, then **Check and recover**
+using the retained backend while new execution is unavailable. Stop, open
+**Remove environment… → Save more files**, verify complete-copy defaults off for a files-policy environment,
+toggle it, cancel, reopen, and explicitly confirm a complete copy. Check the exact
+resource/revision, retained backend, `retentionMode: full`, verified size, unchanged
+workspace files, and the next queued check's unchanged files-only default.
+
+`test-environments-browser.mjs` now belongs once to **Task coordination contracts**,
+with an always-retained evidence directory. Its controlled Incus transport exercises
+real host actions/receipts; it does not allocate Incus instances or verify a real
+archive. Desktop and narrow pointer interaction are covered here. The existing
+`test-environments.test.mjs` cases through Fast `npm test` separately verify both
+unchecked (`files`) and checked (`full`) confirmation handlers. Existing backend
+recovery/retention tests cover backend ownership and archive-validation contracts separately.
+
+Fast's existing release-contract step also runs `test_browser_check_runner.py` and
+`test_active_client_diagnostics.py`, catching scenario ownership/report metadata
+errors before a full Python run. This adds no new workflow or broad gate.

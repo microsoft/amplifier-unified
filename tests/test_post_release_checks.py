@@ -102,6 +102,8 @@ def test_fast_required_check_runs_on_every_pr_without_exhaustive_suites():
     job = workflow['jobs']['integration']
     assert job['name'] == 'Fast release checks'
     commands = '\n'.join(step.get('run', '') for step in job['steps'])
-    assert 'test_post_release_checks.py' in commands
+    for name in ('test_post_release_checks.py', 'test_browser_check_runner.py',
+                 'test_active_client_diagnostics.py'):
+        assert name in commands
     assert 'npm test' in commands and 'git diff --exit-code' in commands
     assert 'playwright' not in commands and 'node tests/' not in commands
