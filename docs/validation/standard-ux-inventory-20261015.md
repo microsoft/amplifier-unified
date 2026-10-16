@@ -287,6 +287,49 @@ inventory with real runtime, CLI, browser/PWA, filesystem, reset, diagnostic
 server, connected-document and profiling acceptance. A skipped host test is not
 a passing smoke result; consult its designated owner and recorded limitations.
 
+## Copied-scale lifecycle regression checklist (October 16)
+
+[The scale lifecycle record](scale-lifecycle-projections-20261016.json) keeps the
+current observations separate from desired performance. Repeat this bounded
+check when changing send acknowledgement, runtime lifecycle publication, or
+shared navigation/attention projection. Use the existing owned private replica
+harness; do not make the copied data or provider credentials a hosted-CI fixture.
+
+- Assert the capture tier before measuring. The first October 15 run used 10/32
+  event shards; subsequent full-capture runs use 32/32. A complete capture is not
+  an atomic filesystem snapshot or a claim of complete Work-history fidelity.
+- With 1, 6 and 12 real subprocess workers using the recorded local deterministic
+  provider, open a copied workspace, filter/clear, and explicitly page forward
+  and back. Record each gesture-to-visible result and loaded row count. Keep the
+  1-second workspace/page and 500-ms filter goals visible when missed.
+- Start a synthetic worker, then send three inputs through the composer to the
+  same retained worker. Record gesture, HTTP acknowledgement, first visible
+  output, server timing and actual worker count separately. The desired 300-ms
+  acknowledgement is not replaced by a looser passing harness threshold.
+- Switch among copied and synthetic chats while streams run. Record the visible
+  marker lag, selection latency, health response latency and Stop outcome. Keep
+  the 250-ms streaming-lag target distinct from functional success.
+- Verify accepted delivery survives persistence, clears only the sending
+  client's draft, preserves another client's draft, and reaches both clients
+  when both select the affected chat. The unbound native/TUI path must still
+  persist its canonical view clear. These checks live in
+  `tests/test_delivery_projection.py`.
+- Repeated working/generation-start details may reuse shared projections only
+  while the saved-facts guard proves those facts unchanged. A real status or
+  attention change, accumulated broad progress, or schedule/collaboration peer
+  effect must still reach the other client. Terminal generations stay broad.
+- Compare membership IDs with the full-row canonical query, including notices
+  and native roots. Compare SQLite work against that reference in the same
+  fixture, rather than imposing one absolute instruction count across platforms
+  (`tests/test_observation_query_bounds.py`).
+- Assert zero remaining synthetic workers after every stage and retain exact
+  source/build/provider/cold-versus-warm context. Do not interpret these local
+  synthetic-worker results as normal qualification or live-provider acceptance.
+
+Use repeated comparable observations for regression decisions. Three sends and
+one sample per workspace action are an early warning, not a stable p95 estimate
+or proof that a particular commit caused a latency change.
+
 ### Checkout identity across handoff waits (October 16)
 
 **R168-01** extends checkout handoff coverage: after the initial Git preflight,

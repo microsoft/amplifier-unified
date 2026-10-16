@@ -3818,7 +3818,11 @@ class AppService:
             sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
             self._clear_sent_draft(current, sent, text, preserve_draft)
             current.pop("lockOwner", None)
-            self._publish_changes(sessions={session['id']}, globals={'view'})
+            # A bound client's draft/reply/attachments are saved by clients.save,
+            # not the shared legacy view. Delivery changes only this owner unless
+            # the existing save guard finds changed status/navigation/attention.
+            self._publish_changes(sessions={session['id']}, detail_only=True,
+                                  globals={'view'} if self.clients.record() is None else ())
         return send_result
 
     def _clear_sent_draft(self, current, sent, text, preserve_draft):
@@ -4254,11 +4258,16 @@ class AppService:
                 # Lifecycle may update an originating schedule or a peer's
                 # saved receipt reference on another chat.
                 changed = self.schedules.sync()
-                # An exact input receipt normally changes only its message.
-                # Keep every affected owner; the save guard still widens for
-                # status, attention, or accumulated progress changing navigation.
+                # Repeated working reports and generation-start details often
+                # leave navigation/attention unchanged. The save guard proves
+                # that before reusing shared projections. Terminal generation
+                # and schedule/collaboration changes retain broad publication.
+                detail_only = (kind == 'runtime.delivery' or
+                               kind == 'runtime.status' and payload.get('status') == 'working' or
+                               kind == 'runtime.generation' and payload.get('event') == 'generation.started')
                 self._publish_changes(sessions={session['id']} | changed | collaboration_changed,
-                                      detail_only=kind == 'runtime.delivery')
+                                      detail_only=detail_only and not changed and not collaboration_changed)
+
 
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""

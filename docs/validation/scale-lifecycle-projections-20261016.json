@@ -1,0 +1,1599 @@
+{
+  "schemaVersion": 1,
+  "scope": "Copied-scale browser sends, workspace paging/filtering, selected-chat navigation and deterministic real-worker streaming. This is not live-provider or full Work-history acceptance.",
+  "catalog": {
+    "nativeSessions": 27508,
+    "nativeProjects": 5272,
+    "verifiedEventShards": 32,
+    "totalEventShards": 32,
+    "capturedFiles": 40403,
+    "capturedBytes": 776931427576,
+    "globalAtomicSnapshot": false,
+    "fullEventFidelity": false,
+    "reconciliation": "combined-scale-concurrency-20261015.json measured 10/32 shards. Later remaining-perf capture-tier32, paired-summary, bounded-metadata-summary and delivery-hint-summary already used the full 32/32 capture. This run independently asserts 32/32; it does not relabel the earlier 10-shard result."
+  },
+  "isolation": {
+    "host": "spark-2",
+    "dtu": "dtu-unified-codex-dev-20261014",
+    "service": "unified-scale-runtime-20261015.service",
+    "privateNetwork": true,
+    "externalProviderDenied": true,
+    "readOnlyProjectMounts": 4532,
+    "derivedPresentationOverlays": 112,
+    "appBlobCowRoots": 3,
+    "syntheticExecutionOwners": 14,
+    "copiedOwnersExecutionDenied": true,
+    "copiedSchedulesAndOutboundAutomationDisabled": true,
+    "effectiveCpuCount": 4,
+    "effectiveMemoryBytes": 8589934592
+  },
+  "runtime": {
+    "realRuntimeManagerAndSubprocessWorkers": true,
+    "interpreter": "/opt/replica-worker/bin/python",
+    "qualificationBypassed": true,
+    "provider": "deterministic local 250 ms deltas",
+    "realProviderCredentials": false,
+    "normalRuntimeColdStartQualified": false,
+    "normalRuntimeReference": "profile-cold-worker-start-20261015.json separately records one 7.729 s normal-worker preparation with warm dependencies, no real prompt/provider. These are different contexts."
+  },
+  "measurementLimits": [
+    "One sequential run per revision/concurrency; three warm sends and one action per workspace operation. Tiny-sample nearest-rank p95 equals max for sends; no statistical confidence claim.",
+    "Frozen captured history, provider, worker interpreter and harness; synthetic retained histories grow between runs and lifecycle scheduling varies. Measurements do not isolate a causal speedup.",
+    "Fresh browser per workspace stage; service, filesystem and dependencies are warm. PrepareRetainedWorker starts a new worker, then verifies three sends use that same worker.",
+    "The baseline first stage overlapped unrelated root validation briefly; later stages/candidate runs had the CPU lane reserved.",
+    "The ~119 s service setup includes thousands of namespace binds and is not a product startup measurement.",
+    "ARM Chromium uses the existing DTU single-process/no-GPU mode. Browser and server share the effective four-CPU parent DTU."
+  ],
+  "desired": {
+    "warmSendAckP95Ms": 300,
+    "workspaceFirstAndPageMs": 1000,
+    "workspaceFilterMs": 500,
+    "streamLagP95Ms": 250,
+    "warmNavigationMedianMs": 500,
+    "warmNavigationP95Ms": 1000
+  },
+  "fixes": [
+    "Project visible membership to only id/session_kind, preserving canonical alias/suppression behavior without unused full-row joins.",
+    "Keep successful bound-client send acknowledgements scoped to the owner when the existing persisted-facts guard proves shared projections unchanged; preserve legacy unbound view persistence and private durable draft clear.",
+    "Reuse the same guard for working status and generation.started details. Actual shared changes, pending broad progress, schedule/collaboration side effects, terminal generations and nonworking status remain broad."
+  ],
+  "membershipWork": {
+    "fixtureLocalRows": 258,
+    "fixtureNoticeOwners": 101,
+    "fixtureNativeRows": 27000,
+    "referenceFullRowVmInstructions": 78600,
+    "narrowMembershipVmInstructions": 68800,
+    "equalIds": true,
+    "portableCheck": "Compare the same-fixture reference query and require >5% reduction, not an absolute universal SQLite instruction budget."
+  },
+  "profile": {
+    "source": "7c23b2b85fca8d7d7d09e0fe19fe3fa8a0c88726",
+    "durationSeconds": 25,
+    "sampleRateHz": 100,
+    "mainThreadSampledSeconds": 15.78,
+    "browserStateInclusiveSeconds": 11.21,
+    "publishInclusiveSeconds": 9.97,
+    "shellResourcesSnapshotInclusiveSeconds": 4.98,
+    "navigationInclusiveSeconds": 2.69,
+    "attentionInclusiveSeconds": 2.16,
+    "interpretation": "Inclusive times overlap. Repeated synchronous browser projections and resource snapshots dominate this sample; it does not establish that all of the latency is attributable to those paths. Provider output is synthetic.",
+    "receiptSha256": "f5e77c92a8d374ef199dfbf430c04b9be8c3583ca5e4e761041875cc8befce94"
+  },
+  "tests": {
+    "focusedFinal": "38 passed: test_delivery_projection.py and test_observation_query_bounds.py",
+    "broaderScoped": "69 passed: delivery projections, active client projections, scoped state writes before conservative lifecycle narrowing; final 38 requalified the narrowed change.",
+    "additionalOwnerScope": "149 passed earlier: delivery, message delivery, observation bounds and scoped records; no repeated full suite.",
+    "redBefore": "Baseline rejects two send-ack isolation cases plus the earlier absolute membership budget (78,500 VM vs 75,000 bound); final portable query test compares the full-row reference instead."
+  },
+  "baseline": {
+    "source": "7c23b2b85fca8d7d7d09e0fe19fe3fa8a0c88726",
+    "build": {
+      "version": "0.20.167",
+      "id": "262682b705b1675f"
+    },
+    "stages": [
+      {
+        "actualWorkers": 1,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 826.2067380000008,
+          "p95": 828.5440269999999,
+          "max": 828.5440269999999
+        },
+        "warmSamples": [
+          {
+            "ackMs": 828.5440269999999,
+            "serverTiming": "app;dur=582.97",
+            "firstVisibleMs": 1133.583028,
+            "gestureToRequestMs": 133.344970703125,
+            "requestToResponseHeadersMs": 663.763,
+            "requestToBodyMs": 665.176
+          },
+          {
+            "ackMs": 826.2067380000008,
+            "serverTiming": "app;dur=664.64",
+            "firstVisibleMs": 1041.8674379999993,
+            "gestureToRequestMs": 119.006103515625,
+            "requestToResponseHeadersMs": 693.134,
+            "requestToBodyMs": 694.097
+          },
+          {
+            "ackMs": 762.4578270000002,
+            "serverTiming": "app;dur=613.95",
+            "firstVisibleMs": 947.5580769999997,
+            "gestureToRequestMs": 89.97900390625,
+            "requestToResponseHeadersMs": 641.409,
+            "requestToBodyMs": 643.052
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 1887.3720800000006,
+          "serverTiming": "app;dur=1688.52",
+          "firstVisibleMs": 2184.124818,
+          "gestureToRequestMs": 95.14306640625,
+          "requestToResponseHeadersMs": 1722.352,
+          "requestToBodyMs": 1726.846
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 804.55,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 493.57,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 502.39,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 663.48,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 439.38,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 2.0971260000005714,
+          "p95": 2.7862050000003364,
+          "max": 2.7862050000003364
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 78,
+            "totalMs": 5178.54
+          },
+          "state.save": {
+            "count": 81,
+            "totalMs": 1723.77
+          },
+          "browser.snapshot": {
+            "count": 126,
+            "totalMs": 4599.86
+          },
+          "catalog.refresh": {
+            "count": 19,
+            "totalMs": 2892.23
+          },
+          "history.load": {
+            "count": 22,
+            "totalMs": 986.72
+          },
+          "shell.resources.pages": {
+            "count": 452,
+            "totalMs": 1775.34
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:14:21.919Z",
+        "finishedAt": "2026-10-16T13:14:40.874Z",
+        "privateReceipt": {
+          "file": "main168baseline-0.json",
+          "sha256": "1149ca76c71edc4752d01b2e338cd2f17157ec7d216451251d9095e1525cbedc"
+        }
+      },
+      {
+        "actualWorkers": 6,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 998.5073080000002,
+          "p95": 1014.9008890000005,
+          "max": 1014.9008890000005
+        },
+        "warmSamples": [
+          {
+            "ackMs": 941.897148,
+            "serverTiming": "app;dur=680.76",
+            "firstVisibleMs": 1091.8759879999998,
+            "gestureToRequestMs": 93.907958984375,
+            "requestToResponseHeadersMs": 828.468,
+            "requestToBodyMs": 830.058
+          },
+          {
+            "ackMs": 1014.9008890000005,
+            "serverTiming": "app;dur=885.43",
+            "firstVisibleMs": 1402.1938549999977,
+            "gestureToRequestMs": 77.533203125,
+            "requestToResponseHeadersMs": 917.458,
+            "requestToBodyMs": 919.718
+          },
+          {
+            "ackMs": 998.5073080000002,
+            "serverTiming": "app;dur=765.93",
+            "firstVisibleMs": 1314.6039090000013,
+            "gestureToRequestMs": 92.65478515625,
+            "requestToResponseHeadersMs": 884.008,
+            "requestToBodyMs": 886.169
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 1830.1327250000004,
+          "serverTiming": "app;dur=1654.68",
+          "firstVisibleMs": 2246.9897140000003,
+          "gestureToRequestMs": 59.33984375,
+          "requestToResponseHeadersMs": 1721.207,
+          "requestToBodyMs": 1723.373
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 736.17,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 406.27,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 681.92,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 710.24,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 811.02,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.6563850000020466,
+          "p95": 112.59603100000095,
+          "max": 112.59603100000095
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 82,
+            "totalMs": 7050.25
+          },
+          "state.save": {
+            "count": 85,
+            "totalMs": 4034.35
+          },
+          "browser.snapshot": {
+            "count": 118,
+            "totalMs": 4166.02
+          },
+          "catalog.refresh": {
+            "count": 16,
+            "totalMs": 3980.48
+          },
+          "history.load": {
+            "count": 19,
+            "totalMs": 1469.5
+          },
+          "shell.resources.pages": {
+            "count": 460,
+            "totalMs": 1549.46
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:14:41.330Z",
+        "finishedAt": "2026-10-16T13:15:10.118Z",
+        "privateReceipt": {
+          "file": "main168baseline-6.json",
+          "sha256": "e70d60d9b37d309acb3c990f803f8476d07e91f176219be55da0df94cc3b9ffc"
+        }
+      },
+      {
+        "actualWorkers": 12,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 1168.0415580000008,
+          "p95": 1221.8178499999995,
+          "max": 1221.8178499999995
+        },
+        "warmSamples": [
+          {
+            "ackMs": 1168.0415580000008,
+            "serverTiming": "app;dur=963.78",
+            "firstVisibleMs": 1657.0843720000012,
+            "gestureToRequestMs": 62.683837890625,
+            "requestToResponseHeadersMs": 1087.351,
+            "requestToBodyMs": 1088.897
+          },
+          {
+            "ackMs": 1221.8178499999995,
+            "serverTiming": "app;dur=1004.96",
+            "firstVisibleMs": 1626.344079999999,
+            "gestureToRequestMs": 93.9970703125,
+            "requestToResponseHeadersMs": 1109.053,
+            "requestToBodyMs": 1110.698
+          },
+          {
+            "ackMs": 1130.6525709999987,
+            "serverTiming": "app;dur=882.02",
+            "firstVisibleMs": 1725.7051519999986,
+            "gestureToRequestMs": 99.20703125,
+            "requestToResponseHeadersMs": 1010.479,
+            "requestToBodyMs": 1011.463
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 1909.7162750000007,
+          "serverTiming": "app;dur=1750.31",
+          "firstVisibleMs": 2443.0373790000012,
+          "gestureToRequestMs": 89.35986328125,
+          "requestToResponseHeadersMs": 1800.294,
+          "requestToBodyMs": 1801.489
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 1791.56,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 806.48,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 698.61,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 789.65,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 458.81,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.6574739999996382,
+          "p95": 2.3024569999979576,
+          "max": 2.3024569999979576
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 85,
+            "totalMs": 10673.63
+          },
+          "state.save": {
+            "count": 88,
+            "totalMs": 7560.45
+          },
+          "browser.snapshot": {
+            "count": 121,
+            "totalMs": 4634.09
+          },
+          "catalog.refresh": {
+            "count": 15,
+            "totalMs": 6007.95
+          },
+          "history.load": {
+            "count": 18,
+            "totalMs": 2567.82
+          },
+          "shell.resources.pages": {
+            "count": 525,
+            "totalMs": 1981.79
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:15:10.615Z",
+        "finishedAt": "2026-10-16T13:15:49.454Z",
+        "privateReceipt": {
+          "file": "main168baseline-12.json",
+          "sha256": "178431f9a781e227a9d4fd4b58d24a6ed5a81ab5cf33ce391dcb4008a1e37399"
+        }
+      }
+    ]
+  },
+  "firstCandidate": {
+    "source": "9cef08323272819fb05d0a1e37900ef33ae4b37f",
+    "build": {
+      "version": "0.20.167",
+      "id": "262682b705b1675f"
+    },
+    "stages": [
+      {
+        "actualWorkers": 1,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 777.4413170000007,
+          "p95": 860.2755809999999,
+          "max": 860.2755809999999
+        },
+        "warmSamples": [
+          {
+            "ackMs": 760.4051730000001,
+            "serverTiming": "app;dur=536.40",
+            "firstVisibleMs": 952.4842149999995,
+            "gestureToRequestMs": 80.5380859375,
+            "requestToResponseHeadersMs": 608.567,
+            "requestToBodyMs": 610.044
+          },
+          {
+            "ackMs": 777.4413170000007,
+            "serverTiming": "app;dur=634.72",
+            "firstVisibleMs": 993.6546720000006,
+            "gestureToRequestMs": 65.05078125,
+            "requestToResponseHeadersMs": 636.098,
+            "requestToBodyMs": 637.663
+          },
+          {
+            "ackMs": 860.2755809999999,
+            "serverTiming": "app;dur=675.78",
+            "firstVisibleMs": 1048.9765239999997,
+            "gestureToRequestMs": 124.712890625,
+            "requestToResponseHeadersMs": 701.402,
+            "requestToBodyMs": 702.982
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 1851.9769219999998,
+          "serverTiming": "app;dur=1613.70",
+          "firstVisibleMs": 2283.3673980000003,
+          "gestureToRequestMs": 152.1611328125,
+          "requestToResponseHeadersMs": 1662.617,
+          "requestToBodyMs": 1664.851
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 935.75,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 363.65,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 481.9,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 492.43,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 759.98,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 2.6022830000001704,
+          "p95": 3.610436999999365,
+          "max": 3.610436999999365
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 75,
+            "totalMs": 4661.92
+          },
+          "state.save": {
+            "count": 78,
+            "totalMs": 1638.64
+          },
+          "browser.snapshot": {
+            "count": 114,
+            "totalMs": 4290.4
+          },
+          "catalog.refresh": {
+            "count": 13,
+            "totalMs": 2193.96
+          },
+          "history.load": {
+            "count": 16,
+            "totalMs": 1091.55
+          },
+          "shell.resources.pages": {
+            "count": 468,
+            "totalMs": 1732.64
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:34:29.822Z",
+        "finishedAt": "2026-10-16T13:34:48.954Z",
+        "privateReceipt": {
+          "file": "narrowack-0.json",
+          "sha256": "b06ca720745772e678e56ac49dae065b89e0a0b48bc4810e5c35a1da030725e2"
+        }
+      },
+      {
+        "actualWorkers": 6,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 976.363037000001,
+          "p95": 1017.3051410000007,
+          "max": 1017.3051410000007
+        },
+        "warmSamples": [
+          {
+            "ackMs": 957.2762330000005,
+            "serverTiming": "app;dur=711.02",
+            "firstVisibleMs": 1287.232204,
+            "gestureToRequestMs": 103.76708984375,
+            "requestToResponseHeadersMs": 828.139,
+            "requestToBodyMs": 829.467
+          },
+          {
+            "ackMs": 976.363037000001,
+            "serverTiming": "app;dur=709.57",
+            "firstVisibleMs": 1249.5981980000015,
+            "gestureToRequestMs": 132.496826171875,
+            "requestToResponseHeadersMs": 791.155,
+            "requestToBodyMs": 794.533
+          },
+          {
+            "ackMs": 1017.3051410000007,
+            "serverTiming": "app;dur=795.88",
+            "firstVisibleMs": 1245.516732,
+            "gestureToRequestMs": 61.985107421875,
+            "requestToResponseHeadersMs": 906.192,
+            "requestToBodyMs": 908.482
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 2362.016082000001,
+          "serverTiming": "app;dur=2182.26",
+          "firstVisibleMs": 2958.496825000001,
+          "gestureToRequestMs": 150.7109375,
+          "requestToResponseHeadersMs": 2185.024,
+          "requestToBodyMs": 2186.362
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 701.58,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 438.6,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 798.52,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 472.17,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 458.01,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 0.9936100000013539,
+          "p95": 1.3304940000016359,
+          "max": 1.3304940000016359
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 87,
+            "totalMs": 7441.79
+          },
+          "state.save": {
+            "count": 91,
+            "totalMs": 4271.68
+          },
+          "browser.snapshot": {
+            "count": 132,
+            "totalMs": 4433.58
+          },
+          "catalog.refresh": {
+            "count": 18,
+            "totalMs": 4338.13
+          },
+          "history.load": {
+            "count": 21,
+            "totalMs": 1813.21
+          },
+          "shell.resources.pages": {
+            "count": 471,
+            "totalMs": 1485.04
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:34:49.356Z",
+        "finishedAt": "2026-10-16T13:35:17.948Z",
+        "privateReceipt": {
+          "file": "narrowack-6.json",
+          "sha256": "cbbe204b103db8fb4ae4cc0d9c2195b903a0c7a75dadf4978948e45fb6002698"
+        }
+      },
+      {
+        "actualWorkers": 12,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 1034.5086149999988,
+          "p95": 1225.5170529999996,
+          "max": 1225.5170529999996
+        },
+        "warmSamples": [
+          {
+            "ackMs": 1034.5086149999988,
+            "serverTiming": "app;dur=879.95",
+            "firstVisibleMs": 1443.9010869999984,
+            "gestureToRequestMs": 98.340087890625,
+            "requestToResponseHeadersMs": 901.741,
+            "requestToBodyMs": 903.8
+          },
+          {
+            "ackMs": 949.3366619999979,
+            "serverTiming": "app;dur=762.59",
+            "firstVisibleMs": 1445.9251069999991,
+            "gestureToRequestMs": 139.9169921875,
+            "requestToResponseHeadersMs": 788.487,
+            "requestToBodyMs": 789.613
+          },
+          {
+            "ackMs": 1225.5170529999996,
+            "serverTiming": "app;dur=1048.55",
+            "firstVisibleMs": 1594.4090579999975,
+            "gestureToRequestMs": 82.28125,
+            "requestToResponseHeadersMs": 1121.809,
+            "requestToBodyMs": 1123.141
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 2024.7000670000016,
+          "serverTiming": "app;dur=1740.54",
+          "firstVisibleMs": 2491.969825000002,
+          "gestureToRequestMs": 99.113037109375,
+          "requestToResponseHeadersMs": 1888.788,
+          "requestToBodyMs": 1890.102
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 2397.94,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 540.06,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 515.82,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 727.14,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 675.14,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.4450069999984407,
+          "p95": 2.032164999996894,
+          "max": 2.032164999996894
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 85,
+            "totalMs": 9761.92
+          },
+          "state.save": {
+            "count": 88,
+            "totalMs": 6962.98
+          },
+          "browser.snapshot": {
+            "count": 122,
+            "totalMs": 4228.29
+          },
+          "catalog.refresh": {
+            "count": 14,
+            "totalMs": 5184.92
+          },
+          "history.load": {
+            "count": 17,
+            "totalMs": 2237.3
+          },
+          "shell.resources.pages": {
+            "count": 544,
+            "totalMs": 1729.2
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:35:18.377Z",
+        "finishedAt": "2026-10-16T13:35:56.780Z",
+        "privateReceipt": {
+          "file": "narrowack-12.json",
+          "sha256": "43defe08b5716bb521c72bb800ba3a13b0908f02f450a4b01c8bc7e340a7d1e9"
+        }
+      }
+    ]
+  },
+  "candidate": {
+    "source": "c3a50ea19a04fd1317b0103595a375479ff86df7",
+    "build": {
+      "version": "0.20.167",
+      "id": "262682b705b1675f"
+    },
+    "stages": [
+      {
+        "actualWorkers": 1,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 748.3865180000003,
+          "p95": 839.8748230000001,
+          "max": 839.8748230000001
+        },
+        "warmSamples": [
+          {
+            "ackMs": 748.3865180000003,
+            "serverTiming": "app;dur=550.65",
+            "firstVisibleMs": 932.2177450000008,
+            "gestureToRequestMs": 157.037841796875,
+            "requestToResponseHeadersMs": 560.494,
+            "requestToBodyMs": 562.404
+          },
+          {
+            "ackMs": 839.8748230000001,
+            "serverTiming": "app;dur=624.77",
+            "firstVisibleMs": 1041.0097180000012,
+            "gestureToRequestMs": 119.337890625,
+            "requestToResponseHeadersMs": 688.06,
+            "requestToBodyMs": 689.447
+          },
+          {
+            "ackMs": 714.4587909999991,
+            "serverTiming": "app;dur=496.63",
+            "firstVisibleMs": 914.9334390000004,
+            "gestureToRequestMs": 90.504150390625,
+            "requestToResponseHeadersMs": 565.911,
+            "requestToBodyMs": 568.02
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 1920.1696029999998,
+          "serverTiming": "app;dur=1691.36",
+          "firstVisibleMs": 2279.336035,
+          "gestureToRequestMs": 119.637939453125,
+          "requestToResponseHeadersMs": 1756.426,
+          "requestToBodyMs": 1757.778
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 670.18,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 454.41,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 582.4,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 441.58,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 509.05,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 2.1119259999977658,
+          "p95": 3.221553999999742,
+          "max": 3.221553999999742
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 85,
+            "totalMs": 4960.32
+          },
+          "state.save": {
+            "count": 88,
+            "totalMs": 1851.68
+          },
+          "browser.snapshot": {
+            "count": 125,
+            "totalMs": 4188.49
+          },
+          "catalog.refresh": {
+            "count": 18,
+            "totalMs": 2917.45
+          },
+          "history.load": {
+            "count": 21,
+            "totalMs": 899.08
+          },
+          "shell.resources.pages": {
+            "count": 481,
+            "totalMs": 1647.81
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:47:43.670Z",
+        "finishedAt": "2026-10-16T13:48:03.724Z",
+        "privateReceipt": {
+          "file": "lifecycle-0.json",
+          "sha256": "af37c2f407d48cddd495a2a970e66b93077e3d7e0b4773f6679c2398be90509a"
+        }
+      },
+      {
+        "actualWorkers": 6,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 791.1939360000015,
+          "p95": 1263.5117769999997,
+          "max": 1263.5117769999997
+        },
+        "warmSamples": [
+          {
+            "ackMs": 791.1939360000015,
+            "serverTiming": "app;dur=694.23",
+            "firstVisibleMs": 1056.1983550000004,
+            "gestureToRequestMs": 65.361083984375,
+            "requestToResponseHeadersMs": 695.157,
+            "requestToBodyMs": 696.488
+          },
+          {
+            "ackMs": 1263.5117769999997,
+            "serverTiming": "app;dur=1126.52",
+            "firstVisibleMs": 1548.8814779999993,
+            "gestureToRequestMs": 97.024169921875,
+            "requestToResponseHeadersMs": 1137.497,
+            "requestToBodyMs": 1138.797
+          },
+          {
+            "ackMs": 764.5433239999984,
+            "serverTiming": "app;dur=516.03",
+            "firstVisibleMs": 1138.2770899999996,
+            "gestureToRequestMs": 100.760009765625,
+            "requestToResponseHeadersMs": 626.785,
+            "requestToBodyMs": 628.295
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 2212.6932020000004,
+          "serverTiming": "app;dur=1933.26",
+          "firstVisibleMs": 2586.6528259999995,
+          "gestureToRequestMs": 75.130126953125,
+          "requestToResponseHeadersMs": 2106.495,
+          "requestToBodyMs": 2108.066
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 898.93,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 692.14,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 747.18,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 778.47,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 591.9,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.2452290000001085,
+          "p95": 2.3781049999997776,
+          "max": 2.3781049999997776
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 86,
+            "totalMs": 7436.81
+          },
+          "state.save": {
+            "count": 89,
+            "totalMs": 4259.55
+          },
+          "browser.snapshot": {
+            "count": 119,
+            "totalMs": 4318.4
+          },
+          "catalog.refresh": {
+            "count": 15,
+            "totalMs": 3886.77
+          },
+          "history.load": {
+            "count": 18,
+            "totalMs": 1566.25
+          },
+          "shell.resources.pages": {
+            "count": 465,
+            "totalMs": 1700.1
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:48:04.281Z",
+        "finishedAt": "2026-10-16T13:48:31.458Z",
+        "privateReceipt": {
+          "file": "lifecycle-6.json",
+          "sha256": "a4dcb071bc43d6991f3698e470b8eae9b2e67892cf20efc32055d638d2180cc4"
+        }
+      },
+      {
+        "actualWorkers": 12,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 1028.660405999999,
+          "p95": 1213.7250380000005,
+          "max": 1213.7250380000005
+        },
+        "warmSamples": [
+          {
+            "ackMs": 1028.660405999999,
+            "serverTiming": "app;dur=919.36",
+            "firstVisibleMs": 1389.9022829999994,
+            "gestureToRequestMs": 81.8349609375,
+            "requestToResponseHeadersMs": 925.264,
+            "requestToBodyMs": 926.504
+          },
+          {
+            "ackMs": 885.8299860000006,
+            "serverTiming": "app;dur=753.57",
+            "firstVisibleMs": 1332.3419439999998,
+            "gestureToRequestMs": 81.007080078125,
+            "requestToResponseHeadersMs": 781.701,
+            "requestToBodyMs": 783.672
+          },
+          {
+            "ackMs": 1213.7250380000005,
+            "serverTiming": "app;dur=1055.42",
+            "firstVisibleMs": 1723.054877999999,
+            "gestureToRequestMs": 87.06787109375,
+            "requestToResponseHeadersMs": 1101.915,
+            "requestToBodyMs": 1102.935
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 3045.563007999999,
+          "serverTiming": "app;dur=2789.49",
+          "firstVisibleMs": 3593.4588139999996,
+          "gestureToRequestMs": 105.841064453125,
+          "requestToResponseHeadersMs": 2846.379,
+          "requestToBodyMs": 2850.806
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 1311.18,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 626.2,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 863.63,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 723.87,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 926.41,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.7228499999982887,
+          "p95": 11.254372999996122,
+          "max": 11.254372999996122
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 94,
+            "totalMs": 11463.79
+          },
+          "state.save": {
+            "count": 97,
+            "totalMs": 8322.76
+          },
+          "browser.snapshot": {
+            "count": 130,
+            "totalMs": 4615.03
+          },
+          "catalog.refresh": {
+            "count": 17,
+            "totalMs": 6465.27
+          },
+          "history.load": {
+            "count": 20,
+            "totalMs": 2610.77
+          },
+          "shell.resources.pages": {
+            "count": 521,
+            "totalMs": 1701.66
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:48:31.964Z",
+        "finishedAt": "2026-10-16T13:49:13.736Z",
+        "privateReceipt": {
+          "file": "lifecycle-12.json",
+          "sha256": "52b94949786c8e465f6ee6d980a45055cbd6bac62188743c8212860700cbd12c"
+        }
+      }
+    ]
+  },
+  "candidateSixWorkerConfirmation": {
+    "source": "c3a50ea19a04fd1317b0103595a375479ff86df7",
+    "build": {
+      "version": "0.20.167",
+      "id": "262682b705b1675f"
+    },
+    "stages": [
+      {
+        "actualWorkers": 6,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 844.3993659999996,
+          "p95": 883.5606020000014,
+          "max": 883.5606020000014
+        },
+        "warmSamples": [
+          {
+            "ackMs": 840.0393369999983,
+            "serverTiming": "app;dur=705.03",
+            "firstVisibleMs": 1179.3990519999988,
+            "gestureToRequestMs": 115.369873046875,
+            "requestToResponseHeadersMs": 705.822,
+            "requestToBodyMs": 706.864
+          },
+          {
+            "ackMs": 844.3993659999996,
+            "serverTiming": "app;dur=661.50",
+            "firstVisibleMs": 1012.6098720000009,
+            "gestureToRequestMs": 97.66015625,
+            "requestToResponseHeadersMs": 715.21,
+            "requestToBodyMs": 716.575
+          },
+          {
+            "ackMs": 883.5606020000014,
+            "serverTiming": "app;dur=641.33",
+            "firstVisibleMs": 1285.2631050000018,
+            "gestureToRequestMs": 94.0791015625,
+            "requestToResponseHeadersMs": 761.921,
+            "requestToBodyMs": 763.682
+          }
+        ],
+        "prepareRetainedWorker": {
+          "ackMs": 2078.0739540000004,
+          "serverTiming": "app;dur=1803.41",
+          "firstVisibleMs": 2513.7564250000005,
+          "gestureToRequestMs": 110.888671875,
+          "requestToResponseHeadersMs": 1934.538,
+          "requestToBodyMs": 1935.743
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 1213.83,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 472.74,
+            "rows": 1,
+            "total": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 548.91,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 493.07,
+            "rows": 40,
+            "total": 274
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 590.0,
+            "rows": 40,
+            "total": 274
+          }
+        ],
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.9726600000030885,
+          "p95": 3.3731230000012147,
+          "max": 3.3731230000012147
+        },
+        "sameRetainedWorker": true,
+        "operationDeltasDuringThreeWarmSends": {
+          "state.publish": {
+            "count": 85,
+            "totalMs": 7244.73
+          },
+          "state.save": {
+            "count": 89,
+            "totalMs": 4251.48
+          },
+          "browser.snapshot": {
+            "count": 122,
+            "totalMs": 4233.31
+          },
+          "catalog.refresh": {
+            "count": 18,
+            "totalMs": 3956.7
+          },
+          "history.load": {
+            "count": 21,
+            "totalMs": 1291.78
+          },
+          "shell.resources.pages": {
+            "count": 495,
+            "totalMs": 1573.59
+          }
+        },
+        "passed": true,
+        "workersStopped": true,
+        "startedAt": "2026-10-16T13:49:56.820Z",
+        "finishedAt": "2026-10-16T13:50:24.180Z",
+        "privateReceipt": {
+          "file": "lifecyclerepeat-6.json",
+          "sha256": "78c2c43fca4c7e857f852a1734968fdddf9fa8d53afb4de682e26f2a1ee34413"
+        }
+      }
+    ]
+  },
+  "baselineStreaming": {
+    "source": "7c23b2b85fca8d7d7d09e0fe19fe3fa8a0c88726",
+    "build": {
+      "version": "0.20.167",
+      "id": "262682b705b1675f"
+    },
+    "passed": true,
+    "workersStopped": true,
+    "startedAt": "2026-10-16T13:17:06.481Z",
+    "finishedAt": "2026-10-16T13:18:13.662Z",
+    "stages": [
+      {
+        "actualWorkers": 1,
+        "streamLagMs": {
+          "count": 23,
+          "p50": 152,
+          "p95": 181,
+          "max": 202
+        },
+        "copiedChatNavigationMs": {
+          "count": 3,
+          "p50": 416.3764390000006,
+          "p95": 570.774535,
+          "max": 570.774535
+        },
+        "syntheticChatNavigationMs": {
+          "count": 3,
+          "p50": 517.6743470000001,
+          "p95": 641.2082799999998,
+          "max": 641.2082799999998
+        },
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.7454109999998764,
+          "p95": 38.67034100000092,
+          "max": 38.67034100000092
+        },
+        "coldWorkerSendAckMs": 1944.530068,
+        "firstVisibleMs": 2292.6423999999997,
+        "stopUiMs": 1118.185238
+      },
+      {
+        "actualWorkers": 6,
+        "streamLagMs": {
+          "count": 23,
+          "p50": 190,
+          "p95": 226,
+          "max": 241
+        },
+        "copiedChatNavigationMs": {
+          "count": 3,
+          "p50": 307.2086859999981,
+          "p95": 396.85036000000036,
+          "max": 396.85036000000036
+        },
+        "syntheticChatNavigationMs": {
+          "count": 3,
+          "p50": 412.16234500000064,
+          "p95": 462.2042440000005,
+          "max": 462.2042440000005
+        },
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.6848659999996016,
+          "p95": 105.25348499999745,
+          "max": 105.25348499999745
+        },
+        "coldWorkerSendAckMs": 1950.3369190000012,
+        "firstVisibleMs": 2332.096336999999,
+        "stopUiMs": 1052.6587550000004
+      },
+      {
+        "actualWorkers": 12,
+        "streamLagMs": {
+          "count": 23,
+          "p50": 245,
+          "p95": 262,
+          "max": 476
+        },
+        "copiedChatNavigationMs": {
+          "count": 3,
+          "p50": 397.1650490000029,
+          "p95": 461.19477399999596,
+          "max": 461.19477399999596
+        },
+        "syntheticChatNavigationMs": {
+          "count": 3,
+          "p50": 345.1179439999978,
+          "p95": 362.49266999999963,
+          "max": 362.49266999999963
+        },
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.2916929999992135,
+          "p95": 2.4259770000062417,
+          "max": 2.4259770000062417
+        },
+        "coldWorkerSendAckMs": 2361.7457980000036,
+        "firstVisibleMs": 2826.9344060000003,
+        "stopUiMs": 1046.9912160000022
+      }
+    ],
+    "privateReceipt": {
+      "file": "stream-main168.json",
+      "sha256": "83d39b6f6b4bf13dce0aa5ce2be5348d892f35e3a9c2cb092f62bf99f4010610"
+    }
+  },
+  "candidateStreaming": {
+    "source": "c3a50ea19a04fd1317b0103595a375479ff86df7",
+    "build": {
+      "version": "0.20.167",
+      "id": "262682b705b1675f"
+    },
+    "passed": true,
+    "workersStopped": true,
+    "startedAt": "2026-10-16T13:50:24.626Z",
+    "finishedAt": "2026-10-16T13:51:28.908Z",
+    "stages": [
+      {
+        "actualWorkers": 1,
+        "streamLagMs": {
+          "count": 24,
+          "p50": 155,
+          "p95": 174,
+          "max": 210
+        },
+        "copiedChatNavigationMs": {
+          "count": 3,
+          "p50": 438.3976990000001,
+          "p95": 605.5164650000002,
+          "max": 605.5164650000002
+        },
+        "syntheticChatNavigationMs": {
+          "count": 3,
+          "p50": 233.24148200000036,
+          "p95": 413.7462910000004,
+          "max": 413.7462910000004
+        },
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 2.0826129999986733,
+          "p95": 2.9893909999991592,
+          "max": 2.9893909999991592
+        },
+        "coldWorkerSendAckMs": 1646.356661,
+        "firstVisibleMs": 2144.8570440000003,
+        "stopUiMs": 1047.5893050000013
+      },
+      {
+        "actualWorkers": 6,
+        "streamLagMs": {
+          "count": 24,
+          "p50": 199,
+          "p95": 258,
+          "max": 381
+        },
+        "copiedChatNavigationMs": {
+          "count": 3,
+          "p50": 376.5618280000017,
+          "p95": 914.8212459999995,
+          "max": 914.8212459999995
+        },
+        "syntheticChatNavigationMs": {
+          "count": 3,
+          "p50": 359.866326000003,
+          "p95": 426.4723269999995,
+          "max": 426.4723269999995
+        },
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.3253260000019509,
+          "p95": 2.2457030000005034,
+          "max": 2.2457030000005034
+        },
+        "coldWorkerSendAckMs": 2057.2226340000016,
+        "firstVisibleMs": 2590.5252010000004,
+        "stopUiMs": 1107.9898820000017
+      },
+      {
+        "actualWorkers": 12,
+        "streamLagMs": {
+          "count": 23,
+          "p50": 252,
+          "p95": 491,
+          "max": 491
+        },
+        "copiedChatNavigationMs": {
+          "count": 3,
+          "p50": 522.573543999999,
+          "p95": 546.1596600000048,
+          "max": 546.1596600000048
+        },
+        "syntheticChatNavigationMs": {
+          "count": 3,
+          "p50": 328.004909999996,
+          "p95": 376.6437799999985,
+          "max": 376.6437799999985
+        },
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 2.9517740000010235,
+          "p95": 121.76972200000455,
+          "max": 121.76972200000455
+        },
+        "coldWorkerSendAckMs": 2379.860720000004,
+        "firstVisibleMs": 2832.2302430000054,
+        "stopUiMs": 1068.9135410000017
+      }
+    ],
+    "privateReceipt": {
+      "file": "stream-lifecycle.json",
+      "sha256": "2ecc4a86b30546e668acd3cc25b71a4602962db8b1f7d596feba5a50d6c91d5b"
+    }
+  },
+  "candidateStreamingTwelveWorkerConfirmation": {
+    "source": "c3a50ea19a04fd1317b0103595a375479ff86df7",
+    "build": {
+      "version": "0.20.167",
+      "id": "262682b705b1675f"
+    },
+    "passed": true,
+    "workersStopped": true,
+    "startedAt": "2026-10-16T13:52:39.449Z",
+    "finishedAt": "2026-10-16T13:53:11.395Z",
+    "stages": [
+      {
+        "actualWorkers": 12,
+        "streamLagMs": {
+          "count": 23,
+          "p50": 243,
+          "p95": 291,
+          "max": 300
+        },
+        "copiedChatNavigationMs": {
+          "count": 3,
+          "p50": 538.2941070000015,
+          "p95": 584.3013659999997,
+          "max": 584.3013659999997
+        },
+        "syntheticChatNavigationMs": {
+          "count": 3,
+          "p50": 296.0481949999994,
+          "p95": 434.8277420000013,
+          "max": 434.8277420000013
+        },
+        "healthRequestMs": {
+          "count": 8,
+          "p50": 1.713314000000537,
+          "p95": 114.48884700000053,
+          "max": 114.48884700000053
+        },
+        "coldWorkerSendAckMs": 2535.7807310000007,
+        "firstVisibleMs": 3103.162626000001,
+        "stopUiMs": 1084.7862490000007
+      }
+    ],
+    "privateReceipt": {
+      "file": "stream-lifecycle12repeat.json",
+      "sha256": "361554a09b9cb0d761eab6f691be34923d346fc82be3b1e8af795e715d7720a3"
+    }
+  },
+  "outcome": {
+    "functionalChecksPassed": true,
+    "desiredPerformanceComplete": false,
+    "warmAckMedianMsByWorkers": [
+      748,
+      791,
+      1029
+    ],
+    "warmAckMaxMsByWorkers": [
+      840,
+      1264,
+      1214
+    ],
+    "sixWorkerConfirmationMedianMaxMs": [
+      844,
+      884
+    ],
+    "twelveWorkerStreamingInitialP95MaxMs": [
+      491,
+      491
+    ],
+    "twelveWorkerStreamingConfirmationP95MaxMs": [
+      291,
+      300
+    ],
+    "regressionWarning": "Initial six-worker send and twelve-worker streaming tails exceeded the >20% and >100 ms warning. Each received one confirmation; neither warning repeated. Both initial results remain recorded. This is not statistical proof of no regression.",
+    "workspaceFirstMsByWorkers": [
+      670,
+      899,
+      1311
+    ],
+    "workspaceFilterMsByWorkers": [
+      454,
+      692,
+      626
+    ]
+  },
+  "privateEvidenceRoot": "output/scale-acceptance-20261016; raw copied identifiers/content excluded from this public summary",
+  "remaining": [
+    "Warm send acknowledgement target remains unmet; trace remaining lifecycle publications, resource snapshots and synchronous before-response work without weakening durability.",
+    "Recheck workspace timing outliers with repeated comparable samples before treating a single observation as a sustained regression.",
+    "Normal qualification, real external provider latency and real Work-profile end-to-end behavior remain separately scoped acceptance; this synthetic test does not complete them."
+  ],
+  "reviewIntegration": {
+    "mergedMain": "c218a1789",
+    "qualifiedProductSource": "c3a50ea19a04fd1317b0103595a375479ff86df7",
+    "note": "Measurement remains on the frozen qualified source and .167 bundled build. Latest main was merged for PR review; only additive smoke documentation conflicted, and both sections were retained. Product/test files below are byte-identical to qualified source; newer bundled assets were not relabeled as measured.",
+    "qualifiedFileHashes": {
+      "amplifier_web/service.py": "7693557921e710b64d1bba68ae824afd1112f450e18f98caebc81abdb7d7cd4c",
+      "amplifier_web/history_directory_observations.py": "937aa52ce7250483a475b508eb8972fa5c21a4d55be92f1701d37742cb965dc9",
+      "tests/test_delivery_projection.py": "c4c7a8b62658e0ff890b0b6f96957bfa2babfd88593d106541a1d7fabbc1a910",
+      "tests/test_observation_query_bounds.py": "a5d51357e5a9e9ce1aefbdac744270a1de95b531a40e8ba2ac62e13fe72fbc8b"
+    }
+  }
+}
