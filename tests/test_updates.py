@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 import subprocess
@@ -689,15 +690,118 @@ async def test_smart_tool_install_recovers_saved_inventory(app, monkeypatch):
     await manager.install()
     assert called and manager.inventory == rows
 
-async def test_smart_tool_rollback_disables_reinstallation(app, monkeypatch):
+
+async def test_smart_tool_failure_does_not_block_healthy_updates_or_repeat_on_tick(app, monkeypatch):
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools = SmartToolsManager(app)
+    manager = app.update_manager
+    called = []
+    async def activate(previous, target):
+        called.append(previous)
+        if previous == 'bad':
+            raise ValueError('private command output secret=do-not-publish')
+    monkeypatch.setattr(app.smart_tools, 'activate_update', activate)
+    app.state['updates'].update(phase='staged', pendingSmartTools=[
+        {'previous': name, 'target': name + '-new', 'component': name}
+        for name in ('bad', 'healthy-a', 'healthy-b')])
+    await manager.activateSmartTools()
+    assert called == ['bad', 'healthy-a', 'healthy-b']
+    pending = app.state['updates']['pendingSmartTools']
+    assert [row['previous'] for row in pending] == ['bad']
+    assert pending[0]['failure']['phase'] == 'activate'
+    assert app.state['updates']['phase'] == 'error'
+    receipt = manager.diagnostics.state['lastFailure']
+    assert receipt['installationId'] == receipt['component'] == 'bad'
+    assert 'do-not-publish' not in json.dumps(app.state['updates'])
+    await manager.tick()
+    assert called == ['bad', 'healthy-a', 'healthy-b']
+
+
+async def test_smart_tool_staging_failure_keeps_other_tools_and_can_retry_one(app, monkeypatch):
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools = SmartToolsManager(app)
+    manager = app.update_manager
+    manager.inventory = [{'installationId': name, 'label': name, 'kind': 'smart tool',
+                          'status': 'update', 'eligible': True, 'latest': 'b' * 40}
+                         for name in ('bad', 'healthy')]
+    stage_calls, activated = [], []
+    async def stage(source):
+        stage_calls.append(source['installationId'])
+        if stage_calls == ['bad']:
+            raise ValueError('private install output')
+        return {'id': source['installationId'] + '-new'}
+    async def activate(previous, target): activated.append(previous)
+    monkeypatch.setattr(app.smart_tools, 'stage_update', stage)
+    monkeypatch.setattr(app.smart_tools, 'activate_update', activate)
+    await manager.installSmartTools()
+    assert stage_calls == ['bad', 'healthy'] and activated == ['healthy']
+    assert app.state['updates']['pendingSmartTools'][0]['failure']['phase'] == 'stage'
+    await manager.smartToolRetry('bad')
+    assert stage_calls == ['bad', 'healthy', 'bad'] and activated == ['healthy', 'bad']
+    assert not app.state['updates']['pendingSmartTools']
+
+
+async def test_smart_tool_cancellation_never_continues_the_batch(app, monkeypatch):
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools = SmartToolsManager(app)
+    called = []
+    async def activate(previous, target):
+        called.append(previous)
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(app.smart_tools, 'activate_update', activate)
+    app.state['updates'].update(phase='staged', pendingSmartTools=[
+        {'previous': name, 'target': name + '-new'} for name in ('first', 'second')])
+    try:
+        await app.update_manager.activateSmartTools()
+    except asyncio.CancelledError:
+        pass
+    else:
+        pytest.fail(f"Cancellation was lost: calls={called}, pending={app.state['updates']['pendingSmartTools']}")
+    assert called == ['first']
+    assert len(app.state['updates']['pendingSmartTools']) == 2
+
+
+async def test_skipped_smart_tool_revision_stays_skipped_until_new_revision(app, monkeypatch):
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools = SmartToolsManager(app)
+    manager = app.update_manager
+    revision = 'b' * 40
+    app.state['updates'].update(phase='error', pendingSmartTools=[{
+        'previous': 'old', 'revision': revision,
+        'failure': {'phase': 'stage', 'reason': 'smart-tool-update-failed'}}])
+    await manager.smartToolSkip('old')
+    assert not app.state['updates']['pendingSmartTools']
+    assert app.state['updates']['skippedSmartTools'] == {'old': revision}
+    async def inventory(**kwargs):
+        return [{'id': 'smart-tool:old', 'installationId': 'old', 'label': 'example',
+                 'kind': 'smart tool', 'status': 'not_checked', 'eligible': True,
+                 'url': 'https://example.invalid/tool', 'ref': 'main', 'current': 'a' * 40}]
+    async def remote(*args): return revision
+    monkeypatch.setattr(manager, 'inventory_sources', inventory)
+    monkeypatch.setattr('amplifier_web.update_checks.git_revision', remote)
+    await manager.check(tier='other')
+    assert manager.inventory[0]['status'] == 'skipped'
+    assert app.state['updates']['available'] == 0
+    revision = 'c' * 40
+    await manager.check(tier='other')
+    assert manager.inventory[0]['status'] == 'update'
+    assert app.state['updates']['available'] == 1
+
+@pytest.mark.parametrize('unrelated_failure', [False, True])
+async def test_smart_tool_rollback_disables_reinstallation(app, monkeypatch, unrelated_failure):
     manager=app.update_manager
     from amplifier_web.smart_tools import SmartToolsManager
     app.smart_tools=SmartToolsManager(app)
     app.smart_tools.state['installations']=[{'id':'new','previousInstallationId':'old'}]
     app.state['updates']['sequence']={'stage':'other','install':True}
-    async def activate(): pass
+    failed = [{'previous': 'unrelated', 'failure': {'phase': 'stage'}}] if unrelated_failure else []
+    app.state['updates']['pendingSmartTools'] = list(failed)
+    activated = asyncio.Event()
+    async def activate(): activated.set()
     monkeypatch.setattr(manager,'activateSmartTools',activate)
-    await manager.smartToolRollback('new')
-    assert app.state['updates']['pendingSmartTools'] == [{'previous':'new','target':'old'}]
+    # Exercise the actual UI dispatcher: it must forward the installation ID.
+    await app.dispatch('updates.smartToolRollback', {'id': 'new'}, command_id='rollback-tool')
+    await asyncio.wait_for(activated.wait(), 2)
+    assert app.state['updates']['pendingSmartTools'] == [*failed, {'previous':'new','target':'old'}]
     assert app.state['updates']['sequence']['install'] is False
     assert app.state['settings']['updates']['autoInstall'] is False

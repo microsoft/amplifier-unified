@@ -272,3 +272,62 @@ async def test_worker_handoff_receipt_does_not_claim_old_context_insertion(activ
     assert result['delivery'] == 'accepted'
     assert result['steering']['disposition'] == 'next_turn'
     assert 'contextAt' not in result['steering']
+
+
+async def test_confirmed_worker_exit_retires_steering_authority_without_replay(active):
+    app, runtime, session = active
+    await correction(app)
+    await app.on_runtime_event('runtime.ended', {'sessionId': session['id'], 'status': 'stopped'})
+    await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'stopped'})
+    assert session['collaborationGeneration']['terminal'] is True
+    assert session['collaborationGeneration']['completed'] is False
+    saved = session['messages'][-1]
+    assert saved['steering']['disposition'] == 'unknown'
+    assert saved['delivery']['status'] == 'unknown'
+    assert not runtime.sent
+    # An explicit stale correction must remain bound and cannot become new work.
+    with pytest.raises(AppError, match='ended or changed'):
+        await app.dispatch('conversation.send', {'text': 'stale correction',
+            'expectedGenerationId': 'generation', 'allowNextTurn': True}, command_id='stale')
+    # A newly written ordinary input starts a fresh turn after confirmed exit.
+    result = await app.dispatch('conversation.send', {'text': 'Start fresh'}, command_id='fresh')
+    assert result['delivery'] == 'accepted'
+    assert 'steering' not in session['messages'][-1]
+    assert len(runtime.sent) == 1
+    assert runtime.steer.await_count == 1
+    assert saved['steering']['disposition'] == 'unknown'
+
+
+@pytest.mark.parametrize('payload', [
+    {'sessionId': 'child', 'rootSessionId': None},
+    {'backgroundOnly': True},
+    {'sessionId': None},
+    {'rootSessionId': 'different-root'},
+])
+async def test_background_exit_cannot_retire_root_steering_authority(active, payload):
+    app, _, session = active
+    app.collaboration.observe(session, 'runtime.ended', {'sessionId': session['id'], **payload})
+    assert session['collaborationGeneration']['terminal'] is False
+
+
+async def test_confirmed_exit_preserves_existing_terminal_success_and_applied_input(active):
+    app, _, session = active
+    await correction(app)
+    await event(app, 'steering.applied')
+    await app.on_runtime_event('runtime.generation', {'sessionId': session['id'],
+        'event': 'generation.finished', 'generation_id': 'generation',
+        'input_ids': ['original', 'correction'], 'active_job_ids': [],
+        'disposition': 'manager_turn_finished'})
+    await app.on_runtime_event('runtime.ended', {'sessionId': session['id'], 'status': 'stopped'})
+    assert session['collaborationGeneration']['completed'] is True
+    assert session['messages'][-1]['steering']['disposition'] == 'applied'
+
+
+@pytest.mark.parametrize('disposition', ['applied', 'held'])
+async def test_confirmed_exit_preserves_known_steering_disposition(active, disposition):
+    app, _, session = active
+    await correction(app)
+    await event(app, 'steering.' + disposition)
+    await app.on_runtime_event('runtime.ended', {'sessionId': session['id'], 'status': 'interrupted'})
+    assert session['collaborationGeneration']['terminal'] is True
+    assert session['messages'][-1]['steering']['disposition'] == disposition

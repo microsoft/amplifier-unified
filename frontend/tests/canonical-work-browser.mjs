@@ -2,8 +2,12 @@ import {openSettingsPage} from './browser-settings.mjs';
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {readFile} from 'node:fs/promises';
+import {readFile,mkdir,mkdtemp} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import assert from 'node:assert/strict';
+const outputDir=process.env.AMPLIFIER_TEST_OUTPUT_DIR||await mkdtemp(join(tmpdir(),'amplifier-canonical-work-'));
+await mkdir(outputDir,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe']});
 let log='',fixtureCookie;fixture.stderr.on('data',chunk=>log+=chunk);
 const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);fixtureCookie=JSON.parse(line).cookie;resolve(JSON.parse(line).port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))})});
@@ -136,9 +140,9 @@ try{
  await read15.locator('pre').waitFor();assert.equal(requestReads.length,3);assert.equal(responseReads.length,2);assert.equal(await page.locator('.a-json-viewer').count(),0,'Reloaded expanded calls must not fetch raw payloads');
  await model.getByRole('button',{name:/^View request/}).click();await model.getByRole('button',{name:/^Request Object/}).click();
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{navPinned:false,navExpanded:false}}));
- await before.scrollIntoViewIfNeeded();await page.screenshot({path:'/tmp/amplifier-canonical-work.png'});
+ await before.scrollIntoViewIfNeeded();await page.screenshot({path:join(outputDir,'desktop.png')});
  await page.setViewportSize({width:390,height:844});await model.locator('.a-json-viewer').scrollIntoViewIfNeeded();await page.mouse.move(380,830);await page.waitForTimeout(400);
- assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-canonical-work-mobile.png'});
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:join(outputDir,'mobile.png')});
  assert.deepEqual(errors,[]);
  console.log('Collapsed one-line actions and richer grouped model details pass; raw requests and responses are click-only, collapsible, paged, retryable and copyable; 15/10 previews, ordering, shared expansion, reload and mobile pass.');
 }catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}

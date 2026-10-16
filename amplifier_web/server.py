@@ -357,13 +357,17 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                                         command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"),
                                         include_state=not compact))
         result = await asyncio.shield(task)
+        # Internal read receipts can be complete without a state publication.
+        # Consume this marker in both transports; clients never author it.
+        state_independent = result.get('_stateIndependent') is True
+        result = {key: value for key, value in result.items() if key != '_stateIndependent'}
         if compact:
             # Some delegated action families return their own snapshot. Keep
             # their receipt/effects, but use the same stream synchronization.
             result = {key: value for key, value in result.items() if key != 'state'}
             # Shell-only receipts have their own revision domain and notify
             # /api/shell. They must not wait for an unrelated app-state frame.
-            if not payload['action'].startswith('shell.') or payload['action'] == 'shell.command':
+            if not state_independent and (not payload['action'].startswith('shell.') or payload['action'] == 'shell.command'):
                 result['stateRevision'] = result.get('revision', service._state['revision'])
             result['hostInstanceId'] = service.instance_id
         return web.json_response(result)
@@ -620,6 +624,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/diagnostics/performance", performance_diagnostics)
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
+    from .message_interactions import install_routes as install_message_annotation_routes
+    install_message_annotation_routes(app)
     app.router.add_get("/api/conversation/detail", conversation_detail)
     app.router.add_get("/api/conversation/provider-recording", provider_recording)
     app.router.add_get("/api/conversation/navigation", conversation_navigation)

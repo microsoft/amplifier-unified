@@ -69,6 +69,12 @@ def test_success_retires_only_owned_caches_and_update_fences(repair_tree, monkey
     backup = reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
     assert (tool / "amplifier-unified/fresh").is_file()
     assert not (tool / "amplifier-unified/old").exists()
+    # uv treats every directory here as a tool environment. Recovery copies
+    # and reset's lock must not become bogus installed tools.
+    assert sorted(path.name for path in tool.iterdir()) == ["amplifier-unified"]
+    saved = Path(json.loads((backup / "manifest.json").read_text())["toolBackup"])
+    assert not saved.is_relative_to(tool)
+    assert (saved / "old").read_text() == "locally edited install"
     for name in reset.REGENERABLE:
         assert not (home / name).exists()
         assert (backup / name / "broken").is_file()
@@ -94,6 +100,7 @@ def test_failure_restores_install_caches_launcher_and_data(repair_tree, monkeypa
         reset.repair(home, "uv", tool, bins, "trusted.whl", {}, (["stop"], ["start"], None), False)
     assert (tool / "amplifier-unified/old").read_text() == "locally edited install"
     assert not (tool / "amplifier-unified/fresh").exists()
+    assert sorted(path.name for path in tool.iterdir()) == ["amplifier-unified"]
     assert (bins / "amplifier-unified").is_symlink()
     for name in reset.REGENERABLE:
         assert (home / name / "broken").exists()
@@ -235,6 +242,10 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
     assert (data / "keep").read_text() == "history sentinel"
     assert not (sites / "rogue.py").exists()
     assert not (data / "updates").exists()
+    listed = subprocess.run([uv, "tool", "list"], env=env, capture_output=True, text=True, check=True)
+    assert "amplifier-unified" in listed.stdout
+    assert not listed.stderr, listed.stderr
+    assert not (tmp_path / "tools/.reset.lock").exists()
     subprocess.run([str(prefix / "bin/python"), "-I", "-c", "import reset_fixture_dependency; assert reset_fixture_dependency.VALUE == 'fresh'"], env=env, check=True)
 
 

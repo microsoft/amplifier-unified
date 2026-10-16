@@ -1,0 +1,341 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "0701c94cb5c9eae983b87005ca8f9b08a70d1184",
+  "build": {
+    "version": "0.20.165",
+    "id": "24278a46672a303b"
+  },
+  "dtu": "dtu-unified-codex-dev-20261014",
+  "changes": [
+    {
+      "commit": "87433d6fd",
+      "description": "Optional plan reads use an independent request lane and no unrelated state-revision acknowledgment; mutations retain their ordered receipts."
+    },
+    {
+      "commit": "256a1f3dc",
+      "description": "Bounded shell query diagnostics separate queue wait from child read CPU without recording query text or paths."
+    },
+    {
+      "commit": "0701c94cb",
+      "description": "Optional plan and title preview metadata reads use bounded directory references and do not admit dormant conversation owners."
+    }
+  ],
+  "focusedChecks": {
+    "python": {
+      "passed": 22,
+      "failed": 0,
+      "seconds": 5.73,
+      "files": [
+        "tests/test_chat_plan.py",
+        "tests/test_state_transport.py",
+        "tests/test_chat_title_preview.py"
+      ]
+    },
+    "browser": {
+      "passed": true,
+      "fixtureChats": 56,
+      "residentOwnersBefore": 1,
+      "residentOwnersAfter": 1,
+      "runtimeEffects": 0,
+      "checks": [
+        "public paging/filtering completes with an optional plan response held",
+        "stale response cannot replace current scope",
+        "canonical plan detail retained",
+        "mutation receipts remain ordered",
+        "optional row reads admit zero dormant owners"
+      ]
+    }
+  },
+  "copyScale": {
+    "verifiedEventShards": 32,
+    "totalEventShards": 32,
+    "captureGloballyAtomic": false,
+    "captureReceiptSha256": "7d8142945195ea68673d730f2a65d43c170e37a60efbd97226e4105246f3883e",
+    "workspaceTotal": 274,
+    "workspacePageRows": 40,
+    "stages": [
+      {
+        "actualWorkers": 1,
+        "backgroundWorkers": 0,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 654.5997370000005,
+          "p95": 671.2288349999999,
+          "max": 671.2288349999999
+        },
+        "desiredWarmP95Ms": 300,
+        "warmWithinDesired": false,
+        "workspace": [
+          {
+            "metric": "first workspace demand",
+            "currentObservedMs": 457.2399880000012,
+            "desiredMs": 1000,
+            "actionAckMs": 129.6697640000002,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate.",
+            "priorSameUiObservedMs": 571.7014660000004
+          },
+          {
+            "metric": "exact chat filter",
+            "currentObservedMs": 273.94481000000087,
+            "desiredMs": 500,
+            "actionAckMs": 112.7955920000004,
+            "rows": 1,
+            "total": 1,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate.",
+            "priorSameUiObservedMs": 1740.7665109999998
+          },
+          {
+            "metric": "clear filter",
+            "currentObservedMs": 349.8362309999993,
+            "desiredMs": 500,
+            "actionAckMs": 77.1553870000007,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate.",
+            "priorSameUiObservedMs": 349.7508720000005
+          },
+          {
+            "metric": "explicit next page",
+            "currentObservedMs": 390.67858999999953,
+            "desiredMs": 1000,
+            "actionAckMs": 149.86723699999857,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate.",
+            "priorSameUiObservedMs": 387.9347400000006
+          },
+          {
+            "metric": "explicit previous page",
+            "currentObservedMs": 405.7075420000001,
+            "desiredMs": 1000,
+            "actionAckMs": 106.74989300000016,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate.",
+            "priorSameUiObservedMs": 2523.3901920000008
+          }
+        ],
+        "residentOwnersBefore": 16,
+        "residentOwnersAfter": 16,
+        "newResidentOwners": 0,
+        "receipt": "boundedmeta32-0.json",
+        "receiptSha256": "168c6f1ee7b6bfd071b0319d054ac06834e62f1f8fbd85ccbc76dc2115c86530"
+      },
+      {
+        "actualWorkers": 6,
+        "backgroundWorkers": 5,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 767.4676659999986,
+          "p95": 785.5454669999999,
+          "max": 785.5454669999999
+        },
+        "desiredWarmP95Ms": 300,
+        "warmWithinDesired": false,
+        "workspace": [
+          {
+            "metric": "first workspace demand",
+            "currentObservedMs": 445.439488,
+            "desiredMs": 1000,
+            "actionAckMs": 117.03487099999984,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          },
+          {
+            "metric": "exact chat filter",
+            "currentObservedMs": 260.2580820000003,
+            "desiredMs": 500,
+            "actionAckMs": 111.88028599999961,
+            "rows": 1,
+            "total": 1,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          },
+          {
+            "metric": "clear filter",
+            "currentObservedMs": 265.1179609999999,
+            "desiredMs": 500,
+            "actionAckMs": 81.28332100000262,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          },
+          {
+            "metric": "explicit next page",
+            "currentObservedMs": 443.9211839999989,
+            "desiredMs": 1000,
+            "actionAckMs": 112.10524900000019,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          },
+          {
+            "metric": "explicit previous page",
+            "currentObservedMs": 378.5537349999977,
+            "desiredMs": 1000,
+            "actionAckMs": 113.78205099999832,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          }
+        ],
+        "residentOwnersBefore": 16,
+        "residentOwnersAfter": 16,
+        "newResidentOwners": 0,
+        "receipt": "boundedmeta32-6.json",
+        "receiptSha256": "9e9c5b18ac122f00054633ee956ef2a534c48d54031ac540ff0555bfe3d5ec1b"
+      },
+      {
+        "actualWorkers": 12,
+        "backgroundWorkers": 11,
+        "warmAckMs": {
+          "count": 3,
+          "p50": 830.0736120000001,
+          "p95": 844.3602999999985,
+          "max": 844.3602999999985
+        },
+        "desiredWarmP95Ms": 300,
+        "warmWithinDesired": false,
+        "workspace": [
+          {
+            "metric": "first workspace demand",
+            "currentObservedMs": 859.2599690000025,
+            "desiredMs": 1000,
+            "actionAckMs": 155.2510570000013,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          },
+          {
+            "metric": "exact chat filter",
+            "currentObservedMs": 374.2829840000013,
+            "desiredMs": 500,
+            "actionAckMs": 100.90344399999958,
+            "rows": 1,
+            "total": 1,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          },
+          {
+            "metric": "clear filter",
+            "currentObservedMs": 430.37349699999686,
+            "desiredMs": 500,
+            "actionAckMs": 107.02227899999707,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          },
+          {
+            "metric": "explicit next page",
+            "currentObservedMs": 560.1040130000001,
+            "desiredMs": 1000,
+            "actionAckMs": 222.8977300000006,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          },
+          {
+            "metric": "explicit previous page",
+            "currentObservedMs": 427.1788209999977,
+            "desiredMs": 1000,
+            "actionAckMs": 157.7486519999984,
+            "rows": 40,
+            "total": 274,
+            "withinDesiredObservation": true,
+            "regressionFlag": null,
+            "reason": "One observation for this exact gesture; not a p95 estimate."
+          }
+        ],
+        "residentOwnersBefore": 16,
+        "residentOwnersAfter": 16,
+        "newResidentOwners": 0,
+        "receipt": "boundedmeta32-12.json",
+        "receiptSha256": "20fd60ac569cd52f2660aa851fa90acb488a46bdb63b497a7a30df725e51a416"
+      }
+    ]
+  },
+  "measuredCause": {
+    "beforeSource": "256a1f3dc8d6e3d2a84c261b886becc7f5271a35",
+    "beforeBuild": {
+      "version": "0.20.165",
+      "id": "24278a46672a303b"
+    },
+    "beforeEvidence": "planread32-0.json",
+    "beforeQueries": {
+      "recentChildCpuMs": [
+        235,
+        721,
+        1219
+      ],
+      "requestedWorkspaceQueueWaitMs": [
+        1227,
+        1856
+      ]
+    },
+    "cause": "The non-hydrating session helper still admitted each listed dormant owner. The live scalar overlay grew while reading optional plans/title labels, making subsequent directory queries expensive. Bounded no-admission metadata reads stop this growth.",
+    "afterResidency": "16 resident owners before and after each two-page public sequence at1/6/12 real workers.",
+    "attribution": "The one-worker replay uses identical built UI and the only intervening product commit is0701c94cb. The private fixture adds resident IDs to existing before/after responses. Timing remains a small-sample observation, not statistical attribution."
+  },
+  "remainingTargetMiss": {
+    "metric": "warm send acknowledgment",
+    "p95Ms": [
+      671.2288349999999,
+      785.5454669999999,
+      844.3602999999985
+    ],
+    "desiredP95Ms": 300,
+    "observation": "The one-worker HTTP server portion remains475\u2013518ms. The workspace fix does not close this separate target; diagnose send admission/publication phases before changing delivery guarantees.",
+    "status": "open performance target; functional delivery and real worker identity checks passed"
+  },
+  "limitations": [
+    "Local deterministic 250ms provider; real isolated worker processes; no live-provider acceptance.",
+    "All32 per-file verified event shards are present; capture is not globally atomic and these paths do not exercise all historical features.",
+    "Fresh service for this source, fixed15s after observed ready, fresh browser per stage. Shared derived state and filesystem caches persist; synthetic conversation history accumulates.",
+    "First stage compares with prior256 source using the identical built UI. Later6/12 stages have current absolute target observations, not a new exact backend-only before/after pair.",
+    "Resident identity instrumentation was added to existing private before/after fixture responses; no extra requests in measured gestures.",
+    "Three warm samples and one observation per workspace gesture are early-warning baselines, not statistical tail or sustained-load certification."
+  ],
+  "evidenceRoot": "output/readiness-day-20261015/replica/remaining-perf",
+  "sourceSha256": {
+    "amplifier_web/service.py": "17516536d1226c90874ef83096a6de539d5e52b110183ebd3a836c1463f39e84",
+    "amplifier_web/server.py": "78f801a2c2c76a80e651e50311e79fce9a06a41bc53c2c6c2407e6e2f7c37c00",
+    "amplifier_web/performance_diagnostics.py": "e03a8e2ee61469a6698b91694b6a71cebdd568387ba78496dac14ba0c3039ea7",
+    "amplifier_web/shell_query_owner.py": "ed735dd00a08cd81276175a9b56049038602d199b2cf3e6de8be23d7df415c53",
+    "frontend/src/main.jsx": "07af6d51a602de66bb76aedc3cea097d9060b70fb8ce548a9442660ab13a6b7c",
+    "frontend/src/workspace-plans.jsx": "884b438c5442fa7e316a8c685df7e0eab3521e5fa25e25801b91d98ca277299e",
+    "tests/test_chat_plan.py": "ce39de93137d95a5eeb23bace24199824bdec5e50986e5a5174b0a742b277ef1",
+    "tests/test_chat_title_preview.py": "f7e4446122a195675a0512e8d6b20c05164b85ca677da42a21233c1966b1d975",
+    "tests/test_state_transport.py": "ca3a837d2464166897f978e54c40a6102873ad17326b516af18a696fd0855cf8",
+    "tests/fixtures/workspace_plan_read_ui_server.py": "1579eee95ee426cbd5c459e58cb7338ed53424850521a8a25cda2019ea5f1196",
+    "frontend/tests/workspace-plan-read-browser.mjs": "e5e2083df308ee7597564eab3d6ee4ae01e7d2b9e4779f859c00a114d8a92a19"
+  }
+}

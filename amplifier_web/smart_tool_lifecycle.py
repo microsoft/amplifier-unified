@@ -303,11 +303,19 @@ class Lifecycle:
             await self._change(lambda _: self._server(identity).update(status="auth-required", connectionState="auth-required", authorization=connection.challenge, catalogState="stale", loadedSchemas={}))
             raise
 
-    async def uninstall(self, identity):
+    async def uninstall(self, identity, *, staged_from=None, revision=None):
         async with self.install_lock:
             package = next((p for p in self.state["installations"] if p["id"] == identity), None)
             if not package:
+                if staged_from is not None:
+                    return {"id": identity, "status": "uninstalled"}
                 raise ValueError("This package is not installed.")
+            if staged_from is not None and (
+                identity == staged_from or not revision
+                or package.get("stagedFrom") != staged_from or package.get("commit") != revision
+                or package.get("previousInstallationId") or package.get("supersededBy")
+            ):
+                raise ValueError("This installation is no longer the failed staged update.")
             if not re.fullmatch(r"[a-f0-9]{16,64}", identity):
                 raise ValueError("This installation has an unsupported identifier.")
             folder = self.root / "installs" / identity
@@ -321,6 +329,12 @@ class Lifecycle:
             if dependents:
                 raise ValueError("Remove these connection registrations before uninstalling: " + ", ".join(dependents)[:500])
             from .task_environments import remove_installation
-            await asyncio.to_thread(remove_installation, self.service.data_dir, identity, folder)
+            try:
+                await asyncio.to_thread(remove_installation, self.service.data_dir, identity, folder)
+            except FileNotFoundError as error:
+                # A crash may follow file removal but precede its durable state
+                # update. Only the exact failed stage can finish that cleanup.
+                if staged_from is None or not error.filename or Path(error.filename) != folder or folder.exists():
+                    raise
             await self._change(lambda state: state.update(installations=[p for p in state["installations"] if p["id"] != identity]))
             return {"id": identity, "status": "uninstalled", "removedPath": str(folder), "externalToolWork": "unchanged"}

@@ -3,6 +3,7 @@ import {clientUrl,request} from './api';
 import {registerSurfaceCheckpoint} from './surface-checkpoint';
 import './canvas-app-viewer.css';
 import {CanvasControl} from './canvas-controls';
+import {useCanvasReloadGuard} from './canvas-reload-guard.jsx';
 
 const targetOf=canvas=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,canvas[key]]));
 const tokens=['bg','surface','soft','ink','muted','line','accent','tint','green','danger'];
@@ -14,6 +15,7 @@ function hostTheme(){
 }
 
 export function CanvasAppViewer({canvas,dispatch}){
+ const reloadGuard=useCanvasReloadGuard();
  const [mounted,setMounted]=useState(canvas),[error,setError]=useState(''),[renderError,setRenderError]=useState(''),[dirty,setDirty]=useState(false),[review,setReview]=useState(null);
  const frame=useRef(),latest=useRef(canvas),shown=useRef(mounted),dirtyRef=useRef(false),busy=useRef(0),editVersion=useRef(0),channel=useRef(crypto.randomUUID()),seen=useRef(new Map()),dirtyWrites=useRef(Promise.resolve()),sent=useRef(),reported=useRef();
  if(canvas.app.revision!==latest.current.app.revision||canvas.app.stateRevision>=latest.current.app.stateRevision)latest.current=canvas;
@@ -34,7 +36,7 @@ export function CanvasAppViewer({canvas,dispatch}){
   if(version!==editVersion.current)return Promise.resolve();
   dirtyRef.current=value;setDirty(value);
   const target=targetOf(shown.current),epoch=channel.current;
-  const write=dirtyWrites.current.catch(()=>{}).then(()=>dispatch('canvas.views.dirty',{...target,dirty:value,editVersion:version}));
+  const write=reloadGuard.declare(value,()=>dirtyWrites.current.catch(()=>{}).then(()=>dispatch('canvas.views.dirty',{...target,dirty:value,editVersion:version})));
   dirtyWrites.current=write;
   return write.catch(e=>{if(epoch===channel.current){dirtyRef.current=true;setDirty(true);setError(e.message)}throw e});
  };
@@ -113,7 +115,7 @@ export function CanvasAppViewer({canvas,dispatch}){
    </details>
   </div></CanvasControl>
   {(error||renderError)&&<div className="a-canvas-app-errors" role="alert">{renderError&&<p>{renderError}</p>}{error&&error!==renderError&&<p>{error}</p>}</div>}
-  {mounted.app.revision!==app.revision&&<p role="status">A new design is ready. Your unfinished input is still here. <button type="button" onClick={async()=>{try{await dispatch('canvas.views.dirty',{...targetOf(latest.current),dirty:false});dirtyRef.current=false;setDirty(false);mount(latest.current)}catch(e){setError(e.message)}}}>Discard unfinished input and load revision {app.revision}</button></p>}
+  {mounted.app.revision!==app.revision&&<p role="status">A new design is ready. Your unfinished input is still here. <button type="button" onClick={async()=>{const version=editVersion.current,epoch=channel.current;try{await reloadGuard.declare(false,()=>dispatch('canvas.views.dirty',{...targetOf(latest.current),dirty:false}));if(version!==editVersion.current||epoch!==channel.current)return;dirtyRef.current=false;setDirty(false);mount(latest.current)}catch(e){setError(e.message)}}}>Discard unfinished input and load revision {app.revision}</button></p>}
   {app.requests.filter(r=>r.status==='pending').map(r=><div className="a-canvas-app-request" key={r.id}><span>{r.action==='theme.preview'?'Preview on this device':r.action==='theme.apply'?'Apply to the shared shell':'Revert this device’s last theme change'}: {r.summary}</span><button type="button" onClick={()=>preview(r).catch(e=>setError(e.message))}>Review theme change</button><button type="button" onClick={()=>run('canvas.apps.resolve',{requestId:r.id,approve:false})}>Decline</button></div>)}
   {review&&app.requests.some(r=>r.id===review.request.id&&r.status==='pending')&&<section className="a-canvas-app-review" aria-label="Review requested theme change"><strong>{review.request.summary}</strong><p>{review.request.action==='theme.apply'?'Applying changes the shell for all connected clients.':'This action uses this device’s theme controls.'}</p><pre>{review.input.css||'End the preview, or undo the last applied theme if it is still current.'}</pre><button type="button" onClick={async()=>{if(await run('canvas.apps.resolve',{requestId:review.request.id,approve:true}))setReview(null)}}>Approve theme change</button><button type="button" onClick={()=>setReview(null)}>Back</button></section>}
   {canvas.readOnlyVersion&&<p role="status">Saved design, read only.{canvas.historicalStateUnavailable?' Inputs were not recorded for this older design.':' Inputs show the state saved when this version was created.'}</p>}

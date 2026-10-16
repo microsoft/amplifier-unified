@@ -22,7 +22,9 @@ try{
  await expect(page.getByRole('button',{name:'Plan a neighborhood garden',exact:true}).first()).toBeVisible();
  assert.deepEqual(await check(),{unchanged:true,namingCalls:0,title:'Conversation deadbeef'});
  assert.equal(previews.length,1,'Header and visible rows share one bounded read');
- await page.getByRole('button',{name:'Details and actions for Plan a neighborhood garden',exact:true}).first().click();
+ const titleRow=page.locator('.a-nav-chat').filter({has:page.getByRole('button',{name:'Plan a neighborhood garden',exact:true})}).first();
+ await titleRow.hover();
+ await titleRow.getByRole('button',{name:'Details and actions for Plan a neighborhood garden',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Details for Plan a neighborhood garden',exact:true});
  await expect(dialog.getByText('Preview from the first message. Rename this chat to give it a permanent name.',{exact:true})).toBeVisible();
  await expect(dialog.getByText(ready.sessionId,{exact:true})).toBeVisible();

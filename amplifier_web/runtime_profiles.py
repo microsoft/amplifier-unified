@@ -48,8 +48,12 @@ def configuration_key(settings, *roots):
         name: source for name, source in settings.get("bundle", {}).get("added", {}).items()
         if name not in bundle_sources and (name not in defaults or source != defaults[name])
     }
+    # Removing the last source through Settings leaves an empty category.
+    # Empty module/bundle maps declare no code and must reuse the same graph.
+    sources = {key: rows for key, rows in settings.get("sources", {}).items()
+               if not (key in {"modules", "bundles"} and rows == {})}
     value = {
-        "sources": settings.get("sources", {}),
+        "sources": sources,
         "bundles": added,
         "behaviors": app_behaviors(settings),
         "routing": bool(settings.get("routing")),

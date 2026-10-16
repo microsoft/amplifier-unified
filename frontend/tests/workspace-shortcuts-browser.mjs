@@ -105,9 +105,13 @@ try{
  await page.screenshot({path:out+'/desktop.png'});
  // Pin B before its first chat: both copies remain usable.
  const scopeBefore=await saved(page);
- await row(b).hover();
- await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
- await page.getByRole('button',{name:'Pin workspace '+b.path,exact:true}).click();
+ await row(b).locator('.a-workspace-select').focus();
+ await page.keyboard.press('Tab');await expect(newChat(b)).toBeFocused();
+ await page.keyboard.press('Tab');
+ await expect(row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true})).toBeFocused();
+ await page.keyboard.press('Enter');
+ const keyboardPin=page.getByRole('button',{name:'Pin workspace '+b.path,exact:true});
+ await keyboardPin.focus();await page.keyboard.press('Enter');
  await expect.poll(async()=>(await saved(page)).pinnedWorkspaceIds).toEqual([b.id]);
  const scopeAfter=await saved(page);
  assert.equal(scopeAfter.selectedSessionId,scopeBefore.selectedSessionId);assert.equal(scopeAfter.selectedWorkspaceId,scopeBefore.selectedWorkspaceId);assert.deepEqual(scopeAfter.view,scopeBefore.view);assert.deepEqual(scopeAfter.canvas,scopeBefore.canvas);
@@ -218,17 +222,41 @@ try{
  const openPoint=await openNavigation.boundingBox();
  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:openPoint.x+openPoint.width/2,y:openPoint.y+openPoint.height/2}]});
  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ const touchScopeBefore=await saved(touch),touchCallStart=calls.length;
+ const tap=async locator=>{await expect(locator).toBeVisible();await locator.click({trial:true});const box=await locator.boundingBox();await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:box.x+box.width/2,y:box.y+box.height/2}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]})};
+ await tap(row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}));
+ await tap(touch.getByRole('button',{name:'Unpin workspace '+b.path,exact:true}));
+ await expect.poll(async()=>(await saved(touch)).pinnedWorkspaceIds).toEqual([]);
+ workspaceRegion=section;
+ await tap(row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}));
+ await tap(touch.getByRole('button',{name:'Pin workspace '+b.path,exact:true}));
+ await expect.poll(async()=>(await saved(touch)).pinnedWorkspaceIds).toEqual([b.id]);
+ workspaceRegion=pinned;
+ const touchScopeAfter=await saved(touch);
+ assert.equal(touchScopeAfter.selectedSessionId,touchScopeBefore.selectedSessionId);
+ assert.equal(touchScopeAfter.selectedWorkspaceId,touchScopeBefore.selectedWorkspaceId);
+ assert.equal(touchScopeAfter.view.draft,touchScopeBefore.view.draft);
+ assert.equal(touchScopeAfter.canvas.id,touchScopeBefore.canvas.id);
+ assert.equal(touchScopeAfter.library.sessionCount,baseline);
+ const touchPinCalls=calls.slice(touchCallStart).flatMap(call=>call.action==='shell.command'?[{action:call.args.action,args:call.args.args}]:[call]);
+ assert.equal(touchPinCalls.some(call=>['session.select','session.create','conversation.send','workspace.select'].includes(call.action)),false,'Touch workspace pin actions must not select or execute a conversation');
  const touchNew=touch.locator('[data-sidebar-section=workspaces]').getByRole('button',{name:'New chat in '+b.path,exact:true});
  await expect(touchNew).toBeVisible();await expect(touchNew).toHaveCSS('opacity','1');
+ await touchNew.click({trial:true});
  const box=await touchNew.boundingBox();assert.ok(box.width>=44&&box.height>=44);
- await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:box.x+box.width/2,y:box.y+box.height/2}]});
- await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ await tap(touchNew);
  await expect.poll(async()=>(await saved(touch)).view.newSessionDraft.workspace).toBe(b.path);
- assert.equal((await saved(touch)).library.sessionCount,baseline);assert.equal((await saved(touch)).view.navExpanded,false);
+ assert.equal((await saved(touch)).library.sessionCount,baseline);await expect.poll(async()=>(await saved(touch)).view.navExpanded).toBe(false);
  await touch.screenshot({path:out+'/touch.png'});
  await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:false});
  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});
  await page.setViewportSize(desktopViewport);
+ // Re-pinning appends the workspace; restore the prior fixture order through
+ // its public keyboard control before the independent reload/order assertions.
+ await expect.poll(order).toEqual(['session:'+sid,'workspace:'+b.id]);
+ await pinned.getByRole('button',{name:'Reorder '+b.name,exact:true}).focus();
+ await page.keyboard.press('ArrowUp');
+ await expect.poll(order).toEqual(['workspace:'+b.id,'session:'+sid]);
  await action('session.select',{id:sid});await expectComposer('Original chat text');
  assert.equal((await saved(page)).canvas.id,canvasId);
  await expect.poll(async()=>(await saved(page)).canvas.renderReports?.preview?.status).toBe('ready');
@@ -285,6 +313,6 @@ try{
  await expect(pinned).toHaveCount(0);
  const afterPins=await saved(other);assert.equal(afterPins.selectedSessionId,otherBefore.selectedSessionId);assert.equal(afterPins.selectedWorkspaceId,otherBefore.selectedWorkspaceId);assert.deepEqual(afterPins.view,otherBefore.view);
  const runtime=await (await page.request.get(url+'/fixture')).json();assert.deepEqual(runtime.sent,[]);assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.stopped,[]);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',scenarios:['empty Pinned hidden','row path not active folder','no creation or model turn','retained draft text attachments model bundle','chat Canvas roundtrip','other client preserved','long equal names stable hover and focus geometry','keyboard Enter','touch target','empty workspace pin survives reload and activity pressure','rename keeps pin identity','mixed keyboard and drag order survives reload without duplicates','last unpin hides section'],screenshots:out}));
+ console.log(JSON.stringify({status:'passed',scenarios:['empty Pinned hidden','row path not active folder','no creation or model turn','retained draft text attachments model bundle','chat Canvas roundtrip','other client preserved','long equal names stable hover and focus geometry','keyboard workspace Details and pin activation','actual touch workspace Details and unpin/re-pin preserve selection and draft','touch target','empty workspace pin survives reload and activity pressure','rename keeps pin identity','mixed keyboard and drag order survives reload without duplicates','last unpin hides section'],screenshots:out}));
 }catch(error){if(page){await page.screenshot({path:out+'/failure.png'});await writeFile(out+'/failure-evidence.json',JSON.stringify({error:error.message,calls,state:await page.evaluate(()=>window.amplifier.getState()),pinned:await page.locator('[data-sidebar-section=pinned]').evaluateAll(nodes=>nodes.map(node=>node.outerHTML))},null,2))}throw error}
 finally{await context?.close();await browser?.close();fixture.kill('SIGTERM')}

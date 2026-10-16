@@ -52,7 +52,11 @@ def record(service, session, input_id, disposition, reason=None, *, preserve_pen
 
 
 def observe(service, session, kind, payload):
-    if kind == 'runtime.error' or (kind == 'runtime.generation' and
+    exited = (kind == 'runtime.ended' and not payload.get('backgroundOnly')
+        and payload.get('sessionId') is not None
+        and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')}
+        and payload.get('rootSessionId', session['id']) == session['id'])
+    if exited or kind == 'runtime.error' or (kind == 'runtime.generation' and
             payload.get('event') in {'generation.finished', 'generation.failed', 'generation.detached'} and
             payload.get('sessionId', session['id']) == session['id'] and
             payload.get('rootSessionId', session['id']) == session['id']):

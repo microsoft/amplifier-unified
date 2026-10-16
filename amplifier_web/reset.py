@@ -505,12 +505,21 @@ def post_checks(prefix, home, *, wait=60):
     return results
 
 
+def tool_recovery_root(tool_root):
+    # uv enumerates children of its tool directory as installed environments.
+    # Keep recovery files outside that namespace, on the same filesystem so
+    # moving an installation out and restoring it remain atomic renames.
+    return tool_root.parent / (tool_root.name + "-amplifier-unified-recovery")
+
+
 def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
     prefix = tool_root / "amplifier-unified"
     launcher = bin_root / "amplifier-unified"
     backup = home / "reset-backups" / uuid.uuid4().hex
     backup.mkdir(parents=True, mode=0o700)
-    tool_backup = tool_root / (".amplifier-unified-reset-" + backup.name)
+    recovery = tool_recovery_root(tool_root) / backup.name
+    recovery.mkdir(parents=True, mode=0o700)
+    tool_backup = recovery / "previous"
     moves = []
     had_launcher = launcher.exists() or launcher.is_symlink()
     # A public launcher may be a symlink or an installer-created script.
@@ -554,7 +563,7 @@ def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
     except BaseException:
         # Preserve failed candidates too, then put the exact old paths back.
         if installing and (prefix.exists() or prefix.is_symlink()):
-            prefix.rename(tool_root / (".amplifier-unified-failed-" + backup.name))
+            prefix.rename(recovery / "failed")
         for original, saved in reversed(moves):
             saved.rename(original)
         if had_launcher:
@@ -690,7 +699,7 @@ def perform(args, home, service):
     if args.source and Path(args.source).expanduser().exists():
         source = str(Path(args.source).expanduser().resolve())
     progress("Installation source found", done=True)
-    with repair_lock(tool_root):
+    with repair_lock(tool_recovery_root(tool_root)):
         repair(home, uv, tool_root, bin_root, source, env, service, args.no_start)
 
 

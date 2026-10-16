@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "status": "historical-majority-explained-current-full-cold-target-unmeasured",
+  "reviewedSource": "df245e2700012a3e51fd6ac6142af3d64705e1e4",
+  "reviewedSourceSha256": {
+    "amplifier_web/runtime.py": "c3c423c2a217070cc54ef17fc9ffe62687478b6e5e26a81e07ec166355bba9d5",
+    "amplifier_web/runtime_profiles.py": "1e4f6ab8aa02038920d4823d182f909415376473fe99dda08a404782a4b56f42",
+    "amplifier_web/host/session.py": "6aabcbc4b1eb3b30b9f1437d4e20b64222af3a080c0f2da099c03eeb759324b9",
+    "tests/fixtures/profile_preparation_benchmark.py": "cd58d4586d57cb4c8a9409a0c15d632d2ec27b7ff42449a420a3bc8b04e59ee2",
+    "tests/test_runtime_profile_inputs.py": "2744a0bc2d53d8e24ac70c1209b278b4d5521c86ed2536206da2d358c47eabc8"
+  },
+  "historicalIncident": {
+    "receiptDate": "2026-10-15",
+    "inputToFirstProviderSeconds": 38.603,
+    "preSpawnProfileQualificationSeconds": 28.600987,
+    "explainedSharePercent": 74.09,
+    "trigger": "Effective application behavior composition changed because the Unified shell behavior was removed. This legitimately changed the qualification key; no other qualification-key component changed.",
+    "rawBehaviorCount": {
+      "before": 21,
+      "after": 20
+    },
+    "effectiveBehaviorCountIncludingAutomaticImageGeneration": {
+      "before": 22,
+      "after": 21
+    },
+    "phaseMilliseconds": {
+      "source-snapshot": 8899.148,
+      "runtime-prepare": 1132.415,
+      "installer-policy": 160.978,
+      "dependency-prepare": 3479.346,
+      "runtime-freeze": 5628.799,
+      "ecosystem-runtime-freeze": 335.114,
+      "ecosystem-runtime-freeze-install": 262.131,
+      "ecosystem-runtime-policy": 187.889,
+      "compatibility-probe": 8051.858,
+      "recorded-verification": 1075.794
+    },
+    "phaseWarning": "Several runtime-freeze entries are nested; do not sum all phase durations as independent work.",
+    "remainingWorkerPreparation": "Approximately8 seconds of worker bundle preparation/session mounting lacks separate Foundation activation, create_session and history-injection durations.",
+    "displayInterpretation": "Preparing community modules (activating) was the currently reported phase, not evidence that all approximately40 seconds were spent in that phase.",
+    "repeatEvidence": "The later read-only audit found the exact qualified index/environment and matching current configuration key. It did not time a second identical production worker start. A repeated40-second setup under unchanged inputs is not established.",
+    "historicalSourceLimit": "These retained receipts bind timing and configuration-key facts, plus recorded runtime packages; they do not contain a historical application Git commit. The current source review above is separate.",
+    "recordedRuntime": {
+      "core": "2.0.1",
+      "foundation": "1.0.0",
+      "foundationCommit": "85532ee4190c687dd7b582861a4c99c8323446ca",
+      "loopLive": "0.2.0",
+      "loopLiveCommit": "08de4d442fde0210c4c89f7628c17846c5dfd67b"
+    },
+    "privateEvidence": [
+      {
+        "path": "output/work-activity-20261013/bounded-directory/runtime-startup160/audit.json",
+        "sha256": "4297e9c28d15dd98ae96dcbbcdae2b58ee39d6e931046bfec47f9e461313ceb6"
+      },
+      {
+        "path": "output/work-activity-20261013/bounded-directory/runtime-startup160/timeline.json",
+        "sha256": "90e2bb9e42e74b2fb37df9732d2905a0b5dac362a308535038875f27f4b5efa0"
+      }
+    ],
+    "productionChangesMadeByInvestigation": 0
+  },
+  "currentSourceFindings": [
+    "RuntimeManager with no explicit command runs profile ensure before spawning a worker; an explicit worker command used by concurrency controls bypasses this qualification path.",
+    "runtime_profiles.ensure uses the parent generation, effective configuration and local source content to select a reusable qualified profile. Existing successful validated index hits return before snapshot, dependency preparation or freeze.",
+    "The community activating label is emitted by Foundation prepare inside host/session.py, after profile qualification and before complete session mounting.",
+    "Profile attempt receipts already separate preflight, lock wait, source snapshot, runtime preparation, installer policy, dependency preparation, freeze, compatibility and verification. Worker activation/mount/history timing still needs finer observation to attribute the remaining interval."
+  ],
+  "alreadyExecutedControls": {
+    "source": "e27593c670bd977f74202d8832791fda11302856",
+    "partOfBroadPythonPass": 9021,
+    "cases": [
+      {
+        "id": "tests/test_runtime_profile_inputs.py::test_concurrent_identical_siblings_coalesce_then_cache_without_process",
+        "status": "passed"
+      },
+      {
+        "id": "tests/test_runtime_profile_inputs.py::test_successful_phase_timings_stay_private_and_cache_reuse_does_not_rewrite",
+        "status": "passed"
+      },
+      {
+        "id": "tests/test_runtime_profile_inputs.py::test_incomplete_attempt_cannot_be_an_index_hit[preparing]",
+        "status": "passed"
+      },
+      {
+        "id": "tests/test_runtime_profile_inputs.py::test_incomplete_attempt_cannot_be_an_index_hit[failed]",
+        "status": "passed"
+      },
+      {
+        "id": "tests/test_runtime_profile_inputs.py::test_incomplete_attempt_cannot_be_an_index_hit[cancelled]",
+        "status": "passed"
+      },
+      {
+        "id": "tests/test_runtime_profile_inputs.py::test_redundant_bundle_registration_reuses_offered_profile[added-default]",
+        "status": "passed"
+      },
+      {
+        "id": "tests/test_runtime_profile_inputs.py::test_redundant_bundle_registration_reuses_offered_profile[added-shadowed]",
+        "status": "passed"
+      },
+      {
+        "id": "tests/test_runtime_profile_inputs.py::test_new_lazy_bundle_registration_still_requires_qualification",
+        "status": "passed"
+      }
+    ],
+    "privateJunitPath": "output/readiness-day-20261015/issues/integrated-python-final/python/python-junit.xml",
+    "boundary": "Real ensure control/cache/receipt logic with synthetic preparation/process seams. These prove reuse/invalidation semantics, not actual full Work installation speed or end-user first-send latency."
+  },
+  "existingBenchmarkAssessment": {
+    "path": "tests/fixtures/profile_preparation_benchmark.py",
+    "canRunUnchangedUnderCurrentConstraints": false,
+    "reasons": [
+      "Seeds dependencies using uv lock and uv sync, and references moving Git main sources.",
+      "Its calls time profile ensure, not the worker activation/mount or first-message acknowledgement phases.",
+      "Its synthetic provider configuration and cached dependencies differ from the historical user composition."
+    ],
+    "historicalWorkBenchmark": "Earlier October9 no-inference Work benchmark reported approximately11.50-second qualification and1-millisecond cache hits on its own older source/cache. It is not a measured40-second to11-second fix or a current full-cold baseline."
+  },
+  "boundedOptionalFollowup": {
+    "status": "specified-not-executed",
+    "purpose": "Measure already-qualified local profile reuse and isolate worker activation, without external inference or dependency installation.",
+    "setup": "New owned DTU state and synthetic workspace; exact reviewed immutable Work source/dependency snapshot and parent receipt copied privately. No user credentials/history/schedules; local provider refuses all model calls. Keep normal RuntimeManager command unset.",
+    "networkPolicy": "No external network or installer process. A missing local source/package is a failed prerequisite, never an implicit download or behavior removal.",
+    "cases": [
+      "Same exact parent/config: one worker-cold start to runtime.ready, then Stop only its owned worker and repeat.",
+      "One second synthetic chat with unchanged composition: require same qualified profile and no additional qualification attempt."
+    ],
+    "assertions": [
+      "Record ensure begin/end, selected immutable generation, spawn, Foundation prepare phase, session ready and exact cleanup.",
+      "Assert no provider complete call, prompt submission, external tool action, qualification attempt rewrite, source mutation or worker leak."
+    ],
+    "limits": "This deliberately measures cache-warm/profile-warm worker starts. Fully cold dependency installation and changed full Work composition remain unmeasured; do not infer their timing from this control."
+  },
+  "outstandingStatement": "The historical delay was mostly a justified one-time runtime requalification after a behavior change. Current full-composition cold preparation latency and the remaining activation/mount interval have not been measured against a target. This is separate from warm-submit scale latency and is not established as a repeated warm regression.",
+  "newExecutionPerformed": false,
+  "releaseOrProductionAdoption": false
+}

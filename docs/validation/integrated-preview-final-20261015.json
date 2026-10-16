@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "sourceRevision": "697fa66ac0be490dfd4edb7358b251163cd460d7",
+  "build": {
+    "version": "0.20.165",
+    "id": "5f136e8e69c99e41"
+  },
+  "savedFilesUnchanged": 8,
+  "savedFileWitnessSha256": "514647218233ce917232387a67f6441e8dc27a328ba6309eb7742a124c9dbfde",
+  "sessions": 4,
+  "schedules": 0,
+  "updates": {
+    "autoCheck": false,
+    "autoInstall": false
+  },
+  "browser": {
+    "authenticated": true,
+    "cssProbe": "none",
+    "loadMs": 481,
+    "errors": []
+  },
+  "ownedSourceImports": true,
+  "frontendRebuilt": false,
+  "dependenciesReinstalled": false,
+  "service": "Owned isolated spark-2 DTU preview only",
+  "passed": true,
+  "limits": [
+    "One authenticated browser launch is functional acceptance, not a matched performance baseline.",
+    "Four synthetic preview chats are distinct from the private27508-session scale corpus.",
+    "Latest local-wheel preparation change has separate focused and fresh-profile qualification; this browser smoke does not itself prepare a new profile.",
+    "No main merge, release, shared-host or spark-1 mutation."
+  ]
+}

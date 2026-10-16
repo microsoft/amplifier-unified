@@ -1,0 +1,40 @@
+{
+  "scope": "Reduce repeated admitted-overlay serialization and isolate automatic naming discovery SQL",
+  "base": "ffa927f0c",
+  "environment": {
+    "host": "spark-2",
+    "dtu": "dtu-unified-codex-dev-20261014",
+    "source": "/opt/unified-dev/checks/perf-remaining-20261015",
+    "state": "Disposable synthetic fixtures only",
+    "provider": "Synthetic naming completion; no external accounts or running user chats"
+  },
+  "serialization": {
+    "baseline": "New guards fail: one real changed-state browser snapshot encodes the same rows/notices eight times; five repeated/scoped queries encode them five times.",
+    "candidate": "Each unchanged admitted overlay encodes once, while same-revision mutations, native fences, read receipts and independent frozen readers remain current.",
+    "focusedResult": {"passed": 35, "seconds": 28.02}
+  },
+  "automaticNaming": {
+    "mechanism": "Existing 32-candidate count/order/window query moves from the event loop to the bounded read-only query process. Host keeps all eligibility, naming and receipt authority.",
+    "existingAndNewBehavior": {"passed": 24, "seconds": 29.39},
+    "finalQueryAndTransportGuards": {"passed": 27, "seconds": 32.59},
+    "failureTransportGuards": {"passed": 2, "seconds": 2.50},
+    "proofs": [
+      "37-candidate canonical query equals the 32-row worker page, including wrap-around",
+      "No candidate query executes on the host directory and no dormant session is admitted",
+      "Held child permits foreground lock acquisition and ten event-loop scheduling turns",
+      "Changed app, native and closed-host facts reject the pending page",
+      "Uncommitted state never spawns or exports a query",
+      "Canceled read closes its owned child and pending tasks",
+      "Timeout and worker early-exit both defer naming and remove the exact child/spool",
+      "Existing naming eligibility, cadence, manual-name precedence and persistent attempt suppression pass"
+    ]
+  },
+  "limits": [
+    "Durations are correctness-run elapsed times under other DTU test load, not performance comparisons.",
+    "No new quiet 1/6/12-worker timing trial has been run. Prior warm-send and workspace-page target misses remain open.",
+    "The earlier sampling profile identifies synchronous naming SQL as remaining main-thread work, but does not prove it accounts for every intermittent workspace delay.",
+    "The naming worker still scans indexed catalog metadata; this change isolates that work rather than eliminating it.",
+    "Real provider latency, source module preparation, and complete copied-event fidelity are outside these focused proofs.",
+    "No spark-1 mutation, release or main merge."
+  ]
+}

@@ -59,7 +59,7 @@ async def test_failed_discovery_keeps_old_connection_and_saved_settings(managed,
     before = copy.deepcopy(managed.state)
     async def fail(connection): raise ValueError('invalid tool catalog')
     monkeypatch.setattr(managed, '_discover_catalog', fail)
-    with pytest.raises(ValueError, match='invalid tool catalog'):
+    with pytest.raises(ValueError, match='connection check'):
         await managed.activate_update('old', 'new')
     assert managed.state == before and managed.connections['board'] is old
     assert not old.task.done()
@@ -110,6 +110,23 @@ async def test_stage_preserves_tracking_policy_and_extras(managed, monkeypatch):
     await managed.stage_update({'installationId': 'old', 'latest': 'b' * 40})
     assert managed.state['installations'][1]['ref'] == 'main'
     assert managed._server('board')['installationId'] == 'old'
+
+
+async def test_stage_rejects_broken_mcp_startup_without_replacing_active_connection(managed, monkeypatch, tmp_path):
+    from amplifier_web.smart_tool_updates import ToolQualificationError
+    await managed.connect('board')
+    old_connection = managed.connections['board']
+    before = copy.deepcopy(managed._server('board'))
+    (tmp_path / 'new/bin/python').write_text('#!/bin/sh\necho private-startup-secret >&2\nexit 12\n')
+    async def install(args): return managed.state['installations'][1]
+    monkeypatch.setattr(managed, 'install', install)
+    with pytest.raises(ToolQualificationError) as caught:
+        await managed.stage_update({'installationId': 'old', 'latest': 'b' * 40})
+    assert caught.value.diagnostic_facts == {'reason': 'smart-tool-startup-failed'}
+    assert 'private-startup-secret' not in str(caught.value)
+    assert managed.connections['board'] is old_connection and not old_connection.task.done()
+    assert managed._server('board') == before
+    assert not (tmp_path / 'data').exists()
 
 def test_retarget_only_owned_paths():
     previous = {'binDir': '/old/bin', 'sourceDir': '/old/src'}

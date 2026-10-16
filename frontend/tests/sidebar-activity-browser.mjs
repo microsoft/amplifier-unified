@@ -1,5 +1,5 @@
 import './composer-test-helpers.mjs';
-// Packaged UI + real scoped HTTP/SSE; synthetic progress only, no model calls.
+// Packaged UI + real scoped HTTP/WebSocket; synthetic progress only, no model calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {writeFile} from 'node:fs/promises';
@@ -48,6 +48,7 @@ async function humanPostRecency(){
   const dispatch=(p,action,args)=>p.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
   const order=()=>page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
   await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
+  await expect(page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]')).toHaveCount(20);
   const initial=await metrics(),target=initial.target;
   assert.equal(initial.sessions.length,24);
   await expect(page.locator('.a-quiet-sidebar')).toBeVisible();
@@ -128,8 +129,10 @@ try{
  }else{
  const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture timeout')),45000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});let output='';fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const d=JSON.parse(line);if(d.url){clearTimeout(timer);resolve(d.url)}}catch{}})});
  const page=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-active-client-token'},viewport:{width:1280,height:1000}});
- const errors=[],traffic=[],reports=[];let measuring=false;
- page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{const path=new URL(r.url()).pathname;if(path==='/api/view')reports.push(r.postDataJSON());if(measuring&&['/api/shell','/api/view'].includes(path))traffic.push(r.method()+' '+path)});
+ const errors=[],traffic=[],reports=[];let measuring=false,bootstrapReads=0,resourceReads=0,stateBaselines=0;
+ await page.addInitScript(()=>{const Native=window.WebSocket;window.sidebarProofSockets=[];window.WebSocket=class extends Native{constructor(...args){super(...args);if(String(args[0]).includes('/api/events/'))window.sidebarProofSockets.push(this)}}});
+ page.on('websocket',socket=>socket.on('framereceived',frame=>{try{if(JSON.parse(String(frame.payload)).event==='state')stateBaselines++}catch{}}));
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{const path=new URL(r.url()).pathname;if(path==='/api/view')reports.push(r.postDataJSON());if(path==='/api/shell')bootstrapReads++;if(path==='/api/shell/resources')resourceReads++;if(measuring&&['/api/shell','/api/shell/resources','/api/view'].includes(path))traffic.push(r.method()+' '+path)});
  await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats);
  const api=async(path,data)=>{const r=await page.request.post(url+path,{data});assert.equal(r.status(),200);return r.json()};
  const {sessions}=await (await page.request.get(url+'/fixture/metrics')).json();
@@ -137,35 +140,70 @@ try{
  const shell=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
  const order=()=>page.locator('.a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ // The shared scale fixture now seeds pins for transport qualification. This
+ // journey explicitly creates and reorders its own two pins below.
+ for(const id of (await shell()).pinnedSessionIds)await dispatch('session.pin',{id,pinned:false});
+ await expect.poll(async()=>(await shell()).pinnedSessionIds).toEqual([]);
+ await page.waitForFunction(()=>window.amplifier.getShellState().snapshots.chats.recentNavigation);
+ await expect(page.locator('.a-nav-chat[data-session-id]')).toHaveCount(20);
  const before=await order();
  // Progress in a different selected conversation must not reshuffle the sidebar.
  await dispatch('session.select',{id:sessions[1]});await api('/fixture/progress',{running:true});await wait(1500);
  measuring=true;await wait(4000);measuring=false;
  assert.deepEqual(await order(),before);assert.deepEqual(traffic,[],'steady streaming must not refetch shell or echo conversation text');
- await api('/fixture/progress',{running:false});await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.sidebarNavigation.recent.items[0].id===id,sessions[0]);
+ await api('/fixture/progress',{running:false});await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.recentNavigation?.items[0]?.id===id,sessions[0]);
  assert.equal((await order())[0],sessions[0]);
  // Explicit user preferences run through the same shared actions as agents.
- await page.locator('[data-sidebar-section=recent] summary').click();await page.getByRole('combobox',{name:'Sort conversations'}).selectOption('name');
- await page.waitForFunction(()=>window.amplifier.getShellState().snapshots.chats.sidebarNavigation.recent.scope.sort==='name');
- const names=(await shell()).sidebarNavigation.recent.items.map(r=>r.title.toLowerCase());assert.deepEqual(names,[...names].sort());
+ // The credential-free scale fixture can show initial connection onboarding.
+ if(await page.locator('.a-settings-experience').isVisible())await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(page.locator('[data-part="overlay"]')).toHaveCount(0);
+ await page.getByRole('button',{name:'Search chats',exact:true}).click();
+ const search=page.getByRole('region',{name:'Chat search',exact:true});await search.locator('summary').click();
+ await search.getByRole('combobox',{name:'Sort conversations'}).selectOption('name');
+ await page.waitForFunction(()=>window.amplifier.getShellState().snapshots.chats.sidebarNavigation?.search?.scope.sort==='name');
+ const names=(await shell()).sidebarNavigation.search.items.map(r=>r.title.toLowerCase());assert.deepEqual(names,[...names].sort());
+ await dispatch('session.select',{id:sessions[1]});
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  await dispatch('session.pin',{id:sessions[1],pinned:true});await dispatch('session.pin',{id:sessions[0],pinned:true});
  await page.waitForFunction(ids=>JSON.stringify(window.amplifier.getShellState().snapshots.chats.pinnedSessionIds)===JSON.stringify(ids),[sessions[1],sessions[0]]);
  await expect(page.locator('.a-reorder-grip')).toHaveCount(2);
  const grip=page.locator(`[data-sidebar-section=pinned] [data-session-id="${sessions[0]}"] .a-reorder-grip`);await grip.scrollIntoViewIfNeeded();const from=await grip.boundingBox(),to=await page.locator(`[data-sidebar-section=pinned] [data-session-id="${sessions[1]}"]`).boundingBox();await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:10});await page.mouse.up();
  await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.pinnedSessionIds[0]===id,sessions[0]);
+ let heldReorder=false,releaseReorder;
+ const holdReorder=async route=>{const value=route.request().postDataJSON(),action=value?.action==='shell.command'?value.args?.action:value?.action;if(action!=='navigation.pinOrder')return route.continue();const response=await route.fetch();await new Promise(resolve=>{const timer=setTimeout(resolve,10000);releaseReorder=()=>{clearTimeout(timer);resolve()};heldReorder=true});await route.fulfill({response})};
+ await page.route('**/api/actions',holdReorder);
  await expect(grip).not.toHaveAttribute('aria-disabled','true');await grip.focus();await page.keyboard.press('Alt+ArrowDown');
+ await expect.poll(()=>heldReorder).toBe(true);
  await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.pinnedSessionIds[0]===id,sessions[1]);
- // Browser-only draft/focus and custom content remain observable; full explicit
- // readback still includes messages. display:contents must not lose slot text.
+ // Focus and custom content remain observable while private draft bytes stay
+ // redacted. Full explicit readback still includes saved conversation messages.
+ // display:contents must not lose slot text.
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this private draft');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeFocused();
+ releaseReorder();await expect(grip).not.toHaveAttribute('aria-disabled','true');
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeFocused();
+ await page.unroute('**/api/actions',holdReorder);
  await page.evaluate(()=>{const div=document.createElement('div');div.dataset.shellComponent='fixture.custom';div.style.display='contents';div.textContent='Custom component observation';document.querySelector('#amp-one').append(div);document.dispatchEvent(new Event('selectionchange'))});
  await page.waitForTimeout(700);
  const latest=reports.at(-1);assert.equal(latest.visibleTextScope,'interface');assert.ok(latest.visibleText.includes('Custom component observation'));assert.ok(!latest.visibleText.includes('Synthetic saved reply'));
- assert.ok(latest.controls.some(c=>c.label==='Message Amplifier'&&c.value==='Keep this private draft'&&c.focused));
+ if(!latest.controls.some(c=>c.label==='Message Amplifier'&&c.value==='[redacted]'&&c.focused))console.error('Composer observation diagnostic',JSON.stringify({reported:latest.controls.filter(c=>c.label==='Message Amplifier'||c.focused),current:await page.evaluate(()=>({active:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label'),className:document.activeElement?.className},controls:window.amplifier.getState().renderedView.controls.filter(c=>c.label==='Message Amplifier'||c.focused)}))}));
+ assert.ok(latest.controls.some(c=>c.label==='Message Amplifier'&&c.value==='[redacted]'&&c.focused));
+ assert.ok(!JSON.stringify(latest).includes('Keep this private draft'));
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Keep this private draft');
+ assert.ok(await page.evaluate(()=>!JSON.stringify(window.amplifier.getState().renderedView).includes('Keep this private draft')));
  assert.ok(await page.evaluate(()=>window.amplifier.getState().renderedView.visibleText.includes('Synthetic saved reply')));
- // The stream reconnect signal refreshes shell data even with no UI edit.
- const refreshed=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/shell'&&r.status()===200);
- await page.evaluate(()=>window.dispatchEvent(new Event('amplifier-reconnected')));await refreshed;
+ // A real reconnect receives a fresh state baseline on the existing scoped
+ // registration; it does not bootstrap the catalog again or replay edits.
+ const priorConnection=await page.evaluate(()=>window.sidebarProofSockets.length),priorBaselines=stateBaselines,reads={bootstrapReads,resourceReads};
+ assert.ok(priorConnection>0,'The normal WebSocket lane must be active');
+ await page.evaluate(()=>window.sidebarProofSockets.at(-1).close());
+ await expect.poll(()=>page.evaluate(()=>window.sidebarProofSockets.length)).toBeGreaterThan(priorConnection);
+ await expect.poll(()=>stateBaselines).toBeGreaterThan(priorBaselines);
+ await expect.poll(()=>page.evaluate(()=>JSON.parse(document.documentElement.dataset.amplifierShellDiagnostics||'{}').counts?.reconnect||0)).toBeGreaterThanOrEqual(2);
+ assert.deepEqual({bootstrapReads,resourceReads},reads);
+ assert.deepEqual((await shell()).pinnedSessionIds,[sessions[1],sessions[0]]);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this private draft');
  // Hidden clients defer shell reads/reports, then catch up on visibility restore.
  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))});
  await wait(500);traffic.length=0;measuring=true;
@@ -177,8 +215,8 @@ try{
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this private draft');
  assert.deepEqual(errors,[]);
  const humanPost=await humanPostRecency();
- const result={steadyStreamRequests:0,activityOrderStable:true,sortChoices:true,dragAndKeyboardPins:true,reloadPersistence:true,privateDraftRetained:true,customContentObserved:true,hiddenReportingDeferred:true,...humanPost,modelCalls:0};
+ const result={steadyStreamRequests:0,activityOrderStable:true,sortChoices:true,dragAndKeyboardPins:true,reloadPersistence:true,privateDraftRetained:true,customContentObserved:true,hiddenReportingDeferred:true,reconnectBaselineWithoutCatalogRead:true,lateReorderKeepsNewFocus:true,...humanPost,modelCalls:0};
  if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE){await writeFile(process.env.AMPLIFIER_SIDEBAR_EVIDENCE,JSON.stringify(result,null,2)+'\n');await page.screenshot({path:process.env.AMPLIFIER_SIDEBAR_EVIDENCE+'.png'})}
  console.log(JSON.stringify(result,null,2));
  }
-}finally{await browser?.close();fixture?.kill('SIGTERM')}
+}finally{try{await browser?.close()}finally{fixture?.kill('SIGTERM')}}

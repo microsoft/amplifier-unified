@@ -436,7 +436,12 @@ class SetupManager:
                     config['login_on_mount']=False
                 row={'id':identity,'module':module,'config':private(config)}
                 source=args.get('source') or (existing or {}).get('source') or (KNOWN_PROVIDER_SOURCES.get(module) if module in {'provider-chat-completions','provider-azure-openai','provider-ollama','provider-vllm'} else None)
-                if source: row['source']=validate_uri(source)
+                if source:
+                    # A model/config edit can retain a local source already
+                    # configured through Sources. Only new source selections
+                    # pass through this surface's URI admission policy.
+                    unchanged_source = existing and existing['module'] == module and existing.get('source') == source
+                    row['source'] = source if unchanged_source else validate_uri(source)
                 if updates:self._keys(updates)
             if index is None:rows.append(row)
             else:rows[index]=row

@@ -214,7 +214,7 @@ class ShellQueryOwner:
         except InputLimit:
             self._fail(key, 5000, { (interest[0], interest[2], interest[3]): interest })
             raise PendingQuery(5000) from None
-        self.jobs[key] = {'inputs': inputs, 'fence': fence,
+        self.jobs[key] = {'inputs': inputs, 'fence': fence, 'queued_at': time.monotonic(),
             'interests': {(interest[0], interest[2], interest[3]): interest}}
         count(self.service, 'shell.query.queued')
         if self.idle is not None:
@@ -288,6 +288,7 @@ class ShellQueryOwner:
                 if self.projector is None:
                     self.projector = self._new_projector()
                 self.active = key
+                started_at = time.monotonic()
                 try:
                     with measure(self.service, 'shell.query.read'):
                         result = await self.projector.project(job['inputs'],
@@ -306,6 +307,7 @@ class ShellQueryOwner:
                     self.jobs.pop(key, None)
                     interested = {item[0] for item in job['interests'].values() if self._current(item)}
                     if not interested or self.closed:
+                        self._diagnose(job, started_at, result, accepted=False)
                         if not self.closed:
                             self._wake_capacity()
                         continue
@@ -313,7 +315,9 @@ class ShellQueryOwner:
                         current = not self.service.db.in_transaction and self._fence(job['inputs']['operation']) == job['fence']
                     except (OSError, sqlite3.Error):
                         current = False
-                    if current and result.get('status') == 'complete' and result.get('durable') == job['fence'][0]:
+                    accepted = current and result.get('status') == 'complete' and result.get('durable') == job['fence'][0]
+                    self._diagnose(job, started_at, result, accepted=accepted)
+                    if accepted:
                         values = self.service.projections.values
                         if len(values) >= 256:
                             values.clear()
@@ -350,6 +354,12 @@ class ShellQueryOwner:
     def _prune_capacity(self):
         self.capacity_waiters = {identity: interest for identity, interest in self.capacity_waiters.items()
                                  if self._current(interest)}
+
+    def _diagnose(self, job, started_at, result, *, accepted):
+        diagnostics = getattr(self.service, 'performance_diagnostics', None)
+        if diagnostics is not None:
+            diagnostics.record_shell_query(job['inputs']['operation'], job['inputs']['args'].get('section'),
+                job['queued_at'], started_at, result, accepted=accepted)
 
     def _wake_capacity(self):
         if len(self.jobs) >= MAX_JOBS:

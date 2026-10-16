@@ -3,6 +3,7 @@ import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+import './composer-test-helpers.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
@@ -20,7 +21,7 @@ try{
  await control({op:'patch',sessions:{[alpha]:{status:'error',error:'Saved worker message',errorAt:1791582278,failure:{category:'unknown',errorType:'str',summary:'Legacy summary',guidance:'A recovery copy can help',recordedAt:1791582278}}}});
  await page.reload();
  await page.getByRole('button',{name:'View error details',exact:true}).click();
- const panel=page.getByRole('dialog');
+ const panel=page.getByRole('dialog',{name:'Error details',exact:true});
  await expect(panel.getByRole('heading',{name:'Error details',exact:true})).toBeVisible();
  await expect(panel).toContainText('Something interrupted this chat.');
  await expect(panel).not.toContainText('Recorded error: str');
@@ -45,10 +46,26 @@ try{
  await page.setViewportSize({width:1280,height:900});
  await panel.getByText('Technical details',{exact:true}).click();
  await page.screenshot({path:'/tmp/unified-error-details.png'});
- await control({op:'patch',sessions:{[alpha]:{status:'idle',error:null,failure:null}}});
- await expect(panel).toContainText('No current error is recorded for this chat.');
+ await panel.getByRole('button',{name:'Close panel',exact:true}).click();
+ const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await composer.fill('Private draft remains during error review.');
+ const beforeReview=await control({op:'inspect'});
+ await page.getByRole('button',{name:'Dismiss conversation error',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
+ const afterReview=await control({op:'inspect'});
+ assert.deepEqual(afterReview.state.sessions.find(row=>row.id===alpha).messages,beforeReview.state.sessions.find(row=>row.id===alpha).messages);
+ assert.equal(afterReview.state.sessions.find(row=>row.id===alpha).error,'Saved worker message');
+ assert.equal(afterReview.runtimeStarts,beforeReview.runtimeStarts);assert.equal(afterReview.runtimeSends,0);
+ await expect(composer).toHaveDraft('Private draft remains during error review.');
+ // A genuinely newer error restores its own notice. Continue is a new explicit
+ // request; it does not replay saved tool calls or consume the unsent draft.
+ await control({op:'patch',sessions:{[alpha]:{status:'error',error:'A newer saved worker failure',errorAt:1791582300,failure:{category:'unknown',summary:'New synthetic failure',recordedAt:1791582300}}}});
+ await expect(page.getByRole('button',{name:'Dismiss conversation error',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Continue conversation',exact:true}).click();
+ await expect.poll(async()=>(await control({op:'inspect'})).runtimeSends).toBe(1);
+ const continued=calls.filter(call=>call.action==='conversation.send');assert.equal(continued.length,1);assert.equal(continued[0].args.sessionId,alpha);assert.equal(continued[0].args.preserveDraft,true);assert.match(continued[0].args.text,/Check what has already completed/);
+ await expect(composer).toHaveDraft('Private draft remains during error review.');
  const effects=calls.filter(call=>['conversation.send','session.recover'].includes(call.action));
- assert.deepEqual(effects,[],'Inspecting a failure must not replay work');
+ assert.equal(effects.length,1,'Only the explicit fresh continuation sends work');
  assert.deepEqual(errors,[]);
  console.log('Focused error details passed: legacy failure, reload, explicit diagnostics, clipboard denial, mobile, and no replay.');
 }finally{await browser?.close();await vite?.close();fixture.kill('SIGTERM')}

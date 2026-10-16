@@ -215,13 +215,31 @@ def _serve_unlocked(args, data_dir: Path) -> None:
     url = (config["public_origins"][0] if config["public_origins"] else
            f"{scheme}://127.0.0.1:{config['port']}")
     print(f"Amplifier Unified · {url}\nWorkspace: {args.workspace}\nState: {data_dir}")
+    timer = None
     if not args.no_open:
         timer = threading.Timer(1.5, lambda: webbrowser.open(url))
         timer.daemon = True
         timer.start()
     from .mcp_oauth import SafeAccessLogger
-    web.run_app(create_app(data_dir, workspace=args.workspace, server_config=config),
-                host=config["bind"], port=config["port"], ssl_context=secure, print=None, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
+    from amplifier_publishing import PublishingError
+    try:
+        web.run_app(create_app(data_dir, workspace=args.workspace, server_config=config),
+                    host=config["bind"], port=config["port"], ssl_context=secure, print=None, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
+    except PublishingError as exc:
+        # The same library error can also mean unsupported OS locking. Only an
+        # actual held-lock conflict establishes that another process owns it.
+        if exc.code != 'root_busy' or not isinstance(exc.__cause__, BlockingIOError):
+            raise
+        from shlex import quote
+        raise SystemExit(
+            f"This Amplifier state folder is already in use: {data_dir}\n"
+            f"Configured address: {url}\n"
+            f"Check the existing service with amplifier-unified --data-dir {quote(str(data_dir))} service status. "
+            "No running process was stopped or replaced."
+        ) from None
+    finally:
+        if timer is not None:
+            timer.cancel()
 
 
 def _tui(args, data_dir):

@@ -5,7 +5,9 @@ import {writeFile,mkdir} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--chat-controls'],{stdio:['ignore','pipe','inherit']});
+const python=process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',out=process.env.AMPLIFIER_TEST_ARTIFACTS;
+if(!out)throw Error('Owned artifacts required');
+const fixture=spawn(python,[root+'tests/fixtures/empty_host_ui_server.py','--chat-controls'],{stdio:['ignore','pipe','inherit']});
 function pdf(pages){
  const objects=['<< /Type /Catalog /Pages 2 0 R >>',`<< /Type /Pages /Count ${pages} /Kids [${Array.from({length:pages},(_,i)=>`${4+i*2} 0 R`).join(' ')}] >>`,'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
  for(let i=0;i<pages;i++){
@@ -40,10 +42,10 @@ try{
  const download=await page.request.get(url+`/api/canvas/${identity}/download?version=1`,{headers:{'X-Amplifier-Client':clientId}});
  assert.equal(download.headers()['content-type'],'application/pdf');assert.match(download.headers()['content-disposition'],/Report.pdf/);assert.equal((await download.body()).toString(),original);
  await page.reload();await expect(page.locator('.a-pdf-text')).toContainText('PDF page 1 selectable text');
- await mkdir('/tmp/pdf-browser',{recursive:true});await page.screenshot({path:'/tmp/pdf-browser/multipage.png'});
+ await mkdir(out,{recursive:true});await page.screenshot({path:out+'/multipage.png'});
  await action('canvas.show',{kind:'auto',path:'Single.pdf'});await expect(page.getByRole('button',{name:'Next PDF page'})).toBeDisabled();
  await action('canvas.show',{kind:'auto',path:'Damaged.pdf'});await expect(page.getByRole('alert').filter({hasText:'This PDF could not be opened'})).toBeVisible();await expect(page.getByRole('button',{name:'Download original PDF'})).toBeVisible();
- execFileSync(root+'.venv/bin/python',['-c',"from pypdf import PdfWriter; import sys; writer=PdfWriter(); writer.add_blank_page(width=500,height=400); writer.encrypt('secret'); writer.write(sys.argv[1])",workspace+'/Locked.pdf']);
+ execFileSync(python,['-c',"from pypdf import PdfWriter; import sys; writer=PdfWriter(); writer.add_blank_page(width=500,height=400); writer.encrypt('secret'); writer.write(sys.argv[1])",workspace+'/Locked.pdf']);
  await action('canvas.show',{kind:'auto',path:'Locked.pdf'});await expect(page.getByRole('alert').filter({hasText:'password-protected'})).toBeVisible();await expect(page.getByRole('button',{name:'Download original PDF'})).toBeVisible();
  assert.deepEqual(errors,[]);console.log(JSON.stringify({status:'passed',checks:['multi/single page','raster layout','selectable text','page controls','zoom/fit','original download after source changes','reload','damaged fallback']}));
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+}finally{try{await browser?.close()}finally{if(fixture.exitCode===null){const done=new Promise(resolve=>fixture.once('exit',resolve));fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);await done.finally(()=>clearTimeout(timer))}}}

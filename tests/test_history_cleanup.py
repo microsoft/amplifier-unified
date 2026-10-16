@@ -169,3 +169,24 @@ async def test_malformed_or_special_metadata_is_refused_without_reading_it(app,t
     metadata.unlink();os.mkfifo(metadata)
     with pytest.raises(AppError,match='metadata could not be verified'):await confirm(app,selection)
     assert path.exists()
+
+async def test_duplicate_titles_have_exact_review_identity_and_stale_activity_is_refused(app, tmp_path):
+    first, first_path, selection = await seed(app, tmp_path, 'Same title')
+    second, second_path, second_selection = await seed(app, tmp_path, 'Same title')
+    metadata = first_path / 'metadata.json'
+    value = json.loads(metadata.read_text())
+    value['last_event_at'] = '2026-10-14T12:00:00Z'
+    metadata.write_text(json.dumps(value))
+    review, args = await confirm(app, selection)
+    other, _ = await confirm(app, second_selection)
+    assert review['title'] == other['title'] == 'Same title'
+    assert review['reviewIdentity'] == {'scope': 'session', 'workspace': str(tmp_path/'project'),
+                                        'sessionId': first, 'lastActivityAt': 1791979200.0}
+    assert other['reviewIdentity'] == {'scope': 'session', 'workspace': str(tmp_path/'project'), 'sessionId': second}
+    value['last_event_at'] = '2026-10-14T13:00:00Z'
+    metadata.write_text(json.dumps(value))
+    with pytest.raises(AppError, match='changed'):
+        await app.dispatch('storage.historyDelete', args)
+    assert first_path.exists() and second_path.exists()
+    project, _ = await confirm(app, {'project': selection['project']})
+    assert project['reviewIdentity'] == {'scope': 'project', 'workspace': str(tmp_path/'project'), 'sessionId': None}

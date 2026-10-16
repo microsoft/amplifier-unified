@@ -307,3 +307,14 @@ test('a rejected draft read can be retried in place without replacing explicit c
   assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/explicit/);
  }finally{await renderAct(async()=>root?.unmount())}
 });
+
+test('authoritative unsupported reasoning shows no invented slider or selection',async()=>{
+ const calls=[],session={id:'chat'},providers=[{id:'one',info:{defaults:{model:'plain'}},configSchema:{fields:[]}}];
+ const state={view:{composerModel:{open:true,sessionId:'chat',instance:'one',model:'plain'}},runtimeControl:{chat:{'configuration.catalog':{configurationRevision:0,providers,effective:{instance:'one',model:'plain'}},modelCatalogs:{one:{phase:'ready',models:['plain'],metadata:{configSchema:{fields:[]}}}}}}};let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement(ModelControl,{state,session,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}})));
+  assert.equal(root.root.findAllByProps({id:'chat-effort'}).length,0);
+  assert.match(JSON.stringify(root.toJSON()),/Reasoning effort is not configurable for this model/);
+  assert.equal(calls.some(row=>row.args?.operation==='provider.queueSelection'||row.name==='conversation.send'),false);
+ }finally{await renderAct(async()=>root?.unmount())}
+});

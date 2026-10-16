@@ -53,6 +53,34 @@ async def test_provider_removal_tombstones_inherited_instance(manager,tmp_path):
     assert 'one' not in manager.store.read(tmp_path,'global')['configurator']['disabled']['providers']
     assert manager.store.read(tmp_path,'local')['configurator']['disabled']['providers'] == ['one']
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('action', ['providers.finishSetup', 'providers.save'])
+async def test_model_edit_retains_existing_local_provider_source(manager,tmp_path,action):
+    source=str(tmp_path/'local-provider')
+    original={'id':'one','module':'provider-local','source':source,
+              'config':{'default_model':'before','custom':{'kept':True}}}
+    manager.store.update(tmp_path,'global',lambda settings:settings.update(config={'providers':[original]}))
+    args={'workspace':str(tmp_path),'id':'one','model':'after'} if action=='providers.finishSetup' else {
+        'workspace':str(tmp_path),'id':'one','module':'provider-local','source':source,
+        'config':{'default_model':'after','custom':{'kept':True}}}
+    await manager.perform(action,args)
+    saved=manager.store.read(tmp_path,'global')['config']['providers'][0]
+    assert saved=={**original,'config':{'default_model':'after','custom':{'kept':True}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['source','module'])
+async def test_existing_local_provider_does_not_bypass_new_source_admission(manager,tmp_path,change):
+    original={'id':'one','module':'provider-local','source':str(tmp_path/'local-provider'),'config':{}}
+    manager.store.update(tmp_path,'global',lambda settings:settings.update(config={'providers':[original]}))
+    before=manager.store.read(tmp_path,'global')
+    args={'workspace':str(tmp_path),**original}
+    args[change]=str(tmp_path/'different-provider') if change=='source' else 'provider-different'
+    with pytest.raises(ValueError,match='HTTPS Git bundle URI'):
+        await manager.perform('providers.save',args)
+    assert manager.store.read(tmp_path,'global')==before
+
 @pytest.mark.asyncio
 async def test_models_and_test_use_isolated_provider_without_starting_session(manager,tmp_path,monkeypatch):
     import sys

@@ -24,6 +24,24 @@ const snapshot={navigationResources:['pinnedNavigation','recentNavigation','work
 const host={instanceId:'chats',getSnapshot:()=>snapshot,subscribe:()=>()=>{},dispatch:async()=>({accepted:true})};
 const navigation={browse(){},create(){},newChat(){}};
 const render=child=>React.createElement(WorkNavigationContext.Provider,{value:navigation},child);
+for(const surface of ['chat','chats'])test(`managed delete obtains one confirmation token on the ${surface} surface`,async()=>{
+ const calls=[],current={...snapshot,view:{workSurface:surface,workspaceDraft:{mode:'chat-delete',id:'managed',name:'Reviewed chat'}}};
+ const scopedHost={...host,getSnapshot:()=>current,dispatch:async(action,args)=>{
+  calls.push([action,args]);return {accepted:true,result:{confirmationToken:'only-preview',title:'Reviewed chat'}};
+ }};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ let root;
+ try{
+  await act(async()=>{root=create(render(React.createElement(React.Fragment,null,
+   React.createElement(ConversationList,{host:scopedHost}),
+   React.createElement(WorkSurface,{shell,state:{view:{workSurface:surface}},act:scopedHost.dispatch}))));});
+  assert.deepEqual(calls.filter(([name])=>name==='session.deletePreview'),[['session.deletePreview',{id:'managed'}]]);
+  const remove=root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='session.delete');
+  assert.equal(remove.length,1);
+  await act(async()=>remove[0].props.onClick());
+  assert.deepEqual(calls.filter(([name])=>name==='session.delete'),[['session.delete',{id:'managed',confirmationToken:'only-preview'}]]);
+ }finally{if(root)await act(async()=>root.unmount())}
+});
 test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host})));
  assert.match(html,/Search chats/);assert.match(html,/All workspaces/);

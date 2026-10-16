@@ -62,7 +62,9 @@ def native_chat(home, workspace, identity, title, at, *, exists=True, worker=Fal
     (directory / 'metadata.json').write_text(json.dumps(metadata))
     transcript = directory / 'transcript.jsonl'
     transcript.write_text(''.join(json.dumps(row) + '\n' for row in [
-        {'role': 'user', 'content': 'Saved question'}, {'role': 'assistant', 'content': 'Saved response'},
+        {'role': 'user', 'content': 'Saved question'},
+        {'role': 'assistant', 'content': ('Saved response for ' + identity
+          if os.environ.get('AMPLIFIER_NAVIGATION_GAPS') == '1' else 'Saved response')},
     ]))
     os.utime(transcript, (at, at))
 
@@ -84,6 +86,12 @@ async def main():
             native_chat(home, paths['two'], f'beta-{index:03}', f'Beta {index:03}', 1_700_001_000 + index)
         native_chat(home, paths['one'], 'worker-only', 'Hidden worker', 1_700_009_000, worker=True)
         native_chat(home, paths['missing'], 'missing-root', 'Deleted workspace chat', 1_700_010_000, exists=False)
+        if os.environ.get('AMPLIFIER_NAVIGATION_GAPS') == '1':
+            # Opt-in page boundary and ancestor-only folder, isolated from all
+            # existing fixtures and never backed by a user's workspace.
+            for index in range(105):
+                native_chat(home, temp / f'folders/paged/team-{index:03}',
+                            f'paged-{index:03}', f'Paged {index:03}', 1_700_020_000 + index)
         from configured_browser import seed_connection
         seed_connection(home)
         runtime = ObservedRuntime()

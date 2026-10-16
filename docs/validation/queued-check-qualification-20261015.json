@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "source": "45a9b5e8d",
+  "product": "ae12f9254",
+  "build": {
+    "version": "0.20.165",
+    "id": "5f136e8e69c99e41"
+  },
+  "buildInputs": "output/readiness-day-20261015/final-queue-qualification/build-inputs.json",
+  "static": "output/readiness-day-20261015/final-queue-qualification/assets.json",
+  "checks": [
+    {
+      "name": "six changed781 backend modules",
+      "passed": 123,
+      "seconds": 64.17,
+      "source": "ec32a4538",
+      "log": "evidence/backend.log",
+      "reuse": "Task environment/queue/adapter sources and all six tests unchanged by final metadata-read-only backend overlay."
+    },
+    {
+      "name": "final read-admission/backend controls",
+      "passed": 22,
+      "seconds": 5.99,
+      "source": "6c68d8c0c",
+      "log": "evidence/final/bounded-reads.log"
+    },
+    {
+      "name": "affected environment/workspace components",
+      "passed": 33,
+      "seconds": 1.189,
+      "log": "evidence/final/affected-components.log",
+      "source": "6c68d8c0c"
+    },
+    {
+      "name": "original environment browser",
+      "passed": true,
+      "seconds": 5.476,
+      "evidence": "evidence/browser/results.json",
+      "source": "ec32a4538"
+    },
+    {
+      "name": "final held-plan browser",
+      "passed": true,
+      "seconds": 5.483,
+      "evidence": "evidence/final/browser/results.json",
+      "source": "6c68d8c0c"
+    },
+    {
+      "name": "public queue/paging/outcomes",
+      "passed": true,
+      "seconds": 21.899,
+      "evidence": "evidence/queue-last/results.json",
+      "source": "45a9b5e8d"
+    }
+  ],
+  "sourceProof": [
+    "source-receipt.json",
+    "final-source-receipt.json",
+    "queue-last-delta.json"
+  ],
+  "retainedFailures": [
+    {
+      "receipt": "evidence/browser/results.json",
+      "reason": "New test did not dismiss credential-free onboarding before breadcrumb."
+    },
+    {
+      "receipt": "evidence/browser-second/results.json",
+      "reason": "New test used Close settings instead of actual Settings dialog Close panel."
+    },
+    {
+      "receipt": "evidence/browser-third/results.json",
+      "reason": "New test incorrectly expected onboarding on retained workspace reload."
+    },
+    {
+      "receipt": "evidence/final/browser/results.json",
+      "reason": "New test expected command body in compact Details; corrected to canonical resource/operation identity."
+    }
+  ],
+  "failedSourceProof": "failed-source-relation.json",
+  "cleanup": "Every original/final browser receipt reports zero remaining and zero forcibly terminated descendants. Owned source/transfers retained pending integration and process/dependency-checked retirement; see WORKSPACE-MANIFEST.json.",
+  "evidenceRoot": "output/readiness-day-20261015/final-queue-qualification",
+  "review": {
+    "reviewer": "issue_validation_day",
+    "verdict": "GO on public controls, corrected exact compact owner receipt, no replay and bounded paging; no production change in test delta"
+  },
+  "limits": [
+    "Controlled backend does not establish physical Docker/Incus acceptance.",
+    "Browser reload is not host restart; admitted cancellation, interruption, revocation and host-restart no-replay require separate canonical Python evidence.",
+    "Keyboard activation is a named witness, not exhaustive sequential Tab coverage.",
+    "Functional shared-DTU times, not controlled performance acceptance.",
+    "No full suite repeat, no release or production adoption."
+  ],
+  "assetReview": {
+    "reviewer": "root",
+    "commit": "80335d20e",
+    "relation": "311 static outputs and 330 build inputs independently matched the integrated candidate."
+  }
+}

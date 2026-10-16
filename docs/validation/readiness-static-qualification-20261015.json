@@ -1,0 +1,28 @@
+{
+  "qualifiedRevision": "ec32a45382168e097e68a981629edbfddffdcaaa",
+  "productSourceAtBuild": "df245e270",
+  "verifiedIntegration": "6d82979a583ae084be82bf0ea8d722c947bdebdb",
+  "build": {
+    "version": "0.20.165",
+    "id": "5f136e8e69c99e41"
+  },
+  "staticFileCount": 311,
+  "buildInputFilesVerified": 330,
+  "exactStaticMatch": true,
+  "inputsChanged": [],
+  "qualification": "Final combined frontend, including main #781 and independent plan-read lane; later backend-only optional metadata lookup leaves these exact inputs and outputs unchanged.",
+  "limits": [
+    "Locked package contract and reused owned dependencies; this is a byte-for-byte input/output verification, not an independent dependency rebuild."
+  ],
+  "historical": {
+    "qualifiedRevision": "596a7ff08a50d09a7233747c01331079d1da7edc",
+    "build": {
+      "version": "0.20.165",
+      "id": "a8b8c4f8468eb04d"
+    },
+    "staticFileCount": 311,
+    "buildInputFilesVerified": 298,
+    "exactStaticMatch": true,
+    "inputsChanged": []
+  }
+}

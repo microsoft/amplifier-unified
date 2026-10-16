@@ -396,7 +396,12 @@ def plan(app, sid, history=None):
     entries = [entry for path in paths if (entry := _inventory(path))]
     from amplifier_foundation.session.shared_state import SharedSessionStore
     coordination = [str((SharedSessionStore.from_identity({'version':1, 'workspace':marker['workspace'], 'sessionId':identity}) if history is not None else SharedSessionStore(marker['workspace'], identity)).checkpoint_path.with_name('session.lock')) for identity in sorted(native_ids)]
-    return {**provisional, 'id': sid, 'title': row['title'], 'rootId': marker['id'], 'project': project, 'coordinationLocks': coordination,
+    review_identity = {'scope': 'project' if history is not None and not history.get('nativeId') else 'session',
+                       'workspace': marker['workspace'],
+                       'sessionId': history.get('nativeId') if history is not None else row['id']}
+    if row.get('reviewActivityAt') is not None:
+        review_identity['lastActivityAt'] = row['reviewActivityAt']
+    return {**provisional, 'reviewIdentity': review_identity, 'id': sid, 'title': row['title'], 'rootId': marker['id'], 'project': project, 'coordinationLocks': coordination,
         'nativeIds': sorted(native_ids), 'paths': entries,
         'contentStamp': hashlib.sha256(_json([sessions, artifacts, owned_rows]).encode()).hexdigest(), 'resourceIds': resources, 'attachmentIds': attachments,
         'rows': [[table, identity] for table, identity, _ in owned_rows],
@@ -686,7 +691,7 @@ async def dispatch(app, action, args, origin, include_state, history=None):
                 value = {**current, 'token': uuid.uuid4().hex, 'expiresAt':time.time()+600}
                 app.db.execute('INSERT OR REPLACE INTO managed_deletions VALUES (?,?,?,?)', (sid,value['token'],'preview',_json(value)))
                 app.db.commit()
-                result = {key:value[key] for key in ('id','title','expiresAt','summary')}
+                result = {key:value[key] for key in ('id','title','expiresAt','summary','reviewIdentity')}
                 result.update(confirmationToken=value['token'],
                     description='Permanently delete this chat, its managed files, saved history, and unshared attachments and artifacts. Published links from this chat stop working.',
                     preserved=['Independent copies and files saved outside this chat', 'Separately saved global memories, exports, and existing backups'])

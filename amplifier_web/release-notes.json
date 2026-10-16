@@ -2,6 +2,22 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.166",
+      "title": "Keep everyday work responsive and queue isolated checks",
+      "changes": [
+        "Isolated workspace checks can wait for available capacity, retain their results, and report completion without repeating uncertain work. The workspace test panel supports the configured Docker and Incus backends.",
+        "Managed checkout moves finish at saved conversation boundaries, preserve the original task authority, and verify both source and destination before handing off work. Agent action discovery and routine control replies stay bounded.",
+        "Large chat directories reuse unchanged navigation data, and optional titles and plans no longer activate dormant chats. Observed conversations receive shorter streaming batches while background work keeps its existing batching.",
+        "Archiving a chat gives visible confirmation and Undo while preserving drafts, keyboard focus, and newer navigation. Earlier message pages retain reactions, support forking from the selected message, and a visible return to the latest messages.",
+        "Canvas and Settings protect unsaved input during reloads and navigation. Delayed tool opens and list reordering preserve newer selections and focus; diagram fit, touch, wheel, and pointer navigation are corrected.",
+        "Workspace setup reports completed inspections before allowing retries and keeps validation errors beside the affected fields. Task storage retains recovery receipts across interrupted requests and replaced panels.",
+        "Failed Smart Tool updates can be retried or skipped individually. Storage failures have clearer update diagnostics, and installation repair keeps recovery files outside the installed-tools directory.",
+        "Changing model defaults preserves an existing provider source. Removing the last source override reuses the qualified profile, and new worker profiles correctly retain named local-wheel dependency overrides.",
+        "Expanded smoke coverage records ordinary navigation and settings outcomes, copied-history scale checks, and concurrent-worker behavior. Remaining device and account checks and performance targets are tracked separately."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.165",
       "title": "Confirm update restarts and keep sidebar selection clear",
       "changes": [

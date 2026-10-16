@@ -29,6 +29,25 @@ Additional top-level settings from local tooling or other versions do not preven
 
 `setup-tls` creates Unified's local CA and a leaf certificate. Run `setup-tls force` only after changing an address that must appear in the certificate; it keeps the CA and replaces the leaf certificate.
 
+To use an existing trusted certificate and its private key, keep the bind on
+loopback while configuring the pair, then enable the remote bind:
+
+```sh
+amplifier-unified config set tls.method ca
+amplifier-unified config set public_origins '["https://your-host.example:8941"]'
+amplifier-unified config set tls.cert '/absolute/path/server.crt'
+amplifier-unified config set tls.key '/absolute/path/server.key'
+amplifier-unified config set bind '["192.0.2.10", "127.0.0.1"]'
+```
+
+The certificate and key commands may be entered in either order. Until both are
+configured, HTTPS cannot start and a non-loopback bind is refused. Invalid
+configuration changes leave the previous saved configuration intact. To replace
+an existing pair together, use one atomic setting:
+`amplifier-unified config set tls '{method: ca, cert: /absolute/path/server.crt, key: /absolute/path/server.key}'`.
+Starting the server also verifies that the certificate and key files can be loaded
+as a matching pair; saving their paths alone is not a successful TLS check.
+
 If Unified uses a non-default data directory, pass the same `--data-dir` value to `setup-tls` and `doctor`.
 
 ## Trust the CA on each client

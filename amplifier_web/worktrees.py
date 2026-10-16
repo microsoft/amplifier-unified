@@ -231,23 +231,27 @@ class Worktrees:
         return {'kind': 'checkout', 'path': path, 'checkoutId': checkout_id, 'repository': checkout['repository']}
 
     def check_binding(self, record, session):
-        binding = record['targetBinding']
-        expected = (self.inherited_binding(session, record['target'], retained=binding) if binding['kind'] == 'inherited'
-                    else self.placement_binding(session, record['target'], binding.get('checkoutId')))
-        if binding != expected: raise ValueError('The target checkout binding changed; inspect it again')
+        for side in ('target', 'source'):
+            binding = record[side + 'Binding']
+            expected = (self.inherited_binding(session, record[side], retained=binding) if binding['kind'] == 'inherited'
+                        else self.placement_binding(session, record[side], binding.get('checkoutId')))
+            if binding != expected: raise ValueError(f'The {side} checkout binding changed; inspect it again')
 
     def preflight(self, record, session):
-        binding = record['targetBinding']
-        target = Path(record['target'])
-        if not target.is_dir() or target.resolve(strict=True) != target:
-            raise ValueError('The target folder is unavailable or no longer its recorded canonical path')
-        if binding.get('repository'):
-            if binding['kind'] == 'inherited':
-                checkout = self.git.get(binding['checkoutId'])
-                if checkout['status'] != 'ready': raise ValueError('The inherited checkout is not ready; inspect it first')
-            checked = self.git.inspect(target)
-            if checked['root'] != binding['path'] or checked['repository'] != binding['repository']:
-                raise ValueError('The target is no longer in the recorded repository')
+        # Both ends form the durable handoff provenance. A valid destination
+        # cannot authorize releasing a source replaced since receipt creation.
+        for side in ('target', 'source'):
+            binding = record[side + 'Binding']
+            path = Path(record[side])
+            if not path.is_dir() or path.resolve(strict=True) != path:
+                raise ValueError(f'The {side} folder is unavailable or no longer its recorded canonical path')
+            if binding.get('repository'):
+                if binding['kind'] == 'inherited':
+                    checkout = self.git.get(binding['checkoutId'])
+                    if checkout['status'] != 'ready': raise ValueError('The inherited checkout is not ready; inspect it first')
+                checked = self.git.inspect(path)
+                if checked['root'] != binding['path'] or checked['repository'] != binding['repository']:
+                    raise ValueError(f'The {side} is no longer in the recorded repository')
 
     def require_available_path(self, path):
         """Fence admission without scanning dormant histories or Git records."""

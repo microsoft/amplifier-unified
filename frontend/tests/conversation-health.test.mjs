@@ -33,6 +33,23 @@ test('dismissal does not remove settings details; active work cannot be recovere
  await renderAct(async()=>root.unmount());
 });
 
+test('dismissing a stopped connection acknowledges only its exact error and never sends a turn',async()=>{
+ const calls=[],session={id:'chat',status:'idle',error:'Connection stopped',failure:{category:'worker_exit'}};
+ const item={id:'session:chat',fingerprint:'recorded-failure',read:false};
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ let root;
+ try{
+  await renderAct(async()=>{root=create(React.createElement(ConversationError,{session,state:{attention:{items:[item]}},act}))});
+  assert.deepEqual(calls,[]);
+  await renderAct(async()=>root.root.findByProps({'aria-label':'Dismiss conversation error'}).props.onClick());
+  assert.deepEqual(calls,[{name:'attention.read',args:{ids:['session:chat'],fingerprints:{'session:chat':'recorded-failure'}}}]);
+  await renderAct(async()=>root.update(React.createElement(ConversationError,{session,state:{attention:{items:[{...item,read:true}]}},act})));
+  assert.equal(root.toJSON(),null);
+  assert.equal(session.error,'Connection stopped');
+  assert.equal(calls.length,1);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
 test('error banner opens recorded details through a shared action without retrying work',async()=>{
  const calls=[];
  let root;await renderAct(async()=>{root=create(React.createElement(ConversationError,{session:{id:'chat',error:'failed'},state:{},act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});

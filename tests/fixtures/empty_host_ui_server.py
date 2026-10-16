@@ -241,6 +241,18 @@ async def main(home):
                     'currentInterests': sum(query_owner._current(item) for item in value['interests'].values())} for key, value in list(query_owner.failures.items())[-16:]]})
         app.router.add_get('/fixture/scoped-query', query_control)
         app.router.add_post('/fixture/scoped-query', query_control)
+    if '--canvas-download-cookie' in sys.argv:
+        async def browser_session(request):
+            # Native browser downloads use the normal session cookie; the
+            # fixture's injected renderer Authorization header is insufficient.
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            from amplifier_web.auth import SESSION_COOKIE, new_session
+            response = web.json_response({'issued': True})
+            response.set_cookie(SESSION_COOKIE, new_session(app['session_secret']),
+                                httponly=True, samesite='Strict', path='/')
+            return response
+        app.router.add_post('/fixture/browser-session', browser_session)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)

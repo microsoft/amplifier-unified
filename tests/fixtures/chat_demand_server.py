@@ -67,7 +67,11 @@ async def main(home):
                                   voice=False, background_updates=False, preload_providers=False)
     app['control_token'] = 'fixture-demand-token'
     service = app['service']
-    await service.history.close()
+    # Freeze periodic discovery without closing the explicit paging readers.
+    if service.history.task:
+        service.history.task.cancel()
+        await asyncio.gather(service.history.task, return_exceptions=True)
+        service.history.task = None
     await service.event_log_view.close()
     service.history.index = NativeHistory(home/'native', watch=False,
         cache_path=native.path, directory=True)

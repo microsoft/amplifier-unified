@@ -5,6 +5,24 @@ from types import SimpleNamespace
 import pytest
 
 from amplifier_web.performance_diagnostics import PerformanceDiagnostics, TimedLock, measured
+
+
+def test_shell_query_diagnostics_are_bounded_content_free_and_detached():
+    diagnostics = PerformanceDiagnostics()
+    for index in range(70):
+        diagnostics.record_shell_query('chats', 'private query text', 1, 1.125,
+            {'stats': {'vmSteps': index, 'decodedRows': 40, 'elapsedMs': 32.5,
+                       'threadCpuMs': float('nan'), 'secret': 'not retained'},
+             'value': {'title': 'private chat'}}, accepted=index % 2 == 0)
+    rows = diagnostics.snapshot()['shellQueries']
+    assert len(rows) == 60 and rows[0]['vmSteps'] == 10
+    assert rows[-1]['queueWaitMs'] == 125 and rows[-1]['section'] is None
+    assert set(rows[-1]) == {'at', 'operation', 'section', 'queueWaitMs', 'readMs',
+                             'accepted', 'vmSteps', 'decodedRows', 'elapsedMs'}
+    rows[-1]['accepted'] = True
+    assert diagnostics.snapshot()['shellQueries'][-1]['accepted'] is False
+    diagnostics.record_shell_query('private operation', 'search', 1, 2, {}, accepted=True)
+    assert len(diagnostics.snapshot()['shellQueries']) == 60
 from amplifier_web.server import create_app
 from test_service import Runtime
 

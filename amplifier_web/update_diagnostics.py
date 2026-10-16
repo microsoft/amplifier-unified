@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 import re
 import sqlite3
@@ -15,7 +16,11 @@ ERROR_TYPES = {'Exception','CommandFailure','CommandTimeout','AssertionError','I
 PREPARATION_REASONS = {'ModuleActivationError':'module-prepare-failed','BundleNotFoundError':'bundle-not-found',
                        'BundleLoadError':'bundle-load-failed','BundleValidationError':'bundle-validation-failed',
                        'BundleDependencyError':'bundle-dependency-failed', 'HostComponentConflict':'host-component-conflict'}
-RECOVERY_REASONS = {'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values()}
+STORAGE_REASONS = {getattr(errno, name): reason for name, reason in {
+    'ENOSPC': 'disk-full', 'EDQUOT': 'disk-quota-exceeded',
+    'EACCES': 'storage-permission-denied', 'EPERM': 'storage-permission-denied',
+    'EROFS': 'read-only-storage'}.items() if hasattr(errno, name)}
+RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values()}
 PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','prepared','capabilities','cleanup','worker-imports'}
 
 
@@ -30,8 +35,38 @@ def failure_location(value):
         r'(?:amplifier_web|amplifier_foundation|amplifier_core)(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*:[0-9]{1,7}', value)
 
 
+def exception_facts(error):
+    """Fixed OS codes and code location; no error messages or file paths."""
+    facts = {'errorType': exception_type(error)}
+    current, seen = error, set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, OSError) and current.errno in errno.errorcode:
+            facts['osError'] = errno.errorcode[current.errno]
+            if current.errno in STORAGE_REASONS:
+                facts['reason'] = STORAGE_REASONS[current.errno]
+        traceback = current.__traceback__
+        while traceback:
+            frame = traceback.tb_frame
+            location = f"{frame.f_globals.get('__name__', '')}:{frame.f_code.co_name}:{traceback.tb_lineno}"
+            if failure_location(location):
+                facts['failureLocation'] = location
+            traceback = traceback.tb_next
+        current = current.__cause__ or current.__context__
+    return facts
+
+
+def failure_guidance(event):
+    return {
+        'disk-full': 'The update stopped because its destination disk is full. Free space on the computer running Amplifier, then try again.',
+        'disk-quota-exceeded': 'The update stopped because its storage quota was reached. Increase the quota or free space, then try again.',
+        'storage-permission-denied': 'The update could not access a required file. Review the installation’s file permissions before trying again.',
+        'read-only-storage': 'The update destination is read-only. Make the installation writable before trying again.',
+    }.get(event.get('reason') or event.get('probe', {}).get('reason'))
+
+
 def probe_failure(error, stage):
-    facts={'ok':False,'errorType':exception_type(error)}
+    facts={'ok':False, **exception_facts(error)}
     from .reset import repository_auth_failure
     current, seen = error, set()
     while current is not None and id(current) not in seen:
@@ -55,7 +90,7 @@ def probe_failure(error, stage):
             elif (module, function) == ('amplifier_web.host.session', 'live_plan'):
                 reason = 'incompatible-conversation-loop'
         traceback = traceback.tb_next
-    if reason:facts['reason']=reason
+    if reason and 'reason' not in facts:facts['reason']=reason
     return facts
 
 
@@ -72,6 +107,7 @@ def probe_record(output):
         if isinstance(value.get('errorType'),str) and value['errorType'] in ERROR_TYPES:safe['errorType']=value['errorType']
         if isinstance(value.get('reason'),str) and value['reason'] in RECOVERY_REASONS:safe['reason']=value['reason']
         if failure_location(value.get('failureLocation')):safe['failureLocation']=value['failureLocation']
+        if value.get('osError') in errno.errorcode.values():safe['osError']=value['osError']
         for key in ('version','pythonVersion'):
             if isinstance(value.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',value[key]):safe[key]=value[key]
         for key in ('elapsedMs', 'sources', 'packages', 'resolverTransactions', 'profileIndex'):
@@ -138,11 +174,16 @@ class UpdateDiagnostics:
                'kind':self.state.get('kind'),'phase':phase,'status':status}
         if self.state.get('revision'):event['revision']=self.state['revision']
         if isinstance(facts.get('reason'),str) and facts['reason'] in RECOVERY_REASONS:event['reason']=facts['reason']
+        for key in ('component', 'installationId', 'targetInstallationId'):
+            value = facts.get(key)
+            if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', value):event[key] = value
         if isinstance(facts.get('package'),str) and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*',facts['package']) and len(facts['package'])<=128:
             event['package']=facts['package']
         for key in ('durationMs','exitCode','stdoutBytes','stderrBytes'):
             if type(facts.get(key)) is int:event[key]=facts[key]
         if isinstance(facts.get('errorType'),str) and facts['errorType'] in ERROR_TYPES:event['errorType']=facts['errorType']
+        if facts.get('osError') in errno.errorcode.values():event['osError']=facts['osError']
+        if failure_location(facts.get('failureLocation')):event['failureLocation']=facts['failureLocation']
         if type(facts.get('timedOut')) is bool:event['timedOut']=facts['timedOut']
         if type(facts.get('anonymousRetry')) is bool:event['anonymousRetry']=facts['anonymousRetry']
         if isinstance(facts.get('commandId'),str) and re.fullmatch(r'[a-f0-9]{32}',facts['commandId']):event['commandId']=facts['commandId']
@@ -155,18 +196,18 @@ class UpdateDiagnostics:
             if probe:event['probe']=probe
         self.state['events']=(self.state['events']+[event])[-50:]
         self.state['latest']=event
-        if status=='succeeded' and phase in {'ecosystem-activation','smart-tools-complete','restart-ack'}:
+        if status=='succeeded' and phase in {'ecosystem-activation','smart-tools-complete','smart-tools-partial','restart-ack'}:
             batch=self.state.get('batch',{})
             if batch.get('attemptId')==event['attemptId']:
                 completed={**batch,'completedAt':event['at'],'phase':phase}
-                if phase=='smart-tools-complete':
+                if phase in {'smart-tools-complete','smart-tools-partial'}:
                     activated=batch.get('activatedComponents',[])
                     completed.update(components=activated[:5],componentCount=len(activated))
                 # Smart Tools may activate separately within one attempt.
                 prior=[row for row in self.state.get('completedBatches',[]) if row.get('attemptId')!=event['attemptId']]
                 self.state['completedBatches']=(prior+[completed])[-8:]
         if status in {'failed','interrupted'}:
-            if status=='interrupted' and self.state.get('lastFailure',{}).get('attemptId')==event['attemptId'] and self.state['lastFailure'].get('status')=='failed':
+            if status=='interrupted' and self.state.get('lastFailure',{}).get('attemptId')==event['attemptId'] and self.state.get('lastFailure',{}).get('status')=='failed':
                 prior_failure=self.state['lastFailure']
             self.state['lastFailure']=prior_failure if prior_failure is not None else event
         collector=getattr(self.manager.service,'diagnostics',None)
@@ -200,25 +241,26 @@ class UpdateDiagnostics:
         started=time.monotonic()
         try:result=operation(*args,**kwargs)
         except Exception as error:
-            self.record(phase,'failed',commandId=command_id,durationMs=round((time.monotonic()-started)*1000),errorType=exception_type(error))
+            self.record(phase,'failed',commandId=command_id,**{**exception_facts(error),'durationMs':round((time.monotonic()-started)*1000)})
             raise
         self.record(phase,'succeeded',commandId=command_id,durationMs=round((time.monotonic()-started)*1000))
         return result
 
-    async def run(self,phase,operation,*args,**kwargs):
+    async def run(self,phase,operation,*args,_context=None,**kwargs):
         command_id=uuid.uuid4().hex
-        self.record(phase,'started',commandId=command_id)
+        context = _context or {}
+        self.record(phase,'started',commandId=command_id,**context)
         started=time.monotonic()
         try:result=await operation(*args,**kwargs)
         except BaseException as error:
-            facts={'durationMs':round((time.monotonic()-started)*1000),'errorType':exception_type(error)}
-            facts.update(getattr(error,'diagnostic_facts',{}))
-            self.record(phase,'interrupted' if type(error).__name__=='CancelledError' else 'failed',commandId=command_id,**facts)
+            facts={'durationMs':round((time.monotonic()-started)*1000),
+                   **getattr(error,'diagnostic_facts',{}), **exception_facts(error)}
+            self.record(phase,'interrupted' if type(error).__name__=='CancelledError' else 'failed',commandId=command_id,**{**context,**facts})
             raise
         facts={'durationMs':round((time.monotonic()-started)*1000)}
         facts.update(getattr(result,'diagnostic_facts',{}))
         if isinstance(result,(str,bytes)):
             probe=probe_record(result)
             if probe:facts['probe']=probe
-        self.record(phase,'succeeded',commandId=command_id,**facts)
+        self.record(phase,'succeeded',commandId=command_id,**{**context,**facts})
         return result

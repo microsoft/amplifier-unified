@@ -65,8 +65,8 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  else if(page==='appearance')content=<ShellSlot name="settings.appearance">{React.isValidElement(appearance)?React.cloneElement(appearance,{simple:true,onAdvanced:()=>navigate('custom-appearance')}):appearance}</ShellSlot>;
  else if(page==='custom-appearance')content=React.isValidElement(appearance)?React.cloneElement(appearance,{advancedOnly:true}):appearance;
  else if(page.startsWith('shell:'))content=<ShellSlot name="settings.section" instanceId={page.slice(6)}/>;
- else if(page==='workspaces')content=<WorkspaceSettings {...props}/>;
- else if(page==='workspace-starters')content=<StarterSettings {...props}/>;
+ else if(page==='workspaces')content=<WorkspaceSettings {...props} dispatch={dispatch||act}/>;
+ else if(page==='workspace-starters')content=<StarterSettings {...props} dispatch={dispatch||act}/>;
  else if(page==='voice')content=<><p className="a-everyday-intro">Choose how your conversations sound.</p><VoiceSettings {...props}/></>;
  else if(page==='defaults')content=<BundleDefaults {...props}/>;
  else if(['app-bundles','add-bundles'].includes(page))content=<BundleSettings {...props}/>;

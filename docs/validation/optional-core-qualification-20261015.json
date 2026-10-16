@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "8d459d4741b0486d980f5cb0dd0a0b03792f3ad9",
+  "fixtureCorrectionCommit": "fe6f85e6e",
+  "runtime": {
+    "amplifier-core": "2.0.1",
+    "amplifier-foundation": "1.0.0",
+    "amplifier-module-loop-live": "0.2.0"
+  },
+  "isolation": "Owned spark-2 DTU; private PID/proc/tmp namespaces, synthetic state, credential-free local provider; retained qualified worker and host dependencies read-only. No shared environment installation.",
+  "previouslySkippedPytestCases": {
+    "passed": 12,
+    "failed": 0,
+    "controls": [
+      {
+        "module": "tests.test_app_guidance",
+        "test": "test_real_core_receives_canvas_tool_and_ephemeral_instructions",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_app_guidance",
+        "test": "test_real_core_receives_fresh_notice_then_typed_surface_image",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_app_guidance",
+        "test": "test_real_core_refreshes_workspace_awareness_without_history_accumulation[persist]",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_app_guidance",
+        "test": "test_real_core_refreshes_workspace_awareness_without_history_accumulation[tail]",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_attachments",
+        "test": "test_real_core_loop_live_receives_multimodal_message",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_host_children",
+        "test": "test_real_foundation_child_lifecycle_and_delegate_contract",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_live_terminal_runtime",
+        "test": "test_terminal_clients_follow_detach_reconnect_and_stop_real_worker",
+        "result": "passed-after-fixture-correction"
+      },
+      {
+        "module": "tests.test_runtime_controls",
+        "test": "test_real_core_controls_and_tool_approval",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_runtime_module_cache",
+        "test": "test_real_runtime_uses_active_module_cache[probe]",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_runtime_module_cache",
+        "test": "test_real_runtime_uses_active_module_cache[fresh-worker]",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_runtime_module_cache",
+        "test": "test_real_runtime_uses_active_module_cache[resumed-worker]",
+        "result": "passed"
+      },
+      {
+        "module": "tests.test_runtime_module_cache",
+        "test": "test_real_runtime_uses_active_module_cache[failed-worker]",
+        "result": "passed"
+      }
+    ],
+    "initialPasses": 11,
+    "initialSeconds": 2.67,
+    "correctedTerminalSeconds": 2.4
+  },
+  "terminalCorrections": [
+    "Dedicated worker interpreter did not include host CSS parser; child was supplied retained host dependencies read-only with exact source path.",
+    "Provider fixture had incorrectly assumed the last user-role message was the submitted input; a later ephemeral host-context message caused completed-other. It now selects the newest matching owned fixture input marker.",
+    "Synthetic bundle explicitly excludes optional community behaviors; this bounds fixture scope, and is not the established cause of the original first-response timeout."
+  ],
+  "separateHistoryEditProbe": {
+    "invocation": "Existing tests/fixtures/history_edit_probe.py run directly with qualified interpreter; optional uv-install test wrapper was not run.",
+    "passed": true,
+    "checks": [
+      "Two authoritative turns use same mounted session",
+      "Current edit replaces only later native context with committed revision",
+      "Retirement and re-mount do not replay prior inputs",
+      "Recovery fork edit survives mount checkpoint and preserves original transcript bytes"
+    ],
+    "seconds": 4.174
+  },
+  "limits": [
+    "Original broad Python run remains9021passed/36skipped; these are separate follow-up receipts, not relabeled broad results.",
+    "No external provider, OS terminal package installation, new runtime-profile qualification or recipe-engine acceptance.",
+    "The original40-second preparing-community-modules report remains unverified against real bundle/cache/network conditions. Synthetic new-worker preparation and warm dispatch do not close it.",
+    "All timings are functional observations under shared DTU load, not performance targets or controlled baselines."
+  ],
+  "cleanup": {
+    "remainingDescendants": 0,
+    "forcedTerminations": 0,
+    "originalFailuresRetained": true
+  },
+  "sourceHashes": {
+    "tests/test_app_guidance.py": "8522f9db6a530a16631bb1bf875467e3b26ca413b8d97c322c083c0f2786e74a",
+    "tests/test_attachments.py": "98a1ca773d4399a31e53d00f2966cbf1199acaf87e6a7c3ff5930eaa679f7544",
+    "tests/test_host_children.py": "88de8c8ea3dd0f155ae270078051a463d4e6c33d6b40f6c5ac7ee93ed004195d",
+    "tests/test_live_terminal_runtime.py": "060852672f779e26edb2d92c18d81513622309d51ad7d32b21b8f70ff816c360",
+    "tests/test_runtime_controls.py": "1f4aa60c2f032c3d40252be5a3581536590d89ddf0cdbb24ae31f35ee018e09a",
+    "tests/test_runtime_module_cache.py": "d1c592d686722af8d655efd721a72d8ed270f1e820ac75f6ec00c3fa959a97b5",
+    "tests/fixtures/live_terminal_probe.py": "73321cce4c5b1507f3f0b91e43c2588868d451c3ace467c40513b63749faa7bc"
+  }
+}

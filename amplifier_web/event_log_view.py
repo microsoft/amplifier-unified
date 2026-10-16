@@ -1202,7 +1202,10 @@ class EventLogView:
                             worker[field] = binding[field]
                 live_worker = live_by_id.get(model_key(worker))
                 if live_worker:
-                    for field in ('phase', 'endedAt', 'runId', 'routing', 'parentProvider', 'provider', 'model'):
+                    # Exact worker/run identity keeps an observed worker in the
+                    # bounded live view after its native log replaces the node.
+                    # Unobserved sibling runs remain historical.
+                    for field in ('phase', 'endedAt', 'runId', 'routing', 'parentProvider', 'provider', 'model', 'liveObservation'):
                         if field in live_worker:
                             worker[field] = live_worker[field]
                 nodes.append(worker)

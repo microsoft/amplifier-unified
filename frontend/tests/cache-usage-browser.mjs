@@ -1,3 +1,4 @@
+import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -16,7 +17,9 @@ try{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);
  await page.locator('#amp-one').waitFor();
- await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsSection:'maintenance',settingsExpanded:['updates']}}));
+ await openSettingsPage(page,'updates');
+ const details=page.locator('[data-part=ecosystem-update-details]');
+ if(!await details.evaluate(el=>el.open))await details.locator(':scope > summary').click();
  await expect(page.getByRole('heading',{name:'Other cached sources',exact:true})).toBeVisible();
  await expect(page.locator('#update-issues-list li')).toHaveCount(1);
  await expect(page.locator('#update-issues-list')).toContainText('Configured bundle');
@@ -24,13 +27,13 @@ try{
  await expect(page.locator('#unknown-source-issues-list')).toContainText('Historical branch');
  await expect(page.locator('#unknown-source-issues-list')).toContainText('Tracked source changes are preserved.');
  await expect(page.locator('#available-updates-list')).toContainText('Indirect dependency');
- await expect(page.getByRole('button',{name:'Install available',exact:true})).toBeEnabled();
+ await expect(page.getByRole('button',{name:'Update Amplifier',exact:true})).toBeEnabled();
  await expect(page.getByRole('button',{name:'Show all 5 sources',exact:true})).toHaveAttribute('aria-expanded','false');
  await page.getByRole('heading',{name:'Other cached sources',exact:true}).locator('..').scrollIntoViewIfNeeded();
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-cache-usage-desktop.png'});
- await page.getByRole('button',{name:'Check now',exact:true}).click();
+ await page.getByRole('button',{name:'Check for updates',exact:true}).click();
  await expect.poll(async()=>await (await page.request.get(url+'/fixture')).json()).toEqual(['check']);
- await page.getByRole('button',{name:'Install available',exact:true}).click();
+ await page.getByRole('button',{name:'Update Amplifier',exact:true}).click();
  await expect.poll(async()=>await (await page.request.get(url+'/fixture')).json()).toEqual(['check','install']);
  await page.setViewportSize({width:390,height:844});
  await page.getByRole('heading',{name:'Other cached sources',exact:true}).locator('..').scrollIntoViewIfNeeded();

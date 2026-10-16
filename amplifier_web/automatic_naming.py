@@ -76,26 +76,16 @@ class AutomaticNaming:
                 backfill = self.service.naming_backfill = NamingBackfill(self.service)
             if backfill.running:
                 return
-            # The complete directory owns discovery. Decode only this pass's
-            # window; unrelated dormant owners never enter the working set.
-            directory = self.service.directory
-            where = ("history_managed AND native_project IS NOT NULL AND session_kind='root' "
-                "AND COALESCE(auto_name,1) AND available "
-                "AND COALESCE(name_source,'') NOT IN ('manual','generated') "
-                "AND COALESCE(title_source,'') NOT IN ('manual','generated')")
-            sql, params = directory.effective()
-            total = directory.db.execute(sql + ' SELECT COUNT(*) FROM directory_rows WHERE ' + where, params).fetchone()[0]
             self.next_scan = self.clock() + 15
             chosen = {}
             ready = {}
-            # Catalog recovery can tick every 100 ms. Bound both the cadence
-            # and metadata reads, rotating through large unnamed histories.
-            start = self.cursor % max(1, total)
-            size = min(32, total)
-            order = 'COALESCE(recent,created,0) DESC,ordinal,id'
-            window = directory.select(where, limit=size, offset=start, order=order)
-            if len(window) < size:
-                window += directory.select(where, limit=size-len(window), order=order)
+            # A 32-row result is bounded, but counting/sorting the catalog is
+            # not. Run that scan in a disposable read-only child, so an idle
+            # naming tick cannot stall a new foreground request or stream.
+            from .automatic_naming_query import read_candidates
+            window = await read_candidates(self.service, self.cursor)
+            if not idle(self.service):
+                return
             for session in window:
                 self.cursor += 1
                 if session.get('nativeAvailable') is False:
