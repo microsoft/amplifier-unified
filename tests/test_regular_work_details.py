@@ -6,15 +6,17 @@ No model or tool runs. Only canonical event records contain input/result bodies;
 real ExecutionEvents hooks, normalize_event and AppService ingest supply the
 resident lifecycle rows. Do not repair this test by pre-enriching those rows.
 
-At e4139b8f the resident HTTP route has no canonical-field resolver; the live
-cases should fail for absent fields. Real service reopen also drops transient
-liveObservation rows, so the cold cases may fail earlier at group retrieval.
-These are regression expectations, not executed results or an approved resolver
-design. No inferred historical turn association is being qualified here.
+Ordinary-work cases discover the current registered-web projection, not a group
+ID carried across restart. Separate saved-observation controls read each authored
+pre/post record and its body without pairing observations into logical calls.
+Readable saved bodies do not establish ownership inside an interim group.
+No inferred historical turn association or resolver architecture is qualified.
 """
 
+import asyncio
 import json
 import time
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -83,7 +85,6 @@ async def _seed(service, calls):
     await _emit(service, sid, {"type": "assistant.message", "generation_id": GENERATION_ID,
         "input_ids": [INPUT_ID], "sequence": 1, "time": time.time(), "text": "Inspecting saved work."})
     interim = session["messages"][-1]
-    group = INPUT_ID + "@" + interim["id"]
 
     emitted = []
     observer = ExecutionEvents(sid, emitted.append)
@@ -126,23 +127,127 @@ async def _seed(service, calls):
     assert len(rows) == len(calls) == len({row["id"] for row in rows})
     assert {row["toolCallId"] for row in rows} == {call["call"] for call in calls}
     assert all(row["liveObservation"] and row["phase"] == "completed" for row in rows)
-    return sid, group, user["id"], interim["id"], final["id"]
+    return sid, user["id"], interim["id"], final["id"]
+
+
+@asynccontextmanager
+async def _scenario(authenticated_client, tmp_path, later_calls, reopen):
+    home = tmp_path / "regular-detail-app"
+    app = await create_app(home, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(app)
+    stream = None
+    try:
+        service = app["service"]
+        calls = _calls(later_calls)
+        sid, user_id, interim_id, final_id = await _seed(service, calls)
+        if reopen:
+            # Reload real stores, not a copied execution dict or replayed rows.
+            old_service = service
+            await client.close()
+            assert old_service.closed
+            assert not old_service.runtime.sent and not old_service.runtime.started
+            app = await create_app(home, workspace=tmp_path, runtime=Runtime(),
+                                   voice=False, background_updates=False, preload_providers=False)
+            service = app["service"]
+            client = await authenticated_client(app)
+            assert service is not old_service
+            restored = service._session(sid)
+            assert not any(row.get("liveObservation")
+                           for row in restored.get("execution", {}).get("nodes", []))
+
+        service.clients.attach(BROWSER_ID, kind="web")
+        assert service.clients.records[BROWSER_ID]["kind"] == "web"
+        assert service.clients.records[BROWSER_ID]["selectedSessionId"] == sid
+        client.session.headers["X-Amplifier-Client"] = BROWSER_ID
+        # A connected browser keeps selected Work interest alive. Registration
+        # alone is not a subscription: the reader otherwise correctly retires
+        # its request fence while the physical page read is running.
+        stream = await client.ws_connect("/api/events/ws?transport=delta-v1")
+        initial = await stream.receive_json(timeout=5)
+        assert initial["event"] == "state"
+        yield service, client, calls, sid, user_id, interim_id, final_id
+    finally:
+        if stream is not None:
+            await stream.close()
+        await client.close()
 
 
 async def _get(client, query):
-    response = await client.get(DETAIL_URL, params=query)
-    assert response.status == 200, f"REGULAR-DETAILS-01 {query}: {await response.text()}"
-    return await response.json()
+    async with asyncio.timeout(30):
+        rejected = []
+        for attempt in range(3):
+            response = await client.get(DETAIL_URL, params=query)
+            body = await response.json()
+            # Startup publications can invalidate a first physical read. The
+            # diagnostic confirmed an unchanged owner/source with an advanced
+            # fence. Reopen the selected view only for this explicit read
+            # refusal, never retry a stale field receipt or mutate history.
+            if (query.get("part") == "groups" and "before" not in query
+                    and response.status == 400 and body.get("error") ==
+                    "Invalid request: The requested conversation changed. Open it again."):
+                rejected.append(body["error"])
+                refreshed = await client.get("/api/state")
+                assert refreshed.status == 200
+                await refreshed.read()
+                continue
+            assert response.status == 200, f"REGULAR-DETAILS-01 {query}: {body}"
+            if rejected:
+                print("REGULAR-READ-REOPEN", {"attempt": attempt + 1, "refusals": rejected})
+            return body
+        pytest.fail(f"REGULAR-DETAILS-01 initial reader did not settle: {rejected}")
+
+
+async def _current_group(client, sid, interim_id):
+    # Await the real bounded saved-reader request before judging the projection;
+    # no FakeProjector, background-read timing assumption or blind sleep.
+    await _get(client, {"sessionId": sid, "part": "groups"})
+    readiness = {}
+    async with asyncio.timeout(30):
+        # A sessionId query returns an explicit full session, bypassing the web
+        # detail projection. Use this registered browser's selected view instead.
+        deadline = asyncio.get_running_loop().time() + 5
+        while True:
+            response = await client.get("/api/state")
+            assert response.status == 200, await response.text()
+            state = await response.json()
+            assert state["selectedSessionId"] == sid
+            projected = next(row for row in state["sessions"] if row["id"] == sid)
+            readiness = projected.get("workProjection", {})
+            if readiness.get("status") == "ready" and readiness.get("current") is True:
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.05)
+    assert readiness.get("status") == "ready" and readiness.get("current") is True, readiness
+    segments = projected.get("execution", {}).get("segments", [])
+    candidates = [row for row in segments
+                  if row.get("turnId") == INPUT_ID
+                  and row.get("anchorMessageId") == interim_id
+                  and not row.get("observationWindow")]
+    ownership = [{key: row.get(key) for key in
+                  ("id", "turnId", "anchorMessageId", "phase", "observationWindow")}
+                 for row in segments]
+    assert len(candidates) == 1, (
+        "REGULAR-DETAILS-01 current-group ownership missing or ambiguous: "
+        f"expected one group for input={INPUT_ID!r}, interim={interim_id!r}; "
+        f"current projected groups={ownership!r}. "
+        "Saved observations alone do not establish interim ownership.")
+    group = candidates[0]
+    assert group["phase"] == "completed"
+    return group
 
 
 async def _all_nodes(client, sid, group, count):
     rows, before, seen = [], None, set()
     for page_number in range(8):
-        query = {"sessionId": sid, "part": "nodes", "group": group}
+        query = {"sessionId": sid, "part": "nodes", "group": group["id"],
+                 "revision": group["detailRevision"]}
         if before is not None:
             query["before"] = before
         page = await _get(client, query)
-        assert page["group"] == group and len(page["items"]) <= 100
+        assert page["group"] == group["id"] and len(page["items"]) <= 100
+        assert page["revision"] == group["detailRevision"]
         if page_number == 0 and count > 100:
             assert page["before"], "Earlier calls must not disappear behind the tail window"
         rows[0:0] = page["items"]
@@ -159,8 +264,67 @@ async def _all_nodes(client, sid, group, count):
     return rows
 
 
+async def _saved_observations(client, sid, calls):
+    """Page raw saved observations; never merge pre/post into logical calls."""
+    call_ids = {call["call"] for call in calls}
+    count = 2 * len(calls)
+    rows, before, seen_cursors, seen_groups = [], None, set(), set()
+    for page_number in range(8):
+        query = {"sessionId": sid, "part": "groups"}
+        if before is not None:
+            query["before"] = before
+        page = await _get(client, query)
+        assert page["mode"] == "cursor" and page["total"] is None
+        assert page["hasEarlier"] == (page["before"] is not None)
+        assert not page["unavailableRanges"], page["unavailableRanges"]
+        coverage = page["coverage"]
+        assert not coverage["pagingBlocked"] and not coverage["partialRecord"], coverage
+        assert coverage["invalidEvents"] == 0, coverage
+        if page_number == 0 and count > 100:
+            assert page["before"], "Saved observations must expose the earlier pages"
+        for group in page["items"]:
+            assert group["observationWindow"] is True
+            assert group["id"] not in seen_groups, "Saved group pagination repeated a window"
+            seen_groups.add(group["id"])
+            nodes = await _get(client, {"sessionId": sid, "part": "nodes",
+                "group": group["id"], "revision": group["detailRevision"]})
+            assert nodes["group"] == group["id"]
+            assert nodes["revision"] == group["detailRevision"]
+            assert len(nodes["items"]) <= 100 and nodes["before"] is None
+            for row in nodes["items"]:
+                assert row["observationWindow"] is True and row["observation"] is True
+                assert row["association"] == "unverified"
+                assert row["turnId"] == group["id"]
+                assert row["sessionId"] == sid
+                if row.get("toolCallId") in call_ids:
+                    assert row["inputId"] == INPUT_ID
+                assert "_eventFields" not in row
+            rows.extend(nodes["items"])
+        before = page["before"]
+        if before is None:
+            assert coverage["rootExhausted"] is True, coverage
+            break
+        assert before not in seen_cursors, "Saved group pagination did not advance"
+        seen_cursors.add(before)
+    else:
+        pytest.fail("REGULAR-DETAILS-01 exceeded eight bounded saved-observation pages")
+    assert len({row["id"] for row in rows}) == len(rows)
+    # Service reopen may add unrelated host lifecycle observations. Keep them
+    # distinct, rather than asserting the fixture owns every canonical row.
+    selected = [row for row in rows if row.get("toolCallId") in call_ids]
+    assert len(selected) == count, "Authored saved observations were lost or repeated"
+    return selected
+
+
 async def _field(client, sid, node, field, expected):
     reference = node.get(field + "Detail")
+    large = len(json.dumps(expected, ensure_ascii=False)) > 16000
+    if large:
+        assert reference is not None, (
+            f"REGULAR-DETAILS-01 {node['toolCallId']} {field} must have a lazy reference")
+        if field in node:
+            assert isinstance(node[field], str) and len(node[field]) <= 4096, (
+                "Large fields must be omitted or carry only a bounded preview")
     if reference is None:
         assert field in node, (
             f"REGULAR-DETAILS-01: {node['toolCallId']} has neither {field} nor an owned detail reference")
@@ -168,13 +332,14 @@ async def _field(client, sid, node, field, expected):
     else:
         assert isinstance(reference, dict)
         assert reference["sessionId"] == sid
-        assert isinstance(reference["id"], str) and reference["id"]
+        assert isinstance(reference["id"], str) and reference["id"] == node["id"]
         assert reference["part"] == "nodes" and reference["field"] == field
         assert isinstance(reference["digest"], str) and reference["digest"]
         chunks, offset = [], 0
         for _ in range(64):
             chunk = await _get(client, {**reference, "offset": offset, "limit": 4096})
             assert isinstance(chunk["value"], str)
+            assert len(chunk["value"]) <= 4096
             chunks.append(chunk["value"])
             following = chunk["nextOffset"]
             if following is None:
@@ -183,6 +348,8 @@ async def _field(client, sid, node, field, expected):
             offset = following
         else:
             pytest.fail("REGULAR-DETAILS-01 field pagination failed to terminate")
+        if large:
+            assert len(chunks) > 1, "Large fields must exercise continuation"
         value = "".join(chunks)
     # Permit exact structured fields or their JSON display encoding. A preview
     # without a functioning reference fails; Unicode and trailing sentinels must
@@ -197,33 +364,8 @@ async def _field(client, sid, node, field, expected):
 async def test_regular_work_details_observer_and_service_reopen(
         authenticated_client, tmp_path, later_calls, reopen):
     """Exact input/output remains attached to its successful ordinary call."""
-    home = tmp_path / "regular-detail-app"
-    app = await create_app(home, workspace=tmp_path, runtime=Runtime(),
-                           voice=False, background_updates=False, preload_providers=False)
-    client = await authenticated_client(app)
-    try:
-        service = app["service"]
-        calls = _calls(later_calls)
-        sid, group, user_id, interim_id, final_id = await _seed(service, calls)
-        if reopen:
-            # Actual HTTP/server cleanup closes AppService and its stores. The
-            # next instance must reload those stores, not a copied execution dict
-            # or a direct call to stored_execution(). No observer rows are replayed.
-            old_service = service
-            await client.close()
-            assert old_service.closed
-            app = await create_app(home, workspace=tmp_path, runtime=Runtime(),
-                                   voice=False, background_updates=False, preload_providers=False)
-            service = app["service"]
-            client = await authenticated_client(app)
-            assert service is not old_service
-            restored = service._session(sid)
-            assert not any(row.get("liveObservation")
-                           for row in restored.get("execution", {}).get("nodes", []))
-
-        service.clients.attach(BROWSER_ID, kind="web")
-        assert service.clients.records[BROWSER_ID]["kind"] == "web"
-        client.session.headers["X-Amplifier-Client"] = BROWSER_ID
+    async with _scenario(authenticated_client, tmp_path, later_calls, reopen) as fixture:
+        service, client, calls, sid, user_id, interim_id, final_id = fixture
         session = service._session(sid)
         assert session["status"] == "idle"
         turn = next(row for row in session["execution"]["turns"] if row["id"] == INPUT_ID)
@@ -237,6 +379,7 @@ async def test_regular_work_details_observer_and_service_reopen(
             assert response["inputIds"] == [INPUT_ID] and response["anchorMessageId"] == user_id
             assert response["finalMessageIds"] == [final_id]
 
+        group = await _current_group(client, sid, interim_id)
         rows = await _all_nodes(client, sid, group, len(calls))
         by_call = {row["toolCallId"]: row for row in rows}
         for call in calls:
@@ -244,13 +387,14 @@ async def test_regular_work_details_observer_and_service_reopen(
             assert row["kind"] == "tool" and row["label"] == call["tool"]
             assert row["phase"] == "completed" and row["endedAt"] >= row["startedAt"]
             assert row["sessionId"] == row["rootSessionId"] == sid
-            assert row["turnId"] == INPUT_ID and row["anchorMessageId"] == interim_id
+            assert row["turnId"] == group["turnId"]
+            assert row["anchorMessageId"] == group["anchorMessageId"]
             assert row.get("parentId") is None and not row.get("delegate")
             for field in ("input", "output"):
                 await _field(client, sid, row, field, call[field])
 
         synced = await client.post("/api/conversation/work-sync", json={
-            "sessionId": sid, "group": group,
+            "sessionId": sid, "group": group["id"],
             "known": {row["id"]: row["detailVersion"] for row in rows}})
         assert synced.status == 200, await synced.text()
         result = await synced.json()
@@ -260,5 +404,27 @@ async def test_regular_work_details_observer_and_service_reopen(
         await _field(client, sid, by_call["read"], "output", calls[1]["output"])
         await _field(client, sid, by_call["canvas"], "input", calls[3]["input"])
         assert not service.runtime.sent and not service.runtime.started
-    finally:
-        await client.close()
+
+
+@pytest.mark.parametrize("later_calls", [0, 140], ids=["recent", "behind-tail"])
+@pytest.mark.parametrize("reopen", [False, True], ids=["observer", "service-reopen"])
+async def test_regular_saved_observation_bodies(
+        authenticated_client, tmp_path, later_calls, reopen):
+    """Saved-body availability is independent of interim-group ownership."""
+    async with _scenario(authenticated_client, tmp_path, later_calls, reopen) as fixture:
+        service, client, calls, sid, _, _, _ = fixture
+        rows = await _saved_observations(client, sid, calls)
+        expected = {(call["call"], event): (field, call[field], call["tool"])
+                    for call in calls
+                    for event, field in (("tool:pre", "input"), ("tool:post", "output"))}
+        keys = [(row["toolCallId"], row["event"]) for row in rows]
+        assert len(keys) == len(set(keys)) == len(expected), (
+            "Each authored hook observation must appear exactly once")
+        assert set(keys) == set(expected)
+        for row, key in zip(rows, keys):
+            field, body, tool = expected[key]
+            assert row["kind"] == "tool" and row["label"] == tool
+            assert isinstance(row.get(field + "Detail"), dict), (
+                "Saved bodies must be read through their returned owned reference")
+            await _field(client, sid, row, field, body)
+        assert not service.runtime.sent and not service.runtime.started
