@@ -15,6 +15,21 @@ The original 199-workflow / 669-outcome ledger remains 618 covered-in-context,
 36 partial and 15 unrun. The 51 residual outcomes include broad guarantees and
 external acceptance; they are not 51 ordinary destinations left unvisited.
 
+### Saved tool view recovery follow-up (October 16)
+
+**MCP-807-809** adds ordinary Canvas coverage without changing the frozen counts:
+
+| Check / owner | Current result | Desired result and remaining limit |
+| --- | --- | --- |
+| Passive saved-view status / full Python checks | Zero, one and multiple connected-client cases distinguish live availability from retained source/binding facts; disconnected and wrong-chat clients do not supply live state. | Accurate caller-owned diagnostics without client attachment, navigation, connection or tool calls. |
+| Explicit reconnect and Latest / extended browser checks (`mcp-recovery`) | Real SDK fixture survives disconnect and host restart, preserves input/source/receipts/grants, receives one recovery signal and completes one safe read without repeating a mutation. A deliberate saved version stays read-only, then Latest restores live access. | One understandable host recovery path with no replay. Actual saved Studious behavior and its originally reported historical-selection sequence remain unqualified. |
+| Changed contract / focused and full Python checks | Added ungranted tools do not expand grants; changed description/schema or removed granted actions remain refused. | Preserve current authority while a review/diff proposal is evaluated. Compatibility policy is deferred for judgment. |
+
+[The qualification and #808 recommendation](mcp-recovery-807-809.md) retain exact
+scope, failed attempts, negative controls and platform limits. Current functional
+results are regression witnesses; they do not establish a stable latency percentile
+or replace the inventory's existing interaction-performance targets.
+
 ## Frozen inventory baseline
 
 Frozen source: `1d993e0bb32bc90b75fc66f56f1b9014c2d63f87` (0.20.165 plus PR776).

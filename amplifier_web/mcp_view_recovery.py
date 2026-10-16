@@ -51,8 +51,12 @@ def saved(service, identity, *, require_binding=True):
 
 
 def source(service, identity):
-    from .service import AppError
     canvas, row = saved(service, identity, require_binding=False)
+    return _source(service, canvas, row)
+
+
+def _source(service, canvas, row):
+    from .service import AppError
     from .canvas_versions import definition
     row = definition(row, canvas.get('selectedVersion'))
     try:
@@ -66,14 +70,19 @@ def source(service, identity):
 
 
 def inspect(service, identity):
+    canvas, row = saved(service, identity, require_binding=False)
+    return _inspect(service, canvas, row)
+
+
+def _inspect(service, canvas, row):
     from .service import AppError
-    canvas, _ = saved(service, identity, require_binding=False)
+    identity = canvas['id']
     binding = canvas.get('mcp') if isinstance(canvas.get('mcp'), dict) else {}
     result = {'canvasId': identity, 'bindingRevision': revision(binding), 'source': 'available', 'canReconnect': False}
     def state(code, message, reconnect=False):
         return {**result, 'status': code, 'message': message, 'canReconnect': reconnect}
     try:
-        source(service, identity)
+        _source(service, canvas, row)
     except AppError as error:
         result['source'] = 'unavailable'
         return state('source_unavailable', str(error))
@@ -106,6 +115,53 @@ def inspect(service, identity):
     if binding.get('catalogRevision') != server.get('catalogRevision'):
         return state('reconnect_required', 'Saved document available. Reconnect this tab to the verified current tool contract. Previous calls will not be replayed.', True)
     return state('ready', 'Tool view connected', True)
+
+
+def inspect_for_session(service, identity, session_id, client_id=None):
+    """Read caller-owned saved facts even when no browser currently shows them."""
+    from .agent_canvas import connected_clients, scope
+    from .service import AppError
+    if not session_id:
+        raise AppError('Tool view status requires a calling conversation.', 403)
+    sid, workspace_id = scope(service, session_id)
+    row = next((row for row in service._state.get('canvasArtifacts', [])
+                if row['id'] == identity and row.get('sessionId') == sid
+                and row.get('workspaceId') == workspace_id and row.get('kind') == 'mcp-app'), None)
+    if row is None:
+        raise AppError('This saved tool document is unavailable in the calling conversation.', 404)
+    connected = connected_clients(service, sid)
+    candidates = sorted(key for key in connected
+                        if (record := service.clients.records.get(key))
+                        and record.get('selectedSessionId') == sid
+                        and record.get('selectedWorkspaceId') == workspace_id)
+    if client_id is not None:
+        service.clients.validate(client_id)
+    selected = client_id if client_id in candidates else None
+    if client_id is None and len(candidates) == 1:
+        selected = candidates[0]
+    context = {'clientId': selected, 'clientIds': candidates}
+    if selected:
+        canvas = service.clients.records[selected].get('canvas', {})
+        if canvas.get('id') == identity and canvas.get('open'):
+            return {**_inspect(service, canvas, row), **context}
+        status, message = 'view_not_selected', 'This saved tool document is not open in the selected connected client. Its live view state is unavailable.'
+    elif client_id is not None:
+        status, message = 'client_unavailable', 'The supplied client is not connected to the calling conversation. Its live view state is unavailable.'
+    elif candidates:
+        status, message = 'client_ambiguous', 'Multiple connected clients display this conversation. Supply one of the listed clientIds to inspect its view.'
+    else:
+        status, message = 'no_connected_client', 'No connected client displays this conversation. Live view state is unavailable; saved document information is retained.'
+    # Read the latest saved binding directly. Do not select a Canvas, attach a
+    # browser, load renderer state, connect a server or repair missing resources.
+    canvas = {'id': identity}
+    try:
+        canvas['mcp'] = resource(service.db, row['mcpState']['$resource'])
+    except (KeyError, ValueError, TypeError, OSError):
+        pass
+    saved_status = _inspect(service, canvas, row)
+    return {'canvasId': identity, **context, 'status': status, 'message': message,
+            'canReconnect': False, 'source': saved_status['source'],
+            'savedView': {**saved_status, 'canReconnect': False, 'selection': 'latest_saved'}}
 
 
 def admit(service, args):

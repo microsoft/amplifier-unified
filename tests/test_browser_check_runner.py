@@ -226,6 +226,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
+        'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
@@ -233,7 +234,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row['env'] == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 73
+    assert len(original) == 65 and len(rows) == 74
     assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == '115d865e2934f442582f89f77bde590ebc6101cb535c841efbba8f3e2511807f'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
@@ -281,8 +282,10 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum(f'node {appearance_preview}' in line for _, line in commands) == 1
     # All 108 original scripts, three navigation regressions, confirmed restart,
     # Smart Tool recovery, archive feedback and appearance preview navigation
-    # and sequential keyboard reflow each retain their owning lane.
-    assert len(readiness_scripts | extended_scripts) == 116
+    # and sequential keyboard reflow each retain their owning lane. Saved MCP
+    # recovery now has an extended owner as well as its standalone npm command.
+    assert len(readiness_scripts | extended_scripts) == 117
+    assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
 
     # The environment journey belongs to coordination, outside these two lanes.
     environment = 'tests/test-environments-browser.mjs'
