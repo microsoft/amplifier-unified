@@ -2,6 +2,20 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.167",
+      "title": "Recover test environments and preserve conversation reading",
+      "changes": [
+        "Owned test environments offer Check and recover to verify their current state without repeating an uncertain launch or check. Recovery and cleanup remain available when the original backend can still be verified.",
+        "Incus cleanup saves verified workspace and artifact files by default, with an explicit option to save the full environment. Failed or incomplete exports retain the stopped environment and available evidence.",
+        "Appearance previews end when leaving their settings, including when a delayed preview response arrives after navigation.",
+        "Reading positions in earlier imported history survive chat switches and browser reloads using bounded page restoration.",
+        "Live calls keep following the latest response when the surrounding layout shrinks, while intentional scrolling still pauses following.",
+        "Unchanged browser layout requests finish without waiting for unrelated shared-state updates.",
+        "Additional checks cover environment recovery, saved exports, conversation reading positions, and reliable updates."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.166",
       "title": "Keep everyday work responsive and queue isolated checks",
       "changes": [
