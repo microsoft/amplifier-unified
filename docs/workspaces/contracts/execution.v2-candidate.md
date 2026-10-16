@@ -118,6 +118,11 @@ without replaying input. An interrupted preflight or boundary wait rejects the
 unperformed move with its source unchanged. An unconfirmed release remains
 unknown and requires deliberate reconciliation. A later committed placement
 suppresses an earlier move's pending notification; recovery never moves it back.
+Completion requires the matching placement in the saved owner, including the
+handoff identity for new moves. A receipt saved ahead of that placement remains
+fenced while recovery retries it; failed recovery retains an unknown receipt
+that can be reconciled explicitly. A notification failure after confirmed
+placement does not make the completed move unknown.
 
 If active work requested the move, the host uses the existing guarded inbox to
 deliver one completion observation and continue the already authorized task in
