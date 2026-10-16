@@ -331,6 +331,31 @@ def cleanup_preparation(home, row, config):
     return row, result
 
 
+def resume_preparation_removal(app, row, config):
+    """Finish a recorded guest removal without repeating any guest operation."""
+    home, sid = app.data_dir, row['sessionId']
+    with FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0):
+        row = get(home, sid, row['id'])
+        if not row.get('guestRemoved') or not row.get('preparationPending'):
+            return row
+        if config_key(config) != row['backendKey'] or storage.observe(home, row)['observation'] != 'present':
+            raise ValueError('The retained preparation cleanup owner changed.')
+        request = app.operations.requests.read(sid, row.get('pendingRequest') or row['lastOperation']['requestId'])
+        if (request.get('action') != 'workspace.environments.remove' or request.get('resourceId') != row['id']
+                or request.get('sessionId') != sid):
+            raise ValueError('The guest removal receipt does not match its cleanup owner.')
+        result = row.get('guestRemoval', {})
+        if not result.get('ok') or result.get('status') != 'removed':
+            raise ValueError('The retained guest removal is unverified.')
+        row, cleanup = cleanup_preparation(home, row, config)
+        result = {**result, 'preparationCleanup': cleanup}
+        if not cleanup['complete']:
+            result.update(ok=False, status='not-started', message='The guest is absent; dependency cleanup remains unverified.')
+        request = app.operations.requests.finish(request, 'completed' if cleanup['complete'] else 'outcome_unknown',
+            resourceId=row['id'], result=result, message='Observed the retained guest removal and completed only its dependency cleanup.')
+        return project_result(home, row, request)
+
+
 def effect(app, row, action, args, config, request, admit):
     home, sid = app.data_dir, row['sessionId']
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)

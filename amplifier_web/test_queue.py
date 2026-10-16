@@ -476,7 +476,7 @@ class TestQueue:
     async def cleanup(self, receipt, config, *, recovery=False):
         identity = receipt['requestId']
         row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
-        if not row.get('backendAdmitted') or row.get('environmentState') == 'stopped':
+        if not row.get('backendAdmitted') or row.get('guestRemoved') or row.get('environmentState') == 'stopped':
             cleanup = {'state': 'completed', 'message': 'Observed no running owned environment.'}
         else:
             cleanup = await self.effect(receipt, config, 'stop', cleanup=True,
@@ -546,6 +546,9 @@ class TestQueue:
         try:
             active, _, _ = environments.configuration(self.app)
             row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
+            if row.get('guestRemoved') and row.get('preparationPending'):
+                retained = environments.resolve_configuration(self.app, row, active)
+                row = await asyncio.to_thread(environments.resume_preparation_removal, self.app, row, retained)
             if row['status'] == 'retired':
                 self.restore_operations(receipt)
                 check = receipt['job'].get('check', {})

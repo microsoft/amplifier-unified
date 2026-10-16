@@ -27,6 +27,7 @@ def scope(app):
 def backend(monkeypatch):
     config = {'python': '/managed/python', 'dockerHost': 'unix:///owned/docker.sock', 'image': owner.APPROVED_IMAGE}
     monkeypatch.setattr(owner, 'configuration', lambda app: (config, 'ready', 'Qualified test backend'))
+    monkeypatch.setattr(owner.setup, 'read', AsyncMock(return_value={'status': 'ready', 'backends': [], 'operation': None}))
     calls = []
     def invoke(config, home, row, action, args):
         calls.append((action, dict(args)))
