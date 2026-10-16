@@ -40,17 +40,19 @@ async def main(home, port):
     workspace = home / 'workspace'
     workspace.mkdir()
     (workspace / 'check.py').write_text("print('workspace check passed')\n")
-    calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True}
+    calls, states, mode = [], {}, {'executeTimeout': False, 'capacityAvailable': True, 'backendAvailable': True}
     lock = threading.Lock()
     config = {'python': '/fixture/managed/python', 'dockerHost': 'unix:///fixture/docker.sock', 'image': environments.APPROVED_IMAGE}
-    environments.configuration = lambda app: (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.')
+    environments.configuration = lambda app: (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.') if mode['backendAvailable'] else (None, 'unavailable', 'New execution is unavailable in this controlled fixture.')
+    environments.validate_configuration_value = lambda app, value: (config, 'ready', 'Retained controlled fixture backend.')
+    backend_identity = {'backend': 'docker', 'daemon': 'fixture-daemon'}
     def invoke(config, home, row, action, args):
         with lock:
             calls.append({'action': action, 'requestId': args.get('requestId'), 'resourceId': row['id']})
             identity = 'fixture-' + row['id']
             if action == 'prepare':
                 (environments.storage.directory(home, row) / 'source.tar').write_bytes(b'fixture-retained-source')
-                return {'ok': True, 'universeId': identity, 'snapshot': {'snapshot_commit': 'fixture-snapshot', 'snapshot_tree': 'fixture-tree',
+                return {'ok': True, 'universeId': identity, 'backendIdentity': backend_identity, 'snapshot': {'snapshot_commit': 'fixture-snapshot', 'snapshot_tree': 'fixture-tree',
                     'source_head': 'fixture-head', 'source_branch': 'fixture-branch', 'files': 1, 'archive_bytes': 23, 'archive_sha256': 'fixture-archive'}}
             if action == 'start':
                 states[row['id']] = 'running'
@@ -64,6 +66,12 @@ async def main(home, port):
             value = {'ok': True, 'universeId': identity, 'status': states.get(row['id'], 'unknown')}
             if action == 'execute':
                 value['result'] = {'exit_code': 0, 'stdout': 'workspace check passed\n', 'stderr': '', 'stdout_truncated': False, 'stderr_truncated': False}
+            if action == 'reconcile':
+                value['observation'] = {'backendIdentity': backend_identity, 'rootOwner': row['sessionId'],
+                    'operationId': row['launchOperationId'], 'universeId': identity, 'ownership': 'matched', 'absenceConfirmed': False}
+            if action == 'remove':
+                value['retention'] = {'verified': True, 'sourceBytes': 23, 'archiveBytes': 2025,
+                    'totalBytes': 2048, 'format': 'files', 'policy': 'preserve-until-explicit-removal'}
             return value
     environments.invoke = invoke
     environments.capacity = lambda app, config: {'available': mode['capacityAvailable'],
@@ -93,6 +101,8 @@ async def main(home, port):
             mode['executeTimeout'] = bool(value.get('executeTimeout', value.get('mode') == 'execute-timeout'))
             if 'capacityAvailable' in value:
                 mode['capacityAvailable'] = bool(value['capacityAvailable'])
+            if 'backendAvailable' in value:
+                mode['backendAvailable'] = bool(value['backendAvailable'])
         service.test_queue.backoff.clear()
         service.test_queue.wakeup.set()
         return web.json_response(mode)

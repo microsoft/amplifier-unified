@@ -68,6 +68,39 @@ Native history and one execution owner per conversation; passive inspection; fol
 
 ## Migration and acceptance
 
+### Owned environment recovery and retained files — 2026-10-15
+
+Each new isolated test environment retains its exact qualified backend
+configuration and the observed physical backend identity before launch. Changing
+the active backend does not strand cleanup if that original installation and
+connection remain available and verifiable. Fresh execution still uses the
+currently approved configuration. Missing or changed original code and identity
+are explicit recovery gaps; callers cannot supply replacement executables or
+connections through an environment request.
+
+User and agent callers share an explicit revision-checked reconciliation action.
+It inspects current state, records its own durable receipt and can repair the
+resource projection. It never launches, reruns, stops or deletes physical work.
+An absent instance releases logical ownership only after exact backend, owner
+and launch identity checks and proof that no unresolved admission can still
+create it. Failed inspection and legacy receipts without sufficient evidence
+retain ownership. Original uncertain command outcomes remain unchanged.
+
+Routine removal retains the source snapshot, working folder and artifacts before
+deleting the owned environment. The Incus adapter defaults to selected-file
+retention; explicit full-environment retention remains available. Export failures,
+unsafe selected content and incomplete preservation leave the stopped instance
+available for recovery. Retained byte accounting comes from durable verified
+manifests, not repeated directory scans. It distinguishes saved-file bytes from
+temporary export space and daemon image/cache usage. Older missing accounting
+is unknown. Unique files and unresolved evidence have no automatic age expiry.
+
+Qualification covers changed active configuration, lost acknowledgements,
+projection failure, foreign ownership, stale revisions and unknown admission;
+the archive path covers missing roots, unsafe paths/links, truncated exports and
+bounded storage. Controlled fixtures, actual backend tests, provider cooperation,
+browser behavior and installed-release adoption remain separate evidence.
+
 ### Handoff at a saved runtime boundary — 2026-10-15
 
 A managed checkout handoff returns its durable pending receipt to the calling

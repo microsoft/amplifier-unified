@@ -17,6 +17,35 @@ const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join
 const button=(root,label)=>root.root.findAllByType('button').find(node=>text(node)===label);
 const read={action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'a'}};
 
+for(const available of [true,false])test(`original environment cleanup remains ${available?'available':'blocked'} when new execution is unavailable`,async()=>{
+ let root;const calls=[],resource={id:'env',revision:8,status:'stopped',recovery:{available,reason:'Original connection unavailable'}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?{items:[resource],capability:{status:'unavailable',reason:'New backend is unavailable'}}:{request:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  assert.equal(button(root,'Run check').props.disabled,true);
+  assert.equal(button(root,'Remove environment…').props.disabled,!available);
+  assert.equal(button(root,'Check and recover').props.disabled,!available);
+  if(available){
+   await act(async()=>button(root,'Check and recover').props.onClick());
+   const mutation=calls.find(row=>row.action!=='workspace.environments.read');
+   assert.equal(mutation.action,'workspace.environments.reconcile');assert.equal(mutation.args.id,'env');assert.equal(mutation.args.expectedRevision,8);
+   assert.equal(calls.filter(row=>row.action!=='workspace.environments.read').length,1,'recovery must not run, stop or remove an environment');
+  }else assert.match(text(root.toJSON()),/Original connection unavailable/);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('retained size is shown only from verified accounting and an uncertain operation stays visible',async()=>{
+ let root;const props={workspaceId:'w',sessionId:'a',active:true};
+ const resource={id:'env',revision:9,status:'removed',lastOperation:{state:'outcome_unknown'},lastRecovery:{state:'completed'},retention:{accounting:{verified:true,totalBytes:2048,format:'files'}}};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{...props,act:async()=>accepted({items:[resource]})}))});
+  assert.match(text(root.toJSON()),/Saved files: 2 KiB/);assert.match(text(root.toJSON()),/Last request: outcome unknown/);assert.match(text(root.toJSON()),/Last recovery check: completed/);
+  await act(async()=>root.unmount());resource.retention.accounting.verified=false;
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{...props,act:async()=>accepted({items:[resource]})}))});
+  assert.match(text(root.toJSON()),/storage size has not been verified/);assert.doesNotMatch(text(root.toJSON()),/Saved files: 0/);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 for(const outcome of ['success','transport error','confirmed rejection'])test(`a mutation settled with ${outcome} while hidden releases controls on reopen without replay`,async()=>{
  let settle,root;const calls=[];
  const dispatch=(action,args,meta)=>{

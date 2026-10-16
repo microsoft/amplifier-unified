@@ -51,7 +51,7 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
-    if action in {'workspace.tests.submit', 'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove'}:
+    if action in {'workspace.tests.submit', 'workspace.environments.start', 'workspace.environments.execute', 'workspace.environments.stop', 'workspace.environments.remove', 'workspace.environments.reconcile'}:
         return 'test_environments', 'session'
     if action in PERSISTENT:
         if 'scope' not in args:
