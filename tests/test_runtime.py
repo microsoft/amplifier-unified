@@ -41,6 +41,64 @@ for line in sys.stdin:
 '''
 
 
+@pytest.mark.parametrize('boundary', ['admission', 'status', 'qualification', 'spawn'])
+async def test_restart_authority_is_rechecked_after_startup_waits(tmp_path, monkeypatch, boundary):
+    """A queued restart cannot mount after Stop/revocation; reap any spawned child."""
+    writes = tmp_path/'controls.jsonl'
+    fixture = "import json,sys\nfor line in sys.stdin:\n open(sys.argv[1], 'a').write(line)\n if json.loads(line)['op']=='stop': break\n"
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', fixture, str(writes)],
+        startup_timeout=2, retention={'prewarm_on_select': False})
+    manager.home = tmp_path/'app'
+    session = {'id':'guarded', 'workspace':str(tmp_path), 'bundle':'fixture'}
+    entered, release = asyncio.Event(), asyncio.Event()
+    revoked, created = False, []
+    real_spawn = asyncio.create_subprocess_exec
+    def guard():
+        if revoked: raise ValueError('Restart no longer authorized')
+    async def emit(kind, payload):
+        if boundary == 'status' and kind == 'runtime.status' and not entered.is_set():
+            entered.set(); await release.wait()
+    async def spawn(*args, **kwargs):
+        proc = await real_spawn(*args, **kwargs)
+        created.append(proc)
+        if boundary == 'spawn': entered.set(); await release.wait()
+        return proc
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
+    if boundary == 'qualification':
+        command = manager.command
+        manager.command = None
+        monkeypatch.setattr(manager, '_command', lambda *args, **kwargs: command)
+        async def qualify(*args, **kwargs):
+            entered.set(); await release.wait()
+            return None
+        monkeypatch.setattr('amplifier_web.runtime_profiles.ensure', qualify)
+    if boundary == 'admission':
+        lock = manager._locks.setdefault(session['id'], asyncio.Lock())
+        await lock.acquire()
+    task = asyncio.create_task(manager.start(session, emit, guard=guard))
+    try:
+        if boundary == 'admission':
+            await asyncio.sleep(0)
+            assert not task.done()
+        else: await asyncio.wait_for(entered.wait(), 2)
+        revoked = True
+        if boundary == 'admission': lock.release()
+        else: release.set()
+        with pytest.raises((ValueError, RuntimeError)):
+            await asyncio.wait_for(task, 5)
+        commands = [json.loads(line)['op'] for line in writes.read_text().splitlines()] if writes.exists() else []
+        assert commands == (['stop'] if boundary == 'spawn' else [])  # No startup/configuration or input admission.
+        assert len(created) == (1 if boundary == 'spawn' else 0)
+        assert all(proc.returncode is not None for proc in created)
+        assert not manager.workers and not manager._preparations
+        assert not list((manager.home/'updates/worker-leases').glob('*.json'))
+    finally:
+        release.set()
+        if boundary == 'admission' and lock.locked(): lock.release()
+        await asyncio.gather(task, return_exceptions=True)
+        await manager.close()
+
+
 @pytest.mark.parametrize('cancellation', ['none', 'heartbeat', 'heartbeat-and-reap', 'lease-error'])
 async def test_startup_heartbeat_cleanup_keeps_process_ownership(tmp_path, monkeypatch, cancellation):
     """A real child must be registered or reaped before startup relinquishes it."""

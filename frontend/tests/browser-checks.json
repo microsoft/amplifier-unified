@@ -58,7 +58,7 @@
     {"id": "shell-components", "command": ["node", "tests/shell-components-browser.mjs"]},
     {"id": "mobile-navigation", "command": ["node", "tests/mobile-navigation-browser.mjs"]},
     {"id": "cache-usage", "command": ["node", "tests/cache-usage-browser.mjs"]},
-    {"id": "bundle", "command": ["node", "tests/bundle-browser.mjs"]},
+    {"id": "bundle", "command": ["node", "tests/bundle-browser.mjs"], "env": {"AMPLIFIER_BUNDLE_SCREENSHOT": "{root}/output/browser-checks/bundle-mobile.png"}},
     {"id": "markdown-composer", "command": ["node", "tests/markdown-composer-browser.mjs"]},
     {"id": "draft-switch", "command": ["node", "tests/draft-switch-browser.mjs"]},
     {"id": "draft-reload", "command": ["node", "tests/draft-reload-browser.mjs"]},

@@ -318,10 +318,10 @@ class RuntimeManager:
         except (ValueError, IndexError) as exc:
             raise RuntimeError("The runtime command does not identify a uv project.") from exc
 
-    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False):
+    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None):
         sid = session["id"]
         async with self._admission(sid):
-            await self._start_locked(session, emit, preserve_emit=preserve_emit)
+            await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard)
 
     @asynccontextmanager
     async def _admission(self, sid):
@@ -359,7 +359,9 @@ class RuntimeManager:
             except TimeoutError as exc:
                 raise RuntimeError('Worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
-    async def _start_locked(self, session, emit, *, preserve_emit=False):
+    async def _start_locked(self, session, emit, *, preserve_emit=False, guard=None):
+        # Host callbacks only: no command argument can authorize a restart.
+        if guard is not None: guard()
         if self._closed:
             raise RuntimeHostClosingError()
         sid = session["id"]
@@ -388,6 +390,7 @@ class RuntimeManager:
         reservation = None
         source_reservation = None
         proc = lease = None
+        if guard is not None: guard()
         preparation = {"stopped": self._closed, "shutdown": self._closed, "task": None, "started_at": time.monotonic()}
         self._preparations[sid] = preparation
         heartbeat = asyncio.create_task(self._preparation_progress(sid, preparation, emit))
@@ -424,6 +427,7 @@ class RuntimeManager:
                 # Finish fallible host reads before a process can exist without
                 # readers or a registered cleanup owner.
                 update_pending = generation != active_release(home).get('current')
+                if guard is not None: guard()
                 proc = await asyncio.create_subprocess_exec(*self._command(source_generation, home=home), stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
                     start_new_session=os.name != "nt", env=environment)
@@ -524,6 +528,7 @@ class RuntimeManager:
             if preparation["stopped"]:
                 raise RuntimeStartupError("Runtime preparation was stopped before input admission.")
             try:
+                if guard is not None: guard()
                 await self._write(row, {"op": "start", "session": config})
             except (BrokenPipeError, ConnectionResetError) as exc:
                 # A worker can exit between spawn and stdin.drain(). Let the
@@ -927,7 +932,7 @@ class RuntimeManager:
 
     async def _reply(self, row, identity, future, *, op, args):
         try:
-            timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op == "retire" or op == "control" and args.get("operation") in {"bundle.switch", "history.edit"} else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op == "retire" or op == "control" and args.get("operation") == "history.edit" else 180 if op == "control" and args.get("operation") in {"bundle.preview", "bundle.prepare"} else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             if op == "coordination.approval":
                 # The worker expires the human decision after 50 seconds.
                 timeout = 55

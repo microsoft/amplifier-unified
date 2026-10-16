@@ -47,7 +47,7 @@ def test_changed_feature_selects_its_owner_without_full_matrix():
 
 
 @pytest.mark.parametrize('probe', ['warm_worker_probe.py', 'history_edit_probe.py', 'attachments_runtime_probe.py',
-                                  'live_terminal_probe.py', 'standalone_controls_probe.py', 'computation_runtime.py'])
+                                  'live_terminal_probe.py', 'standalone_controls_probe.py', 'computation_runtime.py', 'bundle_switch_probe.py'])
 def test_runtime_probe_changes_select_native_owner(probe):
     assert 'native' in {row['lane'] for row in checks.select_lanes([f'tests/fixtures/{probe}'])}
 

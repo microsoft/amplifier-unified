@@ -237,6 +237,10 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row.get('env', {}) == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
     assert len(original) == 65 and len(rows) == 76
+    # The same bundle scenario now writes screenshots into its owned evidence.
+    bundle = next(row for row in original if row['id'] == 'bundle')
+    assert bundle['env'] == {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'}
+    original = [{key: value for key, value in row.items() if key != 'env'} if row['id'] == 'bundle' else row for row in original]
     assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == '115d865e2934f442582f89f77bde590ebc6101cb535c841efbba8f3e2511807f'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands

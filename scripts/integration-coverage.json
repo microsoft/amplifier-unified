@@ -52,7 +52,8 @@
         "tests/test_operations.py::test_exact_mount_and_question_recheck_after_approval_before_real_spawn",
         "tests/test_output_image_pairs.py::test_real_loop_core_selected_provider_serializes_both_exact_images_together",
         "tests/test_runtime_controls.py::test_real_core_controls_and_tool_approval",
-        "tests/test_warm_worker.py::test_actual_worker_parks_and_reuses_with_real_shared_state"
+        "tests/test_warm_worker.py::test_actual_worker_parks_and_reuses_with_real_shared_state",
+        "tests/test_bundle_selection.py::test_real_bundle_switch_isolates_module_revisions_and_preserves_history"
       ],
       "paths": [
         "tests/fixtures/computation_runtime.py",
@@ -89,7 +90,11 @@
         "tests/fixtures/history_edit_probe.py",
         "tests/fixtures/live_terminal_probe.py",
         "tests/fixtures/standalone_controls_probe.py",
-        "tests/fixtures/warm_worker_probe.py"
+        "tests/fixtures/warm_worker_probe.py",
+        "amplifier_web/bundle_actions.py",
+        "amplifier_web/bundle_selection.py",
+        "tests/test_bundle_selection.py",
+        "tests/fixtures/bundle_switch_probe.py"
       ]
     },
     "release-runtime": {

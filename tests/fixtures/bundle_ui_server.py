@@ -11,7 +11,8 @@ from amplifier_web.host.config import PRECONFIGURED_BUNDLES, write_private
 import yaml
 class Runtime:
     def __init__(self):self.tokens={}
-    async def start(self,session,emit):
+    async def start(self,session,emit,*,guard=None):
+        if guard is not None:guard()
         if session['bundle']=='broken':raise ValueError('The candidate failed to load; original configuration is preserved.')
         await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
     async def stop(self,*args,reason="stopped"):pass
@@ -20,10 +21,9 @@ class Runtime:
         if op=='bundle.preview':
             token=str(uuid.uuid4());self.tokens[sid]=token
             return {'bundle':args['bundle'],'previewId':token,'fingerprint':args['bundle'],'selection':None,'modelCompatible':True,'changes':{'tools':{'added':['read_transcript'],'removed':['old_tool']},'context':{'before':'context-simple','after':'context-managed'}},'appCapabilities':[]}
-        if op=='bundle.switch':
-            if args['bundle']=='broken':raise ValueError('The candidate failed to load; original configuration is preserved.')
+        if op=='bundle.prepare':
             if args.get('previewId') and self.tokens.get(sid)!=args['previewId']:raise ValueError('Preview again.')
-            return {'bundle':args['bundle'],'configuration':{'plan':{}},'providers':{'providers':[]}}
+            return {'replacement':{'bundle':args['bundle'],'fingerprint':args['bundle'],'selection':None,'modelCompatible':True,'resetModel':False}}
         if op=='history.snapshot':return {'messages':[{'role':'user','content':'Keep my original history.'},{'role':'assistant','content':'Saved response.'}]}
         if op=='configuration.inspect':return {'plan':{}}
         if op=='configuration.providers':return {'providers':[],'effective':{'model':'Fixture model'}}
