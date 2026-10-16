@@ -252,6 +252,10 @@ def _apply_settings(bundle, config):
     settings = config.settings
     # Generic list merging replaces config arrays. Keep the bundle's explicit
     # filesystem denials across that merge so host policy can enforce them.
+    search_declarations = {
+        row.get("id") or row.get("instance_id") or row["module"]: copy.deepcopy(row.get("config", {}))
+        for row in bundle.tools if row.get("module") == "tool-search"
+    }
     filesystem_denials = {
         row.get("id") or row.get("instance_id") or row["module"]:
             {key: copy.deepcopy(row.get('config', {})[key]) for key in ('denied_write_paths', 'denied_read_paths') if key in row.get('config', {})}
@@ -294,6 +298,9 @@ def _apply_settings(bundle, config):
                 continue
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
             identity = row.get("id") or row.get("instance_id") or row.get("module")
+            if kind == "tools" and row.get("module") == "tool-search":
+                from ..read_policy import restore_search_declaration
+                restore_search_declaration(row.setdefault("config", {}), search_declarations.get(identity, {}))
             if kind == 'tools' and row.get('module') == 'tool-filesystem':
                 original = filesystem_allowlists.get(identity, {})
                 for key in ('allowed_write_paths', 'allowed_read_paths'):
@@ -394,7 +401,8 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
         values = merge(values, overrides.get("tool-filesystem", {}).get("config", {}))
         if identity != "tool-filesystem":
             values = merge(values, overrides.get(identity, {}).get("config", {}))
-        policy = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+        policy = expand_environment({key: value for key, value in values.items() if key in policy_keys
+                                     and not (key == "allowed_read_paths" and value is None)})
         # Match the CLI's _ensure_cwd_in_write_paths policy. Shared allowed
         # directories extend project access; they must not replace it. Use an
         # absolute session workspace, never the server process's directory.
@@ -403,7 +411,10 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
         policies[identity] = policy
 
     def restrict(current, policy):
-        policy = copy.deepcopy(policy)
+        current, policy = copy.deepcopy(current), copy.deepcopy(policy)
+        for value in (current, policy):
+            if value.get("allowed_read_paths", False) is None:
+                value.pop("allowed_read_paths")
         for kind in ('read', 'write'):
             allowed, denied = f'allowed_{kind}_paths', f'denied_{kind}_paths'
             if allowed in policy and allowed in current:
@@ -428,6 +439,8 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
             # Normalize paths only after resolving their environment references.
             for key in policy_keys & current.keys():
                 current[key] = expand_environment(current[key])
+            if current.get("allowed_read_paths", False) is None:
+                current.pop("allowed_read_paths")
             if row["module"] == "tool-filesystem":
                 identity = row.get("id") or row.get("instance_id") or "tool-filesystem"
                 policy = policies.get(identity, policies["tool-filesystem"])
@@ -480,6 +493,25 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
             if isinstance(child, dict):
                 writer_policies(child.get('tools', []), child.get('agents', {}), effective)
     writer_policies(bundle.tools, bundle.agents, [])
+    from ..read_policy import restrict_search
+    configured_searches = {row.get('id') or row.get('instance_id') or row['module']: row.get('config', {})
+        for row in configured if isinstance(row, dict) and row.get('module') == 'tool-search'}
+    def search_policies(rows, children, inherited_files, inherited_searches):
+        files = [*inherited_files, *policies.values(), *(row.get('config', {}) for row in rows
+                 if isinstance(row, dict) and row.get('module') == 'tool-filesystem')]
+        declarations = [row for row in rows if isinstance(row, dict) and row.get('module') == 'tool-search']
+        for row in declarations:
+            identity = row.get('id') or row.get('instance_id') or row['module']
+            shared = merge(configured_searches.get(identity, {}), overrides.get('tool-search', {}).get('config', {}))
+            if identity != 'tool-search':
+                shared = merge(shared, overrides.get(identity, {}).get('config', {}))
+            row['config'] = restrict_search(row.get('config', {}), files=files,
+                searches=[*inherited_searches, shared], paths=paths)
+        inherited = [*inherited_searches, *(row['config'] for row in declarations)]
+        for child in children.values():
+            if isinstance(child, dict):
+                search_policies(child.get('tools', []), child.get('agents', {}), files, inherited)
+    search_policies(bundle.tools, bundle.agents, [], [])
     return bundle
 
 
@@ -832,6 +864,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         session = await prepared.create_session(session_id=runtime.session_id,
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
         coordinator = session.coordinator
+        from ..read_policy import validate_mounted_read_policy
+        validate_mounted_read_policy(coordinator)
         from ..provider_recording import install_request_redaction
         from ..session_files import capture_dir
         install_request_redaction(coordinator, directory=capture_dir(config.workspace, runtime.session_id))
