@@ -7,6 +7,8 @@ side effects. Ordinary inspection does not install or configure anything.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
 import hashlib
 import json
 import os
@@ -30,7 +32,9 @@ ACTIVE = {'accepted', 'running'}
 async def settled_thread(function, *args, **kwargs):
     # Cancellation cannot release setup ownership while a thread still drives
     # a daemon operation. Each subprocess is bounded by its own timeout.
-    work = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    callback = functools.partial(function, *args, **kwargs)
+    context = contextvars.copy_context()
+    work = asyncio.get_running_loop().run_in_executor(None, context.run, callback)
     cancelled = False
     while True:
         try:
@@ -502,7 +506,10 @@ async def setup_incus(base, selected, owned, record, step):
     await step('preparing_image', 'Downloading the approved Ubuntu base image into the private test project.')
     alias = 'unified-base-' + record['id'][:12]
     await incus(['image', 'copy', 'unified-images:' + INCUS_IMAGE_ALIAS, 'local:', '--target-project', project, '--alias', alias], timeout=600, project_scope=False)
-    info = json.loads(await incus(['image', 'info', alias, '--format', 'json']))
+    images = json.loads(await incus(['image', 'list', alias, '--format', 'json']))
+    if not isinstance(images, list) or len(images) != 1:
+        raise ValueError('The approved image alias did not resolve to one exact local image.')
+    info = images[0]
     image = info.get('fingerprint', '')
     if len(image) != 64 or info.get('auto_update') or info.get('cached'):
         raise ValueError('The downloaded base image is not a retained exact image.')
