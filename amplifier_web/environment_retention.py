@@ -201,6 +201,9 @@ def filter_incus_stream(stream, destination, identity):
                 if logical > SELECTED_LIMIT:
                     raise ValueError('The selected filesystem exceeds its retention limit.')
                 outputs[selection].addfile(selected, archive.extractfile(item) if item.isfile() else None)
+                # Manual addfile writes and close use the byte offset, never the
+                # prior-member cache. Link validation has its own bounded index.
+                outputs[selection].members.clear()
             verified_footer(archive)
         if roots != set(SELECTION):
             raise ValueError('The instance export does not contain both selected roots.')

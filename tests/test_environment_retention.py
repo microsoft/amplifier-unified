@@ -163,3 +163,18 @@ def test_read_archives_do_not_cache_skipped_metadata(tmp_path,monkeypatch):
     for row in archives:
         retention.inspect_archive(row['destination'],row['source'].strip('/'))
     assert len(opened)==3 and all(not value.members for value in opened)
+
+
+def test_selected_writers_do_not_retain_member_metadata(tmp_path,monkeypatch):
+    written=[]
+    original=retention.tarfile.open
+    def record(*args,**kwargs):
+        value=original(*args,**kwargs)
+        if kwargs.get('mode')=='w' and kwargs.get('fileobj') is not None:
+            written.append(value)
+        return value
+    source=backup(ROOTS+[(f'workspace/file-{i}',tarfile.REGTYPE,b'x') for i in range(1000)])
+    monkeypatch.setattr(retention.tarfile,'open',record)
+    archives=retention.filter_incus_stream(source,tmp_path,'owned')
+    assert len(written)==2 and all(not value.members for value in written)
+    assert retention.inspect_archive(archives[0]['destination'],'workspace')==1000
