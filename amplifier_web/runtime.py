@@ -111,6 +111,8 @@ def _worker_error(data):
         detail = failure_details(data.get('error', ''))
         if detail['category'] == 'provider_selection':
             error.args = (f"ProviderSelectionError: {detail['summary']} {detail['guidance']}",)
+        elif detail['category'] == 'bundle_configuration':
+            error.args = (f"{detail['errorType']}: {detail['summary']} {detail['guidance']}",)
         error.failures = ConfiguredModuleError(data.get('moduleFailures', [])).failures
         if error.failures:
             error.args = (str(error) + '\n\n' + str(ConfiguredModuleError(error.failures)),)
@@ -747,7 +749,8 @@ class RuntimeManager:
                             detail = failure_details(data.get("error"), data.get("errorType"))
                             labels = {'authentication': 'AuthenticationError', 'rate_limit': 'RateLimitError',
                                       'context_limit': 'ContextLengthError', 'invalid_image': 'InvalidImageError',
-                                      'tool_configuration': 'ToolConfigurationError', 'provider_selection': 'ProviderSelectionError'}
+                                      'tool_configuration': 'ToolConfigurationError', 'provider_selection': 'ProviderSelectionError',
+                                      'bundle_configuration': detail['errorType']}
                             label = labels.get(detail['category'])
                             # Publish only our bounded classification and guidance,
                             # never the original provider payload or exception text.

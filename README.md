@@ -139,7 +139,7 @@ amplifier-unified config set bind '["100.64.0.10", "127.0.0.1"]'
 amplifier-unified doctor
 ```
 
-Replace the example origin and Tailscale IP with your host's real addresses. Before opening the remote address, export Unified's public CA on the host, verify its fingerprint with `doctor`, and trust that CA on each device. Do not disable certificate checks.
+Replace the example origin and Tailscale IP with your host's real addresses. Before opening the remote address, export Unified's public CA on the host, verify its fingerprint with `amplifier-unified setup-tls status`, and trust that CA on each device. Do not disable certificate checks.
 
 For the complete setup—including certificate transfer and trust, reverse-proxy limits, and Linux service management—see the [deployment guide](docs/DEPLOYMENT.md).
 

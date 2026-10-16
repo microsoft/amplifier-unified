@@ -56,7 +56,7 @@ On the Unified host, export the public CA and record the fingerprint:
 
 ```sh
 amplifier-unified setup-tls export > amplifier-unified-ca.crt
-amplifier-unified doctor
+amplifier-unified setup-tls status
 ```
 
 Transfer the CA over an already verified connection, then verify it before trusting it:
@@ -66,7 +66,7 @@ scp '<owner>@<host>:/absolute/path/amplifier-unified-ca.crt' .
 openssl x509 -in amplifier-unified-ca.crt -noout -fingerprint -sha256
 ```
 
-Compare that fingerprint with the trusted host's `doctor` output. Import the CA into the user trust store on each client device, then restart the browser. On macOS, use Keychain Access's **login** keychain and trust it for SSL. Follow your organization's approved process for mobile-device certificate trust.
+Compare that fingerprint with the trusted host's `amplifier-unified setup-tls status` output. Import the CA into the user trust store on each client device, then restart the browser. On macOS, use Keychain Access's **login** keychain and trust it for SSL. Follow your organization's approved process for mobile-device certificate trust.
 
 The `/setup` page can provide platform-specific follow-up instructions after TLS is trusted. Its displayed fingerprint or an anonymous certificate download is not independent proof of authenticity.
 
