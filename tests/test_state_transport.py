@@ -16,6 +16,10 @@ async def test_noop_layout_receipt_does_not_wait_for_other_client_revision(authe
     service = app['service']
     await service.history.close()
     await service.event_log_view.close()
+    # Startup diagnostics publishes shared state after an asynchronous read.
+    # Complete that initial snapshot before observing only client-local changes;
+    # its normal background reader remains active throughout the assertions.
+    await service.diagnostics.publish()
     client = await authenticated_client(app)
     for identity in ('layout-one', 'layout-two'):
         await client.post('/api/clients/attach', json={'clientId': identity})
