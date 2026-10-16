@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "release": "0.20.169",
+  "releaseRevision": "2e112cdc72df8858200efa2954a4b4ded2f56d3e",
+  "failedJob": "https://github.com/microsoft/amplifier-unified/actions/runs/38914110741/job/117017166468",
+  "classification": "Exhausted background job budget; final feedback recovery check cancelled, no preceding assertion failure",
+  "githubAnnotation": "The job has exceeded the maximum execution time of 25m0s",
+  "finalNormalStepStartedAfterSeconds": 1495,
+  "originalConclusion": "cancelled",
+  "qualifiedSourceReceiptWritten": false,
+  "repair": {
+    "timeoutMinutesBefore": 25,
+    "timeoutMinutesAfter": 45,
+    "workflowSha256": "c3a1093b3dfbd5d8ee6b396242eb0e5114c98403f718183955041d56e56ea55b",
+    "semanticComparison": "Parsed YAML identical after removing only timeout-minutes; all steps, commands, exact-source checkout and evidence gates unchanged",
+    "publicationGateChanged": false,
+    "productChanges": 0
+  },
+  "focusedValidation": {
+    "runtime": "Owned Linux DTU, isolated source/state/cache/network; shared read-only dependencies",
+    "python": {
+      "files": [
+        "tests/test_feedback_additions.py",
+        "tests/test_feedback_followup.py",
+        "tests/test_feedback_attachments.py",
+        "tests/test_release_qualification.py"
+      ],
+      "passed": 188,
+      "durationSeconds": 6.35,
+      "source": "Exact released source before timeout edit"
+    },
+    "finalWorkflowContracts": {
+      "passed": 33,
+      "durationSeconds": 0.13
+    },
+    "browser": {
+      "file": "frontend/tests/feedback-additions-browser.mjs",
+      "status": "passed",
+      "durationSeconds": 3.517,
+      "scope": "Current-source React component with synthetic host in real multiprocess Chromium; not installed HTTP/SSE E2E",
+      "initialAttempt": "Local shared Vite cache could not be unlinked; rerun used private owned cache, without changing test or product",
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      }
+    }
+  },
+  "successorCompleteReadiness": "pending; focused checks do not qualify the full job",
+  "historicalFailuresPreserved": [
+    "0.20.167",
+    "0.20.168",
+    "0.20.169"
+  ],
+  "limitations": [
+    "Physical media/platform acceptance remains separately unqualified where reported",
+    "A new job must finish every check and emit its qualified-source receipt before resolving readiness"
+  ]
+}

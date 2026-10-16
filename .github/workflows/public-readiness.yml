@@ -13,7 +13,10 @@ jobs:
   critical:
     name: Recovery and first-use checks
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # This is exhaustive background verification, not the publication gate.
+    # Release 0.20.169 reached the final feedback check at 24m55s and exhausted
+    # the former 25-minute job budget without a test assertion failure.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
