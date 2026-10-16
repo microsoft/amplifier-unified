@@ -8,7 +8,7 @@ export function readingPositions(storage){
   set(id,value){if(!id)return;rows[id]={...value,seenAt:Date.now()};rows=Object.fromEntries(Object.entries(rows).sort((a,b)=>b[1].seenAt-a[1].seenAt).slice(0,100));try{storage?.setItem(STORAGE_KEY,JSON.stringify(rows))}catch{}},
  };
 }
-export function createChatScroll(pane,following={current:true},onAway=()=>{},{loadAnchor}={}){
+export function createChatScroll(pane,following={current:true},onAway=()=>{},{loadAnchor,readingReference}={}){
  const view=pane.ownerDocument.defaultView;
  // This owner preserves message anchors; browser anchoring can otherwise move
  // the reader independently when incoming transcript rows replace the tail.
@@ -23,7 +23,9 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  const capture=()=>{
   const top=pane.getBoundingClientRect().top,rows=messages();
   const anchor=rows.find(node=>node.getBoundingClientRect().bottom>top)||rows.at(-1);
-  snapshot={top:pane.scrollTop,messageId:anchor?.dataset.messageId,offset:anchor?anchor.getBoundingClientRect().top-top:0};
+  const messageId=anchor?.dataset.messageId,reference=readingReference?.(sessionId,messageId);
+  snapshot={top:pane.scrollTop,messageId,offset:anchor?anchor.getBoundingClientRect().top-top:0,
+   ...(reference?.kind==='transcript-window'&&typeof reference.restoreCursor==='string'?{reference:{kind:reference.kind,restoreCursor:reference.restoreCursor}}:{})};
  };
  // A reply anchor is different from deliberate scrollback. Preserve that intent
  // across chat switches, even when the reply had not arrived before leaving.
@@ -41,11 +43,11 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
   }else if(restore){
    if(restore.messageId&&!messages().length)return;
    if(restore.messageId&&!messages().some(node=>node.dataset.messageId===restore.messageId)&&loadAnchor&&attemptedAnchor!==restore.messageId){
-    const token={sessionId,messageId:restore.messageId};anchorLoad=token;attemptedAnchor=token.messageId;unresolvedPosition=restore;
+    const token={sessionId,messageId:restore.messageId,reference:restore.reference};anchorLoad=token;attemptedAnchor=token.messageId;unresolvedPosition=restore;
     const current=()=>!disposed&&anchorLoad===token;
     // A successful loader queues a render; it does not guarantee that React
     // has committed its DOM yet. Keep restoration until the anchor mounts.
-    Promise.resolve().then(()=>current()&&loadAnchor(token.sessionId,token.messageId,current)).catch(()=>false).then(queued=>{if(current()){if(queued!==true)anchorLoad=null;update()}});
+    Promise.resolve().then(()=>current()&&loadAnchor(token.sessionId,token.messageId,current,token.reference)).catch(()=>false).then(queued=>{if(current()){if(queued!==true)anchorLoad=null;update()}});
     return;
    }
    const anchorReady=messages().some(node=>node.dataset.messageId===restore.messageId);

@@ -100,14 +100,10 @@ async def main():
                                      'onlyIfChanged': kwargs.get('only_if_changed', False), 'before': kwargs.get('before')})
         service.history.load = measured
         if '--retained-history' in sys.argv:
-            cases = [cases[1]]  # 10,000 messages; retain the latest 1,000.
-            await service.history.load(cases[0]['id'], limit=1000)
-            async def other_reader(request):
-                session = service._session(cases[0]['id'])
-                before = session['sharedHistoryOffset']
-                await service.history.load(session['id'], before=before, limit=100)
-                return web.json_response({'before':before, 'after':service._session(session['id'])['sharedHistoryOffset']})
-            app.router.add_post('/api/fixture/other-reader', other_reader)
+            # Cold history is read on demand by each browser's bounded window.
+            # A second real browser exercises reader independence; do not seed
+            # a legacy shared 1,000-message cache ahead of the first visit.
+            cases = [cases[1]]
         async def metrics(request):
             return web.json_response({'cases': cases, 'home': home, 'loads': timings, 'runtimeCalls': runtime.calls,
                 'unchanged': all([hashlib.sha256(p.read_bytes()).hexdigest() for p in paths[c['identity']]] == c['fileHashes'] for c in cases)})

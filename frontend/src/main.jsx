@@ -345,13 +345,14 @@ function App(){
  const rawConversationRows=useMemo(()=>withArtifactRows(conversationWorkRows(messages,workPlacement)),[messages,workPlacement]);
  const interim=useInterimReplies(rawConversationRows,execution,shell.composition?.presentation?.collapseInterimReplies===true,session?.id,messagesPane,state?.view?.executionExpanded,act);
  const conversationRows=interim.rows;
- const readingWindowLoader=useRef(null);
- readingWindowLoader.current=async(id,messageId,isCurrent)=>{
+ const readingWindowLoader=useRef(null),readingReference=useRef(null);
+ readingReference.current=(id,messageId)=>session?.id===id?messages.find(row=>row.id===messageId)?.sourceReference:null;
+ readingWindowLoader.current=async(id,messageId,isCurrent,reference)=>{
   if(session?.id!==id)return false;
   if(await interim.ensureVisible(messageId))return true;
-  return detail.around(messageId,{jump:false,isCurrent});
+  return detail.around(messageId,{jump:false,isCurrent,reference});
  };
- useLayoutEffect(()=>{if(!messagesPane.current)return;const scroll=createChatScroll(messagesPane.current,stickToBottom,setAwayFromBottom,{loadAnchor:(...args)=>readingWindowLoader.current?.(...args)});chatScroll.current=scroll;return()=>{scroll.dispose();chatScroll.current=null}},[!!state,shell.ready]);
+ useLayoutEffect(()=>{if(!messagesPane.current)return;const scroll=createChatScroll(messagesPane.current,stickToBottom,setAwayFromBottom,{loadAnchor:(...args)=>readingWindowLoader.current?.(...args),readingReference:(...args)=>readingReference.current?.(...args)});chatScroll.current=scroll;return()=>{scroll.dispose();chatScroll.current=null}},[!!state,shell.ready]);
  useLayoutEffect(()=>{chatScroll.current?.select(session?.id??null,!historyPending&&!state?.navigationPending)},[session?.id,historyPending,state?.navigationPending,shell.ready]);
  useLayoutEffect(()=>{
   const owned=voice.status==='connected'&&state?.voice?.status==='connected'&&voice.id&&voice.id===state?.voice?.id;

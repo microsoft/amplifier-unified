@@ -10,24 +10,26 @@ try{
  const {url}=await new Promise((resolve,reject)=>{let out='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),60000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{out+=chunk;for(const line of out.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const page=await browser.newPage({viewport:{width:1440,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-history-loading'}});
- const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(url+'/login');await page.getByLabel('Username').fill('history-fixture');await page.getByLabel('Password').fill('fixture-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');
+ const errors=[],navigationReads=[];page.on('pageerror',e=>errors.push(e.message));
+ page.on('request',request=>{if(new URL(request.url()).pathname==='/api/conversation/navigation')navigationReads.push(new URL(request.url()))});
+ const login=async reader=>{await reader.goto(url+'/login');await reader.getByLabel('Username').fill('history-fixture');await reader.getByLabel('Password').fill('fixture-password');await reader.getByRole('button',{name:'Sign in',exact:true}).click();await reader.waitForSelector('#amp-one')};
+ await login(page);
  const metrics=async()=>(await page.request.get(url+'/api/fixture/history-metrics')).json();
  const initial=await metrics(),id=initial.cases[0].id;
  const select=id=>page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),id);
  const rows=page.locator('[data-message-id]');
  const firstNumber=async()=>Number((await rows.first().innerText()).match(/Saved message (\d+)/)?.[1]);
  await select(id);await expect(rows).toHaveCount(100);await expect.poll(firstNumber).toBe(9900);
- // Navigation includes unloaded history; jumping does not load the whole file.
- const index=await(await page.request.get(url+'/api/conversation/navigation?'+new URLSearchParams({sessionId:id}))).json();
- assert.equal(index.turns.length,5000);
- await expect(page.locator('.a-rail-mark').first()).toHaveAttribute('data-turn-id',index.turns[0].id);
+ // The navigator describes only this requested reading window. Opening and
+ // using it must not enumerate all 5,000 turns in the saved transcript.
+ await expect(page.locator('.a-rail-mark')).toHaveCount(50);
+ await expect(page.locator('.a-rail-mark').first()).toHaveAttribute('data-turn-id',await rows.first().getAttribute('data-message-id'));
  await page.locator('.a-rail-mark').first().click();
- await expect(page.locator(`[data-message-id="${index.turns[0].id}"]`)).toHaveCount(1);
- assert.ok(await rows.count()<=100);
- await page.getByRole('button',{name:'Return to latest',exact:true}).click();
+ await expect.poll(()=>rows.first().evaluate(el=>Math.abs(el.getBoundingClientRect().top-el.closest('.a-messages').getBoundingClientRect().top))).toBeLessThan(100);
+ await page.locator('.a-rail-mark').last().click();
+ assert.equal(navigationReads.length,0,'Visible navigator jumps need no full-history index');
  await expect(rows).toHaveCount(100);await expect.poll(firstNumber).toBe(9900);
- // Cross nine retained pages and then the native disk-page boundary.
+ // Read ten prior pages explicitly, preserving contiguous, unique rows.
  for(let first=9800;first>=8900;first-=100){
   await page.getByRole('button',{name:'Load earlier conversation',exact:true}).evaluate(el=>el.click());
   await expect.poll(firstNumber).toBe(first);
@@ -43,16 +45,23 @@ try{
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const offset=()=>page.locator(`[data-message-id="${readingId}"]`).evaluate(el=>el.getBoundingClientRect().top-el.closest('.a-messages').getBoundingClientRect().top);
  const before=await offset();
- // Another reader expanding the shared native window must not reset ours.
- const expansion=await(await page.request.post(url+'/api/fixture/other-reader')).json();
- assert.deepEqual(expansion,{before:8900,after:8800});
- await page.waitForFunction(id=>window.amplifier.getState().sessions.find(row=>row.id===id)?.sharedHistoryOffset===8800,id);
+ // An independent browser starts with its own latest page and can expand it
+ // without moving this reader or inheriting its eleven loaded pages.
+ const other=await browser.newPage({viewport:{width:1440,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-history-loading'}});
+ other.on('pageerror',e=>errors.push(e.message));await login(other);
+ await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),id);
+ await expect(other.locator('[data-message-id]')).toHaveCount(100);
+ await other.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
+ await expect(other.locator('[data-message-id]')).toHaveCount(200);
+ await expect(other.locator('[data-message-id]').first()).toContainText('Saved message 9800');
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
- assert.equal(await firstNumber(),8900);await expect.poll(offset).toBeCloseTo(before,0);
- const diskPages=(await metrics()).loads.filter(row=>row.before!=null).length;
+ assert.equal(await firstNumber(),8900);await expect(rows).toHaveCount(1100);await expect.poll(offset).toBeCloseTo(before,0);
  await page.getByRole('button',{name:'Load earlier conversation',exact:true}).evaluate(el=>el.click());
  await expect.poll(firstNumber).toBe(8800);await expect.poll(offset).toBeCloseTo(before,0);
- assert.equal((await metrics()).loads.filter(row=>row.before!=null).length,diskPages,'Read retained rows before requesting another disk page');
+ await expect(rows).toHaveCount(1200);
+ await expect(other.locator('[data-message-id]')).toHaveCount(200);
+ await expect(other.locator('[data-message-id]').first()).toContainText('Saved message 9800');
+ await other.close();
  await select(initial.home);await expect(rows).toHaveCount(0);await select(id);
  await expect(page.locator(`[data-message-id="${readingId}"]`)).toHaveCount(1);
  await expect.poll(offset).toBeCloseTo(before,0);
@@ -61,5 +70,5 @@ try{
  await expect.poll(offset).toBeCloseTo(before,0);
  assert.ok(await rows.count()<=100,'Reload restores a bounded reading window');
  const final=await metrics();assert.equal(final.unchanged,true);assert.deepEqual(final.runtimeCalls,[]);assert.deepEqual(errors,[]);
- console.log('Retained history passed: bounded reopen, full-history navigation, retained and disk paging, unique rows, reading position after switch/reload, unchanged source and no model work.');
+ console.log('Retained history passed: cold bounded open, requested-window navigator, sequential paging, independent readers, unique rows, bounded reading position after switch/reload, unchanged source and no model work.');
 }finally{await browser?.close();fixture.kill('SIGTERM')}
