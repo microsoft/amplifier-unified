@@ -1584,5 +1584,16 @@
     "Warm send acknowledgement target remains unmet; trace remaining lifecycle publications, resource snapshots and synchronous before-response work without weakening durability.",
     "Recheck workspace timing outliers with repeated comparable samples before treating a single observation as a sustained regression.",
     "Normal qualification, real external provider latency and real Work-profile end-to-end behavior remain separately scoped acceptance; this synthetic test does not complete them."
-  ]
+  ],
+  "reviewIntegration": {
+    "mergedMain": "c218a1789",
+    "qualifiedProductSource": "c3a50ea19a04fd1317b0103595a375479ff86df7",
+    "note": "Measurement remains on the frozen qualified source and .167 bundled build. Latest main was merged for PR review; only additive smoke documentation conflicted, and both sections were retained. Product/test files below are byte-identical to qualified source; newer bundled assets were not relabeled as measured.",
+    "qualifiedFileHashes": {
+      "amplifier_web/service.py": "7693557921e710b64d1bba68ae824afd1112f450e18f98caebc81abdb7d7cd4c",
+      "amplifier_web/history_directory_observations.py": "937aa52ce7250483a475b508eb8972fa5c21a4d55be92f1701d37742cb965dc9",
+      "tests/test_delivery_projection.py": "c4c7a8b62658e0ff890b0b6f96957bfa2babfd88593d106541a1d7fabbc1a910",
+      "tests/test_observation_query_bounds.py": "a5d51357e5a9e9ce1aefbdac744270a1de95b531a40e8ba2ac62e13fe72fbc8b"
+    }
+  }
 }
