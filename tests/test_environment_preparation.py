@@ -180,7 +180,7 @@ def test_docker_builder_has_bounded_resources_no_mounts_and_immutable_commit(tmp
         commands.append(arguments)
         return 'sha256:' + '3' * 64 if 'commit' in arguments else '{}'
     monkeypatch.setattr(preparation, 'run', call)
-    image, _ = preparation._docker(config(tmp_path), folder, {'baseImage': config(tmp_path)['image'], 'resourceName': 'owned'}, {})
+    image, _ = preparation._docker(config(tmp_path), folder, {'baseImage': config(tmp_path)['image'], 'resourceName': 'owned', 'profileId': 'python-project'}, {})
     assert image == 'sha256:' + '3' * 64
     create = next(row for row in commands if 'create' in row)
     assert '--memory' in create and '--pids-limit' in create and '--cap-drop' in create
@@ -195,7 +195,50 @@ def test_cleanup_refuses_changed_image_owner(tmp_path, backend, monkeypatch):
     commands = []
     def call(arguments, *args, **kwargs):
         commands.append(arguments)
+        if 'ls' in arguments:
+            return 'sha256:' + '2' * 64
         return json.dumps([{'Id': 'sha256:' + '2' * 64, 'Config': {'Labels': {'io.amplifier.preparation': 'foreign'}}}])
     monkeypatch.setattr(preparation, 'run', call)
     assert not preparation.cleanup(config(tmp_path), tmp_path)['complete']
     assert not any('rm' in command for command in commands)
+
+
+def test_cleanup_recovers_missing_receipt_after_image_was_removed(tmp_path, backend, monkeypatch):
+    snapshot = archive(tmp_path)
+    preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request')
+    commands = []
+    def call(arguments, *args, **kwargs):
+        commands.append(arguments)
+        return 'sha256:' + 'a' * 64 + '\n'
+    monkeypatch.setattr(preparation, 'run', call)
+    assert preparation.cleanup(config(tmp_path), tmp_path)['complete']
+    assert not any('rm' in command for command in commands)
+
+
+def test_bounded_control_output_cannot_claim_absence_after_truncation(tmp_path):
+    with pytest.raises(ValueError, match='observation limit'):
+        preparation.run([sys.executable, '-c', 'print("a" * 200000)'],
+                        {'PATH': '/usr/bin:/bin'}, tmp_path / 'inspection.log', require_complete=True)
+
+
+def test_malformed_cleanup_record_retains_uncertainty(tmp_path):
+    folder = tmp_path / 'preparation'
+    folder.mkdir()
+    (folder / 'receipt.json').write_text('{')
+    assert preparation.cleanup(config(tmp_path), tmp_path) == {
+        'complete': False, 'status': 'unknown',
+        'reason': 'The owned dependency preparation could not be inspected or removed; retained source and recovery records are unchanged.'}
+
+
+def test_small_host_memory_accounts_for_existing_container_usage(tmp_path, monkeypatch):
+    original_path = preparation.Path
+    meminfo = tmp_path / 'meminfo'
+    meminfo.write_text('MemTotal:       8388608 kB\nMemAvailable:   7340032 kB\n')
+    monkeypatch.setattr(preparation, 'Path', lambda value: meminfo if value == '/proc/meminfo' else original_path(value))
+    usage = ['3.5GiB / 8GiB']
+    def call(arguments, *args, **kwargs):
+        return json.dumps({'MemTotal': 8 * 1024 ** 3}) if 'info' in arguments else '\n'.join(usage)
+    monkeypatch.setattr(preparation, 'run', call)
+    assert not preparation.memory_available(config(tmp_path), tmp_path, 'python-project')
+    usage[:] = ['1.0GiB / 8GiB']
+    assert preparation.memory_available(config(tmp_path), tmp_path, 'python-project')

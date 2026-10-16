@@ -130,7 +130,7 @@ def plan(archive, snapshot, profile_id):
     return value
 
 
-def run(arguments, env, log, *, timeout=PREPARATION_SECONDS, watch_cancel=True):
+def run(arguments, env, log, *, timeout=PREPARATION_SECONDS, watch_cancel=True, require_complete=False):
     """Bound host memory/log size while draining noisy dependency installers."""
     if watch_cancel and cancelled(log.parent):
         raise PreparationCancelled('Dependency preparation was cancelled.')
@@ -139,6 +139,7 @@ def run(arguments, env, log, *, timeout=PREPARATION_SECONDS, watch_cancel=True):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     tail = bytearray()
+    truncated = False
     deadline = time.monotonic() + timeout
     try:
         while selector.get_map():
@@ -152,9 +153,12 @@ def run(arguments, env, log, *, timeout=PREPARATION_SECONDS, watch_cancel=True):
                     selector.unregister(key.fileobj)
                     continue
                 tail.extend(chunk)
+                truncated |= len(tail) > LOG_BYTES
                 del tail[:-LOG_BYTES]
         if process.wait(timeout=max(1, deadline - time.monotonic())):
             raise ValueError('Dependency preparation failed. Inspect its retained log; private or authenticated dependencies are not supplied automatically.')
+        if require_complete and truncated:
+            raise ValueError('The preparation control response exceeded its observation limit.')
         return tail.decode(errors='replace')
     finally:
         selector.close()
@@ -182,19 +186,55 @@ def _environment(folder, config):
 def backend_identity(config, folder, env):
     log = folder / 'inspection.log'
     if config.get('backend', 'docker') == 'docker':
-        value = json.loads(run(['docker', '--host', config['dockerHost'], 'info', '--format', '{{json .}}'], env, log, timeout=30, watch_cancel=False))
+        value = json.loads(run(['docker', '--host', config['dockerHost'], 'info', '--format', '{{json .}}'], env, log, timeout=30, watch_cancel=False, require_complete=True))
         if not value.get('ID'):
             raise ValueError('The Docker daemon identity is unavailable.')
         return {'backend': 'docker', 'daemon': value['ID']}
     settings = config['incus']
-    value = json.loads(run([settings['incusExecutable'], '--project', settings['project'], 'query', '/1.0'], env, log, timeout=30, watch_cancel=False))['environment']
+    value = json.loads(run([settings['incusExecutable'], '--project', settings['project'], 'query', '/1.0'], env, log, timeout=30, watch_cancel=False, require_complete=True))['environment']
     if value.get('project') != settings['project'] or (settings.get('daemonFingerprint') and value.get('certificate_fingerprint') != settings['daemonFingerprint']):
         raise ValueError('The Incus preparation daemon or project changed.')
     return {'backend': 'incus', 'daemon': value['certificate_fingerprint'], 'project': value['project']}
 
 
+def memory_available(config, folder, profile_id):
+    """Observe headroom before building; unrelated host activity can still change.
+
+    This is not a global reservation over processes outside the managed runner.
+    Both actual host availability and daemon usage are considered on small hosts.
+    """
+    if not Path('/proc/meminfo').exists():
+        return True
+    memory = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
+    available = int(memory['MemAvailable'].split()[0]) * 1024
+    required = profiles.get(profile_id)['memoryMiB'] * 1024 * 1024
+    env = _environment(folder, config)
+    log = folder / 'capacity.log'
+    if config.get('backend', 'docker') == 'docker':
+        command = ['docker', '--host', config['dockerHost']]
+        info = json.loads(run([*command, 'info', '--format', '{{json .}}'], env, log, timeout=30, require_complete=True))
+        total = int(info['MemTotal'])
+        if total <= 16 * 1024 ** 3:
+            samples = run([*command, 'stats', '--no-stream', '--format', '{{.MemUsage}}'], env, log, timeout=30, require_complete=True)
+            used = 0
+            for sample in samples.splitlines():
+                match = re.fullmatch(r'([0-9.]+)\s*(B|kB|MB|GB|KiB|MiB|GiB)\s*/.*', sample)
+                if not match:
+                    raise ValueError('The test host memory usage could not be inspected.')
+                units = {'B': 1, 'kB': 1000, 'MB': 1000 ** 2, 'GB': 1000 ** 3,
+                         'KiB': 1024, 'MiB': 1024 ** 2, 'GiB': 1024 ** 3}
+                used += float(match[1]) * units[match[2]]
+            available = min(available, total - used)
+    else:
+        settings = config['incus']
+        memory = json.loads(run([settings['incusExecutable'], '--project', settings['project'], 'query', '/1.0/resources'], env, log, timeout=30, require_complete=True))['memory']
+        total = int(memory['total'])
+        available = min(available, total - int(memory['used']))
+    return available >= required + max(1024 ** 3, total // 10)
+
+
 @contextmanager
-def preparation_slot(config, folder):
+def preparation_slot(config, folder, profile_id):
     """At most one dependency build per configured admission authority."""
     if fcntl is None:
         raise ValueError('Dependency preparation needs a supported Linux test host.')
@@ -212,9 +252,20 @@ def preparation_slot(config, folder):
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
+                write(folder / 'status.json', {'status': 'preparing', 'phase': 'waiting-for-builder', 'profileId': profile_id,
+                                               'reason': 'Another dependency preparation is using this host’s build slot.'})
                 if time.monotonic() > deadline:
                     raise TimeoutError('Another dependency preparation still owns this host’s build slot.')
                 time.sleep(0.2)
+        while not memory_available(config, folder, profile_id):
+            write(folder / 'status.json', {'status': 'preparing', 'phase': 'waiting-for-memory', 'profileId': profile_id,
+                                           'reason': 'Waiting for enough observed memory for this test profile.'})
+            if cancelled(folder):
+                raise PreparationCancelled('Dependency preparation was cancelled.')
+            if time.monotonic() > deadline:
+                raise TimeoutError('The host did not have enough observed memory for dependency preparation.')
+            time.sleep(0.2)
+        write(folder / 'status.json', {'status': 'preparing', 'phase': 'installing-dependencies', 'profileId': profile_id})
         yield
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -264,7 +315,7 @@ def prepare(config, root, snapshot, profile_id, request_id):
         shutil.copyfile(Path(__file__).with_name(source), context / target)
     write(context / 'plan.json', expected)
     try:
-        with preparation_slot(config, folder):
+        with preparation_slot(config, folder, profile_id):
             image, inventory = (_docker(config, folder, expected, env) if expected['backend'] == 'docker'
                                 else _incus(config, folder, expected, env))
         if cancelled(folder):
@@ -320,7 +371,7 @@ def status(root):
         if not stat.S_ISREG(info.st_mode) or info.st_size > 8192 or info.st_uid != os.getuid():
             return {'status': 'unknown', 'reason': 'The retained preparation status is unavailable.'}
         value = json.load(stream)
-    return {key: value[key] for key in ('status', 'profileId', 'startedAt', 'builderStopped', 'reason') if key in value}
+    return {key: value[key] for key in ('status', 'phase', 'profileId', 'startedAt', 'builderStopped', 'reason') if key in value}
 
 
 def _docker(config, folder, expected, env):
@@ -330,13 +381,14 @@ def _docker(config, folder, expected, env):
     if not re.fullmatch(r'[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('Preparation requires an immutable qualified base image.')
     name = expected['resourceName']
+    budget = profiles.get(expected['profileId'])
     log = folder / 'build.log'
     def call(*args, timeout=PREPARATION_SECONDS):
         return run([*docker, *args], env, log, timeout=timeout)
     # A separate ordinary container avoids unowned BuildKit caches. The only
     # network-enabled phase has no source mounts, runtime secrets or Docker socket.
     call('create', '--name', name, '--label', 'io.amplifier.preparation=' + name,
-         '--memory', '6g', '--cpus', '4', '--pids-limit', '1024', '--network', 'bridge',
+         '--memory', str(budget['memoryMiB']) + 'm', '--cpus', str(budget['cpus']), '--pids-limit', str(budget['pids']), '--network', 'bridge',
          '--security-opt', 'no-new-privileges:true', '--cap-drop', 'ALL',
          '--cap-add', 'CHOWN', '--cap-add', 'DAC_OVERRIDE', '--cap-add', 'FOWNER',
          '--cap-add', 'SETUID', '--cap-add', 'SETGID', '--user', '0:0', image, 'sleep', 'infinity')
@@ -398,12 +450,13 @@ def _incus(config, folder, expected, env):
             raise ValueError('Project dependency preparation needs the supported host setup with its owned build network and storage.')
     incus = [settings['incusExecutable'], '--project', settings['project']]
     name = expected['resourceName']
+    budget = profiles.get(expected['profileId'])
     log = folder / 'build.log'
     def call(*args, timeout=PREPARATION_SECONDS):
         return run([*incus, *args], env, log, timeout=timeout)
     call('init', 'local:' + settings['image'], name, '--no-profiles', '--storage', settings['preparationStorage'],
-         '-c', 'security.privileged=false', '-c', 'security.nesting=false', '-c', 'limits.memory=6GiB',
-         '-c', 'limits.cpu=4', '-c', 'limits.processes=1024', '-c', 'user.amplifier.preparation=' + name)
+         '-c', 'security.privileged=false', '-c', 'security.nesting=false', '-c', 'limits.memory=' + str(budget['memoryMiB']) + 'MiB',
+         '-c', 'limits.cpu=' + str(budget['cpus']), '-c', 'limits.processes=' + str(budget['pids']), '-c', 'user.amplifier.preparation=' + name)
     call('config', 'device', 'add', name, 'prepare-network', 'nic', 'nictype=bridged', 'parent=' + settings['preparationNetwork'], 'name=eth0')
     call('start', name)
     call('exec', name, '--', 'mkdir', '-p', '/prepare', '/workspace')
@@ -428,6 +481,15 @@ def _incus(config, folder, expected, env):
 
 
 def cleanup(config, root):
+    """Return bounded incomplete recovery for malformed or unavailable records."""
+    try:
+        return _cleanup(config, root)
+    except Exception:  # noqa: BLE001 - preserve uncertain external-effect recovery at the host boundary.
+        return {'complete': False, 'status': 'unknown',
+                'reason': 'The owned dependency preparation could not be inspected or removed; retained source and recovery records are unchanged.'}
+
+
+def _cleanup(config, root):
     """Remove only this completed preparation's image, after test guest removal.
 
     Interrupted builds need explicit recovery; absence of a final receipt is not
@@ -451,23 +513,26 @@ def cleanup(config, root):
             raise ValueError('The prepared image daemon or project changed.')
         if receipt['backend'] == 'docker':
             command = ['docker', '--host', config['dockerHost']]
-            images = json.loads(run([*command, 'image', 'inspect', identity], env, log, timeout=30, watch_cancel=False))
-            if len(images) != 1 or images[0].get('Id') != identity or images[0].get('Config', {}).get('Labels', {}).get('io.amplifier.preparation') != name:
-                raise ValueError('The prepared image ownership changed.')
-            # No force: Docker refuses to remove an image retained by a test
-            # container. Tags are checked rather than deleting unrelated aliases.
-            if set(images[0].get('RepoTags') or []) != {name + ':latest'}:
-                raise ValueError('The prepared image has additional owners or aliases.')
-            run([*command, 'image', 'rm', name + ':latest'], env, log, timeout=120, watch_cancel=False)
+            present = run([*command, 'image', 'ls', '--all', '--no-trunc', '--format', '{{.ID}}'], env, log, timeout=30, watch_cancel=False, require_complete=True).splitlines()
+            if identity in present:
+                images = json.loads(run([*command, 'image', 'inspect', identity], env, log, timeout=30, watch_cancel=False, require_complete=True))
+                if len(images) != 1 or images[0].get('Id') != identity or images[0].get('Config', {}).get('Labels', {}).get('io.amplifier.preparation') != name:
+                    raise ValueError('The prepared image ownership changed.')
+                # No force: Docker refuses to remove an image retained by a test
+                # container. Tags are checked rather than deleting unrelated aliases.
+                if set(images[0].get('RepoTags') or []) != {name + ':latest'}:
+                    raise ValueError('The prepared image has additional owners or aliases.')
+                run([*command, 'image', 'rm', name + ':latest'], env, log, timeout=120, watch_cancel=False)
         else:
             settings = config['incus']
             command = [settings['incusExecutable'], '--project', settings['project']]
             images = json.loads(run([*command, 'image', 'list', identity, '--format', 'json'], env, log, timeout=30, watch_cancel=False))
-            if len(images) != 1 or images[0].get('fingerprint') != identity or images[0].get('properties', {}).get('user.amplifier.preparation') != name:
-                raise ValueError('The prepared image ownership changed.')
-            if {item.get('name') for item in images[0].get('aliases', [])} != {name}:
-                raise ValueError('The prepared image has additional owners or aliases.')
-            run([*command, 'image', 'delete', identity], env, log, timeout=120, watch_cancel=False)
+            if images:
+                if len(images) != 1 or images[0].get('fingerprint') != identity or images[0].get('properties', {}).get('user.amplifier.preparation') != name:
+                    raise ValueError('The prepared image ownership changed.')
+                if {item.get('name') for item in images[0].get('aliases', [])} != {name}:
+                    raise ValueError('The prepared image has additional owners or aliases.')
+                run([*command, 'image', 'delete', identity], env, log, timeout=120, watch_cancel=False)
         result = {'complete': True, 'status': 'removed', 'image': identity,
                   'inventoryRetained': True, 'removedAt': time.time()}
         write(folder / 'cleanup.json', result)

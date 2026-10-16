@@ -44,9 +44,11 @@ def main():
     run(bootstrap, '-m', 'pip', '--isolated', 'install', '--index-url',
         'https://pypi.org/simple', 'uv==' + UV_VERSION)
     uv = str(PREFIX / 'bootstrap/bin/uv')
-    # uv validates the committed lock against the manifest and refuses to update
-    # it. Normal project/dev groups are used, not every optional integration.
-    run(uv, 'sync', '--locked', '--all-groups', '--no-install-project', '--python',
+    # Install an exact-source wheel for package metadata and console scripts;
+    # virtual projects naturally install dependencies only. Python source checks
+    # still prefer the exact workspace through the executor's PYTHONPATH.
+    # The manifest's default groups are honored, not every optional integration.
+    run(uv, 'sync', '--locked', '--no-editable', '--python',
         '3.13', cwd='/workspace')
     inventory = {'profileId': plan['profileId'], 'preparationId': plan['preparationId'],
                  'sourceSha256': plan['sourceSha256'], 'lockfiles': plan['lockfiles'],
