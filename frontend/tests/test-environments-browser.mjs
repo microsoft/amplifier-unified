@@ -65,6 +65,13 @@ try{
  await peer.close();
  assert.equal((await facts()).callCounts.execute,beforeRefresh,'Observation cannot replay an unknown command');
  await expect(panel.getByRole('button',{name:'Remove environment…',exact:true})).toBeDisabled();
+  await page.request.post(url+'/fixture/environment-mode',{data:{backendAvailable:false}});
+  await panel.getByRole('button',{name:'Refresh test environments',exact:true}).click();
+  await expect(panel.getByRole('button',{name:'Run check',exact:true})).toBeDisabled();
+  await panel.getByRole('button',{name:'Check and recover',exact:true}).click();
+  await expect(panel.getByText('Last recovery check: completed.',{exact:false})).toBeVisible();
+  await expect(panel.getByText('Last request: outcome unknown',{exact:true})).toBeVisible();
+  assert.equal((await facts()).callCounts.execute,beforeRefresh,'Recovery preserves the original unknown result without replay');
  await panel.getByRole('button',{name:'Stop and keep data',exact:true}).click();
  await expect(panel.getByText('Environment: stopped',{exact:true})).toBeVisible();
  await panel.getByRole('button',{name:'Remove environment…',exact:true}).click();
@@ -78,8 +85,10 @@ try{
  await panel.getByRole('button',{name:'Remove environment…',exact:true}).click();
  await panel.getByRole('button',{name:'Save files and remove environment',exact:true}).click();
  await expect(panel.getByText('Environment: removed',{exact:true})).toBeVisible();
+  await expect(panel.getByText('Latest saved copy: 2 KiB.',{exact:false})).toBeVisible();
  const manual=await facts();assert.equal(manual.callCounts.start,1);assert.equal(manual.callCounts.execute,2);assert.equal(manual.callCounts.stop,1);assert.equal(manual.callCounts.remove,1);
- await page.request.post(url+'/fixture/environment-mode',{data:{executeTimeout:false,capacityAvailable:false}});
+  await page.request.post(url+'/fixture/environment-mode',{data:{executeTimeout:false,capacityAvailable:false,backendAvailable:true}});
+  await panel.getByRole('button',{name:'Refresh test environments',exact:true}).click();
  await panel.getByRole('form',{name:'Queue isolated check'}).getByLabel('Check command').fill('python check.py');
  await panel.getByRole('button',{name:'Queue check',exact:true}).click();
  await expect(panel.getByText('Check: queued',{exact:true})).toBeVisible();
@@ -104,6 +113,6 @@ try{
  await page.setViewportSize({width:1280,height:1050});
  await page.screenshot({path:output+'/queued-check-desktop.png'});
  const final=await facts();assert.equal(final.callCounts.start,2);assert.equal(final.callCounts.execute,3);assert.equal(final.callCounts.stop,2);assert.equal(final.callCounts.remove,2);assert.deepEqual(errors,[]);
- await writeFile(output+'/test-environments-browser-report.json',JSON.stringify({passed:true,realHostActionsAndReceipts:true,backend:'controlled fixture',docker:false,providerCalls:false,lostAckReloadNoReplay:true,peerRequestReplacesStaleResult:true,unknownCommandNotReplayed:true,stopBeforeRemove:true,removalConfirmation:true,mobileNoOverflow:true,queuedWaitSurvivesReload:true,cancelledWaitNoEffects:true,automaticCheckExportRemoval:true,retainedCheckOutput:true,counts:final.callCounts,errors},null,2));
+  await writeFile(output+'/test-environments-browser-report.json',JSON.stringify({passed:true,realHostActionsAndReceipts:true,backend:'controlled fixture',docker:false,providerCalls:false,lostAckReloadNoReplay:true,peerRequestReplacesStaleResult:true,unknownCommandNotReplayed:true,reconcilePreservesUnknownReceipt:true,cleanupWithUnavailableActiveBackend:true,verifiedRetentionSize:true,stopBeforeRemove:true,removalConfirmation:true,mobileNoOverflow:true,queuedWaitSurvivesReload:true,cancelledWaitNoEffects:true,automaticCheckExportRemoval:true,retainedCheckOutput:true,counts:final.callCounts,errors},null,2));
 }catch(error){if(page)await page.screenshot({path:output+'/test-environments-failure.png'}).catch(()=>{});throw error}
 finally{await browser?.close();fixture?.kill()}

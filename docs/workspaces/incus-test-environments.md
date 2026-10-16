@@ -9,6 +9,7 @@ owns admission and instance lifecycle; it is not the Docker Smart Tool backend.
 ## Qualification and configuration
 
 The host selects `backend: "incus"` in its private test-environment configuration.
+The top-level optional `retentionMode` is `files` by default or explicitly `full`.
 Its `incus` object contains:
 
 | Field | Requirement |
@@ -43,11 +44,14 @@ Operators retain and protect that exact installation, its dependencies, client
 configuration and admission directory while any owned resource remains.
 Validation does not create instances or alter the daemon.
 
-Updating Unified preserves the normalized configuration and ownership identity of
-an existing qualified `0.4.0` installation. Stop and remove its owned environments
-before changing that installation or switching the operator configuration to a
-new backend generation. An app upgrade does not authorize substituting a new
-backend configuration for an existing owner's recorded configuration.
+Each new environment retains a private immutable snapshot of its qualified
+backend configuration. Stop, remove and explicit reconciliation resolve that
+recorded configuration, including after the operator selects another backend.
+The old exact installation, dependencies and connection must remain available;
+a snapshot does not reinstall them or accept changed executable bytes. New
+execution continues to require the current configuration. Existing rows without
+a snapshot can use only their identical qualified active configuration. An app
+upgrade never substitutes a different backend for an existing owner.
 
 An auto-updating cached image can disappear when Incus refreshes its cache. Use
 an explicitly approved, task-owned local image copy with `cached: false` and
@@ -97,18 +101,52 @@ retrying under a new name would be incorrect.
 
 Stop releases active capacity and retains the instance filesystem. It does not
 require export space. Removal first requires an observed stopped, owned instance.
-Because a stopped Incus instance cannot run a source/artifact export command, the
-first adapter retains an opaque **complete instance export**, including
-`/workspace` and `/artifacts`, without extracting it on the host.
+The default `files` retention mode streams an uncompressed stopped-instance
+export through a bounded tar filter and saves only `/workspace` and `/artifacts`.
+No guest command is started, and guest paths are never extracted onto the host.
+An explicit `full` retention mode preserves the complete opaque instance export.
+An Incus removal request may deliberately select `retentionMode: "full"` for that
+operation, including after a selected-file export failed. The existing workspace
+removal confirmation offers this choice under “Save more files”. It does not
+replace the original backend configuration or silently enlarge every export.
+Docker rejects full-environment retention before effects.
+Existing complete exports remain unchanged.
 
-The export has an 8 GiB limit, a 300-second deadline, and a 9 GiB private free-space
-preflight. A watchdog terminates the owned export client if the spool crosses the
-limit. It preserves the partial export and stopped environment on failure. After
-export succeeds, the adapter hashes and synchronizes the archive and manifest
-before owner-checked deletion. Failure to preserve that evidence blocks deletion.
-The complete image adds retention cost: the qualification fixture exported about
-629 MiB even for a tiny repository. This is a conservative first implementation;
-selecting larger base images does not make the export budget unlimited.
+Incus may still create a temporary complete backup during export. Smaller retained
+archives reduce storage after cleanup; they do not remove that temporary space
+requirement. Export has a bounded size, deadline and free-space preflight. Unsafe
+archive paths, links that cannot be safely retained, missing selected roots,
+truncation or persistence failures keep the stopped environment and available
+partial evidence. Cleanup never reports preserved files when export failed.
+
+A durable manifest records selected paths, hashes and byte counts before
+owner-checked deletion. The host stores that bounded accounting with the
+resource; ordinary panel refreshes do not traverse retained file trees. The
+reported total covers the source snapshot and latest verified archives, not earlier
+partial copies, filesystem allocation or daemon image/cache usage. Incomplete
+copies remain available for deliberate recovery and are not automatically deleted. Saved check results and manifests remain
+separate small records. Missing older accounting is unknown, not zero. Retained
+files have no automatic age-based expiry; deliberate cleanup must preserve any
+unique or unresolved evidence.
+
+## Explicit recovery
+
+`workspace.environments.reconcile` checks the same owned resource with an observed
+revision and stable request identity. UI and agent callers use the same action.
+It does not start, rerun, stop or remove an instance. It verifies the retained
+backend configuration and actual daemon/project identity, owner, launch request
+and instance identity. Confirmed running or stopped state can repair the current
+resource projection. Ownership is retired only after physical absence is proven
+and no unresolved admission or launch can still create that instance.
+
+An unreachable daemon, changed daemon identity, missing installation, pending
+launch or insufficient legacy identity evidence remains unverified. Empty
+inventory by itself is not proof that a timed-out launch will never complete.
+Recovery has its own durable receipt and leaves original uncertain operation
+receipts unchanged. Repeating the same recovery request returns that receipt;
+a later observation uses a new request and current resource revision. The
+workspace panel exposes “Check and recover” and cleanup even when new execution
+is unavailable, provided the original configuration remains verifiable.
 
 ## Bounded evidence
 

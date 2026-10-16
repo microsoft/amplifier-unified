@@ -10,7 +10,6 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import selectors
 import shutil
@@ -19,6 +18,7 @@ import stat
 import subprocess
 import sys
 import time
+from pathlib import Path
 from urllib.parse import quote
 
 # Preserve previously qualified owners and configuration identity during upgrades.
@@ -231,6 +231,86 @@ def checked(result):
     return result
 
 
+def export_selected(config, env, name, destination):
+    """Filter a stopped instance's backup stream without extracting guest paths."""
+    process = subprocess.Popen([config['incusExecutable'], '--quiet', '--project', config['project'],
+        'export', name, '-', '--instance-only', '--compression', 'none'], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=True)
+    deadline = time.monotonic() + 300
+    class Reader:
+        def __init__(self, selector):
+            self.selector, self.total, self.tail = selector, 0, b''
+        def read(self, size):
+            while self.selector.get_map():
+                if time.monotonic() >= deadline:
+                    raise BackendFailure('export_timeout', 'Export timed out. The stopped environment remains.')
+                for key, _ in self.selector.select(min(0.1, max(0, deadline - time.monotonic()))):
+                    block = os.read(key.fileobj.fileno(), min(size, 65536))
+                    if not block:
+                        self.selector.unregister(key.fileobj)
+                        continue
+                    if key.fileobj is process.stdout:
+                        self.total += len(block)
+                        self.tail = (self.tail + block)[-1024:]
+                        if self.total > EXPORT_BYTES:
+                            raise BackendFailure('export_limit', 'Export exceeded its bound. The stopped environment remains.')
+                        return block
+                    # Diagnostic bytes are drained, never retained unboundedly or
+                    # exposed as user content; exit status is checked below.
+            return b''
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            selector.register(process.stderr, selectors.EVENT_READ)
+            reader = Reader(selector)
+            archives = common.retention.filter_incus_stream(reader, destination, name)
+            while reader.read(65536):
+                pass
+            if reader.tail != bytes(1024) or process.wait(timeout=max(1, deadline - time.monotonic())) != 0:
+                raise BackendFailure('export_incomplete', 'The export was incomplete. The stopped environment remains.')
+            return archives
+    finally:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.wait()
+        process.stdout.close()
+        process.stderr.close()
+
+
+def reconcile(config, env, name, payload, backend, binding_source):
+    # Inventory uses one successful actual daemon/project query. launch-status
+    # alone may be a cached unknown receipt and cannot establish absence.
+    raw = checked(incus(config, env, ['query', '/1.0/instances?recursion=1']))
+    if raw['truncated']:
+        raise BackendFailure('response_limit', 'The actual inventory exceeded its bound.')
+    instances = json.loads(raw['stdout'])
+    if not isinstance(instances, list):
+        raise BackendFailure('backend_unknown', 'The actual inventory is unavailable.')
+    matches = [item for item in instances if item.get('name') == name]
+    if len(matches) > 1:
+        raise BackendFailure('ownership_conflict', 'The actual inventory has conflicting identities.')
+    request = cli(config, env, ['launch-status', payload['operationId']])
+    matches_owner = request.get('name') == name and request.get('owner_root') == payload['rootOwner']
+    complete = matches_owner and request.get('state') in {'ready', 'stopped', 'removed'}
+    if matches:
+        item = matches[0]
+        metadata = item.get('config', {})
+        if not matches_owner or any(metadata.get(key) != value for key, value in {
+            'user.dtu.managed-by': 'amplifier-digital-twin', 'user.dtu.owner-root': payload['rootOwner'],
+            'user.dtu.request-id': payload['operationId']}.items()):
+            raise BackendFailure('ownership_conflict', 'The actual environment owner changed.')
+        state = {'Running': 'running', 'Stopped': 'stopped'}.get(item.get('status'), 'unknown')
+        return {'ok': state != 'unknown', 'status': state, 'universeId': name,
+                'observation': common.observation(payload, name, backend, binding_source, 'matched', complete)}
+    absent = complete
+    return {'ok': absent, 'status': 'absent' if absent else 'unknown', 'universeId': name,
+            'observation': common.observation(payload, name, backend, binding_source,
+                'absent' if absent else 'unknown', complete, absent)}
+
+
 def identity(payload):
     if any(not isinstance(payload.get(key), str) or not payload[key] or len(payload[key]) > 200 for key in ('operationId', 'rootOwner')):
         raise ValueError('A durable launch identity and root owner are required.')
@@ -321,11 +401,19 @@ def execute_call(payload):
             raise BackendFailure('backend_changed', 'The configured Incus daemon or project changed.', admitted=False)
         if action == 'capacity':
             return {'ok': True, 'status': 'available' if capacity['available'] else 'waiting', 'capacity': capacity, 'available': capacity['available']}
+        backend_identity = {'backend': 'incus', **scope}
+        try:
+            binding_source = common.verify_binding(payload, name, backend_identity, prepare=action == 'prepare')
+        except ValueError:
+            return {'ok': False, 'status': 'unknown', 'universeId': name, 'code': 'backend_unverified',
+                    'observation': common.observation(payload, name, backend_identity, 'unverified')}
+        if action == 'reconcile':
+            return reconcile(config, env, name, payload, backend_identity, binding_source)
         if action == 'prepare':
             from digital_twin_universe import lib
             snapshot = common.serialize(lib.export_repository_snapshot(Path(payload['source']), root / 'source.tar'))
             (root / 'snapshot.json').write_text(json.dumps(snapshot))
-            return {'ok': True, 'universeId': name, 'snapshot': snapshot}
+            return {'ok': True, 'universeId': name, 'snapshot': snapshot, 'backendIdentity': backend_identity}
         if action == 'start':
             common.source_identity(name, snapshot)
             if file_digest(root / 'source.tar', 512 * 1024 ** 2)[0] != snapshot['archive_sha256']:
@@ -337,6 +425,7 @@ def execute_call(payload):
             profile_path = root / 'incus-profile.json'
             profile_path.write_text(json.dumps(profile))
             cli(config, env, ['launch', str(profile_path), '--name', name, '--owner-root', payload['rootOwner'], '--request-id', payload['operationId'], '--offline'], 600)
+            common.retain_settlement(payload, name, backend_identity, 'launched')
             observe(config, env, name, payload, confinement=True)
             if common.source_ready(root, name, snapshot):
                 return {'ok': True, 'universeId': name, 'sourceReady': True, 'status': 'running', 'services': []}
@@ -374,27 +463,42 @@ def execute_call(payload):
             stopped = after is not None and after.get('status') == 'Stopped'
             return {'ok': stopped, 'universeId': name, 'status': 'stopped' if stopped else 'unknown', 'message': 'Stopped; source and artifacts remain retained.' if stopped else 'Stop is not confirmed.'}
         if action == 'remove':
+            mode = payload.get('retentionMode', 'files')
+            if mode not in {'files', 'full'}:
+                raise BackendFailure('retention_unsupported', 'The selected retention policy is unsupported. The stopped environment remains.', admitted=False)
             if instance.get('status') != 'Stopped':
                 raise BackendFailure('not_stopped', 'Removal requires an observed stopped environment.', admitted=False)
-            if shutil.disk_usage(root).free < EXPORT_BYTES + FREE_RESERVE_BYTES:
+            capacity = cli(config, env, ['capacity'])
+            if any(capacity.get('scope', {}).get(key) != backend_identity[key] for key in ('daemon', 'project')):
+                raise BackendFailure('backend_changed', 'The actual backend changed before export. The environment remains.', admitted=False)
+            pool_free = capacity.get('storage', {}).get('free_bytes')
+            if (not isinstance(pool_free, int) or isinstance(pool_free, bool)
+                    or pool_free < EXPORT_BYTES + FREE_RESERVE_BYTES
+                    or shutil.disk_usage(root).free < EXPORT_BYTES + FREE_RESERVE_BYTES):
                 raise BackendFailure('retention_storage', 'There is not enough free space for a bounded retained export. The stopped environment remains.', admitted=False)
             destination = root / ('retained-' + hashlib.sha256(payload['requestId'].encode()).hexdigest())
             destination.mkdir(mode=0o700)
             archive = destination / 'instance.tar'
             try:
-                checked(incus(config, env, ['export', name, str(archive), '--instance-only', '--compression', 'none'], 300, watched_file=archive))
-                digest, size = file_digest(archive, EXPORT_BYTES)
-                with archive.open('rb') as stream:
-                    os.fsync(stream.fileno())
-                archives = [{'id': name, 'source': '/', 'retainedPaths': ['/workspace', '/artifacts'], 'destination': str(archive), 'bytes': size, 'sha256': digest}]
+                if mode == 'full':
+                    checked(incus(config, env, ['export', name, str(archive), '--instance-only', '--compression', 'none'], 300, watched_file=archive))
+                    digest, size = file_digest(archive, EXPORT_BYTES)
+                    archives = [{'id': name, 'source': '/', 'retainedPaths': ['/workspace', '/artifacts'], 'destination': str(archive), 'bytes': size, 'sha256': digest}]
+                else:
+                    archives = export_selected(config, env, name, destination)
+                retained = common.retention.verify_retention(root, archives, mode)
                 common.retain_manifest(destination, archives)
             except Exception:
-                (destination / 'incomplete.json').write_text(json.dumps({'status': 'unknown', 'environmentPreserved': True, 'partialArchive': str(archive)}))
+                (destination / 'incomplete.json').write_text(json.dumps({'status': 'unknown', 'environmentPreserved': True,
+                    'policy': mode, 'partialArchives': [str(path) for path in destination.glob('*.tar')]}))
                 raise
             cli(config, env, ['destroy', name, '--owner-root', payload['rootOwner'], '--request-id', payload['operationId']], 120)
             after = cli(config, env, ['launch-status', payload['operationId']])
             removed = after['state'] == 'removed'
+            if removed:
+                common.retain_settlement(payload, name, backend_identity, 'removed')
             return {'ok': removed, 'universeId': name, 'status': 'removed' if removed else 'unknown', 'archives': archives,
+                    'retention': retained,
                     'message': 'The complete source and artifact filesystem was retained before removal.' if removed else 'The export is retained; removal is not confirmed.'}
         raise ValueError('Unsupported managed test environment action.')
     except BackendFailure as exc:
@@ -407,7 +511,7 @@ def main():
     try:
         payload = json.loads(sys.stdin.buffer.read(65537))
         value = execute_call(payload)
-    except Exception:
+    except Exception:  # noqa: BLE001 - subprocess boundary returns uncertainty, never raw private diagnostics.
         value = {'ok': False, 'status': 'unknown', 'message': 'The qualified backend did not return a confirmed result. Inspect retained state; this request will not replay.'}
     sys.stdout.write(json.dumps(value))
 

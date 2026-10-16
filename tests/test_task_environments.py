@@ -31,6 +31,7 @@ def backend(monkeypatch):
     def invoke(config, home, row, action, args):
         calls.append((action, dict(args)))
         return {'ok': True, 'universeId': 'owned-universe',
+                'backendIdentity': {'backend': 'docker', 'daemon': 'owned-daemon'},
                 'snapshot': {'snapshot_commit': 'snapshot', 'archive_sha256': 'archive'},
                 'status': {'start': 'running', 'read': row.get('environmentState', 'running'), 'stop': 'stopped', 'remove': 'removed'}.get(action, 'running'),
                 'result': {'stdout': 'check passed\n', 'stderr': '', 'exit_code': 0}}
@@ -148,7 +149,8 @@ async def test_unready_source_observation_blocks_host_execution(app, backend, mo
 
 async def test_start_failure_and_cleanup_failure_keep_ownership(app, backend, monkeypatch):
     def fail(config, home, row, action, args):
-        return {'ok': action == 'prepare', 'status': 'unknown', 'universeId': 'maybe-created', 'snapshot': {}}
+        return {'ok': action == 'prepare', 'status': 'unknown', 'universeId': 'maybe-created', 'snapshot': {},
+                'backendIdentity': {'backend': 'docker', 'daemon': 'owned-daemon'}}
     monkeypatch.setattr(owner, 'invoke', fail)
     failed = await start(app)
     assert failed['resource']['universeId'] == 'maybe-created' and failed['request']['state'] == 'outcome_unknown'
@@ -283,7 +285,7 @@ def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatc
     assert status == 'ready' and configured['incus']['validated'] and configured['python'] == str(python)
     target.write_text(json.dumps({**value, 'backend': 'incus', 'incus': incus}))
     assert owner.configuration(app)[1] == 'unavailable'  # No mixed/implicit backend selection.
-    for bad in [{**value, 'image': 'arbitrary-image'}, {**value, 'commit': 'c' * 40}, {**value, 'dockerHost': 'tcp://remote:2375'}]:
+    for bad in [{**value, 'retentionMode': 'full'}, {**value, 'retentionMode': 'invalid'}, {**value, 'image': 'arbitrary-image'}, {**value, 'commit': 'c' * 40}, {**value, 'dockerHost': 'tcp://remote:2375'}]:
         target.write_text(json.dumps(bad))
         assert owner.configuration(app)[1] == 'unavailable'
     target.write_text(json.dumps(value)); target.chmod(0o644)

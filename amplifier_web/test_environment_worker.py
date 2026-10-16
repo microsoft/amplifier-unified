@@ -6,14 +6,163 @@ server. Only fixed profiles and owner-derived paths cross this boundary.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
-from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
-import subprocess
 from contextlib import contextmanager
+from pathlib import Path
+
+_retention_spec = importlib.util.spec_from_file_location('_environment_retention', Path(__file__).with_name('environment_retention.py'))
+retention = importlib.util.module_from_spec(_retention_spec)
+_retention_spec.loader.exec_module(retention)
+
+
+def read_private_record(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077 or info.st_size > 4096:
+            raise ValueError('A retained backend proof is unsafe.')
+        return json.load(stream)
+
+
+def write_private_record(path, value):
+    descriptor, temporary = tempfile.mkstemp(prefix='.backend-proof-', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(value, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)  # Atomic publication, never replace earlier proof.
+        Path(temporary).unlink()
+        fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def binding(payload, universe, backend):
+    return {'backendIdentity': backend, 'rootOwner': payload['rootOwner'],
+            'operationId': payload['operationId'], 'universeId': universe}
+
+
+def verify_binding(payload, universe, backend, prepare=False):
+    """Bind effects to the actual daemon, independent of socket/config spelling."""
+    expected = binding(payload, universe, backend)
+    path = Path(payload['root']) / 'backend-binding.json'
+    recorded = read_private_record(path)
+    if payload.get('expectedBackendIdentity') is not None and payload['expectedBackendIdentity'] != backend:
+        raise ValueError('The actual backend identity changed.')
+    if recorded is not None and recorded != expected:
+        raise ValueError('The retained backend owner or identity changed.')
+    if prepare and recorded is None:
+        write_private_record(path, expected)
+        recorded = expected
+    if recorded is None and payload.get('expectedBackendIdentity') != backend:
+        raise ValueError('The original backend identity is unverified.')
+    return 'retained-launch' if recorded is not None else 'host'
+
+
+def retain_settlement(payload, universe, backend, state):
+    value = {**binding(payload, universe, backend), 'state': state}
+    path = Path(payload['root']) / ('backend-' + state + '.json')
+    previous = read_private_record(path)
+    if previous is None:
+        write_private_record(path, value)
+    elif previous != value:
+        raise ValueError('The retained backend settlement changed.')
+
+
+def settled(payload, universe, backend):
+    for state in ('removed', 'launched'):
+        try:
+            recorded = read_private_record(Path(payload['root']) / ('backend-' + state + '.json'))
+        except (OSError, ValueError, TypeError):
+            # Incomplete historical proof prevents absence retirement. It must
+            # not prevent stopping/preserving a currently observed owned guest.
+            return False
+        if recorded == {**binding(payload, universe, backend), 'state': state}:
+            return True
+    return False
+
+
+def observation(payload, universe, backend, source, ownership='unknown', admission_settled=False, absent=False):
+    return {**binding(payload, universe, backend), 'backendIdentitySource': source,
+            'ownership': ownership, 'admissionSettled': admission_settled, 'absenceConfirmed': absent}
+
+
+def docker_backend(payload):
+    daemon = docker_json(payload, 'info', '--format', '{{json .}}')
+    if not isinstance(daemon.get('ID'), str) or not daemon['ID']:
+        raise ValueError('The actual Docker daemon is unavailable.')
+    return {'backend': 'docker', 'daemon': daemon['ID']}
+
+
+def docker_reconcile(payload, universe, backend, source):
+    # A successful daemon query, not the library's cached status, proves presence.
+    result = subprocess.run(['docker', '--host', payload['dockerHost'], 'ps', '-a',
+        '--filter', 'label=com.docker.compose.project=' + universe, '--format', '{{json .}}'],
+        check=True, capture_output=True, text=True, timeout=20)
+    if len(result.stdout) > 1024 * 1024:
+        raise ValueError('The backend observation exceeded its bound.')
+    containers = [json.loads(line) for line in result.stdout.splitlines()]
+    def check_owner(item):
+        labels = item.get('Labels', {})
+        if isinstance(labels, str):
+            labels = dict(label.split('=', 1) for label in labels.split(',') if '=' in label)
+        if any(labels.get(key) != value for key, value in {
+            'com.docker.compose.project': universe, 'io.amplifier.root-owner': payload['rootOwner'],
+            'io.amplifier.operation-id': payload['operationId']}.items()):
+            raise ValueError('A backend resource does not match this operation owner.')
+    for item in containers:
+        check_owner(item)
+    remaining = False
+    for kind in ('volume', 'network'):
+        resources = subprocess.run(['docker', '--host', payload['dockerHost'], kind, 'ls',
+            '--filter', 'label=com.docker.compose.project=' + universe, '--format', '{{json .}}'],
+            check=True, capture_output=True, text=True, timeout=20)
+        if len(resources.stdout) > 1024 * 1024:
+            raise ValueError('The backend storage observation exceeded its bound.')
+        rows = [json.loads(line) for line in resources.stdout.splitlines()]
+        for item in rows:
+            check_owner(item)
+        remaining |= bool(rows)
+    directory = Path(payload['admissionRoot']) / hashlib.sha256(backend['daemon'].encode()).hexdigest()
+    try:
+        if any(path.is_symlink() for path in (directory, *directory.parents)):
+            raise ValueError('The retained admission directory traverses a symlink.')
+        if directory.exists():
+            # Reconciliation must not create or modify admission state.
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+                raise ValueError('The retained admission directory is unsafe.')
+            pending = any(row['universeId'] == universe for row in pending_admissions(directory))
+        else:
+            pending = False
+        complete = settled(payload, universe, backend) and not pending
+    except (OSError, ValueError, TypeError):
+        complete = False
+    absent = not containers and not remaining and complete
+    status = ('stopped' if all(item['State'] in {'exited', 'dead'} for item in containers) else 'running') if containers else 'absent' if absent else 'unknown'
+    return {'ok': status != 'unknown', 'status': status, 'universeId': universe,
+            'observation': observation(payload, universe, backend, source,
+                'matched' if containers else 'absent' if absent else 'unknown', complete, absent)}
+
+
+def docker_owner(payload, universe, backend, source):
+    result = docker_reconcile(payload, universe, backend, source)
+    if result['observation']['ownership'] != 'matched' or result['status'] not in {'running', 'stopped'}:
+        raise ValueError('The actual owned environment is not confirmed for this effect.')
 
 
 def docker_json(payload, *args):
@@ -198,8 +347,8 @@ def retain_manifest(directory, archives):
             os.close(descriptor)
 
 
-def profile(image):
-    return {
+def profile(image, payload=None):
+    value = {
         'name': 'unified-test',
         'services': {'twin': {
             'image': image, 'command': ['sleep', 'infinity'],
@@ -218,6 +367,12 @@ def profile(image):
         'networks': {'default': {'internal': True}},
         'x-dtu': {'twin_machine': 'twin'},
     }
+    if payload is not None:
+        labels = {'io.amplifier.root-owner': payload['rootOwner'], 'io.amplifier.operation-id': payload['operationId']}
+        value['services']['twin']['labels'] = dict(labels)
+        for definition in [*value['volumes'].values(), *value['networks'].values()]:
+            definition['labels'] = dict(labels)
+    return value
 
 
 def execute_call(payload):
@@ -231,22 +386,36 @@ def execute_call(payload):
     try:
         if action == 'capacity':
             return {'ok': True, 'capacity': docker_capacity(payload)}
+        if not identity:
+            identity = lib.launch_id(payload['operationId'], config=config)
+        backend = docker_backend(payload)
+        try:
+            binding_source = verify_binding(payload, identity, backend, prepare=action == 'prepare')
+        except ValueError:
+            return {'ok': False, 'status': 'unknown', 'universeId': identity, 'code': 'backend_unverified',
+                    'observation': observation(payload, identity, backend, 'unverified')}
+        if action == 'reconcile':
+            return docker_reconcile(payload, identity, backend, binding_source)
         if action == 'prepare':
             # Source snapshot is immutable and retained even when launch fails.
             snapshot = serialize(lib.export_repository_snapshot(Path(payload['source']), root / 'source.tar'))
             (root / 'snapshot.json').write_text(json.dumps(snapshot))
-            return {'ok': True, 'universeId': lib.launch_id(payload['operationId'], config=config), 'snapshot': snapshot}
+            return {'ok': True, 'universeId': identity, 'snapshot': snapshot, 'backendIdentity': backend}
         if action == 'start':
             source_identity(identity, snapshot)
             compose = root / 'compose.json'
-            compose.write_text(json.dumps(profile(payload['image'])))
+            compose.write_text(json.dumps(profile(payload['image'], payload)))
             try:
                 with docker_admission(payload) as capacity:
+                    if capacity['scope']['daemon'] != backend['daemon']:
+                        return {'ok': False, 'effectAdmitted': False, 'status': 'not-started', 'code': 'backend_changed',
+                                'message': 'The actual daemon changed before admission. Nothing was launched.'}
                     if not capacity['available']:
                         return {'ok': False, 'admissionDenied': True, 'status': 'not-started', 'capacity': capacity,
                             'message': 'Capacity changed before launch. No backend effect was admitted.'}
                     reservation = reserve_admission(payload, capacity)
                     universe = lib.launch(compose, operation_id=payload['operationId'], timeout_seconds=600, config=config)
+                    retain_settlement(payload, identity, backend, 'launched')
                     reservation.unlink()
             except BlockingIOError:
                 return {'ok': False, 'admissionDenied': True, 'status': 'not-started',
@@ -265,6 +434,8 @@ def execute_call(payload):
             # One resource has its own backend root. Exact launch identity is the
             # recovery key when the host lost the original helper response.
             identity = lib.launch_id(payload['operationId'], config=config)
+        if action in {'read', 'execute', 'stop', 'remove'}:
+            docker_owner(payload, identity, backend, binding_source)
         if action == 'read':
             universe = lib.status(identity, config=config)
             ready = source_ready(root, identity, snapshot)
@@ -287,6 +458,9 @@ def execute_call(payload):
                     'status': 'stopped' if result.complete else 'unknown', 'result': serialize(result),
                     'message': 'Containers stopped; source and artifacts are retained.' if result.complete else 'Stop was requested but not confirmed. Inspect current state.'}
         if action == 'remove':
+            if payload.get('retentionMode', 'files') != 'files':
+                return {'ok': False, 'status': 'unknown', 'universeId': identity, 'code': 'retention_unsupported',
+                        'message': 'Full environment retention is unavailable for this backend. The stopped environment was preserved.'}
             universe = lib.status(identity, config=config)
             if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
                 return {'ok': False, 'universeId': identity, 'status': 'unknown', 'message': 'Removal requires observed stopped containers. No data was removed.'}
@@ -294,13 +468,15 @@ def execute_call(payload):
             destination.mkdir(mode=0o700)
             archives = [serialize(lib.export_files(identity, source, destination / name, config=config))
                         for source, name in [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]]
+            retained = retention.verify_retention(root, archives)
             retain_manifest(destination, archives)
             result = lib.destroy(identity, config=config)
             if result.complete:
                 release_admission(payload, identity)
+                retain_settlement(payload, identity, backend, 'removed')
             return {'ok': result.complete, 'universeId': identity,
                     'status': 'removed' if result.complete else 'unknown', 'result': serialize(result),
-                    'archives': archives, 'message': 'Source and artifacts were retained before removal.' if result.complete else 'Artifacts were retained; teardown is not confirmed.'}
+                    'archives': archives, 'retention': retained, 'message': 'Source and artifacts were retained before removal.' if result.complete else 'Artifacts were retained; teardown is not confirmed.'}
         raise ValueError('Unsupported managed test environment action.')
     except DigitalTwinUniverseError as exc:
         return {'ok': False, 'status': 'unknown', 'universeId': identity or exc.universe_id,
@@ -312,7 +488,7 @@ def main():
     try:
         payload = json.loads(sys.stdin.buffer.read(65537))
         value = execute_call(payload)
-    except Exception:
+    except Exception:  # noqa: BLE001 - subprocess boundary returns uncertainty, never raw private diagnostics.
         value = {'ok': False, 'status': 'unknown',
                  'message': 'The managed backend failed before returning a confirmed result. Inspect retained state; this request will not replay.'}
     sys.stdout.write(json.dumps(value))
