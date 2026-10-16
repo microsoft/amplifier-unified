@@ -23,6 +23,18 @@ BOUND = ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevi
 log = logging.getLogger(__name__)
 
 
+def normalized_binding(values):
+    # Cold metadata spells the same defaults explicitly after a host restart.
+    # Normalize old persisted receipts too; real moves and Stop revisions differ.
+    workspace, directory, execution, interruption = values
+    return [workspace, directory or workspace, 0 if execution is None else execution,
+            0 if interruption is None else interruption]
+
+
+def binding(source):
+    return normalized_binding([source.get(key) for key in BOUND])
+
+
 def definitions(schema, string):
     scope = {'workspaceId': string(100), 'sessionId': string(200)}
     return {
@@ -111,7 +123,7 @@ class TestQueue:
         if job['status'] == 'queued' and job['expiresAt'] <= time.time():
             raise ValueError('The saved check expired while waiting; no environment was started.')
         source = self.app._session(receipt['senderSessionId'], hydrate=False)
-        if job['binding'] != [source.get(key) for key in BOUND]:
+        if normalized_binding(job['binding']) != binding(source):
             raise ValueError('The conversation stopped or moved; its queued check will not start.')
         if self.app.assignments.blocked(source, receipt.get('assignmentId')):
             raise ValueError('The assignment stopped; its queued check will not start.')
@@ -125,7 +137,7 @@ class TestQueue:
         if receipt['job'].get('cancelRequested'):
             return 'The queued check was cancelled; its result remains available.'
         source = self.app._session(receipt['senderSessionId'], hydrate=False)
-        if receipt['job']['binding'] != [source.get(key) for key in BOUND]:
+        if normalized_binding(receipt['job']['binding']) != binding(source):
             return 'The conversation stopped or moved after this check was requested.'
         return None
 
@@ -232,7 +244,7 @@ class TestQueue:
                 'job': {'id': args['requestId'], 'status': 'queued', 'createdAt': now, 'updatedAt': now,
                     'expiresAt': now + args.get('waitSeconds', 3600),
                     'source': source.get('workingDirectory') or source['workspace'],
-                    'binding': [source.get(key) for key in BOUND], 'authority': authority,
+                    'binding': binding(source), 'authority': authority,
                     'backendKey': environments.config_key(config), 'command': args['command'],
                     'timeoutSeconds': args.get('timeoutSeconds', 60), 'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
@@ -341,6 +353,9 @@ class TestQueue:
     async def effect(self, receipt, config, action, *, cleanup=False, suffix=None):
         job, app = receipt['job'], self.app
         row = environments.get(app.data_dir, receipt['senderSessionId'], job['resourceId'])
+        if cleanup:
+            active, _, _ = environments.configuration(app)
+            config = environments.resolve_configuration(app, row, active)
         request_id = receipt['requestId'] + ':' + (suffix or action)
         if action == 'start':
             request_id += ':'+str(job.get('attempt', 0))
@@ -362,6 +377,11 @@ class TestQueue:
                 # it never starts work, changes settings or removes evidence.
                 if not cleanup:
                     self.guard(self.get(receipt['requestId']))
+                else:
+                    active, _, _ = environments.configuration(app)
+                    current = environments.get(app.data_dir, receipt['senderSessionId'], row['id'])
+                    if environments.resolve_configuration(app, current, active) != config:
+                        raise ValueError('The retained cleanup backend changed.')
         def admit():
             asyncio.run_coroutine_threadsafe(checked(), loop).result(timeout=10)
         result = await app.worktrees.finish_thread(environments.effect, app, row, action, args, config, request, admit)
@@ -377,7 +397,7 @@ class TestQueue:
                 job = receipt['job']
                 row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
                     receipt['senderSessionId'], next(w['id'] for w in self.app.state['workspaces'] if w['path']==receipt['workspace']),
-                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'))
+                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config)
                 # Cancellation may arrive while local allocation is persisted.
                 # Never overwrite the newer cancellation/subscription record.
                 receipt = self.get(identity)
@@ -469,9 +489,7 @@ class TestQueue:
         """Reconcile the exact owner and complete cleanup; never rerun the check."""
         receipt = self.get(identity)
         try:
-            config, _, _ = environments.configuration(self.app)
-            if not config or environments.config_key(config) != receipt['job']['backendKey']:
-                raise ValueError('The original backend is unavailable; restore it before cleanup.')
+            active, _, _ = environments.configuration(self.app)
             row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
             if row['status'] == 'retired':
                 self.restore_operations(receipt)
@@ -481,9 +499,10 @@ class TestQueue:
                 self.finish(receipt, 'cancelled' if receipt['job'].get('cancelRequested') else status,
                     'Recovered the recorded check and cleanup results. The owned environment is removed; no command was replayed.')
                 return
+            config = environments.resolve_configuration(self.app, row, active)
             # read reconciles any prior abandoned pendingRequest and physical
             # state. It never starts an environment or installs source again.
-            await asyncio.to_thread(environments.read, self.app, receipt['senderSessionId'], config)
+            await asyncio.to_thread(environments.read, self.app, receipt['senderSessionId'], active)
             receipt = self.get(identity)
             self.restore_operations(receipt)
             row = environments.get(self.app.data_dir, receipt['senderSessionId'], row['id'])
