@@ -429,3 +429,39 @@ release requirements. Native DNS/trust checks remain separate. Enabled bundle
 failures stay explicit; tests must reject silent omission, widened permissions,
 automatic network/trust changes and automatic replay. Frozen inventory counts
 remain unchanged.
+
+### Bundle replacement and media discovery (October 16)
+
+**BUNDLE-SOURCE-01** exercises explicit bundle switching between two revisions
+of a real context module. Each mount uses a distinct worker process and the
+previous owner must have exited before the next spawn. Preserve saved messages
+and the explicit model/reasoning selection, discard the old bundle's control
+overrides only as specified, reject stale previews, and restore exact journaled
+files if candidate mounting fails. No switch, rollback, or picker browsing may
+submit a user input or invoke a model. Stop and revoked configuration authority
+must win across history, lock, admission, preparation and pre-start waits.
+
+The existing native bundle-switch owner exercises real Core/Foundation with a
+synthetic provider; ordinary bundle browser coverage retains its separate UI
+owner. Distinct-process origin checks and injected mount failure now pass where
+the unchanged in-process switch fails Core's mixed-origin import guard. This
+qualifies explicit switching, not the separate parked-settings remount path,
+arbitrary host crashes around commit, or native Windows behavior. Keep measured
+startup durations separate from the existing interaction latency targets.
+
+**MEDIA-CONFIGURATION-TRANSITION** adds the extended browser scenario
+`inline-media-transition`, with no duplicate readiness lane. A real synthetic
+bundle transaction moves an assistant's native index while configuration is
+busy; media identity resolution fails during that interval and succeeds after
+rollback. The old client retains that error. Four new component regressions
+reject the old behavior; all nine media-demand checks pass after the fix.
+
+Require zero new metadata requests while busy, abort and fence unresolved
+requests, retain already-qualified media for the same message, and issue one
+visible lookup after settling. Stable failures keep manual Retry; unchanged
+views never poll, and changing chats never displays the previous owner's media.
+The built-client smoke passes ordinary and collapsed-interim output paths with
+a real AppService/media registry and synthetic busy-state publication. It does
+not prove the timing of the originally reported live request. Backend identity
+validation is unchanged. Frozen inventory counts and original browser-plan hash
+remain unchanged; this is explicit additive coverage.
