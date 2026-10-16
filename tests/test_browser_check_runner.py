@@ -233,7 +233,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row['env'] == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
     assert len(original) == 65 and len(rows) == 72
-    assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == 'ca60c5f5e0a9bf5fd94795d64ea6c8d9c286b2c5f481b7d3c07d5f32fb522173'
+    assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == '115d865e2934f442582f89f77bde590ebc6101cb535c841efbba8f3e2511807f'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
     assert ['node', 'tests/empty-host-browser.mjs', '--lost-create'] in commands
@@ -277,3 +277,20 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # All 108 original scripts, three navigation regressions, confirmed restart,
     # Smart Tool recovery and archive feedback each retain their owning lane.
     assert len(readiness_scripts | extended_scripts) == 114
+
+
+def test_performance_reports_are_distinct_and_uploaded():
+    rows = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())['scenarios']
+    reports = {row['id']: row['env']['AMPLIFIER_PERF_EVIDENCE'] for row in rows
+               if 'AMPLIFIER_PERF_EVIDENCE' in row.get('env', {})}
+    assert len(set(reports.values())) == len(reports), 'A later scenario must not overwrite prior diagnostics'
+    assert reports['active-client-performance'] != reports['state-transport']
+    # Demand has no performance report writer; it must not borrow another path.
+    assert 'demand' not in reports
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    uploads = [step for step in workflow['jobs']['browser']['steps']
+               if step.get('uses') == 'actions/upload-artifact@v4']
+    directories = [line.strip().rstrip('/') + '/' for step in uploads
+                   for line in step['with']['path'].splitlines() if line.strip()]
+    assert all(any(path.removeprefix('{root}/').startswith(directory) for directory in directories)
+               for path in reports.values())
