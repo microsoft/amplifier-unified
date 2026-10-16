@@ -12,6 +12,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -25,7 +26,7 @@ from filelock import FileLock, Timeout
 LEGACY_REPOSITORY = 'https://github.com/microsoft/amplifier-bundle-digital-twin-universe'
 LEGACY_COMMIT = '241849071f682706791ae5f4a1e5462d0e316df7'
 INCUS_IMAGE_SERVER = 'https://images.linuxcontainers.org'
-INCUS_IMAGE_ALIAS = 'ubuntu/24.04'
+INCUS_IMAGE_ALIAS = 'ubuntu/24.04/cloud'
 ACTIVE = {'accepted', 'running'}
 
 
@@ -125,7 +126,8 @@ def command(argv, *, env=None, timeout=20):
     from .incus_environment_worker import run
     result = run(argv, env or {'PATH': os.defpath, 'LANG': 'C.UTF-8'}, timeout=timeout, output_bytes=65536)
     if result['exit_code'] or result['truncated']:
-        raise ValueError('The test backend did not confirm the requested setup step.')
+        detail = re.sub(r'(https?://)[^/\s@]+@', r'\1[redacted]@', result.get('stderr', '').strip())[-1200:]
+        raise ValueError('The test backend did not confirm the requested setup step.' + (' ' + detail if detail else ''))
     return result['stdout'].strip()
 
 
@@ -264,6 +266,8 @@ async def request(app, args, actor, guard=None):
     if existing:
         if existing['intent'] != intent or existing['actor'] != actor:
             raise ValueError('This setup request identity already belongs to another intent.')
+        if existing['state'] in {'outcome_unknown', 'failed'} and existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and identity not in getattr(app, '_test_setup_tasks', {}):
+            existing = await complete_retained(app, path, existing, guard)
         observed = await readiness(app, force=True)
         # A crash after atomic publication can be settled by the exact retained
         # configuration and earlier successful disposable probe, without effects.
@@ -299,6 +303,44 @@ async def request(app, args, actor, guard=None):
     except BaseException:
         lock.release()
         raise
+
+
+async def complete_retained(app, path, record, guard):
+    """Explicit same-intent retry may publish its already verified candidate."""
+    from .task_environments import validate_configuration_value, invoke
+    lock = FileLock(str(root(app) / 'setup.lock'), timeout=0)
+    try:
+        lock.acquire()
+    except Timeout:
+        return record
+    try:
+        candidate = record['candidateConfiguration']
+        selected = read_json(Path(app.data_dir) / 'test-environments.json')
+        if selected == candidate:
+            return record
+        if selected != record.get('priorConfiguration'):
+            raise ValueError('Another runner configuration was selected. The previous setup will not replace it.')
+        if guard:
+            await guard()
+        config, status, _ = await settled_thread(validate_configuration_value, app, candidate)
+        if status != 'ready' or not config:
+            raise ValueError('The retained runner still needs qualification; no setup effects were repeated.')
+        await settled_thread(inspect_base_image, config)
+        value = await settled_thread(invoke, config, app.data_dir, {}, 'capacity', {})
+        scope = (value.get('capacity') or {}).get('scope', {})
+        if not value.get('ok') or scope.get('daemon') != record['proof'].get('daemon'):
+            raise ValueError('The retained setup backend identity could not be confirmed.')
+        if guard:
+            await guard()
+        if read_json(Path(app.data_dir) / 'test-environments.json') != selected:
+            raise ValueError('The runner selection changed before publication.')
+        retain_verification(app, candidate, record['proof'])
+        write_json(Path(app.data_dir) / 'test-environments.json', candidate)
+        record.update(state='completed', phase='ready', detail='The earlier verified setup is now saved. Its install, image preparation and check were not repeated.', updatedAt=time.time())
+        write_json(path, record)
+        return record
+    finally:
+        lock.release()
 
 
 async def close(app):
@@ -346,6 +388,8 @@ async def _run(app, record, lock, guard):
             record.update(state='completed', phase='ready', detail='The existing runner passed an isolated offline check. Its configuration is unchanged.')
             return
         config_before = read_json(Path(app.data_dir) / 'test-environments.json')
+        record['priorConfiguration'] = config_before
+        write_json(path, record)
         selected = next(row for row in await settled_thread(discover) if row['id'] == record['backend'])
         if not selected['available']:
             raise ValueError(selected['reason'])
@@ -371,7 +415,7 @@ async def _run(app, record, lock, guard):
             raise ValueError('The runner configuration changed during setup. The new setup result was retained without replacing it.')
         retain_verification(app, config, proof)
         write_json(Path(app.data_dir) / 'test-environments.json', config)
-        record.update(state='completed', phase='ready', detail='Isolated tests are ready. Prepare this project’s dependencies before its first check.', proof=proof)
+        record.update(state='completed', phase='ready', detail='Isolated tests are ready. Queue a check to prepare this project’s dependencies automatically.', proof=proof)
     except asyncio.CancelledError:
         record.update(state='outcome_unknown', detail='Setup was interrupted. Its retained resources were not repeated or removed.')
     except Exception as exc:
@@ -428,7 +472,7 @@ async def verify_existing(config, raw, owned, record, step):
     await effect(['init', 'local:' + current['image'], name, '--no-profiles', '--storage', pool, '-c', 'user.amplifier.setup=' + record['id'], '-c', 'security.privileged=false', '-c', 'security.nesting=false', '-c', 'limits.memory=512MiB', '-c', 'limits.cpu=1'])
     await effect(['start', name])
     probe = json.loads(await settled_thread(command, [*prefix, 'exec', name, '--', 'python3', '-c', "import json,sys,tarfile; assert hasattr(tarfile,'data_filter'); print(json.dumps({'python':sys.version.split()[0]}))"], env=env, timeout=60))
-    instance = json.loads(await settled_thread(command, [*prefix, 'query', '/1.0/instances/' + name + '?project=' + current['project']], env=env))
+    instance = json.loads(await settled_thread(command, [current['incusExecutable'], '--force-local', 'query', '/1.0/instances/' + name + '?project=' + current['project']], env=env))
     if any(device.get('type') == 'nic' for device in instance.get('expanded_devices', {}).values()):
         raise ValueError('The readiness probe unexpectedly has network access.')
     await effect(['stop', name])
@@ -489,15 +533,19 @@ async def setup_incus(base, selected, owned, record, step):
         await step(record['phase'], record['detail'])
         if args[0] == 'query' and project_scope:
             args = [args[0], args[1] + ('&' if '?' in args[1] else '?') + 'project=' + project]
-        argv = [binary, '--force-local', *(['--project', project] if project_scope else []), *args]
-        kind = {'project': 'project', 'network': 'network', 'init': 'probe', 'start': 'probe', 'stop': 'probe', 'delete': 'probe'}.get(args[0])
-        mutation = args[0] in {'init', 'start', 'stop', 'delete'} or args[:2] in [['project', 'create'], ['network', 'create']]
+        remote_image = any(item.startswith('unified-images:') for item in args)
+        # --force-local discards client remotes. The only remote request uses
+        # our private fixed HTTPS image source and an explicit local target.
+        argv = [binary, *([] if remote_image else ['--force-local']), *(['--project', project] if project_scope and args[0] != 'query' else []), *args]
+        kind = {'project': 'project', 'profile': 'project', 'network': 'network', 'init': 'probe', 'start': 'probe', 'stop': 'probe', 'delete': 'probe'}.get(args[0])
+        mutation = args[0] in {'init', 'start', 'stop', 'delete'} or args[:2] in [['project', 'create'], ['network', 'create'], ['profile', 'device']]
         if mutation:
             identity = hashlib.sha256(json.dumps(args).encode()).hexdigest()[:20]
             return await settled_thread(tracked_command, owned / ('effect-' + identity + '.json'), kind, argv, env=env, timeout=timeout)
         return await settled_thread(command, argv, env=env, timeout=timeout)
     await step('creating_backend', 'Creating a private test project and its dependency-download network.')
-    initial_daemon = json.loads(await incus(['query', '/1.0'], project_scope=False))['environment']['certificate_fingerprint']
+    server = json.loads(await incus(['query', '/1.0'], project_scope=False))['environment']
+    initial_daemon = server['certificate_fingerprint']
     write_json(owned / 'resources.json', {'backend': 'incus', 'project': project, 'network': bridge, 'owner': record['id'], 'daemon': initial_daemon})
     await incus(['project', 'create', project, '-c', 'features.images=true', '-c', 'features.profiles=true', '-c', 'features.networks=false', '-c', 'user.amplifier.setup=' + record['id']], project_scope=False)
     # Incus bridges live in the default network project. Only this unique owned
@@ -505,13 +553,18 @@ async def setup_incus(base, selected, owned, record, step):
     await incus(['network', 'create', bridge, 'ipv4.address=auto', 'ipv4.nat=true', 'ipv6.address=none', 'user.amplifier.setup=' + record['id']], project_scope=False)
     await step('preparing_image', 'Downloading the approved Ubuntu base image into the private test project.')
     alias = 'unified-base-' + record['id'][:12]
-    await incus(['image', 'copy', 'unified-images:' + INCUS_IMAGE_ALIAS, 'local:', '--target-project', project, '--alias', alias], timeout=600, project_scope=False)
+    remote_images = json.loads(await incus(['image', 'list', 'unified-images:' + INCUS_IMAGE_ALIAS, '--format', 'json'], timeout=60, project_scope=False))
+    matches = [image for image in remote_images if image.get('type') == 'container' and image.get('architecture') == server['architectures'][0]]
+    if len(matches) != 1 or not re.fullmatch(r'[a-f0-9]{64}', matches[0].get('fingerprint', '')):
+        raise ValueError('The approved Ubuntu image is not available for this host architecture.')
+    approved_fingerprint = matches[0]['fingerprint']
+    await incus(['image', 'copy', 'unified-images:' + approved_fingerprint, 'local:', '--target-project', project, '--alias', alias], timeout=600, project_scope=False)
     images = json.loads(await incus(['image', 'list', alias, '--format', 'json']))
     if not isinstance(images, list) or len(images) != 1:
         raise ValueError('The approved image alias did not resolve to one exact local image.')
     info = images[0]
     image = info.get('fingerprint', '')
-    if len(image) != 64 or info.get('auto_update') or info.get('cached'):
+    if image != approved_fingerprint or info.get('auto_update') or info.get('cached'):
         raise ValueError('The downloaded base image is not a retained exact image.')
     daemon = json.loads(await incus(['query', '/1.0']))['environment']['certificate_fingerprint']
     launcher = venv / 'bin/amplifier-digital-twin'
@@ -529,6 +582,9 @@ async def setup_incus(base, selected, owned, record, step):
     if not pool:
         raise ValueError('Incus needs an existing initialized storage pool. Setup does not configure host disks.')
     config['incus']['preparationStorage'] = pool
+    # The qualified DTU adapter discovers admission storage from this private
+    # project's default profile. Add only a root disk; no inherited host NIC.
+    await incus(['profile', 'device', 'add', 'default', 'root', 'disk', 'path=/', 'pool=' + pool])
     await incus(['init', 'local:' + image, name, '--no-profiles', '--storage', pool,
                  '-c', 'user.amplifier.setup=' + record['id'], '-c', 'security.privileged=false', '-c', 'security.nesting=false', '-c', 'limits.memory=512MiB', '-c', 'limits.cpu=1'], timeout=120)
     await incus(['start', name], timeout=120)

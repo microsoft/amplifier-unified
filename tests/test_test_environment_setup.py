@@ -310,3 +310,94 @@ def test_unknown_probe_admission_is_not_settled_by_absence(app, monkeypatch):
     # physically observed and then removed, not from an empty inventory alone.
     record['cleanup'] = {'observedResources': ['probe']}
     assert setup.observe_partial(app, record)['absent']
+
+
+async def test_incus_setup_uses_exact_remote_image_and_supported_query_scope(app, monkeypatch, tmp_path):
+    from amplifier_web import incus_environment_worker as worker
+    fingerprint, daemon = 'a' * 64, 'b' * 64
+    calls = []
+    monkeypatch.setattr(setup.shutil, 'which', lambda _: '/usr/bin/uv')
+    monkeypatch.setattr(worker, 'package_digest', lambda _: worker.QUALIFIED_PACKAGES['0.4.1'])
+    monkeypatch.setattr(worker, 'file_digest', lambda *a: ('c' * 64, 10))
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[0] == '/usr/bin/uv':
+            return ''
+        if '-I' in argv:
+            return '"/approved/package"'
+        if 'query' in argv:
+            assert '--project' not in argv, 'Incus query rejects the global project flag'
+            if '/1.0/instances/' in argv[-1]:
+                assert '?project=unified-' in argv[-1]
+                return '{"expanded_devices":{}}'
+            return json.dumps({'environment': {'certificate_fingerprint': daemon, 'architectures': ['aarch64']}})
+        if any(value.startswith('unified-images:') for value in argv):
+            assert '--force-local' not in argv, 'Force-local discards private image remotes'
+            if 'list' in argv:
+                return json.dumps([{'fingerprint': fingerprint, 'type': 'container', 'architecture': 'aarch64'}, {'fingerprint': 'd' * 64, 'type': 'virtual-machine', 'architecture': 'aarch64'}])
+            assert 'unified-images:' + fingerprint in argv and 'local:' in argv
+            return ''
+        if 'image' in argv and 'list' in argv:
+            return json.dumps([{'fingerprint': fingerprint, 'cached': False, 'auto_update': False}])
+        if 'storage' in argv:
+            return '[{"name":"existing-pool","status":"Created"}]'
+        if 'exec' in argv:
+            return '{"python":"3.12.3"}'
+        if 'list' in argv:
+            return '[]'
+        return ''
+    monkeypatch.setattr(setup, 'command', run)
+    record = {'id': 'f' * 32}
+    async def step(phase, detail):
+        record.update(phase=phase, detail=detail)
+    config, proof = await setup.setup_incus({'backend': 'incus'}, {'executable': '/usr/bin/incus'}, tmp_path, record, step)
+    assert config['incus']['image'] == fingerprint
+    assert config['incus']['preparationStorage'] == 'existing-pool'
+    assert proof['probeRemoved'] and proof['offline']
+    assert len([call for call in calls if 'copy' in call]) == 1
+    profile = next(call for call in calls if 'profile' in call and 'device' in call)
+    assert profile[profile.index('--project') + 1] == 'unified-' + record['id'][:20]
+    assert profile[-2:] == ['path=/', 'pool=existing-pool']
+
+
+async def test_explicit_same_setup_can_publish_verified_candidate_without_replay(app, monkeypatch):
+    import hashlib
+    identity = hashlib.sha256(json.dumps(['session', 'setup'], separators=(',', ':')).encode()).hexdigest()[:32]
+    candidate = {'enabled': True, 'backend': 'docker'}
+    record = {'id': identity, 'intent': args(), 'actor': {}, 'backend': 'docker', 'state': 'outcome_unknown',
+              'priorConfiguration': None, 'candidateConfiguration': candidate, 'proof': {'probeRemoved': True, 'daemon': 'original'}}
+    setup.write_json(setup.root(app) / (identity + '.json'), record)
+    monkeypatch.setattr(owner, 'invoke', lambda *a: {'ok': True, 'capacity': {'scope': {'daemon': 'original'}, 'blockers': []}})
+    result = await setup.request(app, args(), {})
+    assert result['operation']['state'] == 'completed'
+    assert setup.read_json(app.data_dir / 'test-environments.json') == candidate
+    app.smart_tools.install.assert_not_called()
+
+
+async def test_retained_setup_handles_capacity_denial_without_publishing(app, monkeypatch):
+    import hashlib
+    identity = hashlib.sha256(json.dumps(['session', 'setup'], separators=(',', ':')).encode()).hexdigest()[:32]
+    candidate = {'enabled': True, 'backend': 'docker'}
+    record = {'id': identity, 'intent': args(), 'actor': {}, 'backend': 'docker', 'state': 'outcome_unknown',
+              'priorConfiguration': None, 'candidateConfiguration': candidate, 'proof': {'probeRemoved': True, 'daemon': 'original'}}
+    setup.write_json(setup.root(app) / (identity + '.json'), record)
+    monkeypatch.setattr(owner, 'invoke', lambda *a: {'ok': False, 'capacity': None, 'code': 'storage_unknown'})
+    with pytest.raises(ValueError, match='backend identity could not be confirmed'):
+        await setup.request(app, args(), {})
+    assert not (app.data_dir / 'test-environments.json').exists()
+    app.smart_tools.install.assert_not_called()
+
+
+async def test_cleaned_setup_cannot_republish_retained_candidate(app, monkeypatch):
+    import hashlib
+    identity = hashlib.sha256(json.dumps(['session', 'setup'], separators=(',', ':')).encode()).hexdigest()[:32]
+    candidate = {'enabled': True, 'backend': 'docker'}
+    record = {'id': identity, 'intent': args(), 'actor': {}, 'backend': 'docker', 'state': 'recovered',
+              'priorConfiguration': None, 'candidateConfiguration': candidate, 'proof': {'probeRemoved': True}}
+    setup.write_json(setup.root(app) / (identity + '.json'), record)
+    complete = AsyncMock()
+    monkeypatch.setattr(setup, 'complete_retained', complete)
+    result = await setup.request(app, args(), {})
+    assert result['operation']['state'] == 'recovered'
+    complete.assert_not_awaited()
+    assert not (app.data_dir / 'test-environments.json').exists()
