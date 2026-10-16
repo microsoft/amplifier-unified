@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.170",
+      "title": "Approve and revoke companion connections",
+      "changes": [
+        "Approve compatible companion apps by confirming a matching code in the browser. Each approved device receives separate credentials with access limited to its permitted chat operations.",
+        "Manage approved devices at /devices. Revocation blocks queued operations before acceptance while allowing already accepted work to finish.",
+        "Companion identities and private client state remain isolated across devices and server restarts. Expanded security and browser checks cover approval, restricted access and revocation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.169",
       "title": "Reduce repeated updates and clarify saved worker permissions",
       "changes": [

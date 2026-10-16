@@ -218,6 +218,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        'device-pairing': {},
         'standard-ux-keyboard-reflow': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-keyboard-reflow'},
         'smart-tool-updates': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/smart-tool-updates-artifacts'},
         'archive-feedback': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/archive-feedback'},
@@ -232,7 +233,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     assert len(added) == len(additions)
     for row in added:
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
-        assert row['env'] == additions[row['id']]
+        assert row.get('env', {}) == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
     assert len(original) == 65 and len(rows) == 74
     assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == '115d865e2934f442582f89f77bde590ebc6101cb535c841efbba8f3e2511807f'
@@ -282,10 +283,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum(f'node {appearance_preview}' in line for _, line in commands) == 1
     # All 108 original scripts, three navigation regressions, confirmed restart,
     # Smart Tool recovery, archive feedback and appearance preview navigation
-    # and sequential keyboard reflow each retain their owning lane. Saved MCP
-    # recovery now has an extended owner as well as its standalone npm command.
-    assert len(readiness_scripts | extended_scripts) == 117
+    # and sequential keyboard reflow, saved MCP recovery, and device pairing
+    # each retain an explicit owning lane.
+    assert len(readiness_scripts | extended_scripts) == 118
     assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
+    assert 'tests/device-pairing-browser.mjs' in extended_scripts - readiness_scripts
 
     # The environment journey belongs to coordination, outside these two lanes.
     environment = 'tests/test-environments-browser.mjs'
