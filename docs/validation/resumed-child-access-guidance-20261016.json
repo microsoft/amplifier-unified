@@ -19,5 +19,15 @@
   ],
   "evidenceRoot": "output/delegate-guidance168/receipts/delegate-guidance168",
   "authorityChanges": false,
-  "replay": false
+  "replay": false,
+  "skipOwner": {
+    "lane": "filesystem-aliases",
+    "platform": "macos-latest",
+    "inventory": "scripts/integration-coverage.json",
+    "entrypoint": "scripts/integration_clients.py",
+    "prerequisite": "Actual filesystem must support both case and Unicode normalization aliasing; lane rejects skips",
+    "qualifiedSource": "959d8c942",
+    "hostedResult": "passed",
+    "url": "https://github.com/microsoft/amplifier-unified/actions/runs/38910620015/job/117005451294"
+  }
 }

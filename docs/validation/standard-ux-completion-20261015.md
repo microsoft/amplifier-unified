@@ -64,6 +64,9 @@ The actual native-child test now installs the production app-access/file guard.
 Across native child, guard and retained-image policy checks: **74 passed, two
 filesystem-specific alias cases skipped**, in 2.85 seconds. The Linux filesystem
 treats the case/unicode aliases as distinct files; those skips are not passes.
+Their designated `filesystem-aliases` lane requires both capabilities and rejects
+skips. The [macOS lane passed on the exact product/test source](https://github.com/microsoft/amplifier-unified/actions/runs/38910620015/job/117005451294)
+at `959d8c942`; coverage ownership is in `scripts/integration-coverage.json`.
 Disabling the new explanation fails the exact resumed-denial assertion. This
 qualifies the caller-visible tool refusal, not a new graphical continuation
 button or the full Stories workflow.
