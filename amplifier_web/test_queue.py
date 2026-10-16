@@ -14,6 +14,7 @@ import time
 import uuid
 
 from . import task_environments as environments
+from . import test_environment_profiles as profiles
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
@@ -39,14 +40,14 @@ def definitions(schema, string):
     scope = {'workspaceId': string(100), 'sessionId': string(200)}
     return {
         ACTION: ('Queue one isolated check. The host waits for capacity, snapshots the working folder when admitted, runs the command once, stops its environment, exports source and artifacts and removes the owned environment. Evidence is retained. Continue independent work while waiting. Unknown effects never replay. A guarded completion notification can resume this chat.', schema({
-            **scope, 'requestId': {**string(200), 'minLength': 1}, 'profileId': {'enum': [environments.PROFILE]},
+            **scope, 'requestId': {**string(200), 'minLength': 1}, 'profileId': {'enum': [row['id'] for row in profiles.catalog()]},
             'command': {**string(16384), 'minLength': 1},
-            'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 300},
+            'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 1800},
             'waitSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 86400},
             'notify': {'type': 'boolean'}}, [*scope, 'requestId', 'profileId', 'command'])),
         'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. Does not execute or replay a check.', schema({**scope,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, list(scope))),
-        'workspace.tests.cancel': ('Cancel this chat’s waiting check or request cleanup of an admitted check. An in-flight command can continue until its bounded timeout; cancellation is confirmed only after owned cleanup. Evidence is retained.', schema({**scope,
+        'workspace.tests.cancel': ('Cancel this chat’s waiting check or request prompt termination of its admitted durable guest job. Cancellation is confirmed only after observed termination and owned cleanup. Evidence is retained.', schema({**scope,
             'requestId': string(200)}, [*scope, 'requestId'])),
         'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. Never executes or repeats a check.', schema({**scope,
             'requestId': string(200), 'offset': {'type': 'integer', 'minimum': 0}}, [*scope, 'requestId'])),
@@ -103,7 +104,7 @@ class TestQueue:
     def public(self, receipt):
         job = receipt['job']
         value = {key: copy.deepcopy(job[key]) for key in ('id', 'status', 'createdAt', 'updatedAt', 'expiresAt',
-            'resourceId', 'capacity', 'detail', 'cancelRequested', 'source', 'timeoutSeconds') if key in job}
+            'resourceId', 'capacity', 'detail', 'cancelRequested', 'source', 'timeoutSeconds', 'profileId', 'guestJob') if key in job}
         # Full output lives in the existing exact operation receipt. Queue lists
         # cannot multiply a 32 KiB command result by the page size.
         for phase in ('launch', 'check', 'cleanup', 'removal'):
@@ -210,6 +211,10 @@ class TestQueue:
                     self.finish(receipt, 'cancelled', 'Cancelled before environment admission. No check was started.')
                 else:
                     self.save(receipt)
+                    if receipt['job']['status'] == 'starting' and receipt['job'].get('resourceId'):
+                        row = environments.get(self.app.data_dir, source['id'], receipt['job']['resourceId'])
+                        environments.cancel_preparation(self.app, row)
+                self.wakeup.set()
                 return {'accepted': True, 'result': self.public(receipt)}
             digest = fingerprint([ACTION, args, source['id'], origin])
             previous = self.app.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
@@ -222,6 +227,7 @@ class TestQueue:
             if self.app.assignments.blocked(source):
                 owner.error('This assignment is stopped.', 409)
             self.app.configuration_authority.check(authority)
+            seconds = profiles.validate_timeout(args['profileId'], args.get('timeoutSeconds'))
             config, _, reason = environments.configuration(self.app)
             if not config:
                 owner.error(reason, 409)
@@ -246,7 +252,8 @@ class TestQueue:
                     'source': source.get('workingDirectory') or source['workspace'],
                     'binding': binding(source), 'authority': authority,
                     'backendKey': environments.config_key(config), 'command': args['command'],
-                    'timeoutSeconds': args.get('timeoutSeconds', 60), 'actor': {'sessionId': source['id'],
+                    'timeoutSeconds': seconds, 'profileId': args['profileId'], 'durableVersion': 1,
+                    'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
             owner.require_causal_depth(receipt['causalDepth'])
             owner.insert(identity, digest, receipt)
@@ -365,6 +372,8 @@ class TestQueue:
             pass
         args = {'requestId': request_id, 'expectedRevision': row['revision'],
             'command': job['command'], 'timeoutSeconds': job['timeoutSeconds']}
+        if action == 'execute' and job.get('durableVersion') == 1:
+            args['durableJob'] = True
         request, fresh = app.operations.requests.begin(receipt['senderSessionId'],
             'workspace.environments.'+action, args, job['actor'])
         if not fresh:
@@ -397,7 +406,7 @@ class TestQueue:
                 job = receipt['job']
                 row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
                     receipt['senderSessionId'], next(w['id'] for w in self.app.state['workspaces'] if w['path']==receipt['workspace']),
-                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config)
+                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE))
                 # Cancellation may arrive while local allocation is persisted.
                 # Never overwrite the newer cancellation/subscription record.
                 receipt = self.get(identity)
@@ -442,6 +451,9 @@ class TestQueue:
                 check = await self.effect(receipt, config, 'execute')
             except Exception as exc:
                 check = {'state': 'cancelled', 'message': str(exc)}
+            row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
+            if receipt['job'].get('durableVersion') == 1 and row.get('durableJob'):
+                return await self.monitor(identity, config, check)
             receipt = self.get(identity)
             receipt['job'].update(check=self.summary(check), status='stopping')
             self.save(receipt)
@@ -485,6 +497,47 @@ class TestQueue:
                       {'completed': 'passed', 'failed': 'failed', 'cancelled': 'cancelled'}.get(check['state'], 'unknown'))
             self.finish(receipt, status, 'The check outcome is '+status+'. Source, artifacts and operation receipts were retained before the owned environment was removed.')
 
+    async def monitor(self, identity, config, check=None):
+        """Reattach observation after restart; only guest admission runs commands."""
+        errors = 0
+        while True:
+            receipt = self.get(identity)
+            row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
+            observed = check is None or receipt['job'].get('cancelRequested')
+            if observed:
+                try:
+                    check = await asyncio.to_thread(environments.observe_job, self.app, row, config,
+                        cancel=bool(receipt['job'].get('cancelRequested')))
+                    errors = 0
+                except Exception as exc:
+                    errors += 1
+                    if errors >= 3:
+                        self.finish(self.get(identity), 'unknown', 'The durable guest could not be observed: '+str(exc)[:300]+'. Its environment and evidence are preserved; no command or cleanup was replayed.')
+                        return
+                    await asyncio.sleep(1)
+                    continue
+            guest = check.get('result', {}).get('job', {})
+            if observed and not guest:
+                self.finish(self.get(identity), 'unknown', 'The backend returned no durable guest receipt. The environment is preserved; no command or cleanup was repeated.')
+                return
+            receipt = self.get(identity)
+            receipt['job']['check'] = self.summary(check)
+            if guest:
+                receipt['job']['guestJob'] = {key: guest[key] for key in ('id', 'state', 'terminal', 'startedAt', 'finishedAt', 'cancelRequested', 'reason') if key in guest}
+            self.save(receipt)
+            if guest.get('terminal') is True:
+                receipt['job']['status'] = 'stopping'
+                self.save(receipt)
+                await self.cleanup(receipt, config)
+                return
+            if guest.get('state') == 'unknown':
+                self.finish(receipt, 'unknown', guest.get('reason', 'The exact guest job is unverified.')+' Its environment is preserved; the command and cleanup were not repeated.')
+                return
+            # The start acknowledgement may have been lost after guest commit.
+            # Observe the exact reserved identity, never call execute again.
+            check = None
+            await asyncio.sleep(1)
+
     async def recover(self, identity):
         """Reconcile the exact owner and complete cleanup; never rerun the check."""
         receipt = self.get(identity)
@@ -500,6 +553,9 @@ class TestQueue:
                     'Recovered the recorded check and cleanup results. The owned environment is removed; no command was replayed.')
                 return
             config = environments.resolve_configuration(self.app, row, active)
+            if receipt['job'].get('durableVersion') == 1 and row.get('durableJob'):
+                await self.monitor(identity, config)
+                return
             # read reconciles any prior abandoned pendingRequest and physical
             # state. It never starts an environment or installs source again.
             await asyncio.to_thread(environments.read, self.app, receipt['senderSessionId'], active)

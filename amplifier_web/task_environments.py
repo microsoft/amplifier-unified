@@ -171,7 +171,7 @@ def remove_installation(home, identity, folder, *, ignore_errors=False):
         shutil.rmtree(folder, ignore_errors=ignore_errors)
 
 
-def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None, backend_config=None):
+def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None, backend_config=None, profile_id=PROFILE):
     with installation_lock(home, installation) if installation else nullcontext(), closing(storage.connect(home)) as db, db:
         if backend_config is not None and backend_configs.retain(home, backend_config) != backend_key:
             raise ValueError('The approved backend configuration identity changed before allocation.')
@@ -183,13 +183,14 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
             # queue links it. Only the same unadmitted intent may recover it.
             if (not row.get('backendAdmitted') and row.get('commandId') == request_id
                     and row['owner'] == actor and row['source'] == source
+                    and row.get('profileId', PROFILE) == profile_id
                     and row['backendKey'] == backend_key and row['workspaceId'] == workspace):
                 return row
             raise ValueError('This task already owns an environment. Inspect or remove it before starting another.')
         if db.execute("SELECT COUNT(*) FROM allocations WHERE status!='retired'").fetchone()[0] >= storage.MAX_ACTIVE:
             raise ValueError('The resource owner capacity has been reached.')
         row = {'id': str(uuid.uuid4()), 'kind': KIND, 'workspaceId': workspace, 'sessionId': sid,
-               'owner': actor, 'source': source, 'profileId': PROFILE, 'backendKey': backend_key,
+               'owner': actor, 'source': source, 'profileId': profile_id, 'backendKey': backend_key,
                'backendInstallation': installation,
                'backendConfigRetained': backend_config is not None,
                **({'retentionMode': backend_config.get('retentionMode', 'files'),
@@ -203,6 +204,8 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
 
 def invoke(config, home, row, action, args):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
+    if action == 'execute' and args.get('durableJob') is True:
+        action = 'job_start'
     folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
               if action == 'capacity' else storage.directory(home, row))
     if action == 'capacity':
@@ -216,6 +219,8 @@ def invoke(config, home, row, action, args):
                'dockerHost': config.get('dockerHost'), 'image': config.get('image'),
                'rootOwner': row.get('sessionId'),
                'requestId': args.get('requestId'), 'command': args.get('command'),
+               'jobId': args.get('jobId', args.get('requestId')),
+               'profileId': row.get('profileId', PROFILE),
                'timeoutSeconds': args.get('timeoutSeconds', 60),
                **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
     helper = Path(__file__).with_name('test_environment_worker.py')
@@ -227,7 +232,7 @@ def invoke(config, home, row, action, args):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     output, errors = bytearray(), bytearray()
     drained = False
-    deadline = time.monotonic() + (650 if action == 'start' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile'} else args.get('timeoutSeconds', 60) + 150)
+    deadline = time.monotonic() + (650 if action == 'start' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
     try:
         process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
@@ -294,7 +299,11 @@ def project_result(home, row, request):
         changes['status'] = 'retired'
         if isinstance(result.get('retention'), dict) and result['retention'].get('verified') is True:
             changes['retainedFiles'] = result['retention']
-    changes.update(pendingRequest=None, environmentState=environment_state, lastOperation=request, reason=result.get('message'))
+    if action == 'execute' and isinstance(result.get('job'), dict):
+        changes['jobObservation'] = result['job']
+        environment_state = 'running'
+    changes.update(pendingRequest=request['requestId'] if request['state'] == 'running' else None,
+                   environmentState=environment_state, lastOperation=request, reason=result.get('message'))
     return save(home, row, **changes)
 
 
@@ -323,6 +332,8 @@ def effect(app, row, action, args, config, request, admit):
             raise ValueError('The retained environment directory changed; no external action was attempted.')
         if action == 'execute' and row.get('environmentState') != 'running':
             raise ValueError('Inspect a running environment before executing a command.')
+        if action == 'execute' and row.get('durableJob'):
+            raise ValueError('This environment already owns a durable check. Observe or cancel that exact job.')
         if action == 'remove' and row.get('environmentState') not in {'stopped', 'not-started'}:
             raise ValueError('Stop and inspect this environment before removing it.')
         if row['status'] == 'retired':
@@ -348,11 +359,21 @@ def effect(app, row, action, args, config, request, admit):
             result = {'ok': True, 'status': 'removed', 'message': 'No environment was launched. All local source and evidence files were retained.'}
         else:
             admitted = True
-            result = invoke(config, home, row, action, args)
+            if action == 'execute' and args.get('durableJob') is True:
+                # Save the exact identity/command before admission. A crash in
+                # either commit gap may be observed, but never re-admitted.
+                row = save(home, row, durableJob={key: args[key] for key in ('requestId', 'command', 'timeoutSeconds')})
+                request = app.operations.requests.finish(request, 'running', resourceId=row['id'],
+                    message='The durable guest admission is being observed; it will not be replayed.')
+                result = invoke(config, home, row, action, args)
+            else:
+                result = invoke(config, home, row, action, args)
         not_admitted = result.get('admissionDenied') or result.get('effectAdmitted') is False
         state = 'completed' if result.get('ok') else 'failed' if not_admitted else 'outcome_unknown' if admitted else 'failed'
         if action == 'execute' and result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
             state = 'failed'
+        if action == 'execute' and args.get('durableJob') is True:
+            state = durable_state(result)
         request = app.operations.requests.finish(request, state, resourceId=row['id'], result=result,
             message=result.get('message', 'The result is retained; this request will not replay.'))
         row = project_result(home, row, request)
@@ -395,6 +416,67 @@ def effect(app, row, action, args, config, request, admit):
             lock.release()
 
 
+def durable_state(result):
+    job = result.get('job', {})
+    if not result.get('ok') or job.get('state') == 'unknown' or not job:
+        return 'outcome_unknown'
+    if job.get('terminal'):
+        return {'passed': 'completed', 'failed': 'failed', 'timed_out': 'failed', 'cancelled': 'cancelled'}.get(job['state'], 'outcome_unknown')
+    return 'running'
+
+
+def observe_job(app, row, config, *, cancel=False):
+    """Observe/cancel one admitted guest identity, without replay or long locks."""
+    home, sid = app.data_dir, row['sessionId']
+    with FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0):
+        row = get(home, sid, row['id'])
+        job = row.get('durableJob')
+        if not job or row['status'] == 'retired':
+            raise ValueError('No live durable job is recorded for this owned environment.')
+        request = app.operations.requests.read(sid, job['requestId'])
+        if request.get('resourceId') != row['id'] or request.get('action') != 'workspace.environments.execute':
+            raise ValueError('The durable operation belongs to a different environment.')
+        if request.get('result', {}).get('job', {}).get('terminal') is True:
+            return request
+        if row['backendKey'] != config_key(config):
+            raise ValueError('The original backend configuration is required for job observation.')
+        row = recovery.bind_configuration(app, row, config)
+        if storage.observe(home, row)['observation'] != 'present':
+            raise ValueError('The retained environment directory changed.')
+        result = invoke(config, home, row, 'job_cancel' if cancel else 'job_read', job)
+        request = app.operations.requests.finish(request, durable_state(result), resourceId=row['id'], result=result,
+            message='Observed the exact durable guest job; no command was repeated.')
+        project_result(home, row, request)
+        return request
+
+
+def cancel_preparation(app, row):
+    """Publish cancellation intent without waiting on the builder's long lock."""
+    row = get(app.data_dir, row['sessionId'], row['id'])
+    if row.get('profileId', PROFILE) == PROFILE or row.get('backendAdmitted'):
+        return
+    if storage.observe(app.data_dir, row)['observation'] != 'present':
+        return  # Admission checks the saved queue cancellation before allocation.
+    folder = storage.directory(app.data_dir, row) / 'preparation'
+    folder.mkdir(mode=0o700, exist_ok=True)
+    descriptor = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(descriptor)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError('The owned preparation directory changed.')
+        try:
+            fd = os.open('cancel.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=descriptor)
+        except FileExistsError:
+            return
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'cancelRequested': True}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def read(app, sid, config):
     home = app.data_dir
     with closing(storage.connect(home)) as db:
@@ -435,6 +517,11 @@ def read(app, sid, config):
                         request = app.operations.requests.read(sid, row['pendingRequest'])
                         if confirmed_result(row, request):
                             row = project_result(home, row, request)
+                        elif (request['state'] == 'running'
+                              and row.get('durableJob', {}).get('requestId') == request['requestId']):
+                            # The guest, not this short host helper, owns the
+                            # running process. A passive list is not a crash.
+                            pass
                         else:
                             if request['state'] == 'admitting':
                                 request = app.operations.requests.finish(request, 'outcome_unknown',

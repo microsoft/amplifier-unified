@@ -96,7 +96,7 @@ def package_digest(directory):
 def validate_configuration(value):
     """Read-only qualification of an explicitly installed legacy CLI generation."""
     required = {'executable', 'executableSha256', 'packageSha256', 'incusExecutable', 'configDir', 'admissionDir', 'project', 'image'}
-    allowed = required | {'daemonFingerprint', 'maxRunning', 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory'}
+    allowed = required | {'daemonFingerprint', 'maxRunning', 'maxInstances', 'minFreeBytes', 'interpreter', 'packageDirectory', 'preparationNetwork', 'preparationStorage'}
     if not isinstance(value, dict) or not required <= value.keys() or value.keys() - allowed:
         raise ValueError('The qualified Incus backend configuration is incomplete.')
     config = dict(value)
@@ -419,8 +419,10 @@ def execute_call(payload):
             if file_digest(root / 'source.tar', 512 * 1024 ** 2)[0] != snapshot['archive_sha256']:
                 raise BackendFailure('snapshot_changed', 'The exact source archive changed; nothing was launched.', admitted=False)
             check_legacy_image(config, env, payload)
+            selected = common.selected_profile(payload)
             profile = {'name': 'unified-owned-offline', 'description': 'Owned offline test environment',
-                'base': {'image': 'local:' + config['image'], 'config': {'security.privileged': 'false', 'security.nesting': 'false', 'limits.memory': '1GiB', 'limits.cpu': '2', 'limits.processes': '128'}},
+                'base': {'image': 'local:' + config['image'], 'config': {'security.privileged': 'false', 'security.nesting': 'false',
+                    'limits.memory': str(selected['memoryMiB'])+'MiB', 'limits.cpu': str(selected['cpus']), 'limits.processes': str(selected['pids'])}},
                 'provision': {'setup_cmds': ['mkdir -p /workspace /artifacts', 'python3 --version']}}
             profile_path = root / 'incus-profile.json'
             profile_path.write_text(json.dumps(profile))
@@ -435,9 +437,11 @@ def execute_call(payload):
             checked(incus(config, env, ['file', 'push', str(root / 'source.tar'), name + '/artifacts/.source.tar'], 120))
             unpack = "import tarfile; tarfile.open('/artifacts/.source.tar').extractall('/workspace', filter='data'); import os; os.unlink('/artifacts/.source.tar')"
             checked(incus(config, env, ['exec', name, '--', 'python3', '-c', unpack], 120))
+            checked(incus(config, env, ['exec', name, '--', '/bin/sh', '-lc',
+                common.jobs.initialize_command(selected['preparationRequired'])], 120))
             common.retain_source_ready(root, name, snapshot)
             return {'ok': True, 'universeId': name, 'sourceReady': True, 'status': 'running', 'services': []}
-        request, instance = observe(config, env, name, payload, confinement=action in {'read', 'execute'})
+        request, instance = observe(config, env, name, payload, confinement=action in {'read', 'execute'} | common.jobs.JOB_ACTIONS)
         state = request['state']
         ready = common.source_ready(root, name, snapshot)
         if action == 'read':
@@ -445,6 +449,13 @@ def execute_call(payload):
             return {'ok': True, 'universeId': name, 'sourceReady': ready, 'status': status, 'services': [], 'launch': request}
         if instance is None:
             raise BackendFailure('launch_unknown', 'No owned instance is confirmed for this operation.')
+        if action in common.jobs.JOB_ACTIONS:
+            if state != 'ready' or not ready:
+                raise BackendFailure('source_unknown', 'The exact source and running environment are not confirmed.', admitted=False)
+            payload = {**payload, 'universeId': name, 'jobEnvironment': common.selected_profile(payload)['environment']}
+            result = run([config['incusExecutable'], '--project', config['project'], 'exec', name, '--',
+                *common.jobs.arguments(payload)], env, timeout=15, output_bytes=262144)
+            return common.jobs.result(payload, result)
         if action == 'execute':
             if state != 'ready' or not ready:
                 raise BackendFailure('source_unknown', 'The exact source and running environment are not confirmed. No check started.', admitted=False)
