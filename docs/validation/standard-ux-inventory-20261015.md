@@ -269,3 +269,20 @@ The [IC-01–IC-10 ownership checklist](integration-coverage.md) extends this
 inventory with real runtime, CLI, browser/PWA, filesystem, reset, diagnostic
 server, connected-document and profiling acceptance. A skipped host test is not
 a passing smoke result; consult its designated owner and recorded limitations.
+
+### Checkout identity across handoff waits (October 16)
+
+**R168-01** extends checkout handoff coverage: after the initial Git preflight,
+replace the source or destination checkout's `.git` identity while the host waits
+for the saved worker boundary, and separately while runtime release is pending.
+The move must never apply the substituted checkout. Before release, reject it
+without invoking release and clear the preparation state. After confirmed release,
+retain the unresolved receipt and require inspection/reconciliation; preserve the
+original execution placement, messages and execution revision, and replay no input.
+
+The four deterministic real-Git substitution cases in
+`test_multi_repository_worktrees.py::test_repository_replaced_during_handoff_await_never_applies`
+are owned by the existing Task coordination contracts and full Python checks. They model
+runtime waits with explicit asynchronous barriers, not a physical filesystem lock
+or an arbitrary concurrent external writer guarantee. They supplement the original
+preflight replacement regression and do not change the frozen 199/669 inventory.
