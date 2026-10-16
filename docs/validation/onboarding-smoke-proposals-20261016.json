@@ -39,10 +39,11 @@
       "priority": "P1",
       "journey": "Broken public DNS with healthy listener",
       "scenario": "Configure valid HTTPS local listener and unresolved public origin.",
-      "currentEvidence": "Source reports public origin after only a local pinned probe.",
+      "currentEvidence": "Fixed and qualified: pinned local health address is retained; configured public addresses are explicitly unverified, with no public authenticated probe. Real HTTPS local probe and control-token destination regression pass; remote-device DNS/trust is separate.",
       "desiredResult": "Local service healthy and public origin unresolved are distinct; actual TLS-scheme local fallback shown; no control token sent to public destination.",
       "ownerAndCoverage": "tests/test_cli_deployment.py + bounded synthetic resolver",
-      "executed": false
+      "executed": false,
+      "qualifiedSlices": "onboarding-listener-readiness.md"
     },
     {
       "id": "SETUP-URL-02",
@@ -59,20 +60,22 @@
       "priority": "P2",
       "journey": "Supplied certificate without app CA",
       "scenario": "Use valid supplied leaf/key with no app-owned ca.crt; run doctor verbose/setup-tls status.",
-      "currentEvidence": "ssl_context loads it; tls_ready reports not ready.",
+      "currentEvidence": "Fixed and qualified: a supplied valid certificate/key is ready without an app-owned CA. Missing/mismatched keys remain rejected; CA export/trust is separately reported.",
       "desiredResult": "Listener readiness true; local-CA export unavailable reported separately; malformed/mismatched keys still rejected.",
       "ownerAndCoverage": "tests/test_tls_config_sequence.py",
-      "executed": false
+      "executed": false,
+      "qualifiedSlices": "onboarding-listener-readiness.md"
     },
     {
       "id": "SETUP-BIND-01",
       "priority": "P2",
       "journey": "Expected listener failure",
       "scenario": "Attempt occupied port/address; inject or qualify permission failure on supported OS.",
-      "currentEvidence": "Source has no expected bind translation; macOS claimed rule unverified.",
+      "currentEvidence": "Fixed and qualified: actual occupied-socket CLI reports actionable failure and does not open a browser. Permission/address errors have focused injected checks; native macOS privileged-port behavior is unqualified.",
       "desiredResult": "One actionable error, no misleading ready URL; no wildcard fallback; safe no-change outcome.",
       "ownerAndCoverage": "tests/test_cli_deployment.py; optional native macOS fixture for platform policy",
-      "executed": false
+      "executed": false,
+      "qualifiedSlices": "onboarding-listener-readiness.md"
     },
     {
       "id": "SETUP-DEFAULT-01",
@@ -125,5 +128,5 @@
       "executed": false
     }
   ],
-  "note": "These proposed journeys remain unexecuted as complete journeys. The separately qualified diagnostic/CLI slices are recorded in onboarding-failure-diagnostics.md; they do not convert the broader journey to a pass."
+  "note": "These proposed journeys remain unexecuted as complete journeys. The separately qualified diagnostic/CLI slices are recorded in onboarding-failure-diagnostics.md; they do not convert the broader journey to a pass. Additional listener/readiness slices are qualified in onboarding-listener-readiness.md; platform and complete onboarding journeys remain separately identified."
 }

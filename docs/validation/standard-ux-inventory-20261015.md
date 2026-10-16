@@ -479,3 +479,11 @@ The media browser uses real AppService/registry behavior with synthetic busy
 publications; real source-revision worker switching is covered by the separate
 no-model-call native probe. These do not establish native-device trust, arbitrary
 crash recovery, or the full proposed onboarding matrix.
+
+### Listener and public-access follow-up
+
+The peer onboarding findings now have focused qualified slices for local versus
+public readiness, supplied certificates, real occupied ports, bind-error guidance
+and browser opening only after successful binds. See
+[listener readiness qualification](onboarding-listener-readiness.md).
+These do not establish native client trust or remote DNS reachability.
