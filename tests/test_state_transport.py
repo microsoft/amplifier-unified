@@ -10,6 +10,62 @@ from test_service import Runtime
 
 
 @pytest.mark.parametrize('compact', [False, True])
+async def test_noop_layout_receipt_does_not_wait_for_other_client_revision(authenticated_client, tmp_path, compact):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=Runtime(), voice=False, background_updates=False)
+    service = app['service']
+    await service.history.close()
+    await service.event_log_view.close()
+    client = await authenticated_client(app)
+    for identity in ('layout-one', 'layout-two'):
+        await client.post('/api/clients/attach', json={'clientId': identity})
+    transport = {'X-Amplifier-State-Transport': 'delta-v1'} if compact else {}
+
+    async def layout(identity, width, **extra):
+        return await client.post('/api/actions', headers={**transport, 'X-Amplifier-Client': identity},
+                                 json={'action': 'view.update', 'args': {'patch': {'navWidth': width}}, **extra})
+
+    await layout('layout-one', 301)
+    with service.clients.bind('layout-one'):
+        baseline = service.browser_state()
+        queue = service.subscribe()
+    try:
+        await layout('layout-two', 302)
+        assert service._state['revision'] > baseline['revision'] and queue.empty()
+        revision = service._state['revision']
+        receipt = await (await layout('layout-one', 301, id='unchanged-layout')).json()
+        assert receipt['accepted'] and receipt['revision'] == revision
+        assert 'stateRevision' not in receipt and '_stateIndependent' not in receipt
+        assert service._state['revision'] == revision and queue.empty()
+        if not compact:
+            assert receipt['state']['view']['navWidth'] == 301
+        saved = json.loads(service.db.execute('SELECT receipt FROM commands WHERE id=?',
+                                             ('unchanged-layout',)).fetchone()[0])
+        assert saved['_stateIndependent'] is True
+
+        # A later unrelated change cannot turn an idempotent no-op into a wait.
+        await layout('layout-two', 303)
+        duplicate = await (await layout('layout-one', 301, id='unchanged-layout')).json()
+        assert duplicate['duplicate'] and duplicate['revision'] == revision
+        assert 'stateRevision' not in duplicate and '_stateIndependent' not in duplicate
+        assert queue.empty()
+        # Stale CAS and reused IDs still reject before the no-op shortcut.
+        assert (await layout('layout-one', 301, expectedRevision=baseline['revision'])).status == 409
+        assert (await layout('layout-one', 302, id='unchanged-layout')).status == 409
+        # Actual changes retain their state acknowledgement; caller-supplied
+        # markers cannot override the server's validated decision.
+        changed = await (await layout('layout-one', 304, _stateIndependent=True)).json()
+        assert queue.get_nowait()['view']['navWidth'] == 304
+        if compact:
+            assert changed['stateRevision'] == changed['revision']
+        else:
+            assert changed['state']['view']['navWidth'] == 304
+        assert '_stateIndependent' not in changed
+    finally:
+        service.unsubscribe(queue)
+
+
+@pytest.mark.parametrize('compact', [False, True])
 async def test_plan_receipt_has_no_unrelated_state_ack(authenticated_client, tmp_path, compact):
     from amplifier_web.event_log_view import event_path
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,

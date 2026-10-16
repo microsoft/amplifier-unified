@@ -357,7 +357,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                                         command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"),
                                         include_state=not compact))
         result = await asyncio.shield(task)
-        # Internal read receipts can be complete without a state publication.
+        # Reads and validated no-ops can be complete without a state publication.
         # Consume this marker in both transports; clients never author it.
         state_independent = result.get('_stateIndependent') is True
         result = {key: value for key, value in result.items() if key != '_stateIndependent'}

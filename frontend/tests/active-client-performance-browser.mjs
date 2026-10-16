@@ -30,12 +30,13 @@ try{
  };
  const {sessions}=await api('/fixture/metrics');
  browser=await chromium.launch({headless:true});
- const pages=[],errors=[],viewCounts=[];
+ const pages=[],errors=[],viewCounts=[],stateReads=[];
  for(let i=0;i<4;i++){
   const context=await browser.newContext({extraHTTPHeaders:{Authorization:headers.Authorization},viewport:{width:1280,height:900}}),page=await context.newPage();pages.push(page);
   page.on('pageerror',error=>errors.push(error.message));
+  stateReads.push(0);
   const counts={pending:0,max:0};viewCounts.push(counts);const views=new Set();
-  page.on('request',r=>{if(new URL(r.url()).pathname==='/api/view'){views.add(r);counts.pending++;counts.max=Math.max(counts.max,counts.pending)}});
+  page.on('request',r=>{const path=new URL(r.url()).pathname;if(path==='/api/state')stateReads[i]++;if(path==='/api/view'){views.add(r);counts.pending++;counts.max=Math.max(counts.max,counts.pending)}});
   const done=r=>{if(views.delete(r))counts.pending--};page.on('requestfinished',done);page.on('requestfailed',done);
   await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
   await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sessions[i<2?0:1]);
@@ -81,8 +82,12 @@ try{
   const sample={index:i,callId:'synthetic-admission-'+i,startedAtMs:Date.now()};
   let start=performance.now();await api('/api/health');health.push(performance.now()-start);
   start=performance.now();assert.equal((await api('/fixture/admit',{id:'synthetic-admission-'+i})).allowed,true);admissions.push(performance.now()-start);
-  start=performance.now();await pages[i%4].evaluate(n=>window.amplifier.dispatch('view.update',{patch:{navExpanded:n%2===0}}),i);actions.push(performance.now()-start);
-  Object.assign(sample,{healthMs:health.at(-1),admissionMs:admissions.at(-1),actionMs:actions.at(-1),endedAtMs:Date.now()});retain(samples,sample);
+  const readsBefore=stateReads[i%4];
+  start=performance.now();const receipt=await pages[i%4].evaluate(n=>window.amplifier.dispatch('view.update',{patch:{navExpanded:n%2===0}}),i);actions.push(performance.now()-start);
+  Object.assign(sample,{healthMs:health.at(-1),admissionMs:admissions.at(-1),actionMs:actions.at(-1),endedAtMs:Date.now(),stateAcknowledgement:Object.hasOwn(receipt,'stateRevision'),stateRecoveryReads:stateReads[i%4]-readsBefore});retain(samples,sample);
+  // Each client's value repeats after its first sample. No-op receipts must
+  // not wait for unrelated streaming revisions or trigger the 1.5s recovery.
+  if(i>=4){assert.equal(sample.stateAcknowledgement,false,JSON.stringify(sample));assert.equal(sample.stateRecoveryReads,0,JSON.stringify(sample))}
   await new Promise(resolve=>setTimeout(resolve,100));
  }
  stopCompanion=true;await companionTask;
