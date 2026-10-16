@@ -33,6 +33,13 @@ def _module_id(row):
     return row.get("module") or row.get("id")
 
 
+def _desktop_ceiling(policies):
+    """Preserve ComputerTool's effective truthiness, including expanded strings."""
+    from .config import expand_environment
+    return {key: True for key in ("read_only", "gate_writes")
+            if any(bool(expand_environment(policy.get(key))) for policy in policies)}
+
+
 def _restrict_child_tools(rows, policies, working_dir, modules):
     """Permission lists are boundaries, not additive configuration lists."""
     writers = [row for row in rows if row.get("module") in modules]
@@ -84,15 +91,16 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
         apply_provider_recording({'agents': agent_filter}, enabled=False)
     agents = parent.get("agents", {})
     spawn = parent.get("spawn") or {}
+    if retained_image_tools is not None and not isinstance(retained_image_tools, list):
+        raise ValueError("Saved child tools must be a list of module declarations.")
     desktop_policies = [parent.get("_unified_desktop_policy", {})]
-    for rows in (parent.get("tools", []), spawn.get("tools", []), overlay.get("tools", [])):
+    for rows in (parent.get("tools", []), spawn.get("tools", []), overlay.get("tools", []),
+                 retained_image_tools or []):
         desktop_policies.extend(row.get("config", {}) for row in rows
-                                if row.get("module") == "tool-computer-use")
+                                if isinstance(row, dict) and row.get("module") == "tool-computer-use")
     image_policies = []
     file_policies = []
     patch_policies = []
-    if retained_image_tools is not None and not isinstance(retained_image_tools, list):
-        raise ValueError("Saved child tools must be a list of module declarations.")
     for index, rows in enumerate((parent.get("tools", []), spawn.get("tools", []), overlay.get("tools", []),
                                   retained_image_tools or [])):
         for row in rows if isinstance(rows, list) else []:
@@ -151,8 +159,7 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
     _restrict_child_tools(result.get("tools", []), image_policies, working_dir, {"tool-image"})
     # Child overlays and instance aliases cannot grant desktop writes that the
     # parent did not opt into. Explicit root settings remain the authority.
-    desktop_ceiling = {key: True for key in ("read_only", "gate_writes")
-                       if any(policy.get(key) is True for policy in desktop_policies)}
+    desktop_ceiling = _desktop_ceiling(desktop_policies)
     # Retain ceilings even when an intermediate child omits the desktop tool.
     # Neither an overlay nor a new instance ID can erase ancestor restrictions.
     result["_unified_desktop_policy"] = desktop_ceiling
@@ -354,11 +361,11 @@ class Children:
         if isinstance(retained_plan, dict):
             # A resumed child must not lose its prior write ceiling merely
             # because its immediate parent currently omits the tool.
-            retained_desktop = retained_plan.get("_unified_desktop_policy", {})
+            # child_plan also retains declarations from older checkpoints that
+            # predate the marker; neither representation can weaken the other.
+            retained_desktop = _desktop_ceiling([retained_plan.get("_unified_desktop_policy", {})])
             ceiling = plan.setdefault("_unified_desktop_policy", {})
-            for key in ("read_only", "gate_writes"):
-                if retained_desktop.get(key) is True:
-                    ceiling[key] = True
+            ceiling.update(retained_desktop)
             for tool in plan.get("tools", []):
                 if tool.get("module") == "tool-computer-use":
                     tool.setdefault("config", {}).update(ceiling)

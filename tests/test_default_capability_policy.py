@@ -203,6 +203,43 @@ def test_desktop_ceiling_survives_a_tool_less_intermediate_child(origin):
     assert grandchild['tools'][0]['config']['read_only'] is True
 
 
+@pytest.mark.parametrize('key', ['read_only', 'gate_writes'])
+@pytest.mark.parametrize('value', [True, False, None, 1, 0, 'true', 'false', ''])
+def test_desktop_ceiling_preserves_effective_expanded_policy(monkeypatch, key, value):
+    from amplifier_web.host.children import child_plan
+    from amplifier_web.host.session import _expand_module_configuration
+    monkeypatch.setenv('UNIFIED_TEST_DESKTOP_LIMIT', value if isinstance(value, str) else 'unused')
+    configured = '${UNIFIED_TEST_DESKTOP_LIMIT}' if isinstance(value, str) else value
+    parent = _expand_module_configuration({'tools': [
+        {'module': 'tool-computer-use', 'config': {key: configured}}]})
+    before = copy.deepcopy(parent)
+    child = child_plan(parent, {'tools': [{'module': 'tool-computer-use',
+        'instance_id': 'alias', 'config': {key: False}}]})
+    alias = next(row for row in child['tools'] if row.get('instance_id') == 'alias')
+    # ComputerTool uses bool(value), including nonempty strings such as "false".
+    # Do not reinterpret supported configuration or remove intentional False.
+    assert alias['config'][key] is bool(value)
+    assert child['_unified_desktop_policy'] == ({key: True} if bool(value) else {})
+    assert parent == before
+
+
+@pytest.mark.parametrize('origin', ['tools', 'spawn', 'marker'])
+@pytest.mark.parametrize('key', ['read_only', 'gate_writes'])
+def test_expanded_desktop_ceiling_survives_omission_and_redeclaration(monkeypatch, origin, key):
+    from amplifier_web.host.children import child_plan
+    monkeypatch.setenv('UNIFIED_TEST_DESKTOP_LIMIT', 'true')
+    policy = {key: '${UNIFIED_TEST_DESKTOP_LIMIT}'}
+    tool = {'module': 'tool-computer-use', 'config': policy}
+    root = {'tools': [tool]} if origin == 'tools' else (
+        {'spawn': {'tools': [tool]}} if origin == 'spawn' else {'_unified_desktop_policy': policy})
+    middle = child_plan(root, {}, tool_inheritance={'exclude_tools': ['tool-computer-use']})
+    assert middle['tools'] == []
+    child = child_plan(middle, {'tools': [{'module': 'tool-computer-use',
+        'instance_id': 'alias', 'config': {key: False}}], '_unified_desktop_policy': {key: False}})
+    assert child['tools'][0]['config'][key] is True
+    assert child['_unified_desktop_policy'][key] is True
+
+
 def test_nested_default_module_does_not_repin_existing_source():
     from amplifier_web.host.components import HostComponents
     source = 'git+https://github.com/example/desktop@explicit#subdirectory=modules/tool'
@@ -583,6 +620,40 @@ def fallback_lifecycle(tmp_path, monkeypatch):
         return instruction
     monkeypatch.setattr('amplifier_web.host.mentions.expand_input', expand)
     return h
+
+
+@pytest.mark.parametrize('saved_format', ['legacy-tools', 'marker-only', 'conflicting-marker', 'explicit-writable'])
+@pytest.mark.parametrize('omit_tool', [False, True])
+async def test_resume_preserves_saved_desktop_ceiling_and_explicit_write_choices(fallback_lifecycle, saved_format, omit_tool):
+    from amplifier_web.host.children import child_plan
+    h = fallback_lifecycle
+    restriction = saved_format != 'explicit-writable'
+    # Pre-marker checkpoints already contain the effective mounted tool policy.
+    policy = {'read_only': restriction, 'gate_writes': restriction}
+    retained = {'tools': [{'module': 'tool-computer-use', 'config': policy}]}
+    if saved_format == 'marker-only':
+        retained = {'tools': [], '_unified_desktop_policy': policy}
+    elif saved_format == 'conflicting-marker':
+        retained['_unified_desktop_policy'] = {'read_only': False, 'gate_writes': False}
+    overlay = {'tools': [] if omit_tool else [{'module':'tool-computer-use',
+        'instance_id':'alias', 'config':{'read_only':False,'gate_writes':False}}]}
+    assert not h.coordinator.config.get('tools')
+    h.store.save('desktop-child', [{'role':'user','content':'Saved synthetic work'}], {
+        'parent_id':'parent', 'agent_name':'desktop-specialist', 'agent_overlay':overlay,
+        'mount_plan':retained, 'status':'completed'})
+    await h.children.resume('desktop-child', 'Continue synthetic inspection', h.parent)
+    mounted = h.observations[-1]['coordinator'].config
+    saved = h.store.load('desktop-child')[1]['mount_plan']
+    expected = {'read_only':True,'gate_writes':True} if restriction else {}
+    assert mounted['_unified_desktop_policy'] == saved['_unified_desktop_policy'] == expected
+    if omit_tool:
+        assert mounted['tools'] == saved['tools'] == []
+    else:
+        assert mounted['tools'][0]['config'] == saved['tools'][0]['config'] == policy
+    descendant = child_plan(mounted, {'tools':[{'module':'tool-computer-use',
+        'instance_id':'another-alias','config':{'read_only':False,'gate_writes':False}}]})
+    for row in descendant['tools']:
+        assert row['config'] == policy
 
 
 async def test_host_fallback_propagates_and_resumes_exact_saved_selection(fallback_lifecycle):
