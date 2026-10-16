@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import closing, nullcontext
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,6 +25,8 @@ import uuid
 from filelock import FileLock, Timeout as LockTimeout
 
 from . import task_resources as storage
+from . import test_environment_configs as backend_configs
+from . import test_environment_recovery as recovery
 
 REPOSITORY = 'https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe'
 DTU_COMMIT = '8f644b3d8d8b89f0bb3ae9853bb531017dc98a04'
@@ -45,7 +46,8 @@ def definitions(schema, string):
         'workspace.environments.start': ('Copy this task’s current Git working area into one approved isolated test environment. No original writable mounts or injected credentials. Keep requestId stable; unknown launches never replay.', schema({**request, 'profileId': {'enum': [PROFILE]}})),
         'workspace.environments.execute': ('Run an approved command in this task’s environment, retaining bounded output. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': 300}}, [*owned, 'command'])),
         'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
-        'workspace.environments.remove': ('Remove an already stopped owned environment only after preserving its source and artifacts. Unknown export or teardown leaves ownership unresolved and never replays.', schema(owned)),
+        'workspace.environments.remove': ('Remove an already stopped owned environment after preserving its source and artifacts. Optional full retention preserves the complete Incus environment; Docker supports files only. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
+        'workspace.environments.reconcile': ('Inspect this exact owned environment and repair its metadata without starting, stopping, deleting or replaying backend work. Retire ownership only after the original backend proves physical absence; earlier uncertain operations stay uncertain.', schema(owned)),
     }
 
 
@@ -61,38 +63,64 @@ def configuration(app):
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 16384:
             raise ValueError('The operator configuration must be a private regular file.')
         value = json.loads(target.read_text())
-        if not isinstance(value, dict):
-            raise ValueError('The operator configuration must be an object.')
-        if value.get('enabled') is not True:
-            return None, 'disabled', 'Test environments are disabled on this host.'
-        if set(value) - {'enabled', 'installationId', 'commit', 'dockerHost', 'image'}:
-            raise ValueError('The operator configuration contains unsupported settings.')
-        if not DTU_COMMIT or value.get('commit') != DTU_COMMIT:
-            raise ValueError('The managed backend is not pinned to this app’s qualified revision.')
-        manager = getattr(app, 'smart_tools', None)
-        installation = next((row for row in manager.state['installations'] if row['id'] == value.get('installationId')), None) if manager else None
-        if not installation or installation.get('status') != 'installed' or installation.get('commit') != DTU_COMMIT or installation.get('repository', '').removesuffix('.git') != REPOSITORY or installation.get('extras'):
-            raise ValueError('Install the qualified DTU core without provider extras before enabling it.')
-        identity = installation['id']
-        if not re.fullmatch(r'[a-f0-9]{24}', identity):
-            raise ValueError('The managed installation identity is invalid.')
-        root = app.data_dir / 'smart-tools' / 'installs' / identity
-        python = root / 'venv' / 'bin' / 'python'
-        if installation.get('python') != str(python) or not python.is_file() or root.is_symlink() or (root / 'venv').is_symlink():
-            raise ValueError('The exact managed backend interpreter is unavailable.')
-        docker = value.get('dockerHost', '')
-        if not isinstance(docker, str) or not docker.startswith('unix:///') or '\x00' in docker or '..' in Path(docker[7:]).parts:
-            raise ValueError('Only an explicitly configured local Docker Unix socket is supported.')
-        image = value.get('image', APPROVED_IMAGE)
-        if image != APPROVED_IMAGE:
-            raise ValueError('Only the app’s approved Python image digest is supported.')
-        return {**value, 'image': image, 'python': str(python)}, 'ready', 'Isolated Linux Python environment; offline network and no host source mounts.'
+        return validate_configuration_value(app, value)
     except (OSError, ValueError, KeyError, TypeError):
         return None, 'unavailable', 'The managed Linux test host needs setup, or its approved backend configuration changed.'
 
 
+def validate_configuration_value(app, value):
+    """Qualify operator-owned fields independently of the currently selected file."""
+    if not isinstance(value, dict):
+        raise ValueError('The operator configuration must be an object.')
+    if value.get('enabled') is not True:
+        return None, 'disabled', 'Test environments are disabled on this host.'
+    if set(value) - {'enabled', 'installationId', 'commit', 'backend', 'incus', 'dockerHost', 'image', 'maxRunning', 'maxInstances', 'minFreeBytes', 'retentionMode'}:
+        raise ValueError('The operator configuration contains unsupported settings.')
+    if 'retentionMode' in value and value['retentionMode'] not in {'files', 'full'}:
+        raise ValueError('Choose files or full environment retention.')
+    if not DTU_COMMIT or value.get('commit') != DTU_COMMIT:
+        raise ValueError('The managed backend is not pinned to this app’s qualified revision.')
+    manager = getattr(app, 'smart_tools', None)
+    installation = next((row for row in manager.state['installations'] if row['id'] == value.get('installationId')), None) if manager else None
+    if not installation or installation.get('status') != 'installed' or installation.get('commit') != DTU_COMMIT or installation.get('repository', '').removesuffix('.git') != REPOSITORY or installation.get('extras'):
+        raise ValueError('Install the qualified DTU core without provider extras before enabling it.')
+    identity = installation['id']
+    if not re.fullmatch(r'[a-f0-9]{24}', identity):
+        raise ValueError('The managed installation identity is invalid.')
+    root = app.data_dir / 'smart-tools' / 'installs' / identity
+    python = root / 'venv' / 'bin' / 'python'
+    if installation.get('python') != str(python) or not python.is_file() or root.is_symlink() or (root / 'venv').is_symlink():
+        raise ValueError('The exact managed backend interpreter is unavailable.')
+    backend = value.get('backend', 'docker')
+    if backend == 'incus':
+        if any(key in value for key in ('dockerHost', 'image', 'maxRunning', 'maxInstances', 'minFreeBytes')):
+            raise ValueError('Incus settings belong in its explicit backend configuration.')
+        from .incus_environment_worker import validate_configuration
+        incus = validate_configuration(value.get('incus'))
+        return {**value, 'backend': 'incus', 'incus': incus, 'python': str(python)}, 'ready', 'Isolated Linux environment on the configured Incus host; offline network and no host source mounts.'
+    if backend != 'docker' or 'incus' in value:
+        raise ValueError('Choose one explicitly configured test backend.')
+    if value.get('retentionMode') == 'full':
+        raise ValueError('Docker supports source and artifact retention; full environment retention requires Incus.')
+    docker = value.get('dockerHost', '')
+    if not isinstance(docker, str) or not docker.startswith('unix:///') or '\x00' in docker or '..' in Path(docker[7:]).parts:
+        raise ValueError('Only an explicitly configured local Docker Unix socket is supported.')
+    image = value.get('image', APPROVED_IMAGE)
+    if image != APPROVED_IMAGE:
+        raise ValueError('Only the app’s approved Python image digest is supported.')
+    for key in ('maxRunning', 'maxInstances', 'minFreeBytes'):
+        if key in value and (type(value[key]) is not int or value[key] < 0):
+            raise ValueError('Capacity policy values must be nonnegative integers.')
+    return {**value, 'image': image, 'python': str(python),
+        'admissionRoot': str(Path.home() / '.cache' / 'amplifier-test-admission')}, 'ready', 'Isolated Linux Python environment; offline network and no host source mounts.'
+
+
 def config_key(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return backend_configs.key(value)
+
+
+def resolve_configuration(app, row, active):
+    return backend_configs.resolve(app, row, active)
 
 
 def public(home, row):
@@ -101,9 +129,14 @@ def public(home, row):
         'revision': row['revision'], 'profileId': row['profileId'],
         'status': row.get('environmentState', 'unknown'), 'universeId': row.get('universeId'),
         'source': row['source'], 'snapshot': row.get('snapshot'), 'sourceReady': row.get('sourceReady'), 'services': row.get('services', []),
-        'lastOperation': row.get('lastOperation'), 'reason': row.get('reason'), 'observation': row.get('observation'),
+        'lastOperation': row.get('lastOperation'), 'lastRecovery': row.get('lastRecovery'),
+        'reason': row.get('reason'), 'observation': row.get('observation'),
+        'recovery': row.get('recovery', {'available': False, 'reason': 'Refresh to inspect the retained recovery backend.'}),
         'retention': {'path': str(storage.directory(home, row)), 'preserved': True,
-                      'policy': 'Stop retains container data. Remove exports source and artifacts before deleting owned containers and volumes. Retained host files are never deleted here.'},
+                      'fullAvailable': row.get('backendType') == 'incus',
+                      **({'mode': row['retentionMode']} if row.get('retentionMode') is not None else {}),
+                      'policy': 'Stop retains container data. Remove exports source and artifacts before deleting owned containers and volumes. Retained host files are never deleted here.',
+                      **({'accounting': row['retainedFiles']} if row.get('retainedFiles') is not None else {})},
     }.items() if value is not None}
 
 
@@ -138,16 +171,29 @@ def remove_installation(home, identity, folder, *, ignore_errors=False):
         shutil.rmtree(folder, ignore_errors=ignore_errors)
 
 
-def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None):
+def prepare(home, sid, workspace, actor, source, backend_key, request_id, installation=None, backend_config=None):
     with installation_lock(home, installation) if installation else nullcontext(), closing(storage.connect(home)) as db, db:
+        if backend_config is not None and backend_configs.retain(home, backend_config) != backend_key:
+            raise ValueError('The approved backend configuration identity changed before allocation.')
         db.execute('BEGIN IMMEDIATE')
-        if db.execute("SELECT 1 FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=? LIMIT 1", (sid, KIND)).fetchone():
+        prior = db.execute("SELECT body FROM allocations WHERE root=? AND status!='retired' AND json_extract(body,'$.kind')=? LIMIT 1", (sid, KIND)).fetchone()
+        if prior:
+            row = json.loads(prior[0])
+            # A crash can occur after reserving local storage but before the
+            # queue links it. Only the same unadmitted intent may recover it.
+            if (not row.get('backendAdmitted') and row.get('commandId') == request_id
+                    and row['owner'] == actor and row['source'] == source
+                    and row['backendKey'] == backend_key and row['workspaceId'] == workspace):
+                return row
             raise ValueError('This task already owns an environment. Inspect or remove it before starting another.')
         if db.execute("SELECT COUNT(*) FROM allocations WHERE status!='retired'").fetchone()[0] >= storage.MAX_ACTIVE:
             raise ValueError('The resource owner capacity has been reached.')
         row = {'id': str(uuid.uuid4()), 'kind': KIND, 'workspaceId': workspace, 'sessionId': sid,
                'owner': actor, 'source': source, 'profileId': PROFILE, 'backendKey': backend_key,
                'backendInstallation': installation,
+               'backendConfigRetained': backend_config is not None,
+               **({'retentionMode': backend_config.get('retentionMode', 'files'),
+                   'backendType': backend_config.get('backend', 'docker')} if backend_config is not None else {}),
                'status': 'prepared', 'environmentState': 'preparing', 'revision': 1,
                'createdAt': time.time(), 'commandId': request_id,
                'launchOperationId': str(uuid.uuid4())}
@@ -157,20 +203,31 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
 
 def invoke(config, home, row, action, args):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
-    folder = storage.directory(home, row)
-    payload = {'action': action, 'root': str(folder), 'source': row['source'],
+    folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
+              if action == 'capacity' else storage.directory(home, row))
+    if action == 'capacity':
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = {'action': action, 'root': str(folder), 'source': row.get('source'),
+               'backendKey': row.get('backendKey'),
+               'expectedBackendIdentity': row.get('backendIdentity'),
+               'retentionMode': args.get('retentionMode', config.get('retentionMode', 'files')) if action == 'remove' else config.get('retentionMode', 'files'),
                'snapshot': row.get('snapshot'),
-               'operationId': row['launchOperationId'], 'universeId': row.get('universeId'),
-               'dockerHost': config['dockerHost'], 'image': config['image'],
+               'operationId': row.get('launchOperationId'), 'universeId': row.get('universeId'),
+               'dockerHost': config.get('dockerHost'), 'image': config.get('image'),
+               'rootOwner': row.get('sessionId'),
                'requestId': args.get('requestId'), 'command': args.get('command'),
-               'timeoutSeconds': args.get('timeoutSeconds', 60)}
+               'timeoutSeconds': args.get('timeoutSeconds', 60),
+               **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
     helper = Path(__file__).with_name('test_environment_worker.py')
+    if config.get('backend') == 'incus':
+        helper = Path(__file__).with_name('incus_environment_worker.py')
+        payload['incus'] = config['incus']
     environment = {'PATH': os.defpath, 'HOME': str(folder), 'LANG': 'C.UTF-8'}
     process = subprocess.Popen([config['python'], '-I', str(helper)], stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     output, errors = bytearray(), bytearray()
     drained = False
-    deadline = time.monotonic() + (650 if action == 'start' else 300 if action == 'prepare' else 30 if action == 'read' else args.get('timeoutSeconds', 60) + 150)
+    deadline = time.monotonic() + (650 if action == 'start' else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile'} else args.get('timeoutSeconds', 60) + 150)
     try:
         process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
@@ -209,6 +266,38 @@ def invoke(config, home, row, action, args):
         process.stderr.close()
 
 
+def capacity(app, config):
+    try:
+        result = invoke(config, app.data_dir, {}, 'capacity', {})
+        return result['capacity'] if result.get('ok') else {'available': False, 'blockers': [{'code': 'backend_unavailable'}]}
+    except (OSError, ValueError, TimeoutError):
+        return {'available': False, 'blockers': [{'code': 'capacity_unknown'}]}
+
+
+def confirmed_result(row, request):
+    return (request.get('state') in {'completed', 'failed'}
+            and request.get('resourceId') == row['id']
+            and request.get('sessionId') == row['sessionId']
+            and request.get('action') in {'workspace.environments.' + action for action in ('start', 'execute', 'stop', 'remove')}
+            and isinstance(request.get('result'), dict))
+
+
+def project_result(home, row, request):
+    """Rebuild resource metadata from its exact receipt without another effect."""
+    result = request['result']
+    action = request['action'].rsplit('.', 1)[-1]
+    changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
+    if action == 'start' and (result.get('admissionDenied') or result.get('effectAdmitted') is False):
+        changes['backendAdmitted'] = False
+    environment_state = ('running' if result.get('ok') else 'unknown') if action == 'execute' else result.get('status', 'unknown')
+    if action == 'remove' and result.get('ok') and environment_state == 'removed':
+        changes['status'] = 'retired'
+        if isinstance(result.get('retention'), dict) and result['retention'].get('verified') is True:
+            changes['retainedFiles'] = result['retention']
+    changes.update(pendingRequest=None, environmentState=environment_state, lastOperation=request, reason=result.get('message'))
+    return save(home, row, **changes)
+
+
 def effect(app, row, action, args, config, request, admit):
     home, sid = app.data_dir, row['sessionId']
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
@@ -220,8 +309,14 @@ def effect(app, row, action, args, config, request, admit):
         row = get(home, sid, row['id'])
         if action != 'start' and row['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
+        if row.get('pendingRequest') and row['pendingRequest'] != request['requestId']:
+            prior = app.operations.requests.read(sid, row['pendingRequest'])
+            if confirmed_result(row, prior):
+                row = project_result(home, row, prior)
         if row['backendKey'] != config_key(config):
             raise ValueError('The approved backend changed. Restore its exact configuration before managing this environment.')
+        if action != 'start':
+            row = recovery.bind_configuration(app, row, config)
         if action == 'start':
             row = storage.allocate(home, row, admit)
         elif not (action == 'remove' and not row.get('backendAdmitted')) and storage.observe(home, row)['observation'] != 'present':
@@ -240,7 +335,10 @@ def effect(app, row, action, args, config, request, admit):
             if not prepared.get('ok'):
                 result = {**prepared, 'status': 'not-started'}
             else:
-                row = save(home, row, universeId=prepared['universeId'], snapshot=prepared['snapshot'])
+                identity = recovery.backend_identity(prepared.get('backendIdentity'))
+                if identity['backend'] != config.get('backend', 'docker'):
+                    raise ValueError('The prepared environment belongs to a different backend.')
+                row = save(home, row, universeId=prepared['universeId'], snapshot=prepared['snapshot'], backendIdentity=identity)
                 admit()
                 # Identity and exact source provenance precede any Docker effect.
                 row = save(home, row, backendAdmitted=True, environmentState='starting')
@@ -251,24 +349,34 @@ def effect(app, row, action, args, config, request, admit):
         else:
             admitted = True
             result = invoke(config, home, row, action, args)
-        changes = {key: result[key] for key in ('universeId', 'snapshot', 'services', 'sourceReady') if result.get(key) is not None}
-        state = 'completed' if result.get('ok') else 'outcome_unknown' if admitted else 'failed'
-        if action == 'execute':
-            environment_state = 'running' if result.get('ok') else 'unknown'
-            if result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
-                state = 'failed'
-        else:
-            environment_state = result.get('status', 'unknown')
-        if action == 'remove' and result.get('ok') and environment_state == 'removed':
-            changes['status'] = 'retired'
+        not_admitted = result.get('admissionDenied') or result.get('effectAdmitted') is False
+        state = 'completed' if result.get('ok') else 'failed' if not_admitted else 'outcome_unknown' if admitted else 'failed'
+        if action == 'execute' and result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
+            state = 'failed'
         request = app.operations.requests.finish(request, state, resourceId=row['id'], result=result,
             message=result.get('message', 'The result is retained; this request will not replay.'))
-        row = save(home, row, **changes, pendingRequest=None, environmentState=environment_state,
-                   lastOperation=request, reason=result.get('message'))
+        row = project_result(home, row, request)
         return {'resource': public(home, row), 'request': request}
     except BaseException as exc:
         # Hold the physical owner lock through final persistence. A rejected
         # competing request must never change the active owner's resource.
+        try:
+            recorded = app.operations.requests.read(sid, request['requestId'])
+        except (OSError, ValueError, sqlite3.Error):
+            recorded = {}
+        if confirmed_result(row, recorded):
+            # The receipt and resource projection have separate commit points.
+            # Retry only the projection; never downgrade or replay a known effect.
+            request = recorded
+            try:
+                if locked:
+                    row = project_result(home, get(home, sid, row['id']), request)
+            except (OSError, ValueError, sqlite3.Error):
+                row = {**row, 'observation': {'status': 'unverified'},
+                       'reason': 'The operation result is saved, but environment metadata could not be updated. Inspect again to repair the metadata; the operation will not replay.'}
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            return {'resource': public(home, row), 'request': request}
         request = app.operations.requests.finish(request, 'outcome_unknown' if admitted else 'failed', resourceId=row['id'],
             message=('The operation did not finish with a confirmed result. Inspect retained state; do not repeat it automatically.'
                      if admitted else 'The operation was not admitted. Read the current environment and authority before trying a new request.'))
@@ -292,12 +400,32 @@ def read(app, sid, config):
     with closing(storage.connect(home)) as db:
         rows = [json.loads(value[0]) for value in db.execute(
             "SELECT body FROM allocations WHERE root=? AND json_extract(body,'$.kind')=? ORDER BY rowid DESC LIMIT 10", (sid, KIND))]
-    result = []
+    result, configurations = [], {}
     for row in rows:
+        selected = None
+        availability = {'available': False, 'reason': 'This environment is already retired.'}
+        if row['status'] != 'retired':
+            identity = (row['backendKey'], bool(row.get('backendConfigRetained')))
+            if identity not in configurations:
+                try:
+                    configurations[identity] = (resolve_configuration(app, row, config), {'available': True})
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    configurations[identity] = (None, {'available': False, 'reason': str(exc)})
+            selected, availability = configurations[identity]
         if row['status'] != 'retired':
             try:
                 with FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0):
                     row = get(home, sid, row['id'])
+                    try:
+                        row = recovery.repair(app, row)
+                    except (OSError, ValueError, sqlite3.Error):
+                        row = {**row, 'observation': {'status': 'unverified'},
+                               'reason': 'The saved recovery result is retained, but its metadata could not be repaired. Refresh to inspect it again.'}
+                        result.append(public(home, {**row, 'recovery': availability}))
+                        continue
+                    if row['status'] == 'retired':
+                        result.append(public(home, {**row, 'recovery': {'available': False, 'reason': 'Physical absence has been confirmed.'}}))
+                        continue
                     if not row.get('backendAdmitted') and row.get('environmentState') == 'preparing':
                         preparation = app.operations.requests.read(sid, row['commandId'])
                         if preparation['state'] in {'failed', 'outcome_unknown'}:
@@ -305,15 +433,22 @@ def read(app, sid, config):
                                 reason='Preparation ended before any environment launch. Local source and evidence are retained.')
                     if row.get('pendingRequest'):
                         request = app.operations.requests.read(sid, row['pendingRequest'])
-                        if request['state'] == 'admitting':
-                            request = app.operations.requests.finish(request, 'outcome_unknown',
-                                message='The operation owner stopped before recording completion. Nothing was replayed.')
-                        row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
-                            lastOperation=request,
-                            reason='The operation owner stopped before recording completion. Nothing was replayed.')
-                    if config and row.get('backendAdmitted') and row['backendKey'] == config_key(config) and storage.observe(home, row)['observation'] == 'present':
+                        if confirmed_result(row, request):
+                            row = project_result(home, row, request)
+                        else:
+                            if request['state'] == 'admitting':
+                                request = app.operations.requests.finish(request, 'outcome_unknown',
+                                    message='The operation owner stopped before recording completion. Nothing was replayed.')
+                            row = save(home, row, pendingRequest=None, environmentState='unknown' if row.get('backendAdmitted') else 'not-started',
+                                lastOperation=request,
+                                reason='The operation owner stopped before recording completion. Nothing was replayed.')
+                    if row['status'] == 'retired':
+                        result.append(public(home, {**row, 'recovery': {'available': False, 'reason': 'This environment is already retired.'}}))
+                        continue
+                    if selected and row.get('backendAdmitted') and storage.observe(home, row)['observation'] == 'present':
                         try:
-                            observed = invoke(config, home, row, 'read', {})
+                            row = recovery.bind_configuration(app, row, selected)
+                            observed = invoke(selected, home, row, 'read', {})
                             if observed.get('ok'):
                                 changes = {key: observed[key] for key in ('universeId', 'services', 'snapshot', 'sourceReady') if key in observed and observed[key] != row.get(key)}
                                 if observed.get('status') != row.get('environmentState'):
@@ -331,7 +466,7 @@ def read(app, sid, config):
                         row = {**row, 'observation': {'status': 'unverified'}, 'reason': 'The approved backend is unavailable. Retained results are historical.'}
             except LockTimeout:
                 row = {**row, 'observation': {'status': 'operation-in-progress'}}
-        result.append(public(home, row))
+        result.append(public(home, {**row, 'recovery': availability}))
     return result
 
 
@@ -350,6 +485,8 @@ async def dispatch(app, action, args, origin, caller, authority):
         raise AppError('Choose this conversation’s current workspace.', 403)
     captured = tuple(source.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision'))
     config, availability, reason = configuration(app)
+    historical = action.rsplit('.', 1)[-1] in {'stop', 'remove', 'reconcile'}
+    row = None
     def guard():
         current = app._session(sid, hydrate=False)
         if captured != tuple(current.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision')):
@@ -360,6 +497,8 @@ async def dispatch(app, action, args, origin, caller, authority):
                 raise AppError(blocked, 409)
         app.configuration_authority.check(authority)
         current_config, _, _ = configuration(app)
+        if historical and row is not None:
+            current_config = resolve_configuration(app, row, current_config)
         if current_config != config:
             raise AppError('The approved test environment configuration changed.', 409)
     try:
@@ -369,10 +508,9 @@ async def dispatch(app, action, args, origin, caller, authority):
                 raise AppError('The task moved; refresh its environments.', 409)
             return {'accepted': True, 'result': {'capability': {'status': availability, 'reason': reason,
                 'profiles': [{'id': PROFILE, 'label': 'Offline Linux Python'}],
-                'source': source.get('workingDirectory') or source['workspace']}, 'items': items, 'nextOffset': None}}
+                'source': source.get('workingDirectory') or source['workspace']}, 'items': items, 'nextOffset': None,
+                'checks': [app.test_queue.public(item) for item in app.test_queue.rows(sid=sid, limit=20)]}}
         guard()
-        if config is None:
-            raise AppError(reason, 409)
         actor = {'sessionId': sid, 'principal': principal}
         previous = app.operations.requests.existing(sid, action, args, actor)
         if previous:
@@ -384,6 +522,12 @@ async def dispatch(app, action, args, origin, caller, authority):
                 raise AppError('The environment belongs to another execution owner.', 403)
             if row['revision'] != args['expectedRevision']:
                 raise AppError('The environment changed. Inspect its current revision.', 409)
+            if historical:
+                config = await asyncio.to_thread(resolve_configuration, app, row, config)
+        if config is None:
+            raise AppError(reason, 409)
+        if action.endswith('.remove') and args.get('retentionMode') == 'full' and config.get('backend', 'docker') != 'incus':
+            raise AppError('Full environment retention is available only for this environment’s original Incus backend.', 409)
         guard()
         request, fresh = app.operations.requests.begin(sid, action, args, actor)
         if not fresh:
@@ -391,7 +535,7 @@ async def dispatch(app, action, args, origin, caller, authority):
         try:
             if action.endswith('.start'):
                 row = await asyncio.to_thread(prepare, app.data_dir, sid, workspace['id'], actor,
-                    source.get('workingDirectory') or source['workspace'], config_key(config), args['requestId'], config.get('installationId'))
+                    source.get('workingDirectory') or source['workspace'], config_key(config), args['requestId'], config.get('installationId'), config)
             request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'])
             guard()
         except BaseException:
@@ -403,7 +547,10 @@ async def dispatch(app, action, args, origin, caller, authority):
                 guard()
         def admit():
             asyncio.run_coroutine_threadsafe(locked_guard(), loop).result(timeout=10)
-        result = await app.worktrees.finish_thread(effect, app, row, action.rsplit('.', 1)[1], args, config, request, admit)
+        if action.endswith('.reconcile'):
+            result = await app.worktrees.finish_thread(recovery.reconcile, app, row, args, config, request, admit)
+        else:
+            result = await app.worktrees.finish_thread(effect, app, row, action.rsplit('.', 1)[1], args, config, request, admit)
         app.operations.notify()
         return {'accepted': True, 'result': result}
     except (OSError, ValueError, sqlite3.Error, LockTimeout) as exc:

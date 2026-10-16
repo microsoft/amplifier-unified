@@ -1,4 +1,4 @@
-import {openSettingsPage} from './browser-settings.mjs';
+import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir,readFile} from 'node:fs/promises';
@@ -57,22 +57,35 @@ try{
  }
  await page.evaluate(theme=>window.amplifier.dispatch('theme.apply',{name:theme.name,css:theme.css}),originalTheme);
  await page.setViewportSize({width:1280,height:900});
- if(contextLimit)await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
- else await page.getByRole('button',{name:'View error details',exact:true}).click();
- const dialog=page.getByRole('dialog',{name:'Chat details',exact:true});
+ async function openRecovery(){
+  await openChatAdvancedPage(page,'Context & recovery');
+  const recovery=page.getByRole('dialog',{name:'Context & recovery',exact:true});
+  const disclosure=recovery.locator('details').filter({has:page.locator('summary',{hasText:'Recovery & recorded errors'})});
+  if(!await disclosure.evaluate(el=>el.open))await disclosure.locator(':scope > summary').click();
+  return recovery;
+ }
+ let dialog;
+ if(contextLimit)dialog=await openRecovery();
+ else{await page.getByRole('button',{name:'View error details',exact:true}).click();dialog=page.getByRole('dialog',{name:'Error details',exact:true});}
  await expect(dialog.getByRole('button',{name:'Hide details',exact:true})).toHaveCount(0);
  if(moduleFailure){
-  await expect(dialog.getByText('Configured modules could not load',{exact:true})).toBeVisible();
+  await expect(dialog.getByText('Some parts of this chat could not load',{exact:true})).toBeVisible();
   await expect(dialog.getByText('hook-fixture',{exact:true})).toBeVisible();
-  await expect(dialog.getByText(/Check the declared module type and metadata/)).toBeVisible();
+  await expect(dialog.getByRole('listitem').filter({hasText:'Check the declared module type and metadata'})).toBeVisible();
   await expect(dialog.locator('summary').filter({hasText:'Runtime message'})).toHaveCount(0);
  }else if(contextLimit) await expect(dialog.getByText('The conversation exceeded the model context limit.',{exact:true})).toBeVisible();
- else await expect(dialog.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
+ else await expect(dialog.getByText('Something interrupted this chat.',{exact:true})).toBeVisible();
  const copy=dialog.getByRole('button',{name:'Copy session ID',exact:true});
  assert.equal(await copy.textContent(),'');await copy.click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),ready.sessionId);
  await dialog.getByRole('button',{name:'Copy diagnostics',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toContain('"capturedAt"');
+ if(!moduleFailure&&!contextLimit)await expect(dialog.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
  const diagnostics=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));if(moduleFailure)assert.equal(diagnostics.moduleFailures[0].reason_code,'invalid_module_metadata');else assert.equal(diagnostics.failure.category,contextLimit?'context_limit':'invalid_image');
+ // Naming is its own everyday chat page; it no longer lives in diagnostics.
+ await dialog.getByRole('button',{name:'Close panel',exact:true}).click();await expect(dialog).toBeHidden();
+ await page.getByRole('button',{name:'Chat',exact:true}).click();
+ await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Rename',exact:true}).click();
+ dialog=page.getByRole('dialog',{name:'Rename',exact:true});
  const automatic=dialog.getByRole('checkbox',{name:'Automatic chat naming'});
  const refresh=dialog.getByRole('button',{name:'Regenerate chat name'});
  await automatic.check();await expect(automatic).toBeChecked();
@@ -83,6 +96,8 @@ try{
  await dialog.getByRole('button',{name:'Save name',exact:true}).click();
  await expect(automatic).not.toBeChecked();
  assert.equal((await (await page.request.get(ready.url+'/fixture/check')).json()).namingCalls,1);
+ await dialog.getByRole('button',{name:'Close panel',exact:true}).click();await expect(dialog).toBeHidden();
+ dialog=await openRecovery();
  await page.setViewportSize({width:390,height:844});
  await page.screenshot({path:output+'mobile-details.png'});
  await dialog.getByRole('button',{name:'Create recovery copy',exact:true}).scrollIntoViewIfNeeded();

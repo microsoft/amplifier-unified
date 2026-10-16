@@ -119,6 +119,10 @@ pages. Pinning adds a shortcut without removing the item from Recent, workspace
 lists or search. Each list contains an item once; the same item may appear in
 Pinned and another list. Recent keeps its chosen sort independently of pin order.
 
+Workspace row selection marks the workspace page currently being browsed. Opening
+a chat clears that workspace highlight, including its containing workspace; the
+chat's workspace context and the remembered browse location remain unchanged.
+
 The initial 20–100 limit and origin toggle persist per client and mounted module.
 Expansion beyond 100 is scoped to the attached client/module session, not copied
 to a reload or another client. Reload uses the saved bounded initial preference.

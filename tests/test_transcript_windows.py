@@ -438,3 +438,31 @@ async def test_native_display_only_window_does_not_inherit_saved_reactions(tmp_p
     session['messageAnnotations'] = {row['id']: {'reactions': ['❤️']}}
     current = service.history.windows.project(session)['messages'][0]
     assert current['displayOnly'] and 'reactions' not in current
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('managed', [True, False])
+async def test_native_anchor_survives_page_eviction_without_canonical_merge(tmp_path, monkeypatch, managed):
+    from amplifier_web import automatic_history, transcript_windows
+    monkeypatch.setattr(automatic_history, 'amplifier_home', lambda: tmp_path)
+    monkeypatch.setattr(transcript_windows, 'MAX_PAGES', 1)
+    monkeypatch.setattr(automatic_history, 'read_transcript', lambda *a, **k: pytest.fail('No full transcript read'))
+    transcript(tmp_path, [{'role': 'user', 'content': str(i)} for i in range(240)])
+    service, session = service_for(tmp_path, managed=managed)
+    original = copy.deepcopy(session)
+    windows = service.history.windows
+    first = await windows.read('app', native=not managed)
+    row = first['items'][20]
+    # Model only the browser's persisted reference, not retained page bodies.
+    reference = json.loads(json.dumps(row['sourceReference']))
+    older = await windows.read('app', before=first['before'], native=not managed)
+    assert older['items'][0]['text'] == '40'
+    assert ('app', first['windowKey']) not in windows.pages
+    restored = await windows.read('app', before=reference['restoreCursor'], native=True)
+    assert restored == first
+    assert next(item for item in restored['items'] if item['id'] == row['id']) == row
+    assert len(windows.pages) == 1
+    assert restored['coverage']['scannedBytes'] <= 8 * 1024 * 1024
+    assert all(item['displayOnly'] and item['sourceReference']['restoreCursor'] == reference['restoreCursor']
+               for item in restored['items'])
+    assert session == original

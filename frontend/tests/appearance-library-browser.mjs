@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {openSettingsPage} from './browser-settings.mjs';
 // Packaged application, isolated storage, no external model or feedback calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -17,30 +18,57 @@ try{
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await action('session.create');await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep my unfinished ideas.');
- await page.getByRole('button',{name:'Settings',exact:true}).click();await page.locator('[data-settings-section="appearance"]').click();
- await expect(page.getByRole('button',{name:'Preview Aurora',exact:true})).toBeVisible();
+ await openSettingsPage(page,'appearance');
+ await expect(page.getByRole('button',{name:'Use Aurora',exact:true})).toBeVisible();
  await expect(page.locator('#theme-css')).toBeHidden();
  await page.screenshot({path:out+'/appearance-gallery.png'});
- const before=(await state()).theme.css;
+ // Everyday cards now save immediately. Verify every built-in and both color
+ // modes through that public path; previews belong to saved custom themes.
  for(const name of ['Aurora','Atelier','Graphite']){
-  await page.getByRole('button',{name:'Preview '+name,exact:true}).click();
-  await expect(page.getByRole('button',{name:'Use '+name,exact:true})).toBeVisible();assert.equal((await state()).theme.css,before);
-  for(const mode of ['Light','Dark']){await page.getByRole('button',{name:mode,exact:true}).click();await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',mode.toLowerCase());await page.screenshot({path:out+'/'+name.toLowerCase()+'-'+mode.toLowerCase()+'.png'});await page.locator('.a-overlay').evaluate(el=>el.style.visibility='hidden');await page.screenshot({path:out+'/'+name.toLowerCase()+'-'+mode.toLowerCase()+'-app.png'});await page.locator('.a-overlay').evaluate(el=>el.style.visibility='')}
-  await page.getByRole('button',{name:'Cancel preview',exact:true}).click();await expect(page.getByRole('button',{name:'Use '+name,exact:true})).toHaveCount(0);assert.equal((await state()).theme.css,before);
+  await page.getByRole('button',{name:'Use '+name,exact:true}).click();
+  await expect.poll(async()=>(await state()).theme.name).toBe(name);
+  await expect(page.getByRole('button',{name:'Cancel preview',exact:true})).toHaveCount(0);
+  for(const mode of ['light','dark']){
+   await page.getByRole('combobox',{name:'Color mode',exact:true}).selectOption(mode);
+   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',mode);
+   await page.screenshot({path:out+'/'+name.toLowerCase()+'-'+mode+'.png'});
+  }
  }
- await page.getByRole('button',{name:'Preview Aurora',exact:true}).click();await page.getByRole('button',{name:'Use Aurora',exact:true}).click();
+ await page.getByRole('button',{name:'Use Aurora',exact:true}).click();
  await expect.poll(async()=>(await state()).theme.name).toBe('Aurora');
  const background=()=>page.locator('#amp-one').evaluate(el=>getComputedStyle(el).backgroundImage);
  await expect.poll(background).not.toBe('none');
- const decoration=page.getByRole('checkbox',{name:'Show decorative theme background'});await decoration.uncheck();await expect.poll(background).toBe('none');await decoration.check();await expect.poll(background).not.toBe('none');
+ await page.getByText('Layout & background',{exact:true}).click();
+ const decoration=page.getByRole('checkbox',{name:'Show decorative theme background'});
+ await decoration.uncheck();await expect.poll(background).toBe('none');await decoration.check();await expect.poll(background).not.toBe('none');
+ for(const width of [760,390,320]){
+  await page.setViewportSize({width,height:900});
+  await expect(page.getByRole('button',{name:'Use Aurora',exact:true})).toBeVisible();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.locator('.a-settings-content').evaluate(el=>el.scrollTop=0);
+  await page.screenshot({path:out+'/appearance-'+width+'.png'});
+ }
+ await page.setViewportSize({width:1440,height:1050});
+ await page.getByRole('button',{name:'Save, import & export themes',exact:true}).click();
  await page.locator('#theme-import').setInputFiles({name:'Ocean.amplifier.css',mimeType:'text/css',buffer:Buffer.from('#amp-one{--a-accent:#137c8b;background-image:none}')});
- await expect(page.getByRole('button',{name:'Preview Ocean',exact:true})).toBeVisible();assert.equal((await state()).theme.name,'Aurora','Uploading does not change the current theme');
+ await expect(page.getByRole('button',{name:'Preview Ocean',exact:true})).toBeVisible();
+ assert.equal((await state()).theme.name,'Aurora','Uploading does not change the current theme');
  await page.reload();await expect(page.getByRole('button',{name:'Preview Ocean',exact:true})).toBeVisible();assert.equal((await state()).theme.name,'Aurora');
+ const before=(await state()).theme.css;
+ await page.getByRole('button',{name:'Preview Ocean',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Use Ocean',exact:true})).toBeVisible();assert.equal((await state()).theme.css,before);
+ await page.getByRole('button',{name:'Cancel preview',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Use Ocean',exact:true})).toHaveCount(0);assert.equal((await state()).theme.css,before);
  await page.locator('#theme-import').setInputFiles({name:'Bad.css',mimeType:'text/css',buffer:Buffer.from('@import "https://example.com/style.css";')});
  await expect(page.getByRole('button',{name:'Preview Bad',exact:true})).toHaveCount(0);assert.equal((await state()).theme.name,'Aurora');
  await page.getByText('Advanced customization',{exact:true}).click();await expect(page.locator('#theme-css')).toBeVisible();await page.locator('#theme-name').fill('My Aurora');await page.getByRole('button',{name:'Save to library',exact:true}).click();await expect(page.getByRole('button',{name:'Preview My Aurora',exact:true})).toBeVisible();
  await page.getByText('Advanced customization',{exact:true}).click();
- for(const width of [760,390,320]){await page.setViewportSize({width,height:900});await expect(page.getByRole('button',{name:'Preview Aurora',exact:true})).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.locator('.a-settings-content').evaluate(el=>el.scrollTop=0);await page.screenshot({path:out+'/appearance-'+width+'.png'})}
- await page.getByRole('button',{name:'Preview Graphite',exact:true}).click();await page.getByRole('button',{name:'Close settings',exact:true}).click();await expect.poll(async()=>(await state()).view.themePreview).toBe(false);assert.equal((await state()).theme.name,'Aurora');await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep my unfinished ideas.');assert.deepEqual(errors,[]);
- console.log('Appearance library passed: three dual-mode previews, apply/cancel, background toggle, persistent uploads, rejected remote CSS, named save, responsive gallery and preserved draft.');
+ await page.getByRole('button',{name:'Preview Ocean',exact:true}).click();
+ await page.getByRole('button',{name:'Use Ocean',exact:true}).click();
+ await expect.poll(async()=>(await state()).theme.name).toBe('Ocean');
+ await page.getByRole('button',{name:'Preview My Aurora',exact:true}).click();
+ await page.getByRole('button',{name:/^Close (panel|settings)$/}).click();
+ await expect.poll(async()=>(await state()).view.themePreview).toBe(false);assert.equal((await state()).theme.name,'Ocean');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep my unfinished ideas.');assert.deepEqual(errors,[]);
+ console.log('Appearance library passed: three autosaved dual-mode built-ins, saved-theme preview/apply/cancel, background toggle, persistent uploads, rejected remote CSS, named save, responsive gallery and preserved draft.');
 }finally{await browser?.close();fixture.kill()}

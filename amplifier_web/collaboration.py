@@ -298,7 +298,7 @@ class Collaboration:
         session = self.service._session(sid)
         task = session.get('task') or self.service.coordination.task(sid)
         waiting = self.service.db.execute("""SELECT count(*) FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','workspace.tests.submit','worktree.handoff')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND (json_extract(receipt,'$.subscription.status') IN ('waiting','reserved','backpressured')
                 OR json_extract(receipt,'$.subscription.open')=1)
@@ -642,6 +642,13 @@ class Collaboration:
                     return reason
             if receipt.get('dependencyRequestId'):
                 dependency = self.receipt(receipt['dependencyRequestId'])
+                if dependency.get('commandAction') == 'workspace.tests.submit':
+                    if reason := self.service.test_queue.continuation_guard(dependency):
+                        return reason
+                if dependency.get('commandAction') == 'worktree.handoff':
+                    reason = self.service.worktrees.continuation_guard(dependency)
+                    if reason:
+                        return reason
                 if dependency.get('commandAction') == 'coordination.watch' and dependency.get('watch', {}).get('status') == 'cancelled':
                     return 'The one-shot watch was cancelled.'
                 if receipt.get('dependencyOutcomeRevision') and not self.claim_matches(dependency, receipt):
@@ -752,7 +759,7 @@ class Collaboration:
 
     def resume_outcomes(self, sid):
         for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch','worktree.handoff')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND json_extract(receipt,'$.subscription.status')='backpressured' LIMIT 64""", (sid,)).fetchall():
             self.enqueue_continuation(json.loads(encoded))
@@ -877,6 +884,19 @@ class Collaboration:
     def observe(self, session, kind, payload):
         """Host event linkage, never prose classification or semantic success."""
         changed = self.watches.observe(session, kind, payload)
+        if (kind == 'runtime.ended' and not payload.get('backgroundOnly')
+                and payload.get('sessionId') is not None
+                and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')}
+                and payload.get('rootSessionId', session['id']) == session['id']):
+            # Confirmed process exit ends routing authority even when the worker
+            # could not flush its terminal generation event. It proves neither
+            # successful completion nor a staged reply: keep those outcomes
+            # unqualified and never replay any previously accepted input.
+            active = session.get('collaborationGeneration') or {}
+            if active and not active.get('terminal'):
+                active.update(terminal=True, completed=False,
+                              detail='Worker exited before terminal generation evidence was received.')
+            return changed
         if kind == "runtime.collaboration_checkpoint":
             active = session.get("collaborationGeneration") or {}
             if (payload.get("sessionId") == session["id"] and payload.get("rootSessionId") == session["id"]

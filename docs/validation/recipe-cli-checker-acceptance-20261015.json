@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "scope": "Canonical recipe task qualification, not an adopted Unified runtime dependency",
+  "sourceCommit": "620d786a4379c936b0cf082bd66ad3faf5e910ee",
+  "sourceFileCount": 404,
+  "sourceManifestSha256": "54ca735ea0eede1545c000b1aaa248a61b16959bf7b9e700737019288448da36",
+  "actualCli": {
+    "commit": "d408797459a012e064be2330b159bf7b3192b57c",
+    "enginePathGuard": "unchanged scripts/live-proof.sh passed; exact frozen engine directory reported through actual CLI tool invoke",
+    "operation": "validate examples/bash-step-example.yaml",
+    "result": "valid, warnings[]",
+    "network": "disabled private namespace",
+    "providerInputs": 0,
+    "scriptSha256": "df0bc8351a0ea6251aacffb24d6aa331c0e55e47c6a7c58369a3fec6c6579805",
+    "privateBundleAndSettingsMatchFrozenSource": true
+  },
+  "independentChecker": {
+    "revision": "2c2047abb4b895e863371015455f4b2ff71c6aca",
+    "unchanged": true,
+    "actualOwningConvertersAndEnginePreparation": true,
+    "suppliedCandidatesUsed": false,
+    "pairs": 14,
+    "passed": 14,
+    "rightParsedBeforeLeft": true,
+    "allPairsVerifiedBeforeBash": true,
+    "safeLocalFixtureExecution": true,
+    "cases": [
+      {
+        "case": "found-226",
+        "engine": "legacy",
+        "candidateSha256": "52ba4f6199308e9d0f122079abdad7ff04cc548c8cb86b7a9bd4ec395ec7cf33",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-226",
+        "engine": "native",
+        "candidateSha256": "52ba4f6199308e9d0f122079abdad7ff04cc548c8cb86b7a9bd4ec395ec7cf33",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-227",
+        "engine": "legacy",
+        "candidateSha256": "52a349dd2103cd85e9f4d35e494a6570fa85cd19e000c8def46abf0c7900ec77",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-227",
+        "engine": "native",
+        "candidateSha256": "52a349dd2103cd85e9f4d35e494a6570fa85cd19e000c8def46abf0c7900ec77",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-386",
+        "engine": "legacy",
+        "candidateSha256": "e13c5f7dcd6a1305f4ede515aaf6f3e286abec60b0fd452d568f422cfbb2be82",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-386",
+        "engine": "native",
+        "candidateSha256": "e13c5f7dcd6a1305f4ede515aaf6f3e286abec60b0fd452d568f422cfbb2be82",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-407-it1",
+        "engine": "legacy",
+        "candidateSha256": "9380a1f9be2c4f0906a7cfcd44414d6c7d94c71ee95ce661fd27b195465d512e",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-407-it1",
+        "engine": "native",
+        "candidateSha256": "9380a1f9be2c4f0906a7cfcd44414d6c7d94c71ee95ce661fd27b195465d512e",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-407-it2",
+        "engine": "legacy",
+        "candidateSha256": "f242e4c0fd00a9989bef1f2667f45644418797a4be9a62819d920364397778dd",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "case": "found-407-it2",
+        "engine": "native",
+        "candidateSha256": "f242e4c0fd00a9989bef1f2667f45644418797a4be9a62819d920364397778dd",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "case": "found-196-present",
+        "engine": "legacy",
+        "candidateSha256": "6afcd5ba8824b73e37d28847af7d53638d7fe1d0e77bf8e42335652cc99a170d",
+        "exitCode": 7,
+        "passed": true
+      },
+      {
+        "case": "found-196-present",
+        "engine": "native",
+        "candidateSha256": "6afcd5ba8824b73e37d28847af7d53638d7fe1d0e77bf8e42335652cc99a170d",
+        "exitCode": 7,
+        "passed": true
+      },
+      {
+        "case": "found-196-absent",
+        "engine": "legacy",
+        "candidateSha256": "6afcd5ba8824b73e37d28847af7d53638d7fe1d0e77bf8e42335652cc99a170d",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "case": "found-196-absent",
+        "engine": "native",
+        "candidateSha256": "6afcd5ba8824b73e37d28847af7d53638d7fe1d0e77bf8e42335652cc99a170d",
+        "exitCode": 0,
+        "passed": true
+      }
+    ]
+  },
+  "retainedCorpusSourceAvailability": {
+    "sourcePaths": 199,
+    "sourcePathStatus": {
+      "exact-recorded-alias": 65,
+      "exact-frozen-git-recovery": 13,
+      "exact-original": 121
+    },
+    "rows": 1227,
+    "uniqueTemplates": 519,
+    "rowsWithExactRecipeMatch": 1218,
+    "rowsWithSomeDefaultValues": 613,
+    "rowsWithAllReferencedDefaults": 704,
+    "uniqueTemplatesWithSomeDefaults": 255,
+    "uniqueTemplatesWithAllReferencedDefaults": 296,
+    "uniqueTemplatesWithoutHoles": 144,
+    "defaultTypes": {
+      "str": 957,
+      "list": 24,
+      "dict": 12,
+      "int": 58,
+      "float": 2,
+      "bool": 12
+    }
+  },
+  "preservedFailures": [
+    {
+      "source": "b6a9a2b293f021512797749e970f1e821c193bf9",
+      "finding": "10/14 checker pairs passed;4 test != pairs blocked before Bash when trusted operator spelling was unnecessarily quoted. Canonical6a8b05b preserves entire trusted field spelling without bypassing witnesses; native mirror620d786a qualifies the successor."
+    },
+    {
+      "finding": "Private CLI bundle then private module override still selected baseline; unchanged live-proof.sh refused both runs. Only private fixture mappings changed; source guard was not weakened."
+    },
+    {
+      "finding": "Checker source is a preserved archive, so initial provenance collection expecting .git failed before cases. Exact frozen checker hash manifest replaces that fixture assumption."
+    }
+  ],
+  "evidence": {
+    "recipe-frozen-620d786a-evidence/evidence/actual-cli-frozen-620d786a-1792106850478682720.json": "e767c416644bea38d7059d7ac4a8689103fad5c758b5ea6a7386d172ef8450c8",
+    "recipe-frozen-620d786a-evidence/evidence/checker-engine-1792106849278578340.json": "8877e85f1e92463524534fbf659cbd12202ceb1667ea635f3f8c991703649e9c",
+    "frozen-620d786a.json": "54ca735ea0eede1545c000b1aaa248a61b16959bf7b9e700737019288448da36",
+    "checker-source-manifest.json": "722cbe5cf79c18f903fc9bd47b32d65c7adf282ae432909e870037eb98e7e784",
+    "recipe-context-inventory.json": "35bf82c3373b7cf925b8db3f3c74893a13f9850bc183732447448f2160da08f0",
+    "recipe-cli-proof.py": "81380c72708dc467e043fc415f5f8f5a6534c65392409a7382bb8bf3f507445c",
+    "recipe-checker-engine-proof.py": "53f49cab5ed28b451e7729f380618ae0d0f7b363958cc176960c07e298f024ad",
+    "recipe-frozen-checker-namespace.py": "3d69c5943cc4108718972a37165d5caf10d4282c85f811d0a1a43aaf2cc50220"
+  },
+  "remaining": [
+    "This seven-case checker proof is not universal Bash or arbitrary corpus execution assurance.",
+    "No main merge, publishing, production adoption or external provider call."
+  ],
+  "subsequentQualification": {
+    "sourceCommit": "620d786a4379c936b0cf082bd66ad3faf5e910ee",
+    "receipt": "microsoft/amplifier-bundle-recipes docs/validation/shell-source-qualification-20261015.json",
+    "repositoryGates": "1646 module passes/1 original skip;590 native passes/1 original skip;19 kit passes/1 original skip;5 unchanged goldens. Each skip has a separate exact-source supplement; the diagram test also has an explicit test-only portable-path correction fc18ee4 with22 cases passing.",
+    "wholeCorpus": "1227 rows,519 templates,3492 role/default cases,6984 both-engine source preparations verified; no original commands executed."
+  }
+}

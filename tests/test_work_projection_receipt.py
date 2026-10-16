@@ -230,12 +230,25 @@ async def test_status_only_same_revision_stream_is_private_immutable_and_does_no
     service = app['service']
     await service.history.close()
     await service.diagnostics.close()
-    await service.event_log_view.close()  # Drive acceptance/status explicitly.
+    # Stop periodic demand while retaining the actual bounded window owner.
+    view = service.event_log_view
+    if view.task is not None:
+        view.task.cancel()
+        await asyncio.gather(view.task, return_exceptions=True)
+        view.task = None
     client = await authenticated_client(app)
     rows = [service._new_session({'title': title}) for title in ('selected', 'unrelated')]
     service.state['sessions'].extend(rows)
     service._publish()
     target, other = (service._session(row['id']) for row in rows)
+    windows = view.windows
+    # Admit a real empty source window before observing status-only changes.
+    # Its page geometry stays fixed while acceptance becomes noncurrent/ready.
+    await windows.read(target['id'])
+    accepted = copy.deepcopy(windows.status[target['id']]['receipt'])
+    assert accepted['scope'] == 'recent-events' and accepted['historyComplete'] is False
+    assert accepted['hostInstanceId'] == service.instance_id and accepted['sessionId'] == target['id']
+    windows.invalidate({target['id']})
     queues, prior, issued = {}, {}, {}
     for identity, selected in (('one', target), ('same-owner', target), ('other-owner', other)):
         service.clients.attach(identity)
@@ -263,28 +276,40 @@ async def test_status_only_same_revision_stream_is_private_immutable_and_does_no
             pytest.fail('Ephemeral Work receipt attempted durable publication')
         for name in ('_publish', '_save', '_save_changes'):
             monkeypatch.setattr(service, name, no_write)
-        view = service.event_log_view
+        sibling_baseline = prior['same-owner']
         for ready in (True, False):
             if ready:
-                view._accept_work(target, ())
+                await windows.read(target['id'], _initial=True)
             else:
-                view._set_work_status(target, 'loading')
-            expected = copy.deepcopy(target['workProjection'])
-            view._notify_work(target['id'])
-            if transport == 'sse':
-                event, patch = await read_event(stream)
-            else:
-                message = await stream.receive_json(timeout=3)
-                event, patch = message['event'], message['data']
-            assert event == 'state-delta'
-            assert patch['baseRevision'] == patch['revision'] == revision
-            assert patch['changes'] and all('workProjection' in row['path'] for row in patch['changes'])
+                windows.invalidate({target['id']})
+            expected = copy.deepcopy(windows.status[target['id']])
+            assert expected['current'] is ready and expected['receipt'] == accepted
+            # Reconnect may already have queued an unchanged initial-refresh
+            # frame. Require the actual nonempty status delta, not that no-op.
+            async with asyncio.timeout(3):
+                while True:
+                    if transport == 'sse':
+                        event, patch = await read_event(stream)
+                    else:
+                        message = await stream.receive_json(timeout=3)
+                        event, patch = message['event'], message['data']
+                    assert event == 'state-delta'
+                    assert patch['baseRevision'] == patch['revision'] == revision
+                    if patch['changes']:
+                        break
+                    assert apply(baseline, patch) == baseline
+            assert all('workProjection' in row['path'] for row in patch['changes'])
             baseline = apply(baseline, patch)
             selected = next(row for row in baseline['sessions'] if row['id'] == target['id'])
             assert selected['workProjection'] == expected
             assert selected['draft'] == 'one private draft'
-            sibling = queues['same-owner'].get_nowait()
-            sibling_row = next(row for row in sibling['sessions'] if row['id'] == target['id'])
+            while True:
+                sibling = queues['same-owner'].get_nowait()
+                sibling_row = next(row for row in sibling['sessions'] if row['id'] == target['id'])
+                if sibling_row['workProjection'] == expected:
+                    break
+                assert sibling == sibling_baseline, 'Only an unchanged frame may precede the status'
+            sibling_baseline = copy.deepcopy(sibling)
             assert sibling_row['workProjection'] == expected
             assert sibling_row['draft'] == 'same-owner private draft'
             assert queues['other-owner'].empty()
@@ -293,7 +318,9 @@ async def test_status_only_same_revision_stream_is_private_immutable_and_does_no
             assert service.state['revision'] == revision and service.db.total_changes == writes
         assert issued == prior, 'Issued baselines must not be mutated in place'
         assert original == prior['one']
-        assert not original['sessions'][0].get('workProjection')
+        original_selected = next(row for row in original['sessions'] if row['id'] == target['id'])
+        assert original_selected['workProjection'] == {'status': 'loading', 'current': False, 'receipt': accepted}
+        assert 'workProjection' not in target, 'Display receipt must not become canonical saved state'
         assert baseline['sessions'][0]['workProjection']['receipt'] == sibling_row['workProjection']['receipt']
     finally:
         monkeypatch.undo()

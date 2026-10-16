@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-15T22:45:40.207065+00:00",
+  "previousSnapshot": {
+    "outcomeStatus": {
+      "covered-in-context": 609,
+      "partially-observed": 42,
+      "not-run": 18
+    },
+    "workflowsAllOutcomesObservedInContext": 160,
+    "residualOutcomes": 60
+  },
+  "currentSummary": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 614,
+      "partially-observed": 37,
+      "not-run": 18
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 164,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "resolvedOutcomes": [
+    "composer.stop:0",
+    "composer.stop:2",
+    "configuration.sources:2",
+    "connections.default-model:1",
+    "privacy.file-policy:1"
+  ],
+  "remainingOutcomes": 55,
+  "receipt": "docs/validation/normal-worker-control-boundaries-20261015.json",
+  "receiptCommit": "70b4896f7",
+  "sourceBinding": {
+    "baseSource": "b4e595b71cf1286fb61adad7266372940623935b",
+    "overlayCommits": [
+      "a5292abc89bd7316089fa81b23e66333fdce54b7",
+      "08b70668bb14cfccdec3565d8ce1186ef80c751a"
+    ],
+    "trackedFilesChecked": 2435,
+    "mismatches": [],
+    "activeProcesses": [],
+    "files": {
+      "amplifier_web/setup.py": "153574dc2885e901dee0e0a7880062f53dc2ab33d1077f9296274a89ccf6f2dc",
+      "amplifier_web/runtime_profiles.py": "798b9aae6b1c23eb47764f795e8eb9417b53272189a6dac3caf35ad08a40aa7c",
+      "tests/test_setup.py": "721f6211cb92fbf1fd9447ddac613ee0aa1fd7ede3ce7c9ba391601d62280271",
+      "tests/test_runtime_profile_inputs.py": "05e382cbf6842fc97384d7f610dac3219e471f2395865df1ea3937114b34b358"
+    },
+    "harness": {
+      "normal-runtime-functional.py": "bf7224acac82b1f2ef5dc6ecbc1bed8ba072dbaa34937070a7cd62ad3907e252",
+      "normal-runtime-functional-namespace.py": "d32acedfe2e603d354aca623f5eeaf18813f7de419b7bd894776cdbbf6a87a47",
+      "functional-instrumentation/sitecustomize.py": "b7389acc29ffba773ab708152a718282865c07ced6665cdec94b82fe17f5ee10"
+    }
+  },
+  "claims": [
+    {
+      "id": "functional-normal-worker-boundaries.composer.stop",
+      "workflow": "composer.stop",
+      "expectedIndices": [
+        0,
+        2
+      ],
+      "status": "passed-in-context",
+      "scenario": "normal-worker-control-boundaries",
+      "variants": [
+        "runtime-public-action"
+      ],
+      "context": "actual-normal-worker-owned-DTU-local-deterministic-provider",
+      "sourceCommit": "b4e595b71cf1286fb61adad7266372940623935b",
+      "appliedCommits": [
+        "a5292abc89bd7316089fa81b23e66333fdce54b7",
+        "08b70668bb14cfccdec3565d8ce1186ef80c751a"
+      ],
+      "receiptCommit": "70b4896f7",
+      "receiptSha256": "d104fb8b3438303f3187340214497c7400617d6c21a2b0b57c81354ec0181e73",
+      "observation": "Actual selected worker Stop persists through AppService close/reopen with no new worker, provider input or automatic continuation. Combined with actual public pointer/keyboard Stop controls; no arbitrary external-effect replay claim.",
+      "complementaryBrowserClaims": [
+        "functional-1.new-chat.18",
+        "functional-2.composer-primary-action.30",
+        "functional-2.composer-primary-action.30",
+        "functional-real-worker-outcome.2"
+      ],
+      "limits": [
+        "Local deterministic provider is held until cancelled; this is not live-provider acceptance.",
+        "The source override is saved and removed while the worker runs. The actual mounted graph stays unchanged; activation of a new unqualified provider source is intentionally not attempted.",
+        "No browser was exercised in this runtime proof; corresponding public browser paths have separate receipts.",
+        "A single finite actual-worker run establishes these effects, not reliability statistics.",
+        "Browser and runtime results are separate, source-bound witnesses; this is not one end-to-end browser/worker run or universal variant acceptance."
+      ]
+    },
+    {
+      "id": "functional-normal-worker-boundaries.privacy.file-policy",
+      "workflow": "privacy.file-policy",
+      "expectedIndices": [
+        1
+      ],
+      "status": "passed-in-context",
+      "scenario": "normal-worker-control-boundaries",
+      "variants": [
+        "runtime-public-action"
+      ],
+      "context": "actual-normal-worker-owned-DTU-local-deterministic-provider",
+      "sourceCommit": "b4e595b71cf1286fb61adad7266372940623935b",
+      "appliedCommits": [
+        "a5292abc89bd7316089fa81b23e66333fdce54b7",
+        "08b70668bb14cfccdec3565d8ce1186ef80c751a"
+      ],
+      "receiptCommit": "70b4896f7",
+      "receiptSha256": "d104fb8b3438303f3187340214497c7400617d6c21a2b0b57c81354ec0181e73",
+      "observation": "Saved file restriction leaves the active worker grants unchanged; after explicit Stop and worker reopen, the actual filesystem writer rejects the denied path with file_source_access/effect:none and no file appears.",
+      "complementaryBrowserClaims": [
+        "functional-22b.standard-ux-defaults-file-policy.570"
+      ],
+      "limits": [
+        "Local deterministic provider is held until cancelled; this is not live-provider acceptance.",
+        "The source override is saved and removed while the worker runs. The actual mounted graph stays unchanged; activation of a new unqualified provider source is intentionally not attempted.",
+        "No browser was exercised in this runtime proof; corresponding public browser paths have separate receipts.",
+        "A single finite actual-worker run establishes these effects, not reliability statistics.",
+        "Browser and runtime results are separate, source-bound witnesses; this is not one end-to-end browser/worker run or universal variant acceptance."
+      ]
+    },
+    {
+      "id": "functional-normal-worker-boundaries.connections.default-model",
+      "workflow": "connections.default-model",
+      "expectedIndices": [
+        1
+      ],
+      "status": "passed-in-context",
+      "scenario": "normal-worker-control-boundaries",
+      "variants": [
+        "runtime-public-action"
+      ],
+      "context": "actual-normal-worker-owned-DTU-local-deterministic-provider",
+      "sourceCommit": "b4e595b71cf1286fb61adad7266372940623935b",
+      "appliedCommits": [
+        "a5292abc89bd7316089fa81b23e66333fdce54b7",
+        "08b70668bb14cfccdec3565d8ce1186ef80c751a"
+      ],
+      "receiptCommit": "70b4896f7",
+      "receiptSha256": "d104fb8b3438303f3187340214497c7400617d6c21a2b0b57c81354ec0181e73",
+      "observation": "Public default-model save and restore leave the same active worker PID and mounted selection unchanged; pending state is recorded.",
+      "complementaryBrowserClaims": [
+        "functional-22b.standard-ux-defaults-file-policy.568"
+      ],
+      "limits": [
+        "Local deterministic provider is held until cancelled; this is not live-provider acceptance.",
+        "The source override is saved and removed while the worker runs. The actual mounted graph stays unchanged; activation of a new unqualified provider source is intentionally not attempted.",
+        "No browser was exercised in this runtime proof; corresponding public browser paths have separate receipts.",
+        "A single finite actual-worker run establishes these effects, not reliability statistics.",
+        "Browser and runtime results are separate, source-bound witnesses; this is not one end-to-end browser/worker run or universal variant acceptance."
+      ]
+    },
+    {
+      "id": "functional-normal-worker-boundaries.configuration.sources",
+      "workflow": "configuration.sources",
+      "expectedIndices": [
+        2
+      ],
+      "status": "passed-in-context",
+      "scenario": "normal-worker-control-boundaries",
+      "variants": [
+        "runtime-public-action"
+      ],
+      "context": "actual-normal-worker-owned-DTU-local-deterministic-provider",
+      "sourceCommit": "b4e595b71cf1286fb61adad7266372940623935b",
+      "appliedCommits": [
+        "a5292abc89bd7316089fa81b23e66333fdce54b7",
+        "08b70668bb14cfccdec3565d8ce1186ef80c751a"
+      ],
+      "receiptCommit": "70b4896f7",
+      "receiptSha256": "d104fb8b3438303f3187340214497c7400617d6c21a2b0b57c81354ec0181e73",
+      "observation": "Source override save and removal leave the same active worker PID and mounted graph unchanged; no activation of a newly unqualified source is claimed.",
+      "complementaryBrowserClaims": [
+        "functional-25g.standard-ux-workspace-configuration.591"
+      ],
+      "limits": [
+        "Local deterministic provider is held until cancelled; this is not live-provider acceptance.",
+        "The source override is saved and removed while the worker runs. The actual mounted graph stays unchanged; activation of a new unqualified provider source is intentionally not attempted.",
+        "No browser was exercised in this runtime proof; corresponding public browser paths have separate receipts.",
+        "A single finite actual-worker run establishes these effects, not reliability statistics.",
+        "Browser and runtime results are separate, source-bound witnesses; this is not one end-to-end browser/worker run or universal variant acceptance."
+      ]
+    }
+  ],
+  "remainingRequiredWork": [
+    "Finish canonical recipe implementation and unchanged exact-candidate acceptance.",
+    "Reconcile final integrated preview/source/PR identity and required source-specific validations."
+  ],
+  "limits": [
+    "External account/device/platform acceptance remains unqualified.",
+    "No count implies all original requested work complete.",
+    "Source save/removal while active is qualified; newly unqualified source activation is not."
+  ]
+}

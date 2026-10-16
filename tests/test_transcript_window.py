@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 
@@ -51,6 +52,60 @@ def test_cursor_rejects_other_host_owner_and_source_change(tmp_path):
     with path.open('ab') as stream:
         stream.write(b'{"role":"user","content":"new"}\n')
     assert reader.read_window(tmp_path, OWNER, before=token)['reason'] == 'source_changed'
+
+
+def test_restore_cursor_replays_current_page_not_preceding_page(tmp_path):
+    values = [row(str(i)) for i in range(230)]
+    write(tmp_path, values)
+    reader = TranscriptWindowReader()
+    before = None
+    for expected in (values[-100:], values[30:130], values[:30]):
+        page = reader.read_window(tmp_path, OWNER, before=before)
+        window = page['messageWindow']
+        restored = reader.read_window(tmp_path, OWNER, before=window['restoreCursor'])
+        assert [item['value'] for item in restored['rows']] == expected
+        assert restored == page
+        before = window['before']
+    assert before is None
+
+
+def test_restore_cursor_rejects_tamper_owner_restart_and_source_changes(tmp_path):
+    path = write(tmp_path, [row(str(i)) for i in range(101)])
+    reader = TranscriptWindowReader()
+    token = reader.read_window(tmp_path, OWNER)['messageWindow']['restoreCursor']
+    assert len(token) <= 4096
+    raw = bytearray(base64.urlsafe_b64decode(token + '=' * (-len(token) % 4)))
+    raw[0] ^= 1
+    forged = base64.urlsafe_b64encode(raw).decode().rstrip('=')
+    assert reader.read_window(tmp_path, OWNER, before=forged)['reason'] == 'invalid_cursor'
+    assert reader.read_window(tmp_path, {**OWNER, 'project': 'other'}, before=token)['reason'] == 'source_changed'
+    assert TranscriptWindowReader().read_window(tmp_path, OWNER, before=token)['reason'] == 'invalid_cursor'
+    with path.open('ab') as stream:
+        stream.write(json.dumps(row('new')).encode() + b'\n')
+    assert reader.read_window(tmp_path, OWNER, before=token)['reason'] == 'source_changed'
+
+
+def test_restore_cursor_is_one_bounded_read_even_behind_later_pages(tmp_path, monkeypatch):
+    # The malformed unread prefix must not be indexed or parsed for restoration.
+    values = [row(str(i) + 'x' * 1000) for i in range(1000)]
+    path = write(tmp_path, values)
+    path.write_bytes(b'not-json\n' + path.read_bytes())
+    reader = TranscriptWindowReader()
+    page = reader.read_window(tmp_path, OWNER)
+    for _ in range(5):
+        page = reader.read_window(tmp_path, OWNER, before=page['messageWindow']['before'])
+    calls = []
+    original = reader._read
+    def bounded(*args):
+        result = original(*args)
+        calls.append(args[-1]['read'])
+        return result
+    monkeypatch.setattr(reader, '_read', bounded)
+    restored = reader.read_window(tmp_path, OWNER, before=page['messageWindow']['restoreCursor'])
+    assert restored == page
+    assert len(calls) == 1 and calls[0] < 3 * module.BLOCK
+    assert len(restored['rows']) == 100
+    assert restored['messageWindow']['total'] is None
 
 
 def test_append_intent_uses_backup_and_never_uncommitted_primary(tmp_path):

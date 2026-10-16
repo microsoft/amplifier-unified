@@ -1,5 +1,5 @@
 """Disposable heavy conversation browser fixture. No model providers or user data."""
-import asyncio, copy, json, os, signal, sys, tempfile, time
+import asyncio, copy, hashlib, json, os, signal, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(sys.argv[1]).resolve()
@@ -17,7 +17,7 @@ async def fixture_routing(self, workspace): pass
 SetupManager.ensure_routing_catalog = fixture_routing
 
 class Runtime:
-    def __init__(self): self.starts=0; self.sends=0
+    def __init__(self): self.starts=0; self.sends=0; self.stops=[]; self.worker_stops=[]; self.controls=[]
     async def start(self, session, emit):
         self.starts+=1
         await emit('runtime.status', {'sessionId':session['id'], 'status':'ready'})
@@ -25,8 +25,13 @@ class Runtime:
         self.sends+=1
         await emit('assistant.message', {'sessionId':session['id'], 'text':'Synthetic reply.', 'inputId':input_id})
         await emit('runtime.status', {'sessionId':session['id'], 'status':'idle'})
-    async def control(self, *args): return {}
-    async def stop(self, *args, reason="stopped"): pass
+    async def control(self, sid, operation, args):
+        self.controls.append({'sessionId':sid,'operation':operation,'args':args})
+        if operation=='native.status':
+            return {'supported':False,'compactAvailable':False,'reason':'This fixture model has no native context support.'}
+        return {}
+    async def stop(self, sid, *, reason="stopped"): self.stops.append(sid)
+    async def stop_worker(self, sid, worker_id): self.worker_stops.append([sid, worker_id])
     async def close(self): pass
 
 async def main():
@@ -46,7 +51,8 @@ async def main():
             service.history.task.cancel()
             await asyncio.gather(service.history.task, return_exceptions=True)
             service.history.task = None
-        await service.event_log_view.close()
+        # Keep the selected-chat Work reader active. Its current-window receipt
+        # is part of the browser contract, including after a turn becomes idle.
         await service.dispatch('session.create', {'title':'Alpha conversation','workspace':str(alpha)})
         aid=service.state['selectedSessionId']
         await service.dispatch('session.create', {'title':'Beta conversation','workspace':str(beta)})
@@ -78,6 +84,11 @@ async def main():
             def lifecycle(self,event):self.observer.lifecycle(event)
         async def control(request):
             args=await request.json(); op=args.get('op')
+            if op == 'inspect-work-source':
+                # A read-only oracle: do not publish a frame or rebuild usage.
+                async with service.lock:
+                    return web.json_response({'sessions':[{key:copy.deepcopy(row.get(key)) for key in ('id','messages','execution')} for row in service._state['sessions']],
+                        'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends})
             if op == 'agent-bridge':
                 try:
                     result = await service.app_bridge(args['operation'], args.get('args', {}), args['sessionId'])
@@ -97,15 +108,31 @@ async def main():
                     'working_dir':str(alpha),'name':'Live saved history','bundle':'bundle:anchors'}))
                 (native/'transcript.jsonl').write_text(''.join(json.dumps({'role':'user' if i%2==0 else 'assistant',
                     'content':f'Saved message {i}\n\n'+('A retained paragraph. '*25)})+'\n' for i in range(305)))
+                native_receipt = {name: hashlib.sha256((native/name).read_bytes()).hexdigest()
+                                  for name in ('metadata.json', 'transcript.jsonl')}
+                service.fixture_native_receipt = native_receipt
+                service.fixture_native_path = native
+                if args.get('unreadable'):
+                    (native/'transcript.jsonl').chmod(0)
                 await service.history.refresh()
                 # Refresh discovers dormant entries in the directory. Only the
                 # explicitly requested chat joins the resident working set.
-                row=service._session('paging-fixture')
-                await service.history.load(row['id'])
+                row=service._session('paging-fixture', hydrate=False)
+                if not args.get('unreadable'):
+                    await service.history.load(row['id'])
                 row.update(status='ready',preparation={'status':'active'})
                 service.state.update(selectedSessionId=row['id'],selectedWorkspaceId=row['workspaceId'])
+            elif op=='native-readable':
+                native=service.fixture_native_path
+                (native/'transcript.jsonl').chmod(0o600)
+                return web.json_response({'original': service.fixture_native_receipt,
+                    'current': {name: hashlib.sha256((native/name).read_bytes()).hexdigest()
+                                for name in ('metadata.json', 'transcript.jsonl')}})
             elif op=='live-response':
                 row=service._session(args['id'])
+                # Match actual send admission: live callbacks belong to the
+                # active web conversation, not the passive native-file reader.
+                row['historyManaged']=False
                 await service.on_runtime_event('runtime.status',{'sessionId':row['id'],'status':'working'})
                 await service.on_runtime_event('assistant.message',{'sessionId':row['id'],'text':'A new live response.'})
                 await service.on_runtime_event('assistant.delta',{'sessionId':row['id'],'text':'Still writing...'})
@@ -149,7 +176,6 @@ async def main():
                     'event':'generation.failed','generation_id':service._session(aid)['fixtureGeneration'],'input_ids':['interim-input']})
                 await service.on_runtime_event('runtime.error',{'sessionId':aid,'error':'Synthetic interruption.'})
             elif op=='interim-media':
-                import hashlib
                 from inline_media_samples import animation
                 data,_=animation();path=alpha/'interim.gif';path.write_bytes(data)
                 message=service._session(aid)['messages'][1]
@@ -171,19 +197,47 @@ async def main():
                     row.update(id=identity,title=f'Additional conversation {index}',status='idle',nativeIdentity=None,runtimeSessionId=None,
                         messages=[{'id':f'{identity}-m-{i}','role':'assistant','text':'Retained text. '*350,'createdAt':1700000000+i} for i in range(count)],execution={'turns':[],'nodes':[]})
                     service.state['sessions'].append(row)
+            elif op == 'historical-delegate-record':
+                # Historical UI uses a bounded canonical root-event page, not
+                # the in-memory live tree fabricated by the earlier scenario.
+                from amplifier_web.event_log_view import event_path
+                from amplifier_web.work_windows import WorkWindows
+                row = service._session(aid)
+                event_path(row, aid).unlink(missing_ok=True)
+                log_hook(aid, 'tool:post', {'tool_call_id': 'delegate-one',
+                    'tool_name': 'delegate', 'result': {'success': True,
+                    'output': {'response': 'The exact delivered async answer.'}}}, 1791409140)
+                log_hook(aid, 'llm:response', {'model': 'historical-model',
+                    'usage': {'total_tokens': 999999, 'cost_usd': 999}}, 1791409141)
+                await service.event_log_view.windows.close()
+                service.event_log_view.windows = WorkWindows(service)
+                await service.event_log_view.windows.read(aid)
             elif op in {'canonical-work','canonical-append'}:
                 from amplifier_web.event_log_view import event_path
                 row=service._session(aid);base=1700000000
-                def tool(call,name,arguments,result,start,end):
+                async def observed(kind, identity, start, end, **fields):
+                    # Model the host's current observations as well as the
+                    # native log. Historical-only events intentionally use a
+                    # separate bounded window and have no authoritative turns.
+                    await service.on_runtime_event('execution.event', {
+                        'id':identity,'kind':kind,'sessionId':aid,'rootSessionId':aid,
+                        'turnId':'canonical','producerId':'fixture-live','revision':2,
+                        'liveObservation':True,'phase':'completed','startedAt':base+start,
+                        'endedAt':base+end,**fields})
+                async def tool(call,name,arguments,result,start,end):
                     log_hook(aid,'tool:pre',{'tool_call_id':call,'tool_name':name,'tool_input':arguments},base+start)
                     log_hook(aid,'tool:post',{'tool_call_id':call,'tool_name':name,'result':result},base+end)
+                    await observed('tool',f'tool:{aid}:{call}',start,end,toolCallId=call,label=name)
                 if op=='canonical-work':
                     event_path(row,aid).unlink(missing_ok=True)
                     row.update(status='idle',workers=[],messages=[
                         {'id':'before','role':'user','text':'Review the change','createdAt':base},
                         {'id':'interim','role':'assistant','text':'The first check passed. I am inspecting the remaining files.','createdAt':base+10},
                         {'id':'final','role':'assistant','text':'The review is complete.','createdAt':base+20}],execution={'nodes':[],'turns':[]})
-                    tool('brief','bash',{'command':'git diff --check'},{'success':True,'output':{'stdout':'','stderr':'','returncode':0}},1,2)
+                    from amplifier_web.execution import ensure_turn
+                    ensure_turn(row,'canonical')
+                    row['execution']['turns'][0].update(startedAt=base,anchorMessageId='before',phase='completed')
+                    await tool('brief','bash',{'command':'git diff --check'},{'success':True,'output':{'stdout':'','stderr':'','returncode':0}},1,2)
                     raw={'model':'fixture','instructions':'Owner-recorded instructions',
                          'input':[{'role':'user','content':'Recorded message '+str(i)+' '+('content '*100)} for i in range(100)],
                          'tools':[{'name':'read_file'},{'name':'bash'}], 'reasoning':{'effort':'high'}, 'max_output_tokens':4096}
@@ -197,16 +251,22 @@ async def main():
                     log_hook(aid,'llm:request',{'request_id':'first','provider':'test','model':'fixture','message_count':100,'has_instructions':True,'raw':preview,'provider_payloads':{'raw':saved},'request_capture':{'redacted':True,'truncated':limited}},base+3)
                     log_hook(aid,'llm:response',{'request_id':'first','provider':'test','model':'fixture','duration_ms':1000,'raw_response':{'output':[{'type':'message','content':[{'type':'output_text','text':'Recorded response content'}]}],'status':'completed'},'usage':{'input_tokens':10,'output_tokens':2,'cost_usd':.001}},base+4)
                     log_hook(aid,'llm:response',{'kind':'llm','id':'model-first','sessionId':aid,'model':'fixture','provider':'test','startedAt':base+3,'endedAt':base+4,'phase':'completed','usage':{'inputTokens':10,'outputTokens':2,'totalTokens':12,'costUsd':.001,'costType':'reported'}},base+4)
+                    await observed('llm','model-first',3,4,label='Model call',provider='test',model='fixture',usage={'inputTokens':10,'outputTokens':2,'totalTokens':12,'costUsd':.001,'costType':'reported'})
                     for count,start in [(15,11),(16,13)]:
-                        tool('read'+str(count),'read_file',{'file_path':str(count)+'.txt'},
+                        await tool('read'+str(count),'read_file',{'file_path':str(count)+'.txt'},
                              {'success':True,'output':{'content':'\n'.join('Line '+str(i) for i in range(1,count+1))}},start,start+1)
-                    tool('owned','app_control',{'action':'inspect','authorization':'Bearer owner-recorded-value'},
+                    await tool('owned','app_control',{'action':'inspect','authorization':'Bearer owner-recorded-value'},
                          {'success':True,'output':{'value':'The full result is already here'}},15,16)
                     log_hook(aid,'llm:response',{'request_id':'second','model':'fixture','duration_ms':1000,'usage':{'input_tokens':20,'output_tokens':3,'cost_usd':.002}},base+18)
+                    log_hook(aid,'llm:response',{'kind':'llm','id':'model-second','sessionId':aid,'model':'fixture','startedAt':base+17,'endedAt':base+18,'phase':'completed','usage':{'inputTokens':20,'outputTokens':3,'totalTokens':23,'costUsd':.002,'costType':'reported'}},base+18)
+                    await observed('llm','model-second',17,18,label='Model call',model='fixture',usage={'inputTokens':20,'outputTokens':3,'totalTokens':23,'costUsd':.002,'costType':'reported'})
                 else:
-                    tool('after-final','bash',{'command':'git status --short'},{'success':True,'output':'Clean'},21,22)
+                    await tool('after-final','bash',{'command':'git status --short'},{'success':True,'output':'Clean'},21,22)
+                    log_hook(aid,'provider:request',{'kind':'llm','id':'model-small','sessionId':aid,'model':'fixture','startedAt':base+23,'phase':'running'},base+23)
                     log_hook(aid,'llm:request',{'request_id':'small','model':'fixture','raw':{'model':'fixture','input':'Small recorded request'}},base+23)
                     log_hook(aid,'llm:response',{'request_id':'small','model':'fixture','raw':'Small recorded response… [truncated]', 'request_capture':{'redacted':True,'truncated':True}},base+24)
+                    log_hook(aid,'llm:response',{'kind':'llm','id':'model-small','sessionId':aid,'model':'fixture','startedAt':base+23,'endedAt':base+24,'phase':'completed'},base+24)
+                    await observed('llm','model-small',23,24,label='Model call',model='fixture')
                 await service.event_log_view.refresh(aid)
             elif op=='chat-plan':
                 row=service._session(aid)
@@ -232,7 +292,14 @@ async def main():
                 events.hook(aid,'tool:post',{'tool_call_id':'inspect-tool','result':{'success':True,'output':'Result line.\n'*2000+'RESULT-END','url':'https://example.com/artifact'}})
                 for event in emitted:
                     kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
-                await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'running','startedAt':now-2})
+                # Match ExecutionEvents.publish: current observations remain
+                # live evidence when the native Work window is reconciled.
+                model={'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,
+                    'turnId':'inspect','label':'Model call','phase':'running','startedAt':now-2,
+                    'producerId':'inspection-fixture','revision':1,'liveObservation':True}
+                service.fixture_inspection_model=model
+                log_hook(aid,'provider:request',model,now-2)
+                await service.on_runtime_event('execution.event',model)
             elif op=='inspection-actions':
                 from amplifier_web.execution_events import ExecutionEvents
                 from amplifier_web.runtime import normalize_event
@@ -269,7 +336,10 @@ async def main():
                 await service.on_runtime_event('execution.event',{'id':'legacy','kind':'tool','turnId':'inspect','label':'legacy.tool','phase':'completed','summary':'Tool completed. Expand any delegated actions below for their progress and results.'})
             elif op=='inspection-finish':
                 now=time.time()
-                await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'completed','endedAt':now,'usage':{'inputTokens':100,'outputTokens':20,'totalTokens':120,'costUsd':.004,'costType':'reported'}})
+                model={**service.fixture_inspection_model,'revision':2,'phase':'completed','endedAt':now,
+                    'usage':{'inputTokens':100,'outputTokens':20,'totalTokens':120,'costUsd':.004,'costType':'reported'}}
+                log_hook(aid,'llm:response',model,now)
+                await service.on_runtime_event('execution.event',model)
                 await service.on_runtime_event('runtime.status',{'sessionId':aid,'status':'idle'})
             elif op=='many':
                 template=copy.deepcopy(service._session(aid)); now=time.time()
@@ -281,6 +351,7 @@ async def main():
             service._publish()
             return web.json_response({'alpha':aid,'beta':bid,'revision':service.state['revision'], 'state':service.get_state(),
                 'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends,
+                'runtimeStops':service.runtime.stops,'workerStops':service.runtime.worker_stops,'runtimeControls':service.runtime.controls,
                 'retainedSessions':len(service.state['sessions']),
                 'retainedMessages':sum(len(row.get('messages',[])) for row in service.state['sessions']),
                 'canonicalBytes':len(json.dumps(service.state['sessions']).encode())})
@@ -295,4 +366,5 @@ async def main():
         for sig in [signal.SIGTERM,signal.SIGINT]:asyncio.get_running_loop().add_signal_handler(sig,stopped.set)
         await stopped.wait();await runner.cleanup()
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())

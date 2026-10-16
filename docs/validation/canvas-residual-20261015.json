@@ -1,0 +1,39 @@
+{
+  "sourceBase": "e27593c670bd977f74202d8832791fda11302856",
+  "scriptSha256": "9ad219e2db553b250dfa795cc93cc39858e932268359d5ebbcdb3bdcd90b282c",
+  "productSha256": "0beb8d645550eddc0ecd15f8bc6c0d013f72c592131c580142b577c9690643c5",
+  "baseline": {
+    "build": "aaace78a7cdfbe98",
+    "result": "evidence/red-adapter/results.json",
+    "failure": "After successful empty Inspect, no visible empty state",
+    "seconds": 8.001
+  },
+  "candidate": {
+    "build": {
+      "version": "0.20.165",
+      "id": "f2bb5e139ee163e6"
+    },
+    "result": "evidence/green/results.json",
+    "seconds": 3.813,
+    "cleanup": {
+      "remaining": [],
+      "terminated": 0
+    }
+  },
+  "environment": "Own isolated source/state under /opt/unified-dev/checks/canvas-residual-20261015; PID/mount-proc namespace isolates cleanup from concurrent tests; synthetic runtime; actual public UI and canonical local effects.",
+  "checks": [
+    "Read failure preserves output form and does not claim empty success",
+    "Successful empty list explicitly names linked/all filter",
+    "Creating reference removes empty status; zero browser reference requests",
+    "Real theme approval applies, then its HTTP acknowledgement is replaced with explicit503 fixture message; canonical applied state and rendered accent remain correct",
+    "Exactly one resolve submission across supported revision/restore/close/reopen/reload",
+    "Draft and synthetic runtime sent list unchanged"
+  ],
+  "limits": [
+    "No actual generic unknown external-effect capability: CanvasApp HOST_ACTIONS admits only theme.preview/apply/revert.",
+    "Injected503 error wording is fixture data; does not qualify generic network-failure copy or arbitrary exactly-once external effects.",
+    "No server-side network instrumentation; external browser fetch count is exact and bounded.",
+    "Native dirty transition contract uses immediate refusal/recovery, not a Cancel confirmation dialog; do not claim nonexistent cancellation focus flow."
+  ],
+  "retainedSetupFailure": "evidence/red failed before browser startup because copied adapter still referenced retired dependency path; corrected to persistent owned dependency path before actual red. No product attribution."
+}

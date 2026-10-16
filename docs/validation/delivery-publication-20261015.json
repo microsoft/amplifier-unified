@@ -1,0 +1,277 @@
+{
+  "schemaVersion": 1,
+  "before": {
+    "sourceCommit": "0701c94cb5c9eae983b87005ca8f9b08a70d1184",
+    "build": {
+      "version": "0.20.165",
+      "id": "24278a46672a303b"
+    },
+    "actualWorkers": 1,
+    "warmAckMs": {
+      "count": 3,
+      "p50": 654.5997370000005,
+      "p95": 671.2288349999999,
+      "max": 671.2288349999999
+    },
+    "warmSendSamples": [
+      {
+        "ackMs": 671.2288349999999,
+        "serverTiming": "app;dur=497.72",
+        "firstVisibleMs": 902.7887410000003,
+        "gestureToRequestMs": 79.841064453125,
+        "requestToResponseHeadersMs": 564.237,
+        "requestToBodyMs": 565.295
+      },
+      {
+        "ackMs": 631.6376900000014,
+        "serverTiming": "app;dur=474.96",
+        "firstVisibleMs": 769.0990760000004,
+        "gestureToRequestMs": 87.93994140625,
+        "requestToResponseHeadersMs": 514.418,
+        "requestToBodyMs": 517.311
+      },
+      {
+        "ackMs": 654.5997370000005,
+        "serverTiming": "app;dur=518.32",
+        "firstVisibleMs": 857.6818070000008,
+        "gestureToRequestMs": 96.25390625,
+        "requestToResponseHeadersMs": 545.909,
+        "requestToBodyMs": 547.604
+      }
+    ],
+    "workspace": [
+      {
+        "metric": "first workspace demand",
+        "observedMs": 457.2399880000012,
+        "desiredMs": 1000,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "metric": "exact chat filter",
+        "observedMs": 273.94481000000087,
+        "desiredMs": 500,
+        "rows": 1,
+        "total": 1
+      },
+      {
+        "metric": "clear filter",
+        "observedMs": 349.8362309999993,
+        "desiredMs": 500,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "metric": "explicit next page",
+        "observedMs": 390.67858999999953,
+        "desiredMs": 1000,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "metric": "explicit previous page",
+        "observedMs": 405.7075420000001,
+        "desiredMs": 1000,
+        "rows": 40,
+        "total": 274
+      }
+    ],
+    "residentOwnersBefore": 16,
+    "residentOwnersAfter": 16,
+    "measuredOperationDeltas": {
+      "browser.snapshot": {
+        "count": 121,
+        "totalMs": 3326.23
+      },
+      "state.publish": {
+        "count": 74,
+        "totalMs": 3944.19
+      },
+      "state.save": {
+        "count": 77,
+        "totalMs": 1475.73
+      },
+      "shell.resources.pages": {
+        "count": 400,
+        "totalMs": 1260.52
+      }
+    },
+    "fixedSettleSeconds": 15,
+    "isolatedMountAndApplicationStartupSeconds": 115.31338858604431,
+    "runtimePid": 231133,
+    "receipt": "boundedmeta32-0.json",
+    "receiptSha256": "168c6f1ee7b6bfd071b0319d054ac06834e62f1f8fbd85ccbc76dc2115c86530",
+    "phaseReceiptSha256": "45ce4c68cff93bab47f22c9a94ff8a9da2e62fa62678af97339b625c39ca2272"
+  },
+  "candidate": {
+    "sourceCommit": "36ba434c475bc2f10c23fd0f9a7258bac27d0fc8",
+    "build": {
+      "version": "0.20.165",
+      "id": "24278a46672a303b"
+    },
+    "actualWorkers": 1,
+    "warmAckMs": {
+      "count": 3,
+      "p50": 603.652282,
+      "p95": 611.8672540000007,
+      "max": 611.8672540000007
+    },
+    "warmSendSamples": [
+      {
+        "ackMs": 603.652282,
+        "serverTiming": "app;dur=445.88",
+        "firstVisibleMs": 799.960951,
+        "gestureToRequestMs": 73.4619140625,
+        "requestToResponseHeadersMs": 515.913,
+        "requestToBodyMs": 517.71
+      },
+      {
+        "ackMs": 611.8672540000007,
+        "serverTiming": "app;dur=453.21",
+        "firstVisibleMs": 790.8237289999997,
+        "gestureToRequestMs": 91.330810546875,
+        "requestToResponseHeadersMs": 495.501,
+        "requestToBodyMs": 497.525
+      },
+      {
+        "ackMs": 554.3834939999997,
+        "serverTiming": "app;dur=421.24",
+        "firstVisibleMs": 745.7694350000002,
+        "gestureToRequestMs": 69.05810546875,
+        "requestToResponseHeadersMs": 452.809,
+        "requestToBodyMs": 454.293
+      }
+    ],
+    "workspace": [
+      {
+        "metric": "first workspace demand",
+        "observedMs": 408.8577270000005,
+        "desiredMs": 1000,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "metric": "exact chat filter",
+        "observedMs": 275.11525999999867,
+        "desiredMs": 500,
+        "rows": 1,
+        "total": 1
+      },
+      {
+        "metric": "clear filter",
+        "observedMs": 324.74864399999933,
+        "desiredMs": 500,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "metric": "explicit next page",
+        "observedMs": 398.79521399999976,
+        "desiredMs": 1000,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "metric": "explicit previous page",
+        "observedMs": 321.620594,
+        "desiredMs": 1000,
+        "rows": 40,
+        "total": 274
+      }
+    ],
+    "residentOwnersBefore": 16,
+    "residentOwnersAfter": 16,
+    "measuredOperationDeltas": {
+      "browser.snapshot": {
+        "count": 116,
+        "totalMs": 3021.05
+      },
+      "state.publish": {
+        "count": 74,
+        "totalMs": 3761.81
+      },
+      "state.save": {
+        "count": 77,
+        "totalMs": 1382.52
+      },
+      "shell.resources.pages": {
+        "count": 323,
+        "totalMs": 1080.97
+      }
+    },
+    "fixedSettleSeconds": 15,
+    "isolatedMountAndApplicationStartupSeconds": 115.39982533454895,
+    "runtimePid": 232955,
+    "receipt": "deliveryhint32-0.json",
+    "receiptSha256": "a00358471f5cfed0786a8b618fa82dbddf7195245af741f8b77ad360b72cafcc",
+    "phaseReceiptSha256": "6fdbb2469afd07845f52fcaeedc91ba039cd720efe954fcdd7e3deb42c9290e8"
+  },
+  "desiredWarmP95Ms": 300,
+  "warmWithinDesired": false,
+  "warmP95DeltaMs": -59.361580999999205,
+  "warmP95DeltaPercent": -8.843717359073112,
+  "warmRegressionEarlyWarning": false,
+  "comparisonRule": "Warn only if comparable p95 rises both >20% and >100ms; three samples require confirmation. Workspace gestures have one observation each and no p95 claim.",
+  "limitations": [
+    "One worker, three warm sends. The six/twelve-worker measurements remain bound to the previous 0701 source.",
+    "Same 32-shard copied fixture, identical built UI, fresh service and browser, fixed 15s after observed readiness. Derived state and filesystem caches persist; synthetic conversation history accumulates.",
+    "4532 read-only mount setup is recorded separately; it is not a production application startup benchmark.",
+    "Deterministic local 250ms provider and real isolated worker process; this is not live-provider acceptance.",
+    "Capture is verified per file but not globally atomic; copied workloads are never executed."
+  ],
+  "dtu": "dtu-unified-codex-dev-20261014",
+  "productChange": {
+    "commit": "36ba434c475bc2f10c23fd0f9a7258bac27d0fc8",
+    "description": "Exact runtime.delivery receipts request detail-only publication. Existing shared-fact guards and pending-progress union widen publication when needed; every affected owner remains included."
+  },
+  "diagnosis": {
+    "profile": "warmsend0701-profile.json",
+    "sha256": "8a06fecbe152d8421200a77958c8ef1a2ee71e1d23c625f7673e5da1007d39d4",
+    "observation": "The retained-worker profile showed repeated browser snapshot and publication work on the main thread. The bounded candidate reduces unchanged navigation projections during exact delivery receipts. Profile timings are instrumented and are not used as comparison baselines."
+  },
+  "focusedChecks": {
+    "beforeFix": {
+      "passed": 6,
+      "failed": 2,
+      "seconds": 5.9,
+      "expectedFailures": "Unchanged unrelated client unnecessarily rebuilt for both sending and failed prior delivery states."
+    },
+    "candidateAdjacency": {
+      "passed": 33,
+      "seconds": 38.51,
+      "scope": "Eight new delivery cases, active-client projection cases, and four exact admission/reconciliation/retry/late-acceptance cases."
+    },
+    "finalDeliveryCases": {
+      "passed": 10,
+      "seconds": 7.3,
+      "checks": [
+        "Exact message and command acceptance remains visible and durable",
+        "Failed delivery error and retry code clear on positive acceptance",
+        "Two selected clients both receive the updated receipt",
+        "Private client drafts stay unchanged",
+        "Unchanged unrelated client receives no frame or rebuild",
+        "Current status, peer attention, and pending broad progress widen publication"
+      ]
+    },
+    "incompleteBroadRun": {
+      "passedAsSuite": false,
+      "timeoutSeconds": 100,
+      "observedProgress": "109 passing progress markers with no reported failure before timeout; not counted as a completed pass."
+    },
+    "receipts": [
+      {
+        "name": "delivery-projection-red.log",
+        "sha256": "09ee3ee2556a709ecedf556864e65bb513c63221e6c1b76a98f1cb3621953b60"
+      },
+      {
+        "name": "delivery-projection-green.log",
+        "sha256": "3996cc0bd75cf80f19a988756ca4c96f8012557dd96747fad6e834e15e19f418"
+      },
+      {
+        "name": "delivery-projection-final.log",
+        "sha256": "3fbf62c25eed5c4447739f8b842f98ff12c880e3a7d2082dc6c2fdc7ec297cb0"
+      }
+    ]
+  },
+  "interpretation": "Observed one-worker warm acknowledgment improved by 59ms (8.8%) with fewer navigation page builds. This small sample supports a modest reduction alongside the exact counter-oracles; it does not establish a statistical tail guarantee or satisfy the desired 300ms target."
+}

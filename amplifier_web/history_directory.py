@@ -7,9 +7,11 @@ never start a runtime, acquire a writer, or make eviction a deletion operation.
 from __future__ import annotations
 
 import copy
+from contextvars import ContextVar
 import heapq
 import json
 import sqlite3
+from threading import get_ident
 import uuid
 from pathlib import Path
 
@@ -219,7 +221,34 @@ class HistoryDirectory:
         self._live_values = {}
         self._live_notices = []
         self._live_revision = 0
+        self._encoded_overlay = None
         self._native_revision = None
+        self._read_frame = ContextVar('directory_read_frame', default=None)
+
+    def read_frame(self, project, *args, **kwargs):
+        """Share the live scalar overlay during one synchronous projection.
+
+        This is a call boundary, not a revision cache or an async context. Even
+        an awaitable returned by project leaves the frame before it can yield.
+        The next call observes in-place changes afresh. Native/durable query
+        fences still run normally; only duplicate live-row preparation is saved.
+        Projection callbacks must not mutate existing rows. Admission/list and
+        durable-write boundaries are detected; explicit hydrating reads do not
+        use this scope.
+        """
+        current = self._read_frame.get()
+        if current is not None and current['active'] and current['thread'] == get_ident():
+            return project(*args, **kwargs)
+        frame = {'thread': get_ident(), 'owner': None, 'active': True}
+        token = self._read_frame.set(frame)
+        try:
+            return project(*args, **kwargs)
+        finally:
+            # Tasks created by projection inherit ContextVars. Retire the
+            # shared frame itself before they can run, not only our token.
+            frame['active'] = False
+            frame['owner'] = None
+            self._read_frame.reset(token)
 
     def bind(self, catalog):
         if catalog is None:
@@ -432,6 +461,17 @@ class HistoryDirectory:
     def _sync_live(self, state):
         if self.snapshot:
             return
+        frame = self._read_frame.get()
+        owner = (state.get('sessions'), state.get('attentionRead'), state.get('runtimeControl'))
+        boundary = (len(owner[0] or ()), self.db.total_changes)
+        if frame is not None and frame['active'] and frame['thread'] == get_ident():
+            prior = frame['owner']
+            if (prior is not None and prior[1] == boundary
+                    and all(a is b for a, b in zip(prior[0], owner))):
+                return
+            frame['owner'] = None
+        else:
+            frame = None
         values = {}
         sequence = self.db.execute('SELECT next FROM history_directory_order WHERE id=1').fetchone()[0]
         for row in state.get('sessions', ()):
@@ -441,11 +481,29 @@ class HistoryDirectory:
                 sequence += 1
             record, startup = _scalars(row, state, ordinal)
             values[row['id']] = (*record, startup)
-        if values == self._live_values:
-            return
-        self._live_values = values
-        self._live_notices = [notice for row in state.get('sessions', ()) for notice in notices(row, state)]
-        self._live_revision += 1
+        if values != self._live_values:
+            self._live_values = values
+            self._live_notices = [notice for row in state.get('sessions', ()) for notice in notices(row, state)]
+            self._live_revision += 1
+        if frame is not None:
+            frame['owner'] = (owner, boundary)
+
+    def _overlay_parameters(self):
+        """Encode only a changed admitted overlay, never history or query fences.
+
+        Live preparation replaces both containers on change; snapshot readers
+        also install their own frozen containers. Their scalar rows and notice
+        tuples are never edited after installation. Retain one pair of encodings,
+        not per-page results or mutable application state. Read receipts and
+        native/durable generations remain current on every query.
+        """
+        prior = self._encoded_overlay
+        if prior is None or prior[0] is not self._live_values or prior[1] is not self._live_notices:
+            prior = (self._live_values, self._live_notices,
+                     json.dumps(list(self._live_values.values()), separators=(',', ':')),
+                     json.dumps(self._live_notices, separators=(',', ':')))
+            self._encoded_overlay = prior
+        return prior[2:]
 
     def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None):
         """Return effective rows with optional alias, exact-ID or child scope.
@@ -555,8 +613,7 @@ class HistoryDirectory:
                 f"CASE WHEN {quiet} THEN CASE WHEN ns.unread THEN 'New response' ELSE 'Idle' END ELSE l.base_activity_label END" if name == 'activity_label' else f'l.{name}')
             expressions.append(expression + ' AS ' + name)
         local += ', local_rows AS (SELECT ' + ','.join(expressions) + ' FROM raw_local_rows l LEFT JOIN notice_status ns ON ns.owner=l.id)'
-        parameters = scope_params + [json.dumps(list(self._live_values.values()), separators=(',', ':')),
-                      json.dumps(self._live_notices, separators=(',', ':')),
+        parameters = scope_params + [*self._overlay_parameters(),
                       json.dumps(state.get('attentionRead', {}), separators=(',', ':'))]
         if self._native_path:
             parameters.append(self._native_namespace)

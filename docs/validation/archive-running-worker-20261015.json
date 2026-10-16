@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "scenario": "nav.archive:0 real worker preservation",
+  "source": {
+    "revision": "3a50b226ad1f512587f3c94c4e166a120f85352e",
+    "productFilesMatched": 387,
+    "fileHashesSha256": "c9392ccedab7bb6ce7d0103913053e52f97407ae641d3256dfd0ff6f66924a43",
+    "missingOptionalFiles": [
+      "bundle.yaml",
+      "context/shell-skills.md",
+      "docs/shell/README.md",
+      "docs/shell/appearance-contract.md",
+      "docs/shell/appearances.md",
+      "docs/shell/behavior.md",
+      "docs/shell/components.md",
+      "docs/shell/conversation-surfaces.md",
+      "docs/shell/customization-roadmap.md",
+      "docs/shell/themes.md",
+      "examples/shell-controls/README.md",
+      "examples/shell-controls/index.js",
+      "examples/shell-controls/manifest.json",
+      "examples/shell-navigator/index.js",
+      "examples/shell-navigator/manifest.json",
+      "examples/shell-reader/index.js",
+      "examples/shell-reader/manifest.json",
+      "skills/amplifier-shell/SKILL.md",
+      "skills/amplifier-shell/authoring.md",
+      "skills/amplifier-shell/conversation-surfaces.md",
+      "skills/amplifier-shell/presentation.md",
+      "skills/coordinate-work/SKILL.md"
+    ],
+    "scope": "All shipped Python packages and behavior files used by the controlled Work runtime match this revision. Optional Unified-shell bundle assets were absent in the source snapshot and excluded from this synthetic configuration; no whole-install/package acceptance is claimed."
+  },
+  "runtime": {
+    "manager": "normal RuntimeManager; no command override",
+    "generation": "ded15b45a24c002963871d4691d44bac",
+    "qualifiedProject": "q-d110746e5a0c696e659c611fc14845ed",
+    "provider": "deterministic local held completion",
+    "externalInference": false,
+    "localProviderCalls": 1,
+    "network": "private network namespace with loopback only",
+    "input": "one explicit local test input",
+    "history": "synthetic only"
+  },
+  "route": {
+    "transport": "real authenticated HTTP /api/actions",
+    "actions": [
+      "session.select",
+      "conversation.send",
+      "session.archive",
+      "conversation.stop",
+      "session.restore"
+    ],
+    "entryScope": "Public server action; existing independent browser evidence proves menu entry and private draft preservation."
+  },
+  "outcomes": {
+    "archiveAccepted": true,
+    "sameWorkerContinues": true,
+    "workerStatusAfterArchive": "working",
+    "committedMessagesUnchanged": true,
+    "workspaceSentinelsUnchanged": true,
+    "separateExplicitStopRecorded": true,
+    "interruptionAndHistorySurviveReopen": true,
+    "restoreIsOrganizationOnly": true,
+    "noAutomaticWorkerOrInputReplay": true,
+    "workersRemaining": 0
+  },
+  "workspaceWitnesses": {
+    "keep.txt": {
+      "sha256": "e5eabb1507730428b4d6e754d418142a6a1a82a4e788f6a18bf4b370e9a08e99",
+      "bytes": 43
+    },
+    "nested/keep.bin": {
+      "sha256": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+      "bytes": 256
+    }
+  },
+  "priorFailures": [
+    {
+      "attempt": 1,
+      "cause": "Fixture source transfer initially omitted sibling Python packages; no application action executed."
+    },
+    {
+      "attempt": 2,
+      "cause": "Fixture mounted source-binding lock metadata read-only; startup rejected before input execution."
+    },
+    {
+      "attempt": 3,
+      "cause": "Fixture omitted immutable source-store mount; offline namespace rejected attempted fetch before input execution."
+    }
+  ],
+  "passed": true,
+  "limits": [
+    "One actual running synthetic Work worker, not twelve concurrent workers.",
+    "No live account/provider inference, browser performance, or release-package claim.",
+    "Archive deliberately preserves running work; explicit Stop is a separate operation."
+  ]
+}

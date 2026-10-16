@@ -46,11 +46,17 @@ try{
  });
  await page.goto(vite.resolvedUrls.local[0]);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
- await composer.waitFor();await page.locator('[data-message-id="message-79"] strong').waitFor();
+ await composer.waitFor();await page.locator('[data-message-id="message-119"] strong').waitFor();
+ // The latest page is bounded; the older-page positive control below must
+ // load rows which were not already present at startup.
+ const initialMessages=await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).messages.map(row=>row.id));
+ assert.equal(initialMessages.length,100);
+ assert.equal(initialMessages[0],'message-20');
+ await expect(page.locator('[data-message-id="message-0"]')).toHaveCount(0);
  await expect(page.getByRole('timer')).toBeVisible();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
- const stableText=await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).messages.find(row=>row.id==='message-79').text);
+ const stableText=await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).messages.find(row=>row.id==='message-119').text);
  const counts=()=>page.evaluate(text=>({apps:renderProbe.apps,stableParses:renderProbe.parses.filter(value=>value===text).length}),stableText);
  // Fence the clock probe in one browser task. A host/view acknowledgment can
  // still have a pending React commit; asynchronous observation traffic must not
@@ -95,16 +101,16 @@ try{
  // Changed body and streaming remain live; these are positive controls.
  const replacement='Changed **response** with `code`';
  await change({text:replacement,streaming:'New **streamed** text'});
- await expect(page.locator('[data-message-id="message-79"]')).toContainText('Changed response');
+ await expect(page.locator('[data-message-id="message-119"]')).toContainText('Changed response');
  await expect(page.locator('.a-messages')).toContainText('New streamed text');
  assert.ok(await page.evaluate(text=>renderProbe.parses.includes(text),replacement));
  await change({status:'idle',streaming:''});
  await expect(page.getByRole('timer')).toHaveCount(0);
- const user=page.locator('[data-message-id="message-78"]');
+ const user=page.locator('[data-message-id="message-118"]');
  await user.getByRole('button',{name:'Edit message',exact:true}).click();
  await expect(user.getByRole('textbox',{name:'Edit your message'})).toBeVisible();
  await user.getByRole('button',{name:'Cancel',exact:true}).click();
- await expect(user.locator('.a-markdown')).toContainText('Saved message 78');
+ await expect(user.locator('.a-markdown')).toContainText('Saved message 118');
  // Keep earlier-history loading and chat-specific drafts working.
  await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
  await expect(page.locator('[data-message-id="message-0"]')).toBeAttached();

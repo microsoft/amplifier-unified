@@ -13,7 +13,10 @@ jobs:
   critical:
     name: Recovery and first-use checks
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # This is exhaustive background verification, not the publication gate.
+    # Release 0.20.169 reached the final feedback check at 24m55s and exhausted
+    # the former 25-minute job budget without a test assertion failure.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,6 +56,12 @@ jobs:
         id: browser_runtime
         working-directory: frontend
         run: npx playwright install --with-deps chromium
+      - name: Prepare owned browser evidence
+        id: browser_evidence
+        run: |
+          artifact_dir="$RUNNER_TEMP/public-readiness-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$artifact_dir"
+          echo "AMPLIFIER_TEST_ARTIFACTS=$artifact_dir" >> "$GITHUB_ENV"
       - name: Exercise real UI and API recovery paths
         working-directory: frontend
         run: |
@@ -89,6 +98,7 @@ jobs:
         working-directory: frontend
         run: |
           node tests/appearance-save-feedback-browser.mjs
+          node tests/appearance-preview-navigation-browser.mjs
           node tests/theme-surfaces-browser.mjs
           node tests/settings-save-feedback-browser.mjs
           node tests/location-feedback-browser.mjs
@@ -231,3 +241,10 @@ jobs:
             /tmp/unified-storage-category.png
             /tmp/unified-storage-mobile.png
           if-no-files-found: ignore
+      - name: Upload owned browser evidence
+        if: always() && steps.browser_evidence.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-readiness-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.AMPLIFIER_TEST_ARTIFACTS }}/
+          if-no-files-found: warn

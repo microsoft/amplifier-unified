@@ -1,0 +1,75 @@
+{
+  "baseRevision": "9c8d26af0b72dde5b4fa31e00f1006a9db50f140",
+  "reportedReleaseRevision": "c64ad16e3e9c245204b788ce548e7a9cf1ff91f0",
+  "scope": "Cache usage synthetic fixture and browser teardown only; no product or runner changes.",
+  "reportedFailure": {
+    "uiAssertions": "passed",
+    "exitCode": 0,
+    "cleanupInitialSurvivors": 5,
+    "remaining": [],
+    "limit": "Runner count is initial survivor count; exact process identities and signal deliveries were not retained."
+  },
+  "localBaseline": {
+    "id": "cache-usage",
+    "command": [
+      "node",
+      "tests/cache-usage-browser.mjs"
+    ],
+    "status": "failed",
+    "reason": null,
+    "log": "cache-usage.log",
+    "exitCode": 0,
+    "cleanup": {
+      "remaining": [],
+      "terminated": 1
+    },
+    "durationSeconds": 6.557
+  },
+  "final": {
+    "id": "cache-usage",
+    "command": [
+      "node",
+      "tests/cache-usage-browser.mjs"
+    ],
+    "status": "passed",
+    "reason": null,
+    "log": "cache-usage.log",
+    "exitCode": 0,
+    "cleanup": {
+      "remaining": [],
+      "terminated": 0
+    },
+    "durationSeconds": 2.711
+  },
+  "finalSourceHashes": {
+    "frontend/tests/cache-usage-browser.mjs": "82cbb02d7e8d35c2d110f165d39d08985f1e9ec2f9567b0aa75f8d6ca54e50a5",
+    "tests/fixtures/cache_usage_ui_server.py": "09943cede28e2f25bde83daf324553d7db1190e6adb2c2913f842d37f8032a33",
+    "scripts/browser_check_runner.py": "b3fcbce305c7b3680aa3e80afed2c869ffc1e36f7941cd3f5a44cf888f6e7bff"
+  },
+  "changes": [
+    "SIGINT/SIGTERM set fixture stop event, allowing AppRunner/service cleanup and temporary-directory cleanup.",
+    "Browser awaits fixture exit for at most5seconds; timeout sends SIGKILL and fails; normal exit code0/no terminating signal required.",
+    "Cleanup runs even if browser close fails and preserves original assertion failure in an aggregate error.",
+    "Wait for the empty-host connection setup transition before opening Updates, avoiding a later onboarding redirect.",
+    "Routing-catalog discovery is a synthetic no-op, as in existing settings fixtures; update check/install assertions remain unchanged."
+  ],
+  "retainedIntermediateFailures": [
+    {
+      "phase": "baseline",
+      "reason": "Preexisting shared /tmp screenshot permission collision; corrected with private namespace /tmp mount."
+    },
+    {
+      "phase": "strict-shutdown-old-fixture",
+      "reason": "New normal-exit assertion rejected old SIGTERM behavior; ARM Chromium also crashed during startup, so not counted as isolated browser red proof."
+    },
+    {
+      "phase": "fixed",
+      "reason": "Disabling provider preload exposed a connection-setup navigation race. Final fixture retains discovery semantics, stubs only irrelevant catalog fetch, and waits for the actual initial transition."
+    }
+  ],
+  "platform": "Owned spark-2 DTU; private PID/network/mount namespace; ARM single-process Chromium adapter; no external network or inference.",
+  "sharedHelperReview": "No canonical exported fixture shutdown helper exists; uses local strict lifecycle pattern already present in other browser scenarios.",
+  "coverage": "Original cache grouping, failure visibility, update controls, pins, desktop/mobile layout and page-error checks all retained. Strict runner gate unchanged.",
+  "evidence": "output/post-release-fixes-20261016/cache-usage/evidence",
+  "remaining": "Temporary resources retired after zero-reference audit; no merge or release in this lane."
+}

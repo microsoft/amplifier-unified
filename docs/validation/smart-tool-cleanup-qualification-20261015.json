@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "issue": 785,
+  "base": "95d64c53259625f7a53d851d1b776a99bff93524",
+  "sourceSha256": {
+    "amplifier_web/smart_tool_lifecycle.py": "56315af4a5e33192685131a7114c13023d218c1aaf8acc9b255123a993375719",
+    "amplifier_web/smart_tool_updates.py": "a09e4f49112603860077967e6bef70dd82a5acec599d3c5e54d58121f0482b29",
+    "amplifier_web/smart_tool_update_batch.py": "4141c949c2c583990f1a9c98296d5bd42054487a47cba1a06bceddbb34406197",
+    "tests/test_updates.py": "d87ef87d38e1fb973d71a8c709bd275bf6a77a1cd33cc27f515d94cb739dae75",
+    "tests/test_smart_tool_update_cleanup.py": "94b4b9f5c3bab89efd9818cd512f46b53979ece801e90b911e7a7eeee3fab91a"
+  },
+  "environment": "Owned spark-2 DTU; private PID/proc namespace; synthetic packages and real persistence/connection/removal paths",
+  "baseline": {
+    "failed": 1,
+    "seconds": 2.477,
+    "cause": "Real failed MCP qualification persisted a staged installation; restart then Skip left its folder and record."
+  },
+  "initialCandidate": {
+    "passed": 74,
+    "failed": 3,
+    "seconds": 60.428,
+    "failures": [
+      "Partial-delete recovery compared a Path filename to a string; corrected to Path equality.",
+      "Two repair adjacency checks needed the existing owned uv executable on PATH; no package installation was performed."
+    ]
+  },
+  "finalAffectedChecks": {
+    "passed": 13,
+    "failed": 0,
+    "seconds": 13.317,
+    "includes": "All 10 new cleanup cases plus the two environment-failed repair controls and existing skipped-revision check"
+  },
+  "guarantees": [
+    "Exact staged owner and immutable revision recovered after restart without a pending target ID",
+    "Repeated later failed revisions are removed, current live connection and source survive",
+    "Cleanup failures remain actionable and redact exception text",
+    "Cancellation preserves the failed pending item and cannot activate it",
+    "Missing-folder partial cleanup converges; other revision remains",
+    "Configured connection, symlink, rollback, superseded, changed-owner and changed-revision guards preserve installations"
+  ],
+  "remainingProcesses": 0,
+  "limitations": [
+    "No real package download or production update was performed",
+    "The prior 9021-test run is not relabeled as a full run on this later source"
+  ]
+}

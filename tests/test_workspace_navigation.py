@@ -249,7 +249,7 @@ async def test_agent_and_ui_share_durable_explorer_controls_and_selection_scope(
     assert overview['workspaceExplorer']['rows'][0]['path'] == str(second)
     assert 'navWorkspacePath' in overview['_stateAccess']['history']
     actions = await app.app_bridge('list_actions', {'prefix': 'view.'}, first_chat)
-    assert 'navWorkspacePage' in actions[0]['description']
+    assert 'navWorkspacePage' in actions['items'][0]['description']
     with pytest.raises(AppError):
         await app.dispatch('view.update', {'patch': {'navWorkspaceBrowseFor': 'spoof'}})
     with pytest.raises(AppError):

@@ -23,11 +23,15 @@ try {
  });
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+ const openComputerAccess=async()=>{
+  await page.getByRole('button',{name:'Chat',exact:true}).click();
+  await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Advanced',exact:true}).click();
+  await page.getByRole('navigation',{name:'Advanced chat options'}).getByRole('button',{name:/^Computer access/}).click();
+ };
  await action('session.create',{});await page.getByRole('button',{name:'Start voice call',exact:true}).click();
  await expect(page.getByRole('button',{name:'Choose screen source',exact:true})).toHaveCount(0);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent draft');
- await page.getByRole('button',{name:'Chat controls',exact:true}).click();
- await page.getByRole('button',{name:'Computer use',exact:true}).click();
+ await openComputerAccess();
  await page.getByRole('button',{name:'Choose screen source',exact:true}).waitFor();
  const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId),target={sessionId:sid};
  await page.evaluate(()=>window.denyCapture=true);await page.getByRole('button',{name:'Choose screen source',exact:true}).click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeDisabled();
@@ -48,7 +52,7 @@ try {
  assert.equal(await page.evaluate(()=>window.captureTrack.readyState),'live');assert.equal((await inspect()).computerGrants.length,1);
  await page.getByRole('button',{name:'Stop sharing',exact:true}).click();await expect.poll(()=>page.evaluate(()=>window.captureTrack.readyState)).toBe('ended');assert.deepEqual(errors,[]);
  await action('call.start');
- await page.getByRole('button',{name:'Chat controls',exact:true}).click();
+ await openComputerAccess();
  await page.getByRole('button',{name:'Check desktop host',exact:true}).waitFor();
  assert.deepEqual((await inspect()).nativeCalls,[]);
  await page.getByRole('button',{name:'Check desktop host',exact:true}).click();

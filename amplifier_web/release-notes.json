@@ -2,6 +2,68 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.169",
+      "title": "Reduce repeated updates and clarify saved worker permissions",
+      "changes": [
+        "Concurrent conversations avoid rebuilding unrelated browser views for unchanged delivery and working-state details. Directory visibility checks read only the fields they need.",
+        "Managed checkout moves verify repository identity again after waiting for running work and after releasing its worker, refusing changed source or destination bindings.",
+        "A resumed worker explains when saved file permissions prevent an operation and how a new worker can use a later approval. Existing permissions and saved work remain intact.",
+        "Expanded checks cover keyboard navigation and compact Settings layouts, exact file grants, resumed worker permissions, and separately loaded recent work details."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.168",
+      "title": "Keep reading steady while work details load",
+      "changes": [
+        "Conversation reading positions stay steady as work details load and temporary loading notices disappear.",
+        "Expanded integration checks exercise native runtime, browser, CLI, filesystem, reset, and context-intelligence behavior in their required environments. Browser checks also verify that their test processes finish cleanly."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.167",
+      "title": "Recover test environments and preserve conversation reading",
+      "changes": [
+        "Owned test environments offer Check and recover to verify their current state without repeating an uncertain launch or check. Recovery and cleanup remain available when the original backend can still be verified.",
+        "Incus cleanup saves verified workspace and artifact files by default, with an explicit option to save the full environment. Failed or incomplete exports retain the stopped environment and available evidence.",
+        "Appearance previews end when leaving their settings, including when a delayed preview response arrives after navigation.",
+        "Reading positions in earlier imported history survive chat switches and browser reloads using bounded page restoration.",
+        "Live calls keep following the latest response when the surrounding layout shrinks, while intentional scrolling still pauses following.",
+        "Unchanged browser layout requests finish without waiting for unrelated shared-state updates.",
+        "Additional checks cover environment recovery, saved exports, conversation reading positions, and reliable updates."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.166",
+      "title": "Keep everyday work responsive and queue isolated checks",
+      "changes": [
+        "Isolated workspace checks can wait for available capacity, retain their results, and report completion without repeating uncertain work. The workspace test panel supports the configured Docker and Incus backends.",
+        "Managed checkout moves finish at saved conversation boundaries, preserve the original task authority, and verify both source and destination before handing off work. Agent action discovery and routine control replies stay bounded.",
+        "Large chat directories reuse unchanged navigation data, and optional titles and plans no longer activate dormant chats. Observed conversations receive shorter streaming batches while background work keeps its existing batching.",
+        "Archiving a chat gives visible confirmation and Undo while preserving drafts, keyboard focus, and newer navigation. Earlier message pages retain reactions, support forking from the selected message, and a visible return to the latest messages.",
+        "Canvas and Settings protect unsaved input during reloads and navigation. Delayed tool opens and list reordering preserve newer selections and focus; diagram fit, touch, wheel, and pointer navigation are corrected.",
+        "Workspace setup reports completed inspections before allowing retries and keeps validation errors beside the affected fields. Task storage retains recovery receipts across interrupted requests and replaced panels.",
+        "Failed Smart Tool updates can be retried or skipped individually. Storage failures have clearer update diagnostics, and installation repair keeps recovery files outside the installed-tools directory.",
+        "Changing model defaults preserves an existing provider source. Removing the last source override reuses the qualified profile, and new worker profiles correctly retain named local-wheel dependency overrides.",
+        "Expanded smoke coverage records ordinary navigation and settings outcomes, copied-history scale checks, and concurrent-worker behavior. Remaining device and account checks and performance targets are tracked separately."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.165",
+      "title": "Confirm update restarts and keep sidebar selection clear",
+      "changes": [
+        "Updates can interrupt active work and restart into a qualified staged app after explicit confirmation. Saved history and drafts remain, interrupted work is not replayed, and unresolved checkout handoffs still require inspection.",
+        "Checkout handoffs refused before any runtime release no longer leave the chat stuck preparing. Existing uncertain handoffs remain protected until reconciled.",
+        "The sidebar highlights a workspace only while browsing that workspace; viewing a chat highlights the chat.",
+        "Workspace chat lists refresh quietly without inserting an Updating message that shifts the layout.",
+        "Sidebar titles use the space reserved for hidden actions. Hover and keyboard focus reveal the controls; Everything mode and touch layouts keep their existing visible actions."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.164",
       "title": "Reduce work when reading large chat directories",
       "changes": [

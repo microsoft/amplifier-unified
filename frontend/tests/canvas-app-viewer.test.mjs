@@ -13,6 +13,7 @@ globalThis.MutationObserver=class {observe(){} disconnect(){}};
 globalThis.requestAnimationFrame=()=>1;globalThis.cancelAnimationFrame=()=>{};
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {CanvasAppViewer}=await server.ssrLoadModule('/src/canvas-app-viewer.jsx');
+const {hasLocalCanvasEdits}=await server.ssrLoadModule('/src/canvas-reload-guard.js');
 test.after(()=>server.close());
 async function fixture(dispatcher){
  const callbacks=new Map(),out=[],calls=[],contentWindow={postMessage:data=>out.push(data)};
@@ -50,4 +51,38 @@ test('duplicate snapshots and render statuses are not republished',async()=>{
   await f.send({op:'status',status:'error',message:'Broken'});await f.send({op:'status',status:'error',message:'Broken'});
   assert.equal(f.calls.filter(c=>c.name==='canvas.views.status').length,1);
  }finally{await f.close()}
+});
+
+test('interactive local edits block reload until the exact commit acknowledgement and retire on unmount',async()=>{
+ const f=await fixture();try{
+  assert.equal(hasLocalCanvasEdits(),false);
+  await f.send({op:'editing',editVersion:1});assert.equal(hasLocalCanvasEdits(),true);
+  await f.send({op:'event',requestId:'unrelated',args:{name:'setTab',payload:{tab:'clock'}}});assert.equal(hasLocalCanvasEdits(),true);
+  await f.send({op:'state',requestId:'commit',args:{patch:{value:'saved'}},commit:1});assert.equal(hasLocalCanvasEdits(),false);
+  await f.send({op:'editing',editVersion:2});assert.equal(hasLocalCanvasEdits(),true);
+ }finally{await f.close()}
+ assert.equal(hasLocalCanvasEdits(),false);
+});
+test('rejected interactive dirty declaration stays locally protected',async()=>{
+ const f=await fixture(async name=>{if(name==='canvas.views.dirty')throw Error('offline')});try{
+  await f.send({op:'editing'});assert.equal(hasLocalCanvasEdits(),true);
+  await f.send({op:'dirty',requestId:'clear',args:{dirty:false}});assert.equal(hasLocalCanvasEdits(),true);
+ }finally{await f.close()}
+ assert.equal(hasLocalCanvasEdits(),false);
+});
+
+test('a delayed discard acknowledgement cannot replace a newer interactive edit',async()=>{
+ let release;const held=new Promise(resolve=>release=resolve);
+ const f=await fixture(async(name,args)=>{if(name==='canvas.views.dirty'&&!args.dirty)await held});
+ try{
+  await f.send({op:'editing',editVersion:1});
+  await f.update({app:{revision:2,stateRevision:2,state:{},manifest:{},versions:[],requests:[]}});
+  const discard=()=>f.component.root.findAllByType('button').find(button=>String(button.props.children).includes('Discard unfinished input'));
+  let pending;await act(async()=>{pending=discard().props.onClick();await Promise.resolve()});
+  await f.send({op:'editing',editVersion:2});
+  await act(async()=>{release();await pending});
+  assert.ok(discard(),'new design must not replace the newer local edit');
+  assert.equal(f.dirty(),true);assert.equal(hasLocalCanvasEdits(),true);
+ }finally{release();await f.close()}
+ assert.equal(hasLocalCanvasEdits(),false);
 });

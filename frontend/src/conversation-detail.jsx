@@ -1,5 +1,6 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {request} from './api';
+import {useVisibleMessageAnnotations} from './message-annotations';
 import {Markdown} from './markdown';
 import {readDetail} from './detail-read';
 import {hasEarlierWindow,returnedWindow,validateHistoryPage} from './history-window';
@@ -49,21 +50,33 @@ export function useConversationDetail(source,beforeApply){
  const extra=saved?.id===source?.id?saved:null;
  // Browser deltas preserve unchanged branches. Keep that identity through the
  // annotation/page overlay rather than rebuilding the transcript on draft ticks.
- const messages=useMemo(()=>source?.messages.map(row=>source.messageAnnotations?.[row.id]?{...row,...source.messageAnnotations[row.id]}:row),[source?.messages,source?.messageAnnotations]);
+ const currentAnnotations=useMemo(()=>new Map((originalSource?.messages||[]).map(row=>[row.id,{...originalSource.messageAnnotations?.[row.id],reactions:originalSource.messageAnnotations?.[row.id]?.reactions||[],annotationRevision:originalSource.messageAnnotationRevision||0}])),[originalSource?.messages,originalSource?.messageAnnotations,originalSource?.messageAnnotationRevision]);
+ const messages=useMemo(()=>source?.messages.map(row=>currentAnnotations.has(row.id)?{...row,...currentAnnotations.get(row.id)}:row),[source?.messages,currentAnnotations]);
  const projected=useMemo(()=>source?{...source,messages}:source,[source,messages]);
- const expandedMessages=useMemo(()=>extra?unique([...extra.messages,...(source?.messages||[])]).map(row=>source?.messageAnnotations?.[row.id]?{...row,...source.messageAnnotations[row.id]}:row):messages,[extra?.messages,source?.messages,source?.messageAnnotations,messages]);
+ const expandedMessages=useMemo(()=>extra?unique([...extra.messages,...(messages||[])]).map(row=>currentAnnotations.has(row.id)?{...row,...currentAnnotations.get(row.id)}:row):messages,[extra?.messages,currentAnnotations,messages]);
  const regular=useMemo(()=>source&&extra?{...source,messages:expandedMessages,sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
   messageWindow:{...source.messageWindow,...(extra.messageWindow||(extra.messages.length?{offset:extra.sourceOffset!=null?Math.max(0,extra.sourceOffset-(source.historyManaged?source.sharedHistoryOffset||0:0)):extra.messageOffset,sourceOffset:extra.sourceOffset,before:extra.messages[0].id}:{}))},
   execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])]),segments:unique([...(extra.segments||[]),...(source.execution?.segments||[])])},
   executionWindow:{...source.executionWindow,...extra.groupWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected,[source,extra,projected,expandedMessages]);
  const focusedHere=focused?.sessionId===source?.id?focused:null;
  const nativeHere=nativeView?.id===source?.id?nativeView:null;
- const session=useMemo(()=>nativeHere?{...projected,messages:nativeHere.messages,historyLoading:false,historyError:null,messageWindow:nativeHere.window,workProjection:undefined,streaming:'',execution:{nodes:[],turns:[],segments:[]},executionWindow:null}:focusedHere?{...projected,messages:focusedHere.messages,historyLoading:false,historyError:null,workProjection:undefined,streaming:'',execution:focusedHere.execution,
+ const windowSession=useMemo(()=>nativeHere?{...projected,messages:nativeHere.messages,historyLoading:false,historyError:null,messageWindow:nativeHere.window,workProjection:undefined,streaming:'',execution:{nodes:[],turns:[],segments:[]},executionWindow:null}:focusedHere?{...projected,messages:focusedHere.messages,historyLoading:false,historyError:null,workProjection:undefined,streaming:'',execution:focusedHere.execution,
   sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:{mode:'focus',status:'ready'},executionWindow:undefined}:regular,[nativeHere,focusedHere,projected,regular]);
- async function around(messageId,{jump=true,isCurrent=()=>true}={}){
+ const annotations=useVisibleMessageAnnotations(windowSession,!nativeHere&&!!(focusedHere||frozen||extra));
+ const session=useMemo(()=>windowSession?{...windowSession,messages:annotations.messages}:windowSession,[windowSession,annotations.messages]);
+ async function around(messageId,{jump=true,isCurrent=()=>true,reference}={}){
   if(paging.current||!originalSource)return false;
   const id=originalSource.id,token=beginRead(id);setBusy('conversation');setError('');
   try{
+   // Native display IDs belong to a bounded page, not the canonical navigation
+   // index. Reopen the signed page directly, even after its cache was evicted.
+   if(messageId.startsWith('native-window:')){
+    if(reference?.kind!=='transcript-window'||typeof reference.restoreCursor!=='string'||!reference.restoreCursor)throw Error('This saved reading position is no longer available. Return to latest and load earlier messages.');
+    const result=validateHistoryPage(await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:'messages',native:'true',before:reference.restoreCursor}),{signal:token.abort.signal}),{mode:'cursor'});
+    if(!result.items.some(row=>row.id===messageId))throw Error('This saved reading position is no longer available. Return to latest and load earlier messages.');
+    if(originalId.current===id&&paging.current===token&&isCurrent()){setFocused(null);setNativeView({id,messages:result.items,window:returnedWindow(result)});if(jump)setJumpTarget({id:messageId});return true}
+    return false;
+   }
    const result=await request('/api/conversation/navigation?'+new URLSearchParams({sessionId:id,messageId,window:'true'}),{signal:token.abort.signal});
    if(!Array.isArray(result?.messages)||!result.messages.some(row=>row.id===messageId))throw Error('This message could not be loaded. Try again.');
    if(originalId.current===id&&paging.current===token&&isCurrent()){setFocused({...result,sessionId:id});if(jump)setJumpTarget({id:messageId});return true}
@@ -122,5 +135,6 @@ export function useConversationDetail(source,beforeApply){
   {busy&&!hasEarlier&&<p role="status">Loading conversation…</p>}{error&&<p role="alert">{error}</p>}
  </>;
 
- return {session,controls,earlier,busy,around,latest,openNativeHistory,focused:!!focusedHere||!!nativeHere||!!frozen,jumpRequest:jumpTarget};
+ const readControls=<>{controls}{annotations.error&&<p role="status">Could not refresh message reactions. <button type="button" className="a-link" onClick={annotations.retry}>Retry reactions</button></p>}</>;
+ return {session,controls:readControls,earlier,busy,around,latest,openNativeHistory,focused:!!focusedHere||!!nativeHere||!!frozen,jumpRequest:jumpTarget};
 }

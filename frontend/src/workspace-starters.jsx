@@ -15,9 +15,9 @@ export function useStarters(state,act){
  return {catalog,error,reload:async()=>setCatalog(await run(act,'workspace.starters.list'))};
 }
 const empty=()=>({name:'',description:'',instructions:'',bundle:'',repositories:[],trackResources:false,scratch:false,rootGit:false});
-export function StarterSettings({state,act,navigate}){
+export function StarterSettings({state,act,dispatch=act,navigate}){
  const layout=useContext(SettingsLayoutContext);
- const {catalog,error:loadError,reload}=useStarters(state,act),[draft,setDraft]=useState(null),[base,setBase]=useState(null),[query,setQuery]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[confirm,setConfirm]=useState(null),id=useId();
+ const {catalog,error:loadError,reload}=useStarters(state,dispatch),[draft,setDraft]=useState(null),[base,setBase]=useState(null),[query,setQuery]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[confirm,setConfirm]=useState(null),id=useId();
  const submitting=useRef(false),navigation=state.view?.workspaceStarterEditor||{};
  const dirty=!!draft&&JSON.stringify(draft)!==JSON.stringify(base);
  const route=patch=>act('view.update',{patch:{workspaceStarterEditor:{...navigation,...patch}}});
@@ -28,8 +28,8 @@ export function StarterSettings({state,act,navigate}){
  const edit=row=>{if(busy)return;if(dirty&&row.id!==draft?.id){setError('Save or cancel the current starter before opening another.');route({detailOpen:true});return}if(row.id!==draft?.id||!draft)load(row);route({id:row.id||null,detailOpen:true})};
  const change=(key,value)=>{setDraft({...draft,[key]:value});setNotice('')};
  const perform=async fn=>{if(submitting.current)return;submitting.current=true;setBusy(true);setError('');try{await fn();await reload()}catch(err){setError(err.message)}finally{submitting.current=false;setBusy(false)}};
- const duplicate=row=>{if(dirty){setError('Save or cancel the current starter first.');return}perform(async()=>{const value=await run(act,'workspace.starters.duplicate',{id:row.id});load(value);route({id:value.id,detailOpen:true});setNotice('Copy created. Customize it below.')})};
- const save=event=>{event.preventDefault();perform(async()=>{const {id:identity,revision,builtIn,...starter}=draft;const value=await run(act,'workspace.starters.save',{starter,...(identity?{id:identity,expectedRevision:revision}:{})});setDraft(value);setBase(value);route({id:value.id,detailOpen:true});setNotice('Saved. Existing workspaces are unchanged.')})};
+ const duplicate=row=>{if(dirty){setError('Save or cancel the current starter first.');return}perform(async()=>{const value=await run(dispatch,'workspace.starters.duplicate',{id:row.id});load(value);route({id:value.id,detailOpen:true});setNotice('Copy created. Customize it below.')})};
+ const save=event=>{event.preventDefault();perform(async()=>{const {id:identity,revision,builtIn,...starter}=draft;const value=await run(dispatch,'workspace.starters.save',{starter,...(identity?{id:identity,expectedRevision:revision}:{})});setDraft(value);setBase(value);route({id:value.id,detailOpen:true});setNotice('Saved. Existing workspaces are unchanged.')})};
  const shown=(catalog?.items||[]).filter(row=>(row.name+' '+row.description).toLowerCase().includes(query.toLowerCase()));
  return <section className="a-workspace-starters" data-part="workspace-starters" aria-label="Workspace starters">
   <p className="a-starter-intro">Reusable starting setups for new workspaces. Choose a built-in to inspect it, or duplicate one to make it yours.</p>
@@ -54,15 +54,31 @@ export function StarterSettings({state,act,navigate}){
     {!draft.builtIn&&draft.id&&<div className="a-starter-danger"><button type="button" className="a-link a-danger" disabled={busy||dirty} onClick={()=>setConfirm(draft)}><Trash2/>Delete this starter</button><p className="a-caption">Only the definition is deleted. Workspaces and files remain.</p></div>}
    </form>:<p>Select a starter to see what it includes.</p>}
   </Collection>
-  {confirm&&<div role="alertdialog" aria-label="Delete starter" className="a-workspace-setup"><p>Delete “{confirm.name}”? Existing workspaces and files stay intact.</p><button type="button" disabled={busy} onClick={()=>perform(async()=>{await run(act,'workspace.starters.remove',{id:confirm.id,expectedRevision:confirm.revision});setDraft(null);setBase(null);setConfirm(null);route({id:null,detailOpen:false})})}>Delete starter</button><button type="button" disabled={busy} onClick={()=>setConfirm(null)}>Cancel deletion</button></div>}
+  {confirm&&<div role="alertdialog" aria-label="Delete starter" className="a-workspace-setup"><p>Delete “{confirm.name}”? Existing workspaces and files stay intact.</p><button type="button" disabled={busy} onClick={()=>perform(async()=>{await run(dispatch,'workspace.starters.remove',{id:confirm.id,expectedRevision:confirm.revision});setDraft(null);setBase(null);setConfirm(null);route({id:null,detailOpen:false})})}>Delete starter</button><button type="button" disabled={busy} onClick={()=>setConfirm(null)}>Cancel deletion</button></div>}
  </section>;
 }
 
 export function WorkspaceReadiness({state,act,workspaceId}){
- const workspace=state.workspaces?.find(row=>row.id===(workspaceId||state.selectedWorkspaceId)),setup=workspace?.setup;
- const [error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const workspace=state.workspaces?.find(row=>row.id===(workspaceId||state.selectedWorkspaceId)),projected=workspace?.setup;
+ const [error,setError]=useState(''),[busy,setBusy]=useState(false),[observed,setObserved]=useState(null);
+ const visit=useRef(0),busyRef=useRef(false);
+ useEffect(()=>{visit.current++;busyRef.current=false;setBusy(false);setError('');setObserved(null);return()=>{visit.current++}},[workspace?.id]);
+ // The command receipt can precede its subscription projection. Keep the
+ // newest exact setup observation, scoped to this workspace, for explicit Retry.
+ const setup=observed&&projected&&observed.workspaceId===workspace?.id&&observed.setup.id===projected.id&&observed.setup.revision>projected.revision?observed.setup:projected;
+ const perform=async action=>{
+  if(busyRef.current||!setup)return;
+  busyRef.current=true;setBusy(true);setError('');const current=visit.current,owner=workspace.id;
+  try{
+   const value=await run(act,action,{workspaceId:owner,...(action==='workspace.setup.retry'?{expectedRevision:setup.revision}:{})});
+   if(current!==visit.current)return;
+   if(action==='workspace.setup.reconcile'&&value?.inspectionStatus!=='complete')throw Error('Inspection is not confirmed. Inspect retained imports again before retrying setup.');
+   if(value?.id!==setup.id||!Number.isInteger(value.revision))throw Error('The setup observation changed. Inspect this workspace again.');
+   setObserved({workspaceId:owner,setup:value});
+  }catch(err){if(current===visit.current)setError(err.message)}
+  finally{if(current===visit.current){busyRef.current=false;setBusy(false)}}
+ };
+ const retry=()=>perform('workspace.setup.retry'),inspect=()=>perform('workspace.setup.reconcile');
  if(!setup)return null;
- const retry=async()=>{setBusy(true);setError('');try{await run(act,'workspace.setup.retry',{workspaceId:workspace.id,expectedRevision:setup.revision})}catch(err){setError(err.message)}finally{setBusy(false)}};
- const inspect=async()=>{setBusy(true);setError('');try{await run(act,'workspace.setup.reconcile',{workspaceId:workspace.id})}catch(err){setError(err.message)}finally{setBusy(false)}};
  return <section className="a-workspace-setup" aria-label="Workspace readiness"><h3>{setup.starter?.name||'Workspace'} setup</h3><p role="status">{setup.status==='ready'?'Ready to work':setup.status==='pending'||setup.status==='running'?'Preparing workspace…':'Some setup steps need attention. Successful work is retained.'}</p>{setup.error&&<p role="alert">{setup.error}</p>}<ul>{setup.rootGit&&<li>Local workspace Git: {setup.rootGit.status}{setup.rootGit.note&&' · '+setup.rootGit.note}</li>}{setup.files?.map(row=><li key={row.path}>{row.path}: {row.status}</li>)}{setup.repositories?.map(row=><li key={row.directory}><strong>{row.directory}</strong>: {row.status}{row.sha&&' · '+row.sha.slice(0,8)}{row.error&&<p>{row.error}</p>}</li>)}</ul>{['partial','failed','interrupted'].includes(setup.status)&&<><button type="button" disabled={busy} onClick={inspect}>Inspect retained imports</button><button type="button" disabled={busy} onClick={retry}>Retry unfinished setup</button></>}{error&&<p role="alert">{error}</p>}<p className="a-caption">No existing repository was updated or merged. Workspace files and chat history are retained.</p></section>;
 }

@@ -129,7 +129,12 @@ in place and reports that it is not ready; it does not claim a successful repair
 
 Retired runtime directories and a copy
 of the database are under `<data-dir>/reset-backups/<id>/`. The old app environment
-is retained beside the uv tool environment as `.amplifier-unified-reset-<id>`.
+is retained outside uv's tool directory, under the sibling
+`<tool-directory-name>-amplifier-unified-recovery/<id>/previous`. Failed
+replacement environments are retained in that same recovery folder as `failed`.
+The backup manifest records the exact path. Keeping recovery copies and the
+installation repair lock outside uv's tool directory prevents them from being
+mistaken for installed tools by `uv tool list` and `uv tool upgrade`.
 Failed candidates are retained as `.amplifier-unified-failed-<id>`. The manifest in
 the data backup records the paths. Backups can contain credentials or private
 conversation data; keep them private. They are not active runtime paths.

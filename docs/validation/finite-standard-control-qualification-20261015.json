@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-15T22:03:29.393151+00:00",
+  "baseRevision": "6341681aec4c295a20e4c2e19abe0df241ebd66f",
+  "testRevision": "26533c68cdf4cca9b43d9bb4e5b426407a553ea3",
+  "builtClient": "5f136e8e69c99e41",
+  "host": "spark-2",
+  "dtu": "dtu-unified-codex-dev-20261014",
+  "privatePidNamespace": true,
+  "credentials": "none",
+  "providerCalls": 0,
+  "productChanges": 0,
+  "results": [
+    {
+      "variant": "desktop-pointer",
+      "scenario": "removed-connection-browser",
+      "sourceSha256": "41f778f0cd11207a9fa1bbbf08f3fee07061866724e51928eabaedd47183f6d4",
+      "exitCode": 0,
+      "timeout": false,
+      "duration": 4.164515267126262
+    },
+    {
+      "variant": "desktop-pointer",
+      "scenario": "workspace-shortcuts-browser",
+      "sourceSha256": "97b76f88dffbf775d08213df7322672cccb3a2c979efa37ae71a3d40dab62de5",
+      "exitCode": 0,
+      "timeout": false,
+      "duration": 10.482985022477806
+    }
+  ],
+  "preservedFailures": [
+    {
+      "folder": "first",
+      "cause": "Previous immediate navExpanded assertion raced completion after newly added touch sequence."
+    },
+    {
+      "folder": "second",
+      "cause": "Re-pinning appends workspace; fixture later assumed original order. Public keyboard reorder now restores it before original order/reload assertions."
+    },
+    {
+      "folder": "third",
+      "cause": "Raw CDP touch used coordinates while repin layout moved and hit neighboring new-chat row. Trial action now waits for stable/actionable target; actual input remains CDP touch."
+    }
+  ],
+  "qualificationLimits": [
+    "Earlier failed whole-scenario runs remain failed; only final complete pass credited.",
+    "Browser fixtures use actual bundled product/client APIs and synthetic runtime; no timing target or live provider claim."
+  ],
+  "outcomeSummaryAfter": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 609,
+      "partially-observed": 42,
+      "not-run": 18
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 160,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "residualCount": 60,
+  "remainingFiniteWorkerAcceptance": [
+    {
+      "id": "composer.stop:0",
+      "owner": "perf_remaining",
+      "status": "actual-normal-worker-acceptance-pending",
+      "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+    },
+    {
+      "id": "composer.stop:2",
+      "owner": "perf_remaining",
+      "status": "actual-normal-worker-acceptance-pending",
+      "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+    },
+    {
+      "id": "privacy.file-policy:1",
+      "owner": "perf_remaining",
+      "status": "actual-normal-worker-acceptance-pending",
+      "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+    },
+    {
+      "id": "connections.default-model:1",
+      "owner": "perf_remaining",
+      "status": "actual-normal-worker-acceptance-pending",
+      "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+    },
+    {
+      "id": "configuration.sources:2",
+      "owner": "perf_remaining",
+      "status": "actual-normal-worker-acceptance-pending",
+      "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+    }
+  ]
+}

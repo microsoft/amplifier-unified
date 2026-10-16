@@ -58,21 +58,24 @@ try{
   assert.ok(Object.values(state.modelCatalogs).every(row=>row.modelsDeferred&&!row.models));
  }
  await expect(composer).toHaveDraft('');
- // Both the initial and earlier recovery windows retain identity despite deferral.
- const expandRecovery=async()=>{for(const summary of await page.locator('details.a-recovery-group:not([open]) > summary').all())await summary.click()};
- await expandRecovery();
- await expect(page.locator('[data-message-id="1-m-119"]')).toContainText('Historical worker 0');
- const notice=page.locator('[data-message-id="1-m-119"]');
+ // Historical recovery notices stay out of the transcript. The retained
+ // result is still available on demand from the ordinary Work details.
+ await expect(page.locator('.a-recovery-group')).toHaveCount(0);
+ await expect(page.locator('[data-message-id="1-m-119"]')).toHaveCount(0);
+ const work=page.locator('[data-group-id="turn@1-m-118"]');
+ await work.locator('button.a-execution-turn-line').click();
+ const result=work.locator('[data-node-id="node"]');
  const savedResult=page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/conversation/detail'&&url.searchParams.get('field')==='output'&&response.ok()});
- await notice.getByText('View saved result',{exact:true}).click();
- await savedResult;
- await expect(notice).toContainText('End of retained result.');
+ await result.locator('button.a-execution-action-line').click();await savedResult;
+ await result.getByRole('button',{name:'Show all 21,023 characters',exact:true}).click();
+ await expect(result).toContainText('End of retained result.');
  await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
  await expect(page.locator('[data-message-id="1-m-1"]')).toBeAttached();
- await expandRecovery();
- await expect(page.locator('[data-message-id="1-m-0"]')).toContainText('Historical worker 0');
+ await expect(page.locator('[data-message-id="1-m-0"]')).toHaveCount(0);
+ await expect(page.locator('.a-recovery-group')).toHaveCount(0);
  const focused=await api('/api/conversation/navigation?sessionId='+meta.ids[1]+'&messageId=1-m-0&window=true');
  if(!measureOnly)assert.equal(focused.messages.find(m=>m.id==='1-m-0').recoveryWorker.id,'old-0');
+ await page.getByRole('button',{name:'Return to latest',exact:true}).click();
  // Terminal jobs win over stale session progress in either observation order.
  for(const terminal of ['completed','error','cancelled'])for(const reverse of [false,true]){
   const changed=await api('/fixture/activity',{terminal,reverse});
@@ -128,7 +131,7 @@ try{
  await expect(page.getByRole('dialog',{name:'Chat options'})).toHaveCount(0);
  if(!measureOnly){await expect.poll(async()=>(await snapshot()).view.composerModel?.open).toBe(false)}
  await settle();const final=await api('/fixture/demand');assert.deepEqual(final.runtimeCalls,[]);assert.equal(final.workersUnchanged,true);assert.deepEqual(errors,[]);
- evidence.controls={olderRecovery:true,focusedRecovery:true,savedResult:true,terminalPrecedenceBothOrders:true,desktopPicker:true,accountIsolation:true,privateDrafts:true,reconnect:true,mobilePicker:true,workerEvidenceUnchanged:true};evidence.pageErrors=errors;
+ evidence.controls={historicalNoticesHidden:true,focusedRecoveryEvidence:true,savedWorkResult:true,terminalPrecedenceBothOrders:true,desktopPicker:true,accountIsolation:true,privateDrafts:true,reconnect:true,mobilePicker:true,workerEvidenceUnchanged:true};evidence.pageErrors=errors;
  console.log(JSON.stringify(evidence,null,2));
 }catch(error){
  primaryError=error;

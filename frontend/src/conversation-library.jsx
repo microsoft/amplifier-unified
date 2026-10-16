@@ -1,4 +1,5 @@
 import React,{useEffect,useRef,useState} from 'react';
+import {ArchiveButton} from './archive-feedback.jsx';
 import {Archive,ArchiveRestore,Share2,Copy} from 'lucide-react';
 
 export function LibraryFilters({state,act}){
@@ -7,9 +8,7 @@ export function LibraryFilters({state,act}){
 }
 export function ConversationLibrary({state,session,act}){
  const archived=Object.hasOwn(state.conversationOrganization?.archived||{},session.id);
- const [busy,setBusy]=useState(false),[error,setError]=useState('');
- async function toggle(){setBusy(true);setError('');try{const receipt=await act(archived?'session.restore':'session.archive',{id:session.id});if(!receipt?.accepted)throw Error('The change was not saved.')}catch(e){setError(e.message)}finally{setBusy(false)}}
- return <section className="a-settings-section"><h3>Conversation library</h3><p>Archive keeps this conversation and its files. Work already running continues.</p><button type="button" className="a-soft" disabled={busy} data-action={archived?'session.restore':'session.archive'} onClick={toggle}>{archived?<ArchiveRestore/>:<Archive/>}{archived?'Restore conversation':'Archive conversation'}</button>{error&&<p role="alert" className="a-danger">{error}</p>}</section>;
+ return <section className="a-settings-section"><h3>Conversation library</h3><p>Archive keeps this conversation and its files. Work already running continues.</p><ArchiveButton className="a-soft" chat={session} archived={archived}>{archived?'Restore conversation':'Archive conversation'}</ArchiveButton></section>;
 }
 
 export function ConversationSharing({session,act}){

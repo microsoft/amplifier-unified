@@ -69,6 +69,12 @@ def test_success_retires_only_owned_caches_and_update_fences(repair_tree, monkey
     backup = reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
     assert (tool / "amplifier-unified/fresh").is_file()
     assert not (tool / "amplifier-unified/old").exists()
+    # uv treats every directory here as a tool environment. Recovery copies
+    # and reset's lock must not become bogus installed tools.
+    assert sorted(path.name for path in tool.iterdir()) == ["amplifier-unified"]
+    saved = Path(json.loads((backup / "manifest.json").read_text())["toolBackup"])
+    assert not saved.is_relative_to(tool)
+    assert (saved / "old").read_text() == "locally edited install"
     for name in reset.REGENERABLE:
         assert not (home / name).exists()
         assert (backup / name / "broken").is_file()
@@ -94,6 +100,7 @@ def test_failure_restores_install_caches_launcher_and_data(repair_tree, monkeypa
         reset.repair(home, "uv", tool, bins, "trusted.whl", {}, (["stop"], ["start"], None), False)
     assert (tool / "amplifier-unified/old").read_text() == "locally edited install"
     assert not (tool / "amplifier-unified/fresh").exists()
+    assert sorted(path.name for path in tool.iterdir()) == ["amplifier-unified"]
     assert (bins / "amplifier-unified").is_symlink()
     for name in reset.REGENERABLE:
         assert (home / name / "broken").exists()
@@ -207,12 +214,16 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
         "amplifier_web/installation_health.py": "import json\ndef doctor(home): return {'ok': True}\nasync def status(home, wait=0): return {'ok': False, 'service': 'stopped'}\ndef display(result, **kw): print(json.dumps(result))\n",
         "amplifier_web/app_updates.py": "PROBE = \"import reset_fixture_dependency; assert reset_fixture_dependency.VALUE == 'fresh'\"\n",
     }, [f"reset-fixture-dependency @ {dep.as_uri()}"])
+    # uv tool deliberately ignores virtualenv interpreters while resolving 3.13.
+    # Keep the already-running standalone Python discoverable after HOME changes.
+    interpreter_bin = str(Path(sys._base_executable).resolve().parent)
     env = {**os.environ, "HOME": str(tmp_path), "UV_TOOL_DIR": str(tmp_path / "tools"),
-           "UV_TOOL_BIN_DIR": str(tmp_path / "bin"), "PATH": str(Path(uv).parent) + ":" + os.environ["PATH"],
+           "UV_TOOL_BIN_DIR": str(tmp_path / "bin"), "PATH": os.pathsep.join((str(Path(uv).parent), interpreter_bin, os.environ["PATH"])),
            "AMPLIFIER_WEB_HOME": str(tmp_path / "data")}
     for key in ("AMPLIFIER_SOURCE_STORE", "PYTHONPATH"):
         env.pop(key, None)
-    subprocess.run([uv, "tool", "install", "--no-cache", "--python", "3.13", str(app)], env=env, check=True, capture_output=True)
+    installed = subprocess.run([uv, "tool", "install", "--no-cache", "--python", "3.13", str(app)], env=env, capture_output=True, text=True)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
     prefix = tmp_path / "tools/amplifier-unified"
     sites = next(prefix.glob("lib/python*/site-packages"))
     (sites / "amplifier_web/app_updates.py").write_text("raise RuntimeError('locally hacked app')\n")
@@ -235,6 +246,10 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
     assert (data / "keep").read_text() == "history sentinel"
     assert not (sites / "rogue.py").exists()
     assert not (data / "updates").exists()
+    listed = subprocess.run([uv, "tool", "list"], env=env, capture_output=True, text=True, check=True)
+    assert "amplifier-unified" in listed.stdout
+    assert not listed.stderr, listed.stderr
+    assert not (tmp_path / "tools/.reset.lock").exists()
     subprocess.run([str(prefix / "bin/python"), "-I", "-c", "import reset_fixture_dependency; assert reset_fixture_dependency.VALUE == 'fresh'"], env=env, check=True)
 
 

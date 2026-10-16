@@ -45,9 +45,11 @@ try{
  // Both copies open one identity-bound details flyout; unpin from Recent leaves its row in place.
  const id=ordinary[0];
  for(const region of [pinned,recent]){
+  await region.locator(`[data-session-id="${id}"]`).hover();
   await region.locator(`[data-session-id="${id}"]`).getByRole('button',{name:/Details and actions/}).click();
   await expect(page.getByRole('dialog')).toHaveCount(1);await page.keyboard.press('Escape');
  }
+ await recent.locator(`[data-session-id="${id}"]`).hover();
  await recent.locator(`[data-session-id="${id}"]`).getByRole('button',{name:/Details and actions/}).click();
  await page.getByRole('dialog').getByRole('button',{name:/^Unpin /}).click();
  await page.keyboard.press('Escape');

@@ -64,7 +64,7 @@ export function AssignmentControls({dispatch,sessionId,memberLabels={}}){
    </>}
    {draft&&<button className="a-link" disabled={busy} onClick={()=>{save(null);setError('')}}>Discard draft and use latest</button>}
    <AssignmentTaskList dispatch={dispatch} sessionId={sessionId} compact enabled={expanded&&!busy} onAssignmentChange={applyAssignment}/>
-   <details><summary>Membership and accounting details</summary><p>{value.enforcement}</p><pre>{JSON.stringify(assignment.members,null,2)}</pre><p>{value.usage?.coverage}</p><button className="a-link" disabled={busy||!!draft?.pending} onClick={()=>run('assignment.detach',{sessionId,expectedRevision:assignment.revision})}>Detach this settled chat</button></details>
+   <details><summary>Membership and accounting details</summary><p>Assignment: <code>{assignment.id}</code> · Revision: {assignment.revision}</p><p>Commissioning owner: {label(assignment.ownerSessionId)} · <code>{assignment.ownerSessionId}</code></p><p>{value.enforcement}</p><pre>{JSON.stringify(assignment.members,null,2)}</pre><p>{value.usage?.coverage}</p><button className="a-link" disabled={busy||!!draft?.pending} onClick={()=>run('assignment.detach',{sessionId,expectedRevision:assignment.revision})}>Detach this settled chat</button></details>
   </>}
  </details>;
 }

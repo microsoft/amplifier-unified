@@ -143,6 +143,14 @@ across selection and text updates; native/local generations, exact query inputs
 and database versions retain invalidation. Mutable transactions bypass reuse,
 while read snapshots keep their pinned view. Counts and first-page filtering can
 still inspect scalar directory rows; these are not constant-work queries.
+The bound web display prepares admitted scalar overlays once within each
+synchronous browser projection. Nested queries share that preparation only
+until the projection returns or raises; no scope survives an event-loop yield.
+The next frame observes in-place changes again. Different owner inputs, new
+admissions and durable writes invalidate preparation within the frame, while
+native/query generation checks remain active. Explicit hydrating session reads
+and non-web/full projections retain ordinary fresh preparation. Read callbacks
+must not mutate existing admitted rows inside a frame.
 Dedicated exact-summary and child-scope tests compare 270 and 27,000 native rows
 with local overlays, and separately 27,000 local owners. SQL instruction budgets
 and poisoned unrelated payloads verify that small requested sets do not traverse
@@ -208,3 +216,24 @@ certify an ordinal. Each operation derives its token and rows from the same
 short-lived SQLite read snapshots and closes them on success or error. These
 snapshots identify the observed local/native version pair, not a distributed
 atomic commit. Reads without `revision` explicitly use the current directory.
+
+## Background name discovery
+
+Automatic naming still chooses at most 32 eligible metadata candidates per scan,
+and at most two naming attempts, while the host is idle. Its catalog count and
+ordered candidate selection run in a disposable read-only query process. A small
+result alone did not bound the old synchronous SQL work on the event loop.
+
+Only admitted scalar overlays and suppression/read receipts enter this worker;
+it does not receive the workspace registry or conversation bodies. It cannot
+admit a chat, invoke a provider, or write a name. The host rejects changed-source
+results, repeats its idle/eligibility checks, and retains the existing policy and
+attempt receipts. Cancellation and completion close the exact worker and spool.
+Failed or uncertain reads defer to the next ordinary naming tick. Fixed-name
+`naming.candidates.*` diagnostics expose read duration, decoded rows, SQL steps
+and deferrals without recording conversation content.
+
+Directory SQL also reuses one encoding of its private admitted scalar overlay
+until that overlay changes. Mutable application rows are prepared afresh at
+their existing boundary; native generations, deletion rules and read receipts
+are still checked for each read. This retains no per-page history cache.

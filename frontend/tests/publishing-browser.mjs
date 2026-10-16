@@ -72,9 +72,10 @@ try{
  snapshot=await list();assert.equal(uncertainErrors,4);assert.ok(snapshot.calls.filter(row=>row.action==='publishing.deploy').slice(-4).every(row=>JSON.stringify(row.args)===JSON.stringify(uncertainArgs)));assert.equal(snapshot.publishing.sites[0].revision,uncertainBefore.publishing.sites[0].revision);
  await page.unroute('**/api/actions*');
  await panel.getByRole('button',{name:'Inspect publishing',exact:true}).click();await expect(pending).toContainText('Recorded unknown outcome');
- snapshot=await list();const unknownCount=snapshot.calls.filter(row=>row.action==='publishing.deploy').length;assert.equal(snapshot.publishing.sites[0].status,'unknown');
+ const effectCalls=rows=>rows.filter(row=>!['publishing.target.list','publishing.list','publishing.status','publishing.logs'].includes(row.action));
+ snapshot=await list();const unknownCount=snapshot.calls.filter(row=>row.action==='publishing.deploy').length,unknownCalls=structuredClone(effectCalls(snapshot.calls)),unknownSite=structuredClone(snapshot.publishing.sites[0]);assert.equal(unknownSite.status,'unknown');
  await pending.getByRole('button',{name:'Acknowledge unknown outcome'}).click();await expect(pending).toHaveCount(0);await expect(panel.getByRole('button',{name:'Deploy reviewed release'})).toBeDisabled();
- snapshot=await list();assert.equal(snapshot.calls.filter(row=>row.action==='publishing.deploy').length,unknownCount);
+ snapshot=await list();assert.equal(snapshot.calls.filter(row=>row.action==='publishing.deploy').length,unknownCount);assert.deepEqual(effectCalls(snapshot.calls),unknownCalls);assert.deepEqual(snapshot.publishing.sites[0],unknownSite);
  await panel.getByRole('button',{name:'Stop site',exact:true}).click();await expect(status).toContainText('stopped');
  await panel.getByRole('button',{name:'Deploy reviewed release'}).click();await expect(status).toContainText('running');
  if(process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS)await page.screenshot({path:process.env.AMPLIFIER_PUBLISHING_SCREENSHOTS+'-desktop.png',animations:'disabled'});

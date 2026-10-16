@@ -1,0 +1,146 @@
+{
+  "status": "passed",
+  "kind": "actual normal-worker functional acceptance; not a latency benchmark",
+  "sourceBinding": {
+    "baseSource": "b4e595b71cf1286fb61adad7266372940623935b",
+    "overlayCommits": [
+      "a5292abc89bd7316089fa81b23e66333fdce54b7",
+      "08b70668bb14cfccdec3565d8ce1186ef80c751a"
+    ],
+    "trackedFilesChecked": 2435,
+    "mismatches": [],
+    "activeProcesses": [],
+    "files": {
+      "amplifier_web/setup.py": "153574dc2885e901dee0e0a7880062f53dc2ab33d1077f9296274a89ccf6f2dc",
+      "amplifier_web/runtime_profiles.py": "798b9aae6b1c23eb47764f795e8eb9417b53272189a6dac3caf35ad08a40aa7c",
+      "tests/test_setup.py": "721f6211cb92fbf1fd9447ddac613ee0aa1fd7ede3ce7c9ba391601d62280271",
+      "tests/test_runtime_profile_inputs.py": "05e382cbf6842fc97384d7f610dac3219e471f2395865df1ea3937114b34b358"
+    },
+    "harness": {
+      "normal-runtime-functional.py": "bf7224acac82b1f2ef5dc6ecbc1bed8ba072dbaa34937070a7cd62ad3907e252",
+      "normal-runtime-functional-namespace.py": "d32acedfe2e603d354aca623f5eeaf18813f7de419b7bd894776cdbbf6a87a47",
+      "functional-instrumentation/sitecustomize.py": "b7389acc29ffba773ab708152a718282865c07ced6665cdec94b82fe17f5ee10"
+    }
+  },
+  "runtime": {
+    "parentGeneration": "1502bc86abc54ee3b8b953aa77d1b78a",
+    "workerGeneration": "30f5821775e64f29bc558320c9a846ce",
+    "commandOverride": false,
+    "qualificationInstallFallback": "forbidden; final run did not invoke it",
+    "localProviderCalls": 1,
+    "externalProviderCalls": 0,
+    "workersRemaining": 0,
+    "privateNetworkNamespace": true
+  },
+  "checks": [
+    {
+      "name": "saved global default leaves active worker selection unchanged",
+      "passed": true,
+      "samePid": true,
+      "sameMountedPlan": true,
+      "pending": true
+    },
+    {
+      "name": "saved source edit leaves active mounted source graph unchanged",
+      "passed": true,
+      "samePid": true,
+      "sameMountedPlan": true,
+      "pending": true
+    },
+    {
+      "name": "saved file policy leaves active mounted grants unchanged",
+      "passed": true,
+      "samePid": true,
+      "sameMountedPlan": true,
+      "pending": true
+    },
+    {
+      "name": "Stop survives owned service reopen without new worker or input replay",
+      "passed": true,
+      "status": "stopped",
+      "localProviderCalls": 1
+    },
+    {
+      "name": "new actual worker mounts saved file restriction only after stop and explicit reopen",
+      "passed": true,
+      "noInputReplay": true
+    },
+    {
+      "name": "actual filesystem writer rejects newly denied path after explicit reopen",
+      "passed": true,
+      "fileAbsent": true
+    }
+  ],
+  "ordinaryOutcomes": {
+    "composer.stop": [
+      0,
+      2
+    ],
+    "privacy.file-policy": [
+      1
+    ],
+    "connections.default-model": [
+      1
+    ],
+    "configuration.sources": [
+      2
+    ]
+  },
+  "actualFileEffects": {
+    "beforePolicy": {
+      "tool": "write_file",
+      "success": true,
+      "writtenBytes": 25
+    },
+    "afterStopAndExplicitReopen": {
+      "tool": "write_file",
+      "success": false,
+      "errorCode": "file_source_access",
+      "effect": "none",
+      "fileAbsent": true
+    }
+  },
+  "fixes": [
+    {
+      "commit": "a5292abc89bd7316089fa81b23e66333fdce54b7",
+      "defect": "Default-model edit rejected the existing local provider source.",
+      "change": "Retain only the same source on the same provider module; newly selected paths/modules still use the existing URI validator.",
+      "red": "2 failed, 2 passed; old product source",
+      "green": "68 setup tests passed in 2.59s"
+    },
+    {
+      "commit": "08b70668bb14cfccdec3565d8ce1186ef80c751a",
+      "defect": "Removing the last source override left an empty category, changing the profile key and unnecessarily requesting qualification.",
+      "change": "Known empty module/bundle source maps declare no source. Nonempty and unknown declarations remain in the identity.",
+      "red": "3 failed; old product source",
+      "green": "60 profile/update tests passed in 7.38s"
+    }
+  ],
+  "finalFlow": "Public default-model save/restore, source save/remove, session-policy save, public Stop, AppService close/reopen, explicit worker reopen, actual filesystem denial. The final passing flow required no private global-settings reset.",
+  "retainedFailures": [
+    "Initial test environment omitted app dependencies; host controller now reuses its existing qualification environment read-only while normal workers use q638.",
+    "Initial functional harness omitted the actual AppService bridge; restored normal runtime.app_bridge wiring.",
+    "Original local-source rejection and empty-source profile miss are preserved as failed results; both now fixed.",
+    "An intermediate independent policy-boundary check restored original private global bytes. It passed but is superseded by the final ordinary-action flow with no reset."
+  ],
+  "limitations": [
+    "Local deterministic provider is held until cancelled; this is not live-provider acceptance.",
+    "The source override is saved and removed while the worker runs. The actual mounted graph stays unchanged; activation of a new unqualified provider source is intentionally not attempted.",
+    "No browser was exercised in this runtime proof; corresponding public browser paths have separate receipts.",
+    "A single finite actual-worker run establishes these effects, not reliability statistics."
+  ],
+  "evidence": {
+    "normal-runtime-functional-evidence/evidence/functional-result.json": "f3bb547f99e44eac5c91eae4522308cb1877e27011250a235ac501b40775b504",
+    "normal-runtime-functional-evidence/evidence/functional-source-binding.json": "38aa1d18ee1cb84349e6571b6747a7efab267153c9fdaa1c4c901c547b6d6244",
+    "normal-runtime-functional-evidence/evidence/existing-local-source-failed-functional-result.json": "c67a43f651bd90c720e0efe9fa0102f683416006f9e2e495fd889cd3331ec0f0",
+    "normal-runtime-functional-evidence/evidence/empty-source-map-profile-miss-functional-result.json": "7da259d6bdccba42f74533d105ecafb0db0c402565d4b0cfa7a676a0c36eb3c8",
+    "local-source-red.log": "d888ddb0ea459f5e2893731928dc9dc974ca2f4f9dd1101ed6b50c1000398bce",
+    "local-source-green.log": "36b766afb4d426e14c24268ff4226454e6c7e482c22470ab998447a20d673ee2",
+    "empty-source-red.log": "9ce71a7e477297dd076a65b7af78a076dd3b537e08e1e1b199faec1f625164c7",
+    "empty-source-green.log": "76d03bb3755bb0585e7dde708fe92c9d18a5d62389f53a7f77687f83643ba00e",
+    "normal-runtime-functional6.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-runtime-functional.py": "bf7224acac82b1f2ef5dc6ecbc1bed8ba072dbaa34937070a7cd62ad3907e252",
+    "normal-runtime-functional-namespace.py": "d32acedfe2e603d354aca623f5eeaf18813f7de419b7bd894776cdbbf6a87a47",
+    "normal-runtime-functional-sitecustomize.py": "b7389acc29ffba773ab708152a718282865c07ced6665cdec94b82fe17f5ee10"
+  }
+}

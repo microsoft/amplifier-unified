@@ -9,6 +9,23 @@ worker, selects a different chat, changes a draft or edits native history.
 Archived active work can still produce a response or attention item. Worker
 histories stay with their parent and cannot be independently archived.
 
+Interactive Archive controls show “Archiving…” immediately and confirm success
+with “Chat archived” and Undo. When archiving the chat currently being viewed,
+the initiating browser returns to that workspace's Chats view (Search chats for
+a managed chat or unavailable workspace), without opening another conversation.
+The previously selected chat remains retained behind the list; drafts and
+attachments are not cleared. Archiving from a list does not change that view.
+If the person navigates while archiving, a late response never redirects them.
+Unsaved Settings edits keep that view open with an explicit archive confirmation.
+Only one interactive archive or restore mutation runs at a time so its outcome is
+not hidden. A confirmed mutation releases that lock before navigating: Undo and
+other archive controls remain usable even if opening the list stalls. A later
+operation or notice dismissal invalidates the old browse and its focus change.
+Undo restores only the archived chat; it does not reopen it. Rejections stay
+in place with an error; an unconfirmed outcome is not retried automatically.
+Raw `session.archive` calls, including `app_control` and browser integrations,
+keep their selection-preserving contract and do not trigger this UI navigation.
+
 Workspace conversations support Archive and Restore. Chats created without a
 workspace also support permanent Delete after reviewing the exact deletion
 scope. `session.deletePreview` supplies that review, and `session.delete`

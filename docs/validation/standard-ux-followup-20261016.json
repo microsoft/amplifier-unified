@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-16T13:31:51.691784+00:00",
+  "baseRevision": "7c23b2b85fca8d7d7d09e0fe19fe3fa8a0c88726",
+  "runtime": "actual bundled app and Chromium in owned DTU; synthetic provider fixture",
+  "productChanges": 0,
+  "sourceFiles": {
+    "frontend/tests/standard-ux-keyboard-reflow-browser.mjs": "7fb6d1f3f0aed9bc48d52ec8978b7b1d78612e028f1d364264bc5136f57af32d",
+    "tests/test_chat_permissions.py": "7bf7c70667606762f5eece167521ff4ccb86d2bc540c1dad273bf443dcf3d265",
+    "tests/test_workspace_task_storage.py": "2320d40f60d2a7629bebf4eb968dcd2549acd51f6dae872488ed362ccd063aa2",
+    "amplifier_web/static/build.json": "70fe6388e40cedd0ea05a2614899d0af5cd7cf569139a49227b150e87b3bea52",
+    "tests/test_browser_check_runner.py": "76ea96867a42e569de2e6c5babf85fa8b00886eba113866f34ec015bc2f3bbb0",
+    "frontend/tests/browser-checks.json": "3ff309a4b6b3a05410067d2f01fd2ccd5a7f158aeb888a318eec09cf6624d074"
+  },
+  "browser": {
+    "passed": true,
+    "durationSeconds": 7.173,
+    "cleanup": {
+      "remaining": [],
+      "terminated": 0
+    },
+    "sequentialFocusWitnesses": 29,
+    "cssViewports": [
+      [
+        1440,
+        1000
+      ],
+      [
+        720,
+        500
+      ]
+    ],
+    "sections": [
+      "ai",
+      "smart-tools",
+      "appearance",
+      "workspaces",
+      "voice",
+      "notifications",
+      "privacy",
+      "updates"
+    ],
+    "checks": [
+      "Sequential Tab reachability; Enter activation",
+      "Visible focus indicator and entire target in viewport",
+      "No horizontal panel overflow",
+      "Back/close and retained private draft"
+    ],
+    "negativeControl": {
+      "status": "failed as required",
+      "mutation": "Remove Privacy & files section from sequential Tab order (tabIndex=-1)",
+      "error": "Not sequentially keyboard reachable: privacy section",
+      "productSourceChanged": false
+    }
+  },
+  "permissions": {
+    "passed": 35,
+    "failed": 0,
+    "skipped": 0,
+    "durationSeconds": 17.38,
+    "checks": [
+      "Real native Core coordinator/filesystem mount accepts exact approved session directory on new mount",
+      "Sibling directory still refused",
+      "Reset restores inherited defaults",
+      "Task storage uses execution checkout and refuses allocation before denied/unknown mounted access creates files"
+    ],
+    "limits": [
+      "Service runtime fixture is controlled; native coordinator/filesystem are real",
+      "Does not execute original Stories workflow or real resumed delegate"
+    ],
+    "routineOwner": "Full Python checks: native Core/file-policy prerequisites required before complete suite"
+  },
+  "ledger": {
+    "workflows": 199,
+    "outcomes": 669,
+    "coveredInContext": 618,
+    "partiallyObserved": 36,
+    "notRun": 15,
+    "ordinaryPathsObserved": 189,
+    "remainingOutcomes": 51,
+    "changedByThisQualification": 0,
+    "reason": "Additional named witnesses strengthen shared-pattern evidence without claiming every control, platform, renderer or external effect."
+  },
+  "historicalAttempts": [
+    {
+      "attempt": "first",
+      "status": "failed",
+      "reason": "Test selected hidden compact close button in desktop layout."
+    },
+    {
+      "attempt": "second",
+      "status": "failed",
+      "reason": "Single-process Chromium context reuse exited; each viewport now owns its own browser."
+    },
+    {
+      "attempt": "third/fourth",
+      "status": "failed",
+      "reason": "CSS zoom2 did not provide browser-zoom CSS viewport semantics; clipped privacy control is retained as CSS zoom observation, not relabeled pass. Final uses half CSS viewport and explicitly excludes browser/OS zoom."
+    }
+  ],
+  "limits": [
+    "No physical device, browser toolbar zoom, OS magnifier or screen-reader qualification",
+    "Named destinations only; not universal keyboard accessibility",
+    "Scenario duration under shared DTU load is not interaction latency"
+  ],
+  "evidenceRoot": "output/ux-residual168/receipts/ux-residual168",
+  "runnerContracts": {
+    "passed": 18,
+    "failed": 0,
+    "skipped": 0,
+    "durationSeconds": 3.59,
+    "namespace": "private PID namespace; pytest cache disabled"
+  }
+}

@@ -22,7 +22,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --group dev --group artifacts
       - name: Check release identity and post-release reporting contracts
-        run: uv run --no-sync pytest -q tests/test_release_automation.py tests/test_release_qualification.py tests/test_frontend_release_proof.py tests/test_goal_peer_junit.py tests/test_post_release_checks.py
+        run: uv run --no-sync pytest -q tests/test_release_automation.py tests/test_release_qualification.py tests/test_frontend_release_proof.py tests/test_goal_peer_junit.py tests/test_post_release_checks.py tests/test_integration_checks.py tests/test_integration_clients.py tests/test_browser_check_runner.py tests/test_active_client_diagnostics.py
       # Full Python and browser coverage runs locally and after publication.
       - name: Install frontend dependencies
         run: npm ci --prefix frontend

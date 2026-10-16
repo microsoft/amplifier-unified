@@ -91,6 +91,8 @@ instructions and asks delegated workers to coordinate use of the shared canvas. 
 
 Call `app_control` with `operation:get_state` to see the canvas and
 `operation:list_actions` with `args:{"prefix":"canvas."}` for canvas action schemas.
+Read the returned `items` and follow `nextOffset` with the same prefix/revision;
+see [bounded discovery](AGENT-RESULTS.md) for oversized-schema reads.
 The default state read is a bounded overview of the calling conversation and
 visible UI. Other conversations are listed by title/status, without their content.
 Use `get_state` with `args:{"path":"/canvas","offset":0,"limit":50}` to inspect
@@ -400,6 +402,15 @@ resource/revision/generation checks. `canvas.views.release` closes only that
 inline view and refuses unsaved edits. Conversation transitions protect dirty
 views and clear clean inline leases; a new browser page never inherits leases
 from its predecessor. Saved content is unaffected by preview disposal.
+
+The app's **Reload now** control also protects unfinished Canvas input. Mounted
+native renderers and interactive apps register local dirty intent before sending
+the canonical declaration, so a pending or rejected acknowledgement still blocks
+reload. Only the latest successful clean declaration clears that local guard;
+unmount retires it. Canonical dirty views provide an additional safeguard. Reload
+checks again after draft/checkpoint preparation, immediately before navigation.
+This does not turn a best-effort observation checkpoint into saved input, and does
+not intercept the browser's own reload/close controls.
 
 Preview bodies load only near the viewport. A client may retain up to eight
 inline previews; additional artifacts remain available in full Canvas, and the

@@ -1,0 +1,322 @@
+{
+  "schemaVersion": 1,
+  "purpose": "One-time isolated readiness audit; not a new per-release gate",
+  "delivery": {
+    "branch": "integration/readiness-20261015",
+    "pullRequest": "https://github.com/microsoft/amplifier-unified/pull/784",
+    "mainMerged": false,
+    "released": false,
+    "productionAdopted": false
+  },
+  "broadPython": {
+    "source": "e27593c670bd977f74202d8832791fda11302856",
+    "python": "3.13.16",
+    "platform": "Linux aarch64, owned spark-2 DTU",
+    "isolation": "Private PID/proc namespace and private on-disk temporary directory",
+    "passed": 9021,
+    "subtestsPassed": 6,
+    "skipped": 36,
+    "failed": 0,
+    "seconds": 4403.79,
+    "warnings": {
+      "junitRecordPropertyCompatibility": 4,
+      "multiprocessForkDeprecationInTests": 8,
+      "aiohttpStartedAppMutationInTest": 1
+    },
+    "skipPolicy": "Explicit optional runtime, package, platform and external-environment requirements are not counted as passes. Useful warmed-Core controls receive separate source-bound qualification.",
+    "limit": "Later product changes use focused qualification; this result is not relabeled as a full run at a later commit."
+  },
+  "broadFrontend": {
+    "source": "09d6ea084",
+    "passed": 977,
+    "skipped": 0,
+    "seconds": 27.961
+  },
+  "canonicalBrowsers": {
+    "source": "4801878aa",
+    "passed": 72,
+    "seconds": 492.512,
+    "receipt": "canonical-browser-qualification-20261015.json"
+  },
+  "laterFocusedQualification": [
+    {
+      "source": "596a7ff08",
+      "ui": "a8b8c4f8468eb04d",
+      "checks": [
+        "14 ordinary workspace assertions",
+        "4 Smart Canvas owner assertions"
+      ],
+      "passed": true
+    },
+    {
+      "source": "17cdccdfd",
+      "ui": "a8b8c4f8468eb04d",
+      "checks": [
+        "Expired and denied sign-in with actual login lifecycle and disposable child",
+        "Image preference inspection/configuration without model or image submission",
+        "Badge preference changes preserve pending Activity, decisions and private draft"
+      ],
+      "browserScenariosPassed": 3,
+      "seconds": [
+        5.638,
+        7.252,
+        6.081
+      ],
+      "limits": [
+        "Synthetic provider and shortened sign-in deadline",
+        "No external account, image generation or OS notification acceptance"
+      ]
+    },
+    {
+      "source": "ba4545fbd",
+      "ui": "a8b8c4f8468eb04d",
+      "checks": [
+        "Saved-version browse/reload and one explicit restore preserve exact runtime input receipts",
+        "All three ordinary layout values preserve the actual reading message and pixel offset, private draft and canonical conversation records"
+      ],
+      "browserScenariosPassed": 2,
+      "seconds": [
+        4.092,
+        4.066
+      ],
+      "limits": [
+        "Desktop pointer and synthetic history/runtime",
+        "Does not qualify universal external-effect replay or every narrow-layout reading position"
+      ]
+    },
+    {
+      "source": "3f002040e",
+      "receipt": "standard-ux-final-ordinary-20261015.json",
+      "checks": [
+        "Final ordinary Settings, archive/search navigation and missing workspace folder controls"
+      ],
+      "passed": true
+    },
+    {
+      "source": "9c1cd7f70",
+      "receipt": "optional-core-qualification-20261015.json",
+      "checks": [
+        "12 separately qualified optional Core checks and direct real history-edit probe"
+      ],
+      "passed": true
+    },
+    {
+      "sourceBeforeCommit": "95d64c53259625f7a53d851d1b776a99bff93524",
+      "receipt": "smart-tool-cleanup-qualification-20261015.json",
+      "checks": [
+        "Failed Smart Tool stage cleanup and current-installation preservation"
+      ],
+      "passed": true
+    },
+    {
+      "source": "ed8dc6482",
+      "receipt": "queued-check-qualification-20261015.json",
+      "checks": [
+        "123 source-bound main integration backend checks",
+        "22 final bounded metadata backend checks",
+        "33 affected frontend component checks",
+        "Public queued-check controls and held-plan read browser journeys"
+      ],
+      "passed": true,
+      "build": "5f136e8e69c99e41"
+    },
+    {
+      "source": "0701c94cb5c9eae983b87005ca8f9b08a70d1184",
+      "receipt": "bounded-workspace-metadata-20261015.json",
+      "checks": [
+        "Copied-scale workspace navigation with 1/6/12 real workers",
+        "No dormant-owner admission across both 40-row pages"
+      ],
+      "workspaceTargetsMet": true,
+      "warmSendTargetMet": false
+    },
+    {
+      "source": "36ba434c475bc2f10c23fd0f9a7258bac27d0fc8",
+      "integrationCommit": "989b57b1b",
+      "receipt": "delivery-publication-20261015.json",
+      "checks": [
+        "Exact delivery durability, affected subscribers, private drafts, attention and pending progress widening",
+        "Same-UI complete-corpus one-worker replay"
+      ],
+      "focusedCasesPassed": 33,
+      "finalCounterOracleCasesPassed": 10,
+      "warmTargetMet": false,
+      "sampledP95MsBeforeAfter": [
+        671,
+        612
+      ],
+      "samplesPerStage": 3,
+      "timingLimit": "Largest of three samples, not a population tail estimate"
+    },
+    {
+      "source": "26533c68cdf4cca9b43d9bb4e5b426407a553ea3",
+      "integrationCommit": "16b80b224",
+      "receipt": "finite-standard-control-qualification-20261015.json",
+      "checks": [
+        "Actual public keyboard and coarse-touch workspace Pin/Unpin",
+        "Nonempty unsent draft and saved history survive provider removal, replacement and reload"
+      ],
+      "browserScenariosPassed": 2,
+      "seconds": [
+        10.48,
+        4.16
+      ],
+      "build": "5f136e8e69c99e41",
+      "limits": [
+        "Synthetic provider/runtime; no real account or physical touch-device claim",
+        "Three prior fixture failures preserved; no product change"
+      ]
+    },
+    {
+      "receipt": "normal-runtime-worker-start-20261015.json",
+      "passed": true,
+      "checks": [
+        "Three actual RuntimeManager starts using the existing qualified Work profile; no worker command override or model input"
+      ],
+      "limits": [
+        "Finite source-bound isolated acceptance; see receipt for exact sources and limits."
+      ]
+    },
+    {
+      "receipt": "normal-worker-control-boundaries-20261015.json",
+      "passed": true,
+      "checks": [
+        "Six actual-worker configuration, durable Stop, no automatic replay and filesystem permission controls",
+        "68 setup tests and 60 profile/update tests; original defects retained as failing controls"
+      ],
+      "limits": [
+        "Finite source-bound isolated acceptance; see receipt for exact sources and limits."
+      ]
+    },
+    {
+      "receipt": "integrated-dependency-activation-20261015.json",
+      "passed": true,
+      "checks": [
+        "Exact Bash and computer-use candidate package identities installed in a new private graph",
+        "Full Work preparation and normal worker readiness with network disabled; no provider inputs or desktop actions"
+      ],
+      "limits": [
+        "Finite source-bound isolated acceptance; see receipt for exact sources and limits."
+      ]
+    },
+    {
+      "receipt": "work-required-modules-20261015.json",
+      "passed": true,
+      "checks": [
+        "Actual named Work worker mounts all 13 required tool capabilities and its declared orchestrator/context/provider; stable independent provenance, no provider input"
+      ],
+      "limits": [
+        "Named profile proof, not every bundle/provider combination"
+      ]
+    },
+    {
+      "receipt": "integrated-preview-worker-fixes-20261015.json",
+      "passed": true,
+      "checks": [
+        "Integrated product source c5c4b3c17 imports from the owned preview checkout",
+        "Actual authenticated browser launch and two repeats, no browser errors",
+        "Four synthetic chats and eight saved files preserved byte-for-byte; updates disabled and schedules empty"
+      ],
+      "limits": [
+        "Finite preview functionality; scale and performance qualification use separate source-bound receipts"
+      ]
+    },
+    {
+      "source": "3a50b226ad1f512587f3c94c4e166a120f85352e",
+      "receipt": "archive-running-worker-20261015.json",
+      "passed": true,
+      "checks": [
+        "Public Archive preserves actual running worker, committed history and workspace sentinel files",
+        "Separate explicit Stop/reopen/Restore admits no replay"
+      ],
+      "limits": [
+        "Local deterministic provider and private runtime; no external effects or sustained-load claim"
+      ]
+    },
+    {
+      "source": "3a50b226ad1f512587f3c94c4e166a120f85352e",
+      "receipt": "recovery-ownership-worker-20261015.json",
+      "passed": true,
+      "checks": [
+        "Public recovery, duplicate command and service reopen preserve original history and a prior local file effect without starting a worker",
+        "Separate real Foundation lock owner refuses takeover; explicit release hands off to one normal worker; duplicate receipt retains same worker without input"
+      ],
+      "limits": [
+        "Separate Foundation lock owner, not full CLI runtime; synthetic committed tool history, not arbitrary remote effects"
+      ]
+    },
+    {
+      "source": "697fa66ac0be490dfd4edb7358b251163cd460d7",
+      "receipt": "profile-cold-worker-start-20261015.json",
+      "passed": true,
+      "checks": [
+        "Locked local wheel exports retain package identity and markers; unmatched or ambiguous sources fail",
+        "Original focused regression4failed/6passed becomes10passed",
+        "Fresh ordinary Work profile qualification and actual worker readiness; immutable parent policy unchanged"
+      ],
+      "readyMs": 7729.195,
+      "targetMs": 10000,
+      "limits": [
+        "One profile-cold/worker-cold sample with warm dependency/source caches; no download or p95 claim",
+        "No provider input; zero workers afterward"
+      ]
+    },
+    {
+      "source": "697fa66ac0be490dfd4edb7358b251163cd460d7",
+      "receipt": "integrated-preview-final-20261015.json",
+      "passed": true,
+      "checks": [
+        "Final integrated preview uses current owned product source and unchanged qualified browser build",
+        "Eight saved files/four synthetic chats unchanged; automatic updates disabled; no schedules",
+        "Authenticated browser opens without errors"
+      ],
+      "limits": [
+        "Single481ms functional launch, not matched performance measurement"
+      ]
+    }
+  ],
+  "evidencePolicy": "Current baseline observations, desired performance targets, ordinary route coverage and per-outcome coverage remain separate. Historical failures and all explicit limitations are retained in the private evidence ledger. Passing a suite does not qualify an unasserted outcome.",
+  "remaining": "Warm send acknowledgement remains above the desired300ms target. All finite ordinary runtime follow-ups identified by the independent audit have source-bound receipts. Device/account/platform acceptance and universal guarantees retain explicit limits;13 product/authority choices remain decision briefs. All70 issues are dispositioned, not all resolved. Canonical dependency PRs remain unmerged and unadopted in production; exact private dependency qualification is separately recorded; current PR CI is recorded separately.",
+  "coverage": {
+    "workflows": 199,
+    "outcomes": 669,
+    "observedInNamedContexts": 618,
+    "partial": 36,
+    "notRun": 15,
+    "explicitResidualDispositions": 51,
+    "receipt": "standard-ux-completion-20261015.md",
+    "finiteResidualFollowup": "Archive, recovery, local ownership, current cold qualification and final preview are now qualified in their named contexts; see requirement reconciliation and individual receipts.",
+    "workflowsFullyObservedInNamedContexts": 168
+  },
+  "canonicalRecipeQualification": {
+    "pullRequest": "https://github.com/microsoft/amplifier-bundle-recipes/pull/121",
+    "head": "8de062a8577735854559f4e77e0bf68236530659",
+    "implementation": "620d786a4379c936b0cf082bd66ad3faf5e910ee",
+    "receipt": "https://github.com/microsoft/amplifier-bundle-recipes/blob/8de062a8577735854559f4e77e0bf68236530659/docs/validation/shell-source-qualification-20261015.json",
+    "repositoryGates": {
+      "modulePassed": 1646,
+      "moduleSkipped": 1,
+      "nativePassed": 590,
+      "nativeSkipped": 1,
+      "kitPassed": 19,
+      "kitSkipped": 1,
+      "unchangedLegacyGoldens": 5
+    },
+    "supplements": {
+      "historicalActivationControlPassed": 1,
+      "crossEngineKeyComparisonPassed": 1,
+      "portableDiagramExamplesPassed": 22
+    },
+    "actualCliPassed": true,
+    "unchangedIndependentCheckerPairsPassed": 14,
+    "retainedCorpusPreparations": 6984,
+    "admittedRefusals": 0,
+    "productionAdopted": false,
+    "limits": [
+      "GNU Bash5.2.21 and exact parser profile; other installed platforms not qualified",
+      "Source preparations across519 templates, not execution of arbitrary original recipes",
+      "Context source confinement is not a sandbox for trusted recipe authors",
+      "Canonical recipe capability is absent from inspected normal Work graph; no Unified dependency adoption implied"
+    ]
+  }
+}

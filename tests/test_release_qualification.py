@@ -250,7 +250,7 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert 'host-source-resolution' in resolve['steps'][-1]['run']
     assert post['jobs']['report']['permissions'] == {'contents': 'read', 'issues': 'write'}
     assert 'always()' in post['jobs']['report']['if']
-    assert set(post['jobs']['report']['needs']) == {'resolve', 'installed-package', 'readiness', 'python', 'browser'}
+    assert set(post['jobs']['report']['needs']) == {'resolve', 'installed-package', 'readiness', 'python', 'browser', 'integrations'}
     frontend = '\n'.join(step.get('run', '') for step in release['jobs']['frontend']['steps'])
     assert 'npm test --prefix frontend' in frontend
     assert 'npm run build --prefix frontend' in frontend

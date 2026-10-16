@@ -6,7 +6,7 @@ export function WorkspacePlans({ids,act,children}){
   if(!act||!ids.length){setPlans({});return}
   let live=true,timer;
   async function refresh(){
-   if(!document.hidden){try{const result=await act('session.plans',{ids});if(live)setPlans(Object.fromEntries((result?.result?.items||[]).map(row=>[row.sessionId,row.plan])))}catch{if(live)setPlans(previous=>Object.fromEntries(Object.keys(previous).map(id=>[id,{unavailable:true,readFailed:true}])))}}
+   if(!document.hidden){try{const result=await act('session.plans',{ids},{feedback:false});if(live)setPlans(Object.fromEntries((result?.result?.items||[]).map(row=>[row.sessionId,row.plan])))}catch{if(live)setPlans(previous=>Object.fromEntries(Object.keys(previous).map(id=>[id,{unavailable:true,readFailed:true}])))}}
    if(live)timer=setTimeout(refresh,15000);
   }
   refresh();return()=>{live=false;clearTimeout(timer)};
@@ -18,7 +18,7 @@ export function WorkspacePlan({id}){
  useEffect(()=>{
   let live=true;setItems(null);setError('');
   if(open&&plan&&!plan.unavailable){
-   act('session.plans',{ids:[id],includeItems:true}).then(result=>{
+   act('session.plans',{ids:[id],includeItems:true},{feedback:false}).then(result=>{
     if(live)setItems(result?.result?.items?.[0]?.plan?.items||[]);
    }).catch(()=>{if(live)setError('The plan could not be read. Open the chat to inspect it.')});
   }

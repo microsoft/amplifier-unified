@@ -79,8 +79,11 @@ checks the actual published stable tag resolves to the candidate commit, and use
 that immutable revision for all broad tests. It does not substitute the current
 main head or whichever release happens to be latest. The installed-package lane
 downloads both published distributions, verifies their checksums, and installs
-and probes the wheel outside the source checkout. The full Python, broad readiness
-and extended browser suites run in independent jobs after publication.
+and probes the wheel outside the source checkout. The full Python, broad readiness, extended browser, and owned integration
+suites run in independent jobs after publication. The [integration ownership
+checklist](integration-coverage.md) maps optional-dependency skips to configured
+execution lanes, runs affected lanes on PRs, and rejects unexpected skips. The
+existing publication runtime group is not duplicated in that matrix.
 The full Python lane has a 90-minute limit and prints each test's identity as it
 runs, so a timeout does not conceal failed or unfinished test identities.
 It retains the verbose log and, when pytest completes, JUnit results. A partial

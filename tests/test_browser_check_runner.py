@@ -218,6 +218,10 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        'standard-ux-keyboard-reflow': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-keyboard-reflow'},
+        'smart-tool-updates': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/smart-tool-updates-artifacts'},
+        'archive-feedback': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/archive-feedback'},
+        'update-restart': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-restart-artifacts'},
         'sidebar-reading': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-reading-artifacts'},
         'navigation-details-context': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-details-context-artifacts'},
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
@@ -229,8 +233,8 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row['env'] == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 69
-    assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == 'ca60c5f5e0a9bf5fd94795d64ea6c8d9c286b2c5f481b7d3c07d5f32fb522173'
+    assert len(original) == 65 and len(rows) == 73
+    assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == '115d865e2934f442582f89f77bde590ebc6101cb535c841efbba8f3e2511807f'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
     assert ['node', 'tests/empty-host-browser.mjs', '--lost-create'] in commands
@@ -271,5 +275,46 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     install = next(index for index, line in commands if 'uv pip install' in line and '--reinstall .' in line)
     for script in installed_overlap:
         assert any(index > install and f'node {script}' in line for index, line in commands)
-    # All 108 original scripts and the three added navigation regressions have a lane.
-    assert len(readiness_scripts | extended_scripts) == 111
+    appearance_preview = 'tests/appearance-preview-navigation-browser.mjs'
+    assert appearance_preview in readiness_scripts
+    assert appearance_preview not in extended_scripts
+    assert sum(f'node {appearance_preview}' in line for _, line in commands) == 1
+    # All 108 original scripts, three navigation regressions, confirmed restart,
+    # Smart Tool recovery, archive feedback and appearance preview navigation
+    # and sequential keyboard reflow each retain their owning lane.
+    assert len(readiness_scripts | extended_scripts) == 116
+
+    # The environment journey belongs to coordination, outside these two lanes.
+    environment = 'tests/test-environments-browser.mjs'
+    assert environment not in readiness_scripts | extended_scripts
+    owners = []
+    for path in workflows.glob('*.yml'):
+        value = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+        for job in value.get('jobs', {}).values():
+            for step in job.get('steps', []):
+                if f'node {environment}' in step.get('run', ''):
+                    owners.append((path.name, step))
+    assert len(owners) == 1 and owners[0][0] == 'coordination.yml'
+    assert owners[0][1]['env']['AMPLIFIER_TEST_OUTPUT_DIR'] == '${{ runner.temp }}/test-environments'
+    coordination = yaml.load((workflows / 'coordination.yml').read_text(), Loader=yaml.BaseLoader)
+    assert 'frontend/' + environment in coordination['on']['pull_request']['paths']
+    assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
+               and step.get('with', {}).get('path') == '${{ runner.temp }}/test-environments'
+               for step in coordination['jobs']['contracts']['steps'])
+
+
+def test_performance_reports_are_distinct_and_uploaded():
+    rows = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())['scenarios']
+    reports = {row['id']: row['env']['AMPLIFIER_PERF_EVIDENCE'] for row in rows
+               if 'AMPLIFIER_PERF_EVIDENCE' in row.get('env', {})}
+    assert len(set(reports.values())) == len(reports), 'A later scenario must not overwrite prior diagnostics'
+    assert reports['active-client-performance'] != reports['state-transport']
+    # Demand has no performance report writer; it must not borrow another path.
+    assert 'demand' not in reports
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    uploads = [step for step in workflow['jobs']['browser']['steps']
+               if step.get('uses') == 'actions/upload-artifact@v4']
+    directories = [line.strip().rstrip('/') + '/' for step in uploads
+                   for line in step['with']['path'].splitlines() if line.strip()]
+    assert all(any(path.removeprefix('{root}/').startswith(directory) for directory in directories)
+               for path in reports.values())

@@ -1002,6 +1002,9 @@ class Worker:
                     from artifact_runtime import discover
                 if data.get('provenance') is not True and data.get('resourceAccess') is not True and data.get('integrationValidation') is not True:
                     result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
+            elif op == 'handoff.boundary':
+                from amplifier_web.handoff_boundary import inspect
+                result = await inspect(self, data['request_id'], data.get('cancel', False))
             elif op == "desktop.readiness":
                 if not self.controls:
                     result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}

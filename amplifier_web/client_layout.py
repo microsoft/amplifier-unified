@@ -24,7 +24,11 @@ def update(service, patch, command_id, fingerprint, *, include_state):
     identity = service.clients.current.get()
     client = service.clients.record()
     if all(client['view'].get(key) == value for key, value in patch.items()):
-        receipt = {'accepted': True, 'revision': service._state['revision'], 'effects': []}
+        # This validated no-op publishes no client frame. The shared revision
+        # may include another chat's progress, which this client never receives.
+        # Retain that fact in the retry receipt rather than waiting for its SSE.
+        receipt = {'accepted': True, 'revision': service._state['revision'], 'effects': [],
+                   '_stateIndependent': True}
         if command_id:
             service.db.execute('INSERT INTO commands VALUES (?,?,?)', (command_id, fingerprint, json.dumps(receipt)))
             service.db.commit()

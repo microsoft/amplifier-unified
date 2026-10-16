@@ -879,7 +879,7 @@ class RuntimeManager:
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
-        safe = op in {'approval', 'coordination.approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness'} or (
+        safe = op in {'approval', 'coordination.approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness', 'handoff.boundary'} or (
             op == 'control' and args.get('operation') in {
                 'operations.cancel', 'kernels.interrupt', 'kernels.close',
                 'task.pause', 'task.block', 'task.complete',
@@ -902,7 +902,7 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery", "approval", "coordination.approval"}:
+        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery", "approval", "coordination.approval", "handoff.boundary"}:
             row["parked"] = False
         try:
             await self._write(row, {"op": op, "id": identity, **args})
@@ -1090,6 +1090,15 @@ class RuntimeManager:
             except SessionInUseError as current:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
+
+    async def handoff_boundary(self, session_id, request_id, *, cancel=False):
+        """Inspect only this existing worker; never warm or acquire a writer."""
+        row = self.workers.get(session_id)
+        if row is None:
+            return {'ready': True, 'waitingFor': [], 'continuationAllowed': False}
+        if row['process'].returncode is not None:
+            raise RuntimeError('The old worker exited before confirming its saved boundary.')
+        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel)
 
     async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None):
         """Save and release a known local writer before moving execution cwd."""

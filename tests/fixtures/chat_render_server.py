@@ -17,8 +17,12 @@ original_create = server.create_app
 async def create(*args, **kwargs):
     app = await original_create(*args, **kwargs)
     service = app["service"]
-    await service.history.close()
-    await service.event_log_view.close()
+    # Stop background discovery, retaining the real on-demand message/work
+    # readers needed by the paging positive control and browser projections.
+    if service.history.task:
+        service.history.task.cancel()
+        await asyncio.gather(service.history.task, return_exceptions=True)
+        service.history.task = None
     await service.dispatch("session.create", {})
     session = service._session()
     now = time.time() - 120
@@ -26,7 +30,9 @@ async def create(*args, **kwargs):
                    status="working", messages=[
         {"id": f"message-{i}", "role": "user" if i % 2 == 0 else "assistant",
          "createdAt": now + i, "text": f"Saved message {i}\n\n**Stable text**\n\n| Name | Value |\n| --- | --- |\n| sample | {i} |\n"}
-        for i in range(80)])
+        # Exceed the current 100-message display window so the browser check
+        # exercises a real earlier-page read, independently of render probes.
+        for i in range(120)])
     session["activity"] = {"phase": "composing", "label": "Synthetic work", "startedAt": now}
     service._publish()
 
@@ -42,7 +48,7 @@ async def create(*args, **kwargs):
             if "workers" in data:
                 session["workers"] = data["workers"]
                 session["execution"] = {"nodes": [{"id": "worker-test", "kind": "tool",
-                    "turnId": "worker-turn", "phase": "completed", "anchorMessageId": "message-78"}],
+                    "turnId": "worker-turn", "phase": "completed", "anchorMessageId": "message-118"}],
                     "turns": [{"id": "worker-turn", "phase": "completed"}]}
             service._publish_changes(sessions={session["id"]}, detail_only=True)
         return web.json_response({"id": session["id"], "messages": len(session["messages"])})

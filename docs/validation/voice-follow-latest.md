@@ -36,3 +36,18 @@ Failed investigative checks are retained in the workspace evidence directory:
 the initial hangup shift, native anchoring experiments, a fixture context setup
 error, and a navigation Chromium launch failure before using its supported DTU
 launch flag. These are not counted as passing feature checks.
+
+October 15 post-release follow-up found a distinct call-following defect: when a
+completed Work notice disappears at the bottom, the browser clamps `scrollTop`
+to the shorter content before the controller's next layout frame. That automatic
+move was incorrectly treated as reading intent, silently pausing the call. The
+controller now preserves following only for that bounded clamp; wheel, touch,
+keyboard, scrollbar and browser focus movement retain their existing behavior.
+
+The owned-DTU regression delivers the observed clamp-before-layout order, then
+grows the transcript. It also checks actual scrollback, browser focus movement,
+explicit resume and resize. The production voice browser waits for accepted
+current Work before comparing raw scroll coordinates and additionally checks the
+visible message identifier and offset. Full voice following, ordinary chat
+scrolling and the controller regression passed on the built candidate. These
+remain synthetic signaling checks, with the physical-audio limits above.

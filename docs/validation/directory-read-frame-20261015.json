@@ -1,0 +1,350 @@
+{
+  "kind": "focused-directory-read-frame-qualification",
+  "date": "2026-10-15",
+  "productCandidate": "76d3258fb10392bb5f8851413f21e62f829b92bb",
+  "baseline": "09b9cbc596f280a67e4ebc6a1275fe2b5eb653d8",
+  "scope": "Reuse exact live scalar preparation only within a synchronous bound-web browser snapshot; no cache across frames, yields, explicit hydration, unbound reads, or other threads.",
+  "correctness": {
+    "baselineRealBrowser": "fails: two admitted owners were each prepared eight times during one changed-state snapshot",
+    "candidateRealBrowser": "each admitted owner prepared once; exact existing projections preserved",
+    "affectedBeforeFinalSafetyGuards": {
+      "passed": 54,
+      "seconds": 33.94
+    },
+    "finalFocused": {
+      "passed": 11,
+      "seconds": 3.94
+    },
+    "finalAdditionalGuards": [
+      "Explicit cold hydration unscoped oracle",
+      "Inherited task contexts retired before asynchronous execution",
+      "Failed alternate-owner reconstruction clears prior receipt"
+    ],
+    "independentSourceReview": "GO from issue_validation_day; no independent rerun claimed"
+  },
+  "environment": {
+    "ownedDTU": "dtu-unified-codex-dev-20261014",
+    "parentCpuCount": 4,
+    "parentMemoryBytes": 8589934592,
+    "serviceCpuQuotaRequested": 6,
+    "serviceMemoryRequestedGiB": 12,
+    "effectiveCapacity": "Constrained by parent; not six CPUs or twelve GiB",
+    "copiedNativeCatalogRows": 27508,
+    "syntheticOwners": 14,
+    "targetWorkspaceNativeRoots": 274,
+    "verifiedEventShards": 15,
+    "totalEventShards": 32,
+    "fullEventFidelity": false,
+    "capturePausedAtVerifiedBoundary": true,
+    "frontend": "identical frozen baseline build; backend-only candidate",
+    "provider": "Actual RuntimeManager workers with deterministic local synthetic provider, no external provider/account",
+    "runtimeQualificationBypassed": true,
+    "privateNetwork": true,
+    "canonicalNativeReadOnlyMounts": 4532,
+    "canonicalWriteOpenDenied": [
+      "metadata.json",
+      "transcript.jsonl",
+      "events.jsonl"
+    ],
+    "executionNegativeControls": 7,
+    "copiedOwnersExecuted": false
+  },
+  "baselineStage0": {
+    "source": "09b9cbc596f280a67e4ebc6a1275fe2b5eb653d8",
+    "startedAt": "2026-10-15T18:16:18.849Z",
+    "finishedAt": "2026-10-15T18:16:46.055Z",
+    "activeTarget": 0,
+    "actualWorkers": 1,
+    "backgroundWorkers": 0,
+    "passed": true,
+    "workersStopped": true,
+    "warmSendAckMs": [
+      1352.3797530000002,
+      1277.9786960000001,
+      1199.489048999998
+    ],
+    "warmAck": {
+      "count": 3,
+      "p50": 1277.9786960000001,
+      "p95": 1352.3797530000002,
+      "max": 1352.3797530000002
+    },
+    "workspace": [
+      {
+        "action": "first workspace demand",
+        "actionAckMs": 184.58902099999978,
+        "pageSettledMs": 1338.2716650000002,
+        "visibleMs": 1370.7080090000018,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "action": "exact chat filter",
+        "actionAckMs": 477.98016799999823,
+        "pageSettledMs": 3509.1537529999987,
+        "visibleMs": 3536.5309979999984,
+        "rows": 1,
+        "total": 1
+      },
+      {
+        "action": "clear filter",
+        "actionAckMs": 140.6608469999992,
+        "pageSettledMs": 474.26292399999875,
+        "visibleMs": 498.00465500000064,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "action": "explicit next page",
+        "actionAckMs": 173.04951000000074,
+        "pageSettledMs": 696.969634000001,
+        "visibleMs": 726.4148720000012,
+        "rows": 40,
+        "total": 274
+      },
+      {
+        "action": "explicit previous page",
+        "actionAckMs": 146.54405099999713,
+        "pageSettledMs": 418.17238499999803,
+        "visibleMs": 458.64259799999854,
+        "rows": 40,
+        "total": 274
+      }
+    ],
+    "hostCpuSecondsDuringMeasuredSpan": 15.04430006399997,
+    "loopLagMs": {
+      "count": 139,
+      "p95": 282.98570290207863
+    },
+    "browserErrors": [],
+    "receiptSha256": "047abe0a22b8eb33f8d0a4360f9c974a8af37fcc99cc17de40e66e8d8e5ebdc4"
+  },
+  "candidateStages": [
+    {
+      "source": "76d3258fb10392bb5f8851413f21e62f829b92bb",
+      "startedAt": "2026-10-15T18:20:55.765Z",
+      "finishedAt": "2026-10-15T18:21:14.700Z",
+      "activeTarget": 0,
+      "actualWorkers": 1,
+      "backgroundWorkers": 0,
+      "passed": true,
+      "workersStopped": true,
+      "warmSendAckMs": [
+        598.5740770000002,
+        771.9375970000001,
+        519.1037989999986
+      ],
+      "warmAck": {
+        "count": 3,
+        "p50": 598.5740770000002,
+        "p95": 771.9375970000001,
+        "max": 771.9375970000001
+      },
+      "workspace": [
+        {
+          "action": "first workspace demand",
+          "actionAckMs": 106.24937000000136,
+          "pageSettledMs": 359.7756239999999,
+          "visibleMs": 384.66741600000023,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "exact chat filter",
+          "actionAckMs": 872.9106820000015,
+          "pageSettledMs": 1696.6678530000008,
+          "visibleMs": 1727.2155820000007,
+          "rows": 1,
+          "total": 1
+        },
+        {
+          "action": "clear filter",
+          "actionAckMs": 118.6812579999987,
+          "pageSettledMs": 360.58193799999935,
+          "visibleMs": 399.03708499999993,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "explicit next page",
+          "actionAckMs": 113.1081379999996,
+          "pageSettledMs": 312.5876879999996,
+          "visibleMs": 339.066057,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "explicit previous page",
+          "actionAckMs": 890.0659680000008,
+          "pageSettledMs": 2635.8468029999985,
+          "visibleMs": 2659.978681999999,
+          "rows": 40,
+          "total": 274
+        }
+      ],
+      "hostCpuSecondsDuringMeasuredSpan": 7.961159968000004,
+      "loopLagMs": {
+        "count": 169,
+        "p95": 114.98267278075218
+      },
+      "browserErrors": [],
+      "receiptSha256": "e0a347613733c838663d22b22313cad16fa15e7f44d76dca21c9623d3cc076a0"
+    },
+    {
+      "source": "76d3258fb10392bb5f8851413f21e62f829b92bb",
+      "startedAt": "2026-10-15T18:21:15.091Z",
+      "finishedAt": "2026-10-15T18:21:49.715Z",
+      "activeTarget": 6,
+      "actualWorkers": 6,
+      "backgroundWorkers": 5,
+      "passed": true,
+      "workersStopped": true,
+      "warmSendAckMs": [
+        853.7327150000001,
+        837.5996640000012,
+        787.376268
+      ],
+      "warmAck": {
+        "count": 3,
+        "p50": 837.5996640000012,
+        "p95": 853.7327150000001,
+        "max": 853.7327150000001
+      },
+      "workspace": [
+        {
+          "action": "first workspace demand",
+          "actionAckMs": 140.13545700000032,
+          "pageSettledMs": 1280.203426,
+          "visibleMs": 1321.6091190000006,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "exact chat filter",
+          "actionAckMs": 584.8322989999979,
+          "pageSettledMs": 2674.8138169999984,
+          "visibleMs": 2705.2091919999984,
+          "rows": 1,
+          "total": 1
+        },
+        {
+          "action": "clear filter",
+          "actionAckMs": 132.84282800000074,
+          "pageSettledMs": 685.7303580000007,
+          "visibleMs": 713.6706489999997,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "explicit next page",
+          "actionAckMs": 122.74690399999963,
+          "pageSettledMs": 527.7148229999984,
+          "visibleMs": 556.2308319999975,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "explicit previous page",
+          "actionAckMs": 774.0086409999967,
+          "pageSettledMs": 2723.8254689999994,
+          "visibleMs": 2760.9965699999993,
+          "rows": 40,
+          "total": 274
+        }
+      ],
+      "hostCpuSecondsDuringMeasuredSpan": 9.947084144000002,
+      "loopLagMs": {
+        "count": 178,
+        "p95": 134.22049283981323
+      },
+      "browserErrors": [],
+      "receiptSha256": "74f946e97874934b86858e1c0918ec3bec19a53f2b12acd21116c70b8de02f2c"
+    },
+    {
+      "source": "76d3258fb10392bb5f8851413f21e62f829b92bb",
+      "startedAt": "2026-10-15T18:21:50.091Z",
+      "finishedAt": "2026-10-15T18:22:30.545Z",
+      "activeTarget": 12,
+      "actualWorkers": 12,
+      "backgroundWorkers": 11,
+      "passed": true,
+      "workersStopped": true,
+      "warmSendAckMs": [
+        761.2559949999995,
+        850.8549800000001,
+        865.5308930000028
+      ],
+      "warmAck": {
+        "count": 3,
+        "p50": 850.8549800000001,
+        "p95": 865.5308930000028,
+        "max": 865.5308930000028
+      },
+      "workspace": [
+        {
+          "action": "first workspace demand",
+          "actionAckMs": 192.23180000000139,
+          "pageSettledMs": 664.5443830000004,
+          "visibleMs": 674.3208640000012,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "exact chat filter",
+          "actionAckMs": 323.35452799999985,
+          "pageSettledMs": 2294.9624949999998,
+          "visibleMs": 2323.1045799999993,
+          "rows": 1,
+          "total": 1
+        },
+        {
+          "action": "clear filter",
+          "actionAckMs": 179.4392050000024,
+          "pageSettledMs": 458.85901899999953,
+          "visibleMs": 481.6680500000002,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "explicit next page",
+          "actionAckMs": 169.24380799999926,
+          "pageSettledMs": 662.2107079999987,
+          "visibleMs": 692.7605320000002,
+          "rows": 40,
+          "total": 274
+        },
+        {
+          "action": "explicit previous page",
+          "actionAckMs": 728.7369790000012,
+          "pageSettledMs": 3571.7624000000033,
+          "visibleMs": 3610.1954510000032,
+          "rows": 40,
+          "total": 274
+        }
+      ],
+      "hostCpuSecondsDuringMeasuredSpan": 8.68551579199999,
+      "loopLagMs": {
+        "count": 129,
+        "p95": 178.86204719543457
+      },
+      "browserErrors": [],
+      "receiptSha256": "509bd0ac078d530b3a87d2a3b793421238adfe6a35ae4a3ff92723985bbd536c"
+    }
+  ],
+  "targets": {
+    "warmAckMs": 300,
+    "met": false,
+    "statement": "All nine candidate warm-send samples exceed 300ms; filter and previous-page delays remain."
+  },
+  "limits": [
+    "Stage zero means zero background workers plus one actual foreground worker.",
+    "Three warm sends per stage are small samples, not sustained-load certification.",
+    "Same copied catalog/event tier and exact synthetic bindings; synthetic turn history accumulates across runs.",
+    "Baseline reused a warm long-lived process; candidate restarted to switch source. Service/cache lifecycle differences confound attribution of timing changes.",
+    "Frontend, workspace, gestures, and receipt predicates are unchanged. Each stage uses a new browser. Disk/service caches are not cold.",
+    "The earlier external profile used event tier13/32, so it motivates the mechanism but is not a numerically matched before/after profile.",
+    "The focused deterministic regression proves removal of duplicate preparation; these timings do not establish that the remaining latency targets are solved.",
+    "Only bound-web default browser frames are optimized; explicit/full/session APIs retain old semantics."
+  ],
+  "followup": "Profile remaining warm-ack and intermittent workspace delays separately if prioritized; no broad test or release gate added."
+}

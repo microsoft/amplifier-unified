@@ -3,7 +3,8 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {once} from 'node:events';
 import {createServer} from 'vite';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
+import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -64,6 +65,10 @@ try{
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const command=request.postDataJSON();if(command?.action==='feedback.comment')pending=command.args}});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+ await composer.fill('Keep my private original-chat draft');
+ await expect(composer).toHaveDraft('Keep my private original-chat draft');
+ const originalChat=await page.evaluate(()=>{const state=window.amplifier.getState();return {id:state.selectedSessionId,messages:state.sessions.find(row=>row.id===state.selectedSessionId)?.messages}});
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await page.getByRole('button',{name:'App options',exact:true}).click();
  await page.getByRole('button',{name:'Send feedback',exact:true}).click();
@@ -121,6 +126,9 @@ try{
  await page.reload();await page.getByText('Comment added to your feedback report.',{exact:true}).waitFor();
  assert.equal(await page.getByLabel('Add a comment',{exact:true}).inputValue(),'');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(composer).toHaveDraft('Keep my private original-chat draft');
+ assert.deepEqual(await page.evaluate(()=>{const state=window.amplifier.getState();return {id:state.selectedSessionId,messages:state.sessions.find(row=>row.id===state.selectedSessionId)?.messages}}),originalChat,'Feedback receipt/retry/correction must preserve original conversation');
+ assert.ok(!(await page.evaluate(()=>fetch('/api/fixture/followup').then(response=>response.json()))).posts.some(row=>JSON.stringify(row).includes('Keep my private original-chat draft')));
  await page.setViewportSize({width:1280,height:900});
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
  const usage=page.getByRole('region',{name:'Conversation usage'});

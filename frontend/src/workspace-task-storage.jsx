@@ -2,10 +2,11 @@ import React,{useEffect,useId,useRef,useState} from 'react';
 
 const kinds={'scratch-directory':'Scratch folder','browser-profile':'Browser profile folder','sqlite-database':'SQLite database'};
 export function TaskStorage({workspaceId,sessionId,initial,act,active,readOnly}){
- const formId=useId(),visit=useRef(0),key='amplifier-task-storage:'+workspaceId+':'+sessionId;
+ const formId=useId(),visit=useRef(0),inFlight=useRef(false),mounted=useRef(false),key='amplifier-task-storage:'+workspaceId+':'+sessionId;
  const [draft,setDraft]=useState(()=>{try{return JSON.parse(sessionStorage.getItem(key))||{kind:'scratch-directory',label:'',pending:null}}catch{return {kind:'scratch-directory',label:'',pending:null}}});
  const [page,setPage]=useState(initial||{items:[],nextOffset:null}),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const retain=value=>{setDraft(value);try{sessionStorage.setItem(key,JSON.stringify(value))}catch{}};
+ const pending=useRef(draft.pending);
+ const retain=(value,required=false)=>{try{sessionStorage.setItem(key,JSON.stringify(value))}catch{if(required)return false}pending.current=value.pending;if(mounted.current)setDraft(value);return true};
  const result=outer=>{const value=outer?.result?.accepted!==undefined?outer.result:outer;if(!value||value.accepted===false)throw Error(value?.error||'Task storage could not be read.');return value.result};
  const refresh=async(offset=0)=>{
   const turn=++visit.current;setBusy(true);setError('');
@@ -13,16 +14,20 @@ export function TaskStorage({workspaceId,sessionId,initial,act,active,readOnly})
   catch(e){if(turn===visit.current)setError(e.message)}finally{if(turn===visit.current)setBusy(false)}
  };
  useEffect(()=>{setPage(initial||{items:[],nextOffset:null});setBusy(false);return()=>{visit.current++}},[initial,active]);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  const mutate=async(action,args={})=>{
-  if(busy)return;
-  const request=draft.pending||{action,args:{workspaceId,sessionId,...args},id:crypto.randomUUID()};
-  retain({...draft,pending:request});const turn=++visit.current;setBusy(true);setError('');
+  if(inFlight.current||!active||readOnly)return;
+  const request=pending.current||{action,args:{workspaceId,sessionId,...args},id:crypto.randomUUID()};
+  if(!retain({...draft,pending:request},true)){setError('This tab cannot save a recovery receipt. Allow browser storage before changing task storage. Nothing was sent.');return}
+  const turn=++visit.current;inFlight.current=true;setBusy(true);setError('');
   try{
    result(await act(request.action,request.args,{id:request.id}));
-   retain({...draft,label:request.action.endsWith('.provision')?'':draft.label,pending:null});
-   if(turn===visit.current)await refresh();
+   // A response from a replaced panel must not erase its successor's receipt.
+   let cleared=true;
+   try{const retained=JSON.parse(sessionStorage.getItem(key));if(retained?.pending?.id===request.id)cleared=retain({...retained,label:request.action.endsWith('.provision')?'':retained.label,pending:null},true)}catch{cleared=false}
+   if(mounted.current&&turn===visit.current){await refresh();if(!cleared)setError('The response was received, but this tab could not clear its saved request. Check the same storage change after browser storage is available.')}
   }catch(e){if(turn===visit.current)setError(e.message||'No confirmed response. Check the same request.')}
-  finally{if(turn===visit.current)setBusy(false)}
+  finally{inFlight.current=false;if(mounted.current)setBusy(false)}
  };
  return <section aria-label="Task storage">
   <h4>Task storage</h4>

@@ -19,7 +19,10 @@ try{
  await page.route('**/api/conversation/detail?**',async route=>{
   if(reject&&new URL(route.request().url()).searchParams.has('group')){reject=false;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Fixture detail unavailable'})})}else await route.continue();
  });
- await toggle.click();await third.getByRole('alert').waitFor();await third.getByRole('button',{name:'Retry loading work'}).click();
+ const transcriptBefore=await page.locator('[data-message-id]').evaluateAll(rows=>rows.map(row=>({id:row.dataset.messageId,text:row.innerText})));
+ await toggle.click();await third.getByRole('alert').waitFor();
+ assert.deepEqual(await page.locator('[data-message-id]').evaluateAll(rows=>rows.map(row=>({id:row.dataset.messageId,text:row.innerText}))),transcriptBefore,'Work projection failure must leave the readable transcript unchanged');
+ await third.getByRole('button',{name:'Retry loading work'}).click();
  await third.locator('[data-node-id="bulk-124"]').waitFor();assert.equal(await third.locator('.a-execution-node').count(),100);
  assert.equal(reads.filter(url=>new URL(url).searchParams.has('field')).length,0,'large bodies remain unloaded');
  await third.getByRole('button',{name:'Load earlier steps'}).click();await third.locator('[data-node-id="bulk-0"]').waitFor();
@@ -35,6 +38,10 @@ try{
  await toggle.click();await entered;await toggle.click();release();await page.waitForTimeout(200);
  assert.equal(await third.locator('.a-execution-node').count(),0);await page.unroute('**/api/conversation/detail?**');
  await toggle.click();await third.locator('[data-node-id="bulk-124"]').waitFor();assert.equal(await third.locator('.a-execution-node').count(),100,'reopening reads a bounded page');
+ await third.getByRole('button',{name:'Load earlier steps'}).click();
+ await third.locator('[data-node-id="bulk-0"]').waitFor();
+ assert.equal(await third.locator('.a-execution-node').count(),126,'explicitly loaded older page is present before sync');
+ const loadedStepIds=await third.locator('.a-execution-node').evaluateAll(nodes=>nodes.map(node=>node.dataset.nodeId));
  // Hold a delta response while two new revisions arrive. Existing DOM and
  // expanded tool details must remain mounted throughout, then catch up.
  await third.locator('[data-node-id="bulk-124"] button.a-execution-action-line').click();
@@ -50,12 +57,13 @@ try{
  const identities=await page.evaluate(async()=> (await fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'update-step'})})).json());
  await syncEntered;
  assert.equal(await third.getByText('Loading work details…',{exact:true}).count(),0);
- assert.equal(await third.locator('.a-execution-node').count(),100);
+ assert.equal(await third.locator('.a-execution-node').count(),126);
  assert.ok(await page.evaluate(()=>window.savedWorkRow.isConnected));
  await page.evaluate(async()=>fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'update-step',label:'Newest live step',phase:'running'})}));
  releaseSync();await third.getByText('Newest live step',{exact:true}).waitFor();
  assert.ok(await page.evaluate(()=>window.savedWorkRow===document.querySelector('[data-node-id="bulk-124"]')));
  assert.equal(await third.locator('[data-node-id="bulk-124"] button.a-execution-action-line').getAttribute('aria-expanded'),'true');
+ assert.deepEqual(await third.locator('.a-execution-node').evaluateAll(nodes=>nodes.map(node=>node.dataset.nodeId)),loadedStepIds,'live sync retains all explicitly loaded steps in order');
  await page.unroute('**/api/conversation/work-sync');
  // Visit a second chat, then delay returning to the cached first chat.
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),identities.second);
@@ -73,13 +81,18 @@ try{
  await page.evaluate(async()=>fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'fail'})}));
  const continueButton=page.getByRole('button',{name:'Continue conversation',exact:true});await continueButton.waitFor();
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep my unsent draft');
- let continuation;
- await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(body?.action==='conversation.send'){continuation=body;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Temporary fixture failure'})})}else await route.continue()});
+ let continuation;const continuations=[];
+ await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(body?.action==='conversation.send'){continuation=body;continuations.push(body);await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Temporary fixture failure'})})}else await route.continue()});
  await continueButton.click();await page.getByText('Temporary fixture failure',{exact:true}).first().waitFor();
  assert.equal(continuation.args.preserveDraft,true);assert.equal(continuation.args.sessionId,identities.first);
  assert.match(continuation.args.text,/Check what has already completed/);
  assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep my unsent draft');
  assert.equal(await continueButton.isEnabled(),true);
+ await page.waitForTimeout(1500);
+ assert.equal(continuations.length,1,'No automatic continuation retry during the observed failure interval');
+ await page.reload();await continueButton.waitFor();
+ assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep my unsent draft');
+ assert.equal(continuations.length,1,'Reload must not replay the rejected continuation');
  await page.unroute('**/api/actions');
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,collapsedStepReads:0,initialNodes:execution.nodes.length,summaryBytes:JSON.stringify(execution).length,checks:['lazy steps','bounded paging','lazy bodies','error retry','collapse race','bounded reopen','delta-only live refresh','no blanking under overlapping revisions','expanded DOM retained','fresh navigation','explicit continuation and retry']}));

@@ -1,12 +1,17 @@
-import React,{createContext,useContext,useEffect,useRef,useState} from 'react';
+import React,{createContext,useContext,useEffect,useRef,useState,useSyncExternalStore} from 'react';
 import {RefreshCw} from 'lucide-react';
 import {frontendBuild} from './feedback-diagnostics';
 import {createBuildDiscovery,reloadWhenSaved} from './app-reload.js';
 import './app-reload.css';
+import {subscribeCanvasReload,hasLocalCanvasEdits,canvasReloadBlocked,canvasReloadMessage} from './canvas-reload-guard.js';
 
 export const AppReloadContext=createContext(null);
-export function useAppReload({client,blocked,prepare}){
+export function useAppReload({client,blocked,prepare,canvasWorkspace}){
  const [installed,setInstalled]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const localDirty=useSyncExternalStore(subscribeCanvasReload,hasLocalCanvasEdits,()=>false);
+ const workspace=useRef(canvasWorkspace);workspace.current=canvasWorkspace;
+ const currentBlocked=useRef(blocked);currentBlocked.current=blocked;
+ const reloadBlocked=blocked||(localDirty||canvasWorkspace?.views?.some(view=>view.dirty)?canvasReloadMessage:'');
  const pending=useRef(false),preparation=useRef(prepare);preparation.current=prepare;
  const discovery=useRef(null);
  useEffect(()=>{
@@ -16,12 +21,12 @@ export function useAppReload({client,blocked,prepare}){
  },[]);
  useEffect(()=>discovery.current?.observe(client),[client]);
  const reload=async()=>{
-  if(!installed||blocked||pending.current)return;
+  if(!installed||reloadBlocked||pending.current)return;
   pending.current=true;setBusy(true);setError('');
-  try{await reloadWhenSaved({prepare:()=>preparation.current(),reload:()=>window.location.reload()})}
+  try{await reloadWhenSaved({prepare:()=>preparation.current(),assertReady:()=>{if(currentBlocked.current)throw Error(currentBlocked.current);if(canvasReloadBlocked(workspace.current))throw Error(canvasReloadMessage)},reload:()=>window.location.reload()})}
   catch(e){setError(e.message||'Your changes could not be saved. Try again when connected.');pending.current=false;setBusy(false)}
  };
- return {available:!!installed,version:installed?.version,busy,blocked,error,reload};
+ return {available:!!installed,version:installed?.version,busy,blocked:reloadBlocked,error,reload};
 }
 export function AppReloadNotice(){
  const update=useContext(AppReloadContext);if(!update?.available)return null;

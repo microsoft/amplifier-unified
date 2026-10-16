@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import signal
 import sys
 import tempfile
 import time
@@ -69,8 +70,16 @@ async def main(home):
     app.router.add_get('/api/voice/config',config);app.router.add_post('/api/voice/connect',connect);app.router.add_post('/api/voice/ready',ready);app.router.add_post('/api/voice/end',end)
     app.router.add_get('/fixture',inspect);app.router.add_post('/fixture/agent',agent);app.router.add_post('/fixture/activity',activity);app.router.add_post('/fixture/transcript',transcript)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start();url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
-    app['allowed_origins']=app['allowed_origins']|{url};print(json.dumps({'url':url}),flush=True)
-    try:await asyncio.Event().wait()
-    finally:await runner.cleanup()
+    app['allowed_origins']=app['allowed_origins']|{url}
+    stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    signals = (signal.SIGINT, signal.SIGTERM) if os.name == 'posix' else ()
+    for sig in signals:loop.add_signal_handler(sig, stopped.set)
+    print(json.dumps({'url':url}),flush=True)
+    try:await stopped.wait()
+    finally:
+        try:await runner.cleanup()
+        finally:
+            for sig in signals:loop.remove_signal_handler(sig)
 if __name__=='__main__':
     with tempfile.TemporaryDirectory(prefix='voice-visual-fixture-') as home:asyncio.run(main(Path(home)))

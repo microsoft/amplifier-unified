@@ -82,3 +82,31 @@ test('resource ownership and access limitations remain visible without mutation'
   assert.equal(calls.length,0);
  }finally{await act(async()=>root.unmount())}
 });
+
+test('blocked browser storage prevents allocation without a recoverable identity',async()=>{
+ let root;const calls=[],save=sessionStorage.setItem;
+ try{
+  await act(async()=>{root=create(React.createElement(TaskStorage,{...props,act:async(...args)=>{calls.push(args);return ok(page)}}))});
+  sessionStorage.setItem=()=>{throw Error('Storage blocked')};
+  await act(async()=>submit(root));
+  assert.equal(calls.length,0,'No allocation may be sent without its saved recovery request');
+  assert.match(JSON.stringify(root.toJSON()),/Nothing was sent/);
+ }finally{sessionStorage.setItem=save;await act(async()=>root.unmount())}
+});
+
+test('a late completed mount cannot erase a newer saved allocation request',async()=>{
+ let root,release;const calls=[];
+ const dispatch=async(...args)=>{calls.push(args);return new Promise(resolve=>release=resolve)};
+ const key='amplifier-task-storage:workspace:owner';
+ try{
+  await act(async()=>{root=create(React.createElement(TaskStorage,{...props,act:dispatch}))});
+  await act(async()=>{submit(root)});
+  const first=JSON.parse(store.get(key));
+  await act(async()=>root.unmount());
+  const newer={...first,label:'Newer allocation',pending:{...first.pending,id:'newer-request'}};
+  store.set(key,JSON.stringify(newer));
+  await act(async()=>release(ok(page)));
+  assert.deepEqual(JSON.parse(store.get(key)),newer);
+  assert.equal(calls.length,1,'An old unmounted completion cannot refresh its old owner');
+ }finally{await act(async()=>root.unmount())}
+});

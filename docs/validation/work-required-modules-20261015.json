@@ -1,0 +1,245 @@
+{
+  "schemaVersion": 1,
+  "status": "passed-in-named-context",
+  "source": "b4e595b71cf1286fb61adad7266372940623935b",
+  "generation": "ded15b45a24c002963871d4691d44bac",
+  "workBundleCommit": "50deb9ebb4b9407401c45e624940effc93cfb107",
+  "workDeclarationHashes": {
+    "bundle.md": "b9a26e49a1669fc67e328fd20eadcd11ca058c1809a212bb12c15d394c78b41e",
+    "bundles/work-session.yaml": "b22737077f0e63d6f13125908ce3c7669f93920ac1b358a52b26b870de703bd5",
+    "behaviors/work-execution.yaml": "c01b8ea4881455ba39d8c3c5be414242cd94423410e7eaf638a1072fb5099205",
+    "behaviors/work-skills.yaml": "78aba54eef6207bf116dfc00c1cd715efc99b6a8c524e34f7f76ce7780c0624d",
+    "behaviors/work-local.yaml": "e1d7b17edbb78fd7a6b7c9a50bcffa02ba6626ec6fd6d2eb73c25ccb91cc099f"
+  },
+  "requiredTools": [
+    "read_transcript",
+    "load_skill",
+    "bash",
+    "tool_exec",
+    "web_search",
+    "web_fetch",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "apply_patch",
+    "grep",
+    "glob",
+    "delegate"
+  ],
+  "actualTools": [
+    "read_transcript",
+    "load_skill",
+    "bash",
+    "tool_exec",
+    "web_search",
+    "web_fetch",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "apply_patch",
+    "grep",
+    "glob",
+    "delegate",
+    "image_generate",
+    "live_worker",
+    "app_control"
+  ],
+  "actualMounts": [
+    {
+      "section": "orchestrator",
+      "name": "orchestrator",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_loop_live.orchestrator",
+      "class": "BundleLiveOrchestrator"
+    },
+    {
+      "section": "context",
+      "name": "context",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_context_managed.boundary",
+      "class": "BoundaryContextManager"
+    },
+    {
+      "section": "providers",
+      "name": "dev-synthetic",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_provider_dev_synthetic",
+      "class": "SyntheticProvider"
+    },
+    {
+      "section": "tools",
+      "name": "read_transcript",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_transcript",
+      "class": "ReadTranscriptTool"
+    },
+    {
+      "section": "tools",
+      "name": "load_skill",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_skills",
+      "class": "SkillsTool"
+    },
+    {
+      "section": "tools",
+      "name": "bash",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_bash",
+      "class": "BashTool"
+    },
+    {
+      "section": "tools",
+      "name": "tool_exec",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_exec.runner",
+      "class": "ProgrammaticTool"
+    },
+    {
+      "section": "tools",
+      "name": "web_search",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_web",
+      "class": "WebSearchTool"
+    },
+    {
+      "section": "tools",
+      "name": "web_fetch",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_web",
+      "class": "WebFetchTool"
+    },
+    {
+      "section": "tools",
+      "name": "read_file",
+      "wrapperDepth": 0,
+      "module": "amplifier_web.file_source_guard",
+      "class": "GuardedFileTool"
+    },
+    {
+      "section": "tools",
+      "name": "write_file",
+      "wrapperDepth": 0,
+      "module": "amplifier_web.file_source_guard",
+      "class": "GuardedFileTool"
+    },
+    {
+      "section": "tools",
+      "name": "edit_file",
+      "wrapperDepth": 0,
+      "module": "amplifier_web.file_source_guard",
+      "class": "GuardedFileTool"
+    },
+    {
+      "section": "tools",
+      "name": "apply_patch",
+      "wrapperDepth": 0,
+      "module": "amplifier_web.file_source_guard",
+      "class": "GuardedFileTool"
+    },
+    {
+      "section": "tools",
+      "name": "grep",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_search.grep",
+      "class": "GrepTool"
+    },
+    {
+      "section": "tools",
+      "name": "glob",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_search.glob",
+      "class": "GlobTool"
+    },
+    {
+      "section": "tools",
+      "name": "delegate",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_loop_live.jobs",
+      "class": "AsyncTool"
+    },
+    {
+      "section": "tools",
+      "name": "delegate",
+      "wrapperDepth": 1,
+      "module": "amplifier_web.host.children",
+      "class": "PersistentDelegate"
+    },
+    {
+      "section": "tools",
+      "name": "delegate",
+      "wrapperDepth": 2,
+      "module": "amplifier_module_tool_delegate",
+      "class": "DelegateTool"
+    },
+    {
+      "section": "tools",
+      "name": "image_generate",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_tool_image.workspace",
+      "class": "WorkspaceImageTool"
+    },
+    {
+      "section": "tools",
+      "name": "live_worker",
+      "wrapperDepth": 0,
+      "module": "amplifier_web.host.children",
+      "class": "WorkerControl"
+    },
+    {
+      "section": "tools",
+      "name": "app_control",
+      "wrapperDepth": 0,
+      "module": "amplifier_web.app_guidance",
+      "class": "install_app_access.<locals>.AppControl"
+    },
+    {
+      "section": "tools",
+      "name": "live_job",
+      "wrapperDepth": 0,
+      "module": "amplifier_module_loop_live.jobs",
+      "class": "JobControl"
+    }
+  ],
+  "orchestrator": "loop-live",
+  "context": "context-managed (boundary)",
+  "provider": "dev-synthetic",
+  "normalRuntimeManager": true,
+  "explicitCommandOverride": false,
+  "networkDisabled": true,
+  "inputsSubmitted": 0,
+  "workersRemaining": 0,
+  "evidence": {
+    "settled-work-module-evidence/evidence/qualification.json": "a1daabc865c0c4579a03e708df18b9f7153aaa9f5236c91b8aa1996cadca0c81",
+    "work-module-evidence/work-declarations.json": "a997b4ce5e5ec8980cee483bb936ba1fbcd805d611ca00e003cabfecab0b1dcc",
+    "work-module-evidence/prepare.py": "12d539192f817482680e31fdb1eaf9f8efe8f55960e37b383676091a1accbe5c"
+  },
+  "complementaryBrowserClaims": [
+    "functional-bundle-exact.bundles.selection",
+    "functional-26b.standard-ux-workspace-bundle.592"
+  ],
+  "limits": [
+    "Named normal Work profile only; no claim for every arbitrary bundle or Advanced module toggles.",
+    "Public bundle selection paths and actual runtime activation are separate source-bound witnesses, not one combined browser-worker run.",
+    "Mount presence is established; individual tools were not executed and no external provider was called."
+  ],
+  "summaryAfter": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 615,
+      "partially-observed": 37,
+      "not-run": 17
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 165,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "remainingOutcomes": 54
+}

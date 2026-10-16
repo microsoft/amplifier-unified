@@ -1,0 +1,1167 @@
+{
+  "schemaVersion": 1,
+  "frozenInventoryCommit": "9fdd6aeea",
+  "changes": [
+    {
+      "id": "delta.635",
+      "sourceCommit": "dab2a993e905e3d8cd6da761d282f7b9190abdb0",
+      "reason": "Integration adds standard per-tool update recovery after v1 freeze; original baseline remains unchanged.",
+      "workflowsAdded": [
+        {
+          "id": "updates.tool-recovery",
+          "family": "updates",
+          "title": "Recover an individual failed Smart Tool update",
+          "scope": "standard-path",
+          "entryPath": [
+            "Settings",
+            "Updates"
+          ],
+          "prerequisites": [
+            "Synthetic installers; completed healthy update and one failed tool",
+            "No production installation or restart"
+          ],
+          "steps": [
+            "Open Settings and Updates through visible controls",
+            "Inspect healthy and failed tool names",
+            "Reload and confirm failure remains",
+            "Activate Retry this tool",
+            "Show another failed tool and switch to390px",
+            "Activate Skip this version"
+          ],
+          "expectedResults": [
+            "Successful tools remain completed while a failed tool is named in standard Updates.",
+            "The failed-tool result survives a browser reload.",
+            "Retry this tool invokes only the failed tool and removes its resolved result.",
+            "Skip this version clears its pending result without an installer call.",
+            "No secret fixture value or browser error appears.",
+            "Named failure and Skip remain visible and usable at390px."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-touch",
+            "desktop-keyboard",
+            "narrow-keyboard"
+          ],
+          "sourceRefs": [
+            {
+              "path": "frontend/src/smart-tool-update-results.jsx",
+              "line": 1
+            },
+            {
+              "path": "frontend/src/updates.jsx",
+              "line": 1
+            }
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "relation": "exact-assertions-below"
+            }
+          ],
+          "performance": {
+            "current": null,
+            "desiredProfile": "standard-interaction",
+            "measurementStatus": "not_measured"
+          }
+        }
+      ],
+      "sourceHashes": {
+        "frontend/src/smart-tool-update-results.jsx": "cd4a7a1308b01c0a0e17154a7528aed6348e87cc12bab9fe578ffbfd23e0952c",
+        "frontend/src/updates.jsx": "0f2f6016226e78572031055d39f06fa28971c817c3707cc3fd265bafa4431a65",
+        "frontend/tests/smart-tool-updates-browser.mjs": "ffe65df2c7b1710bc7aad9b98ab7204fab0f3c627414688d863fd7545a1ffbe1",
+        "tests/fixtures/smart_tool_update_server.py": "524fad882825fa8ea57fb032f4e555c6c616718f178b6840e04b1d3b91e74c76"
+      },
+      "evidenceContext": "synthetic-capability; actualHTTP/SSE; fake installers; no external effects",
+      "claims": [
+        {
+          "workflow": "updates.tool-recovery",
+          "expectedIndices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "status": "passed",
+          "variantsByExpectedIndex": {
+            "0": [
+              "desktop-pointer"
+            ],
+            "1": [
+              "desktop-pointer"
+            ],
+            "2": [
+              "desktop-pointer"
+            ],
+            "3": [
+              "narrow-pointer"
+            ],
+            "4": [
+              "desktop-pointer",
+              "narrow-pointer"
+            ],
+            "5": [
+              "narrow-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 21,
+              "expectedIndices": [
+                0
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 22,
+              "expectedIndices": [
+                0
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 25,
+              "expectedIndices": [
+                0
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 27,
+              "expectedIndices": [
+                1
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 29,
+              "expectedIndices": [
+                1,
+                2
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 30,
+              "expectedIndices": [
+                2
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 31,
+              "expectedIndices": [
+                2
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 34,
+              "expectedIndices": [
+                5
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 37,
+              "expectedIndices": [
+                3,
+                5
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 38,
+              "expectedIndices": [
+                3
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 39,
+              "expectedIndices": [
+                3
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 23,
+              "expectedIndices": [
+                4
+              ]
+            },
+            {
+              "path": "frontend/tests/smart-tool-updates-browser.mjs",
+              "line": 40,
+              "expectedIndices": [
+                4
+              ]
+            }
+          ],
+          "evidence": [
+            "output/readiness-day-20261015/update-repairs/browser2.json"
+          ],
+          "limits": [
+            "Touch events and keyboard activation were not exercised by this script; narrow viewport used pointer clicks.",
+            "Initial partial-update operation is fixture setup; browser asserts rendered result and explicit Retry/Skip.",
+            "No timing or physical-install acceptance claim."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "delta.composer-local-acceptance",
+      "reason": "Root approved clarification after actual pending-send browser proof. Acceptance means durable local intent/outbox admission; it is not the later host acknowledgement. No production change.",
+      "sourceCommit": "1d993e0bb32bc90b75fc66f56f1b9014c2d63f87",
+      "expectedResultChanges": [
+        {
+          "workflow": "composer.send",
+          "expectedIndex": 2,
+          "previous": "Draft clears only on acceptance",
+          "current": "Submitted draft clears after durable local outbox acceptance; its exact intent remains recoverable while host acknowledgement is pending, and a newer draft is never overwritten.",
+          "supportingAssertions": [
+            {
+              "path": "frontend/tests/empty-host-browser.mjs",
+              "lines": [
+                84,
+                86,
+                91,
+                93,
+                97,
+                121,
+                127,
+                130
+              ]
+            },
+            {
+              "path": "frontend/tests/message-outbox-browser.mjs",
+              "lines": [
+                58,
+                69,
+                190,
+                192,
+                197
+              ]
+            }
+          ]
+        }
+      ],
+      "claims": []
+    },
+    {
+      "id": "delta.770",
+      "sourceCommit": "e3b79361fe91994c91536eef259b1140107fd681",
+      "productHead": "257262658",
+      "reason": "Reviewed archive interaction integrated after frozen inventory; raw-action behavior remains separate. Original nav.archive scope note is preserved.",
+      "evidenceContext": "synthetic-standard",
+      "workflowsAdded": [
+        {
+          "id": "nav.archive-progress",
+          "family": "nav",
+          "title": "Archive with truthful progress, guarded navigation, and Undo",
+          "scope": "standard-path",
+          "entryPath": [
+            "Chat \u2192 Archive",
+            "Row Details \u2192 Archive"
+          ],
+          "prerequisites": [
+            "Synthetic isolated archive fixture; no real user files or runtime execution"
+          ],
+          "steps": [
+            "Archive current chat while acknowledgement is held",
+            "Observe confirmation and Undo",
+            "Exercise rejected/unknown acknowledgement",
+            "Hold following navigation and Undo before release",
+            "Change selection or browse intent while archive is pending",
+            "Archive another row and invoke raw action independently",
+            "Return to private Canvas edit",
+            "Open Settings while archive is pending and keep unsaved field",
+            "Repeat current archive at390px"
+          ],
+          "expectedResults": [
+            "Confirmed archive of the current chat opens its existing workspace or full chat list without changing another client or selecting a replacement chat.",
+            "Pending, rejected, and unknown archive outcomes are distinct and never imply an unconfirmed navigation or replay.",
+            "Undo is available after archive confirmation even while the following navigation is stalled.",
+            "A newer navigation intention, including A\u2192B\u2192A, prevents the old archive from redirecting.",
+            "Archiving a different row or invoking the raw public action does not navigate the current view.",
+            "Returning to the archived chat preserves private Canvas edit identity, composer draft, and attachment.",
+            "A confirmation arriving after Settings opens preserves its private unsaved field and current view.",
+            "The archive notice and resulting destination remain usable without horizontal overflow at390px."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-touch",
+            "narrow-keyboard"
+          ],
+          "sourceRefs": [
+            {
+              "path": "frontend/src/archive-action.js",
+              "line": 1
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 51
+            }
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            0
+          ],
+          "variantsByExpectedIndex": {
+            "0": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 55
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 60
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 61
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 62
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 64
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 65
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 66
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 67
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 154
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 155
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 156
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            1
+          ],
+          "variantsByExpectedIndex": {
+            "1": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 55
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 56
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 57
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 100
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 101
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 102
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 104
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 105
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 106
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 107
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 108
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 109
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 110
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            2
+          ],
+          "variantsByExpectedIndex": {
+            "2": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 119
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 123
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 124
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 127
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 128
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 129
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 130
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 134
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            3
+          ],
+          "variantsByExpectedIndex": {
+            "3": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 112
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 113
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 114
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 115
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 116
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 131
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 133
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 134
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            4
+          ],
+          "variantsByExpectedIndex": {
+            "4": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 139
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 140
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 141
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 142
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 143
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 145
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 146
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            5
+          ],
+          "variantsByExpectedIndex": {
+            "5": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 73
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 74
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 84
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 86
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 88
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 89
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 90
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 91
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 92
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 93
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 94
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            6
+          ],
+          "variantsByExpectedIndex": {
+            "6": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 163
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 164
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 166
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 167
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 169
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 170
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 171
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 172
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 173
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 174
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive-progress",
+          "expectedIndices": [
+            7
+          ],
+          "variantsByExpectedIndex": {
+            "7": [
+              "narrow-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 147
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 148
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 149
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 150
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 151
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "Synthetic fixture; no real archive data or runtime shutdown.",
+            "Settings guard proof uses a private advanced JSON editor; standard entry and general guard are exercised, not every standard Settings field."
+          ]
+        },
+        {
+          "workflow": "nav.archive",
+          "expectedIndices": [
+            2
+          ],
+          "variantsByExpectedIndex": {
+            "2": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 64
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 65
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 66
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 67
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 143
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 145
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 146
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "The frozen baseline wording is retained as previous; this qualified candidate includes reviewed PR770.",
+            "Synthetic current/native workspace setup; no real user data or runtime shutdown."
+          ]
+        },
+        {
+          "workflow": "nav.archive",
+          "expectedIndices": [
+            3
+          ],
+          "variantsByExpectedIndex": {
+            "3": [
+              "desktop-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 89
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 91
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 92
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 93
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 112
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 113
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 114
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 115
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 116
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 130
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 131
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 132
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 133
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 134
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 163
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 169
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 170
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 171
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 172
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 173
+            },
+            {
+              "path": "frontend/tests/archive-feedback-browser.mjs",
+              "line": 174
+            }
+          ],
+          "sourceSha256": "b2c9169e350e94cdb73078e0945103b730068c0a1a6a52632df55da2cb490b6a",
+          "evidence": [
+            "output/readiness-day-20261015/pr770-review/browser-settings-race.json"
+          ],
+          "limits": [
+            "The frozen baseline wording is retained as previous; this qualified candidate includes reviewed PR770.",
+            "Synthetic current/native workspace setup; no real user data or runtime shutdown."
+          ]
+        }
+      ],
+      "expectedResultChanges": [
+        {
+          "workflow": "nav.archive",
+          "expectedIndex": 2,
+          "previous": "Frozen baseline raw archive keeps current selection",
+          "current": "Raw archive keeps the current view; confirmed interactive archive leaves only the current chat surface without selecting another chat."
+        },
+        {
+          "workflow": "nav.archive",
+          "expectedIndex": 3,
+          "previous": "Draft770 navigation is not assumed delivered",
+          "current": "Delivered archive navigation respects newer navigation intent and preserves unsaved Canvas and Settings edits."
+        }
+      ]
+    },
+    {
+      "id": "delta.781",
+      "sourceCommit": "45a9b5e8d",
+      "reason": "Merged main adds durable queued-check controls after frozen inventory; explicit new ordinary path is accounted without relabeling the original baseline.",
+      "workflowsAdded": [
+        {
+          "id": "workspace.queued-check",
+          "family": "workspace",
+          "title": "Queue an isolated check and inspect its retained result",
+          "priority": "P1",
+          "scope": "standard-path",
+          "entryPath": [
+            "Current workspace breadcrumb",
+            "Details",
+            "Managed resources",
+            "Test environments"
+          ],
+          "prerequisites": [
+            "Synthetic owned workspace and local controlled environment adapter",
+            "A retained chat and private composer draft",
+            "Explicit capacity-full and admitted adapter states",
+            "No host/shared environment or external provider"
+          ],
+          "steps": [
+            "Open ordinary workspace Details and Managed resources",
+            "Enter check command and Queue while capacity is full",
+            "Reload, inspect waiting status, then Cancel check",
+            "Submit again and allow the exact owned check to complete and retain cleanup evidence",
+            "Open Check details and Read check result; use Next output page",
+            "Inspect recorded failed and unknown outcomes, reload and Refresh without execution replay"
+          ],
+          "expectedResults": [
+            "Queueing at full capacity saves the exact intent without starting an environment; unrelated work remains available.",
+            "Waiting intent survives browser reload; cancelling before admission starts no backend command.",
+            "An admitted check executes once, preserves its result and retires only its owned environment.",
+            "Check details and explicit bounded output paging expose the recorded owner/result without new execution.",
+            "Failed and unknown outcomes remain truthful after reopening and Refresh, without an automatic repeat command.",
+            "Named controls remain usable at desktop and narrow widths while selected chat, private draft, workspace bytes and model-runtime effects remain unchanged."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "desktop-keyboard",
+            "narrow-pointer"
+          ],
+          "stateMatrix": [
+            "initial",
+            "queued",
+            "admitted",
+            "passed",
+            "cancelled-before-admission",
+            "failed",
+            "unknown",
+            "return-or-reopen"
+          ],
+          "sourceRefs": [
+            {
+              "path": "frontend/src/workspace-test-environments.jsx",
+              "line": 52,
+              "symbol": "TaskEnvironments"
+            },
+            {
+              "path": "amplifier_web/test_queue.py",
+              "line": 163,
+              "symbol": "TestQueue"
+            }
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/test-environments-browser.mjs",
+              "relation": "existing queue success/cancel and environment mutation assertions; pending combined-source qualification"
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "relation": "new exact public path/paging/failure/reload assertions; pending qualification"
+            },
+            {
+              "path": "tests/test_test_queue.py",
+              "relation": "backend authority/restart controls, not browser evidence"
+            }
+          ],
+          "performance": {
+            "current": null,
+            "desiredProfile": "standard-interaction",
+            "measurementStatus": "not_measured"
+          },
+          "browserStatus": "passed-in-named-context",
+          "evidence": [
+            "output/readiness-day-20261015/final-queue-qualification/evidence/queue-last/results.json"
+          ],
+          "limits": [
+            "Controlled backend does not establish physical Docker/Incus acceptance.",
+            "Browser reload is not host restart; admitted cancellation, interruption, revocation and host-restart no-replay require separate canonical Python evidence.",
+            "Keyboard activation is a named witness, not exhaustive sequential Tab coverage."
+          ]
+        }
+      ],
+      "evidenceContext": "synthetic controlled local backend; actual service actions/journal/HTTP/browser; no provider or physical container",
+      "qualificationStatus": "passed-in-named-context",
+      "claims": [
+        {
+          "workflow": "workspace.queued-check",
+          "expectedIndices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "variantsByExpectedIndex": {
+            "0": [
+              "desktop-keyboard"
+            ],
+            "1": [
+              "desktop-pointer"
+            ],
+            "2": [
+              "desktop-pointer"
+            ],
+            "3": [
+              "desktop-pointer",
+              "narrow-keyboard"
+            ],
+            "4": [
+              "narrow-pointer"
+            ],
+            "5": [
+              "desktop-pointer",
+              "narrow-pointer"
+            ]
+          },
+          "assertions": [
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 22
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 23
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 26
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 29
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 30
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 31
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 34
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 35
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 37
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 39
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 40
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 41
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 44
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 45
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 46
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 47
+            },
+            {
+              "path": "frontend/tests/standard-ux-queued-checks-browser.mjs",
+              "line": 50
+            }
+          ],
+          "sourceSha256": "3216406530c60eef67622701cc0a7f7ef92d339cfbbfb605fe120b22e1defab4",
+          "evidence": [
+            "output/readiness-day-20261015/final-queue-qualification/evidence/queue-last/results.json",
+            "output/readiness-day-20261015/final-queue-qualification/evidence/queue-last/artifacts/observations.json"
+          ],
+          "limits": [
+            "Controlled backend does not establish physical Docker/Incus acceptance.",
+            "Browser reload is not host restart; admitted cancellation, interruption, revocation and host-restart no-replay require separate canonical Python evidence.",
+            "Keyboard activation is a named witness, not exhaustive sequential Tab coverage."
+          ]
+        }
+      ],
+      "introducedBy": "174c3f06c1f898e413c4fb2bf5645496239d0046",
+      "build": {
+        "version": "0.20.165",
+        "id": "5f136e8e69c99e41"
+      },
+      "qualification": "docs/validation/queued-check-qualification-20261015.json",
+      "sourceHashes": {
+        "frontend/tests/standard-ux-queued-checks-browser.mjs": "3216406530c60eef67622701cc0a7f7ef92d339cfbbfb605fe120b22e1defab4",
+        "tests/fixtures/test_environments_ui_server.py": "f9f87421437eba772e1a2b7ba1c20b304ce6e5604071b8a63f1bdfb505125ae5"
+      }
+    }
+  ]
+}

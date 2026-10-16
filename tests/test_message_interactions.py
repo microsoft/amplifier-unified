@@ -283,3 +283,55 @@ async def test_unavailable_cross_chat_original_does_not_retarget_draft(app):
         await call(app, 'message.reveal', {**old, 'messageId':'missing'})
     assert app.clients.records['one']['selectedSessionId'] == current
     assert app.clients.records['one']['view']['draft'] == 'Keep current draft'
+
+
+async def test_bounded_annotations_read_has_explicit_removals_and_never_reads_bodies(app):
+    from amplifier_web.message_interactions import read_annotations
+    session = app._session()
+    before = copy.deepcopy(session['messages'])
+    identity = before[0]['id']
+    first = await call(app, 'message.reaction', {**target(app), 'emoji': '❤️', 'present': True})
+    second = await call(app, 'message.reaction', {**target(app), 'emoji': '❤️', 'present': False})
+    assert second['result']['annotationRevision'] > first['result']['annotationRevision']
+    class MetadataOnly(dict):
+        def get(self, key, *args):
+            assert key != 'messages', 'Annotation read must never access transcript bodies'
+            return super().get(key, *args)
+    result = read_annotations(MetadataOnly(session), [identity, 'not-annotated'])
+    assert result == {'sessionId': session['id'], 'revision': second['result']['annotationRevision'],
+                      'items': {identity: {'reactions': []}, 'not-annotated': {'reactions': []}}}
+    result['items'][identity]['reactions'].append('👍')
+    assert session['messageAnnotations'][identity]['reactions'] == []
+    assert session['messages'] == before and app.runtime.sent == []
+    for invalid in [[], ['same', 'same'], ['x'] * 101, [1], ['x' * 201], 'x']:
+        with pytest.raises(ValueError):
+            read_annotations(session, invalid)
+
+
+async def test_repeated_reaction_desired_state_does_not_invalidate_annotations(app):
+    first = await call(app, 'message.reaction', {**target(app), 'emoji': '❤️', 'present': True})
+    repeated = await call(app, 'message.reaction', {**target(app), 'emoji': '❤️', 'present': True})
+    assert repeated['result']['annotationRevision'] == first['result']['annotationRevision']
+    assert repeated['result']['reactions'] == ['❤️']
+
+
+async def test_annotation_route_requires_exact_owner_and_avoids_hydration():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from amplifier_web.message_interactions import install_routes
+    router = SimpleNamespace(add_post=Mock())
+    service = SimpleNamespace(_session=Mock(return_value={'id': 'owner'}))
+    app = {'service': service}
+    class Routes(dict):
+        pass
+    routed = Routes(app)
+    routed.router = router
+    install_routes(routed)
+    handler = router.add_post.call_args.args[1]
+    for args in [{}, {'sessionId': ''}, {'sessionId': None}, []]:
+        with pytest.raises(ValueError, match='explicit conversation'):
+            await handler(SimpleNamespace(json=AsyncMock(return_value=args)))
+    service._session.assert_not_called()
+    response = await handler(SimpleNamespace(json=AsyncMock(return_value={'sessionId': 'owner', 'messageIds': ['one']})))
+    service._session.assert_called_once_with('owner', hydrate=False)
+    assert response.status == 200 and response.headers['Cache-Control'] == 'no-store'

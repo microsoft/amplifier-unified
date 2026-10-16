@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "112eea26b87d5622ebc81499c55c168c45e41a00",
+  "baseCommit": "a0508cbe051a7512655488f74e85e3b303589db8",
+  "dtu": "dtu-unified-codex-dev-20261014",
+  "buildId": "8a968ae583d99ac8",
+  "browser": {
+    "test": "frontend/tests/ordinary-workspace-work-browser.mjs",
+    "passed": true,
+    "checks": [
+      "file declaration preserves project bytes and execution placement",
+      "saved acknowledgment expanded editor and focus survive scope refresh",
+      "held scope response cannot overwrite another inspected owner or private draft",
+      "bounded 4000-character excerpt and full original retained",
+      "explicit assignment identity owner and revision",
+      "limits use exact observed authority/revision and show partial unknown usage",
+      "settled member detachment retains attributed incomplete usage",
+      "task board reachable through ordinary route",
+      "candidate observation and recheck use only local read Git commands and do not validate",
+      "public validation controls and passive recap",
+      "managed resources reads selected workspace without allocation or retirement",
+      "scope read failure hides stale controls and refresh recovers",
+      "rebound workspace rejected with stale controls hidden",
+      "selected conversation and exact private draft retained; zero runtime calls"
+    ],
+    "route": "Chat breadcrumb \u2192 workspace \u2192 Workspace work; workspace Details \u2192 Managed resources",
+    "runtimeCalls": 0,
+    "gitReadCalls": 130,
+    "actionCount": 56
+  },
+  "unitTests": {
+    "files": [
+      "frontend/tests/workspace-work.test.mjs",
+      "frontend/tests/workspace-review.test.mjs"
+    ],
+    "passed": 32,
+    "failed": 0,
+    "durationMs": 1245.574762
+  },
+  "fixedDefects": [
+    "Workspace-scoped refresh previously unmounted child controls, discarding saved acknowledgment and disclosure state. Same-scope refresh now retains the verified controls inert until validation finishes; real scope failure clears them.",
+    "A failed public dispatch could return undefined, exposing a JavaScript property error. Explicit response guards show a usable Refresh message.",
+    "Existing assignment accounting details now expose assignment identity, commissioning owner and revision."
+  ],
+  "qualification": {
+    "rawEvidence": "output/readiness-day-20261015/ordinary-coordination",
+    "receiptSha256": "17f8da6936af29b3d28ebfc75b08857a5da038c10ef979240911558fbdb241a5",
+    "sourceSha256": {
+      "frontend/tests/ordinary-workspace-work-browser.mjs": "7e592a68f276ec5e80bce019d4045d321ef756db09f4c88d42df5bcbebd0db57",
+      "tests/fixtures/ordinary_workspace_work_ui_server.py": "74faab3616335ebdb6b21a4d445c6a61b56f35a5971338b6f60e51d9d198683c",
+      "frontend/src/coordination.jsx": "607b376e0438f5cd0181f23726207a0341137bff8d27dec409ceb46fd7c7dd98",
+      "frontend/src/assignment-controls.jsx": "052e1e22c7274081f2a8d6df6c7ed95913eb5c1588077af0db10bd237d393e9b"
+    }
+  },
+  "limits": [
+    "Synthetic fixture, including previously commissioned settled membership and incomplete accounting. No live provider or load-performance claims. Existing tests own task lifecycle and validation execution.",
+    "Desktop pointer fixture; no quiet timing or live-provider claim. Broad Python was active concurrently.",
+    "Fixture seeds previously commissioned membership and incomplete usage, while real application actions perform limits saves, detachment, candidate capture and recheck.",
+    "Existing tests remain the detailed task lifecycle, validation execution and managed-resource mutation proofs; this run supplies their public entry paths."
+  ]
+}

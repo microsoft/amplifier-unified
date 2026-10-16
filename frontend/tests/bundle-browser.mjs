@@ -1,6 +1,6 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/bundle_ui_server.py',import.meta.url))],{stdio:'inherit'});
 for(let i=0;i<300;i++){try{if((await fetch('http://127.0.0.1:8963/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
@@ -11,7 +11,7 @@ const picker=()=>page.getByLabel('Registered root bundles',{exact:true});
 try{
  await page.goto('http://127.0.0.1:8963');await page.getByRole('button',{name:'Conversation bundle',exact:true}).waitFor();const source=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await page.getByRole('button',{name:'Conversation bundle',exact:true}).click();
- assert.deepEqual(await picker().locator('option').evaluateAll(rows=>rows.map(row=>row.value)),['anchors','anchors-amp-dev','work','work-amp-dev','anchors-work','broken']);
+ await expect.poll(()=>picker().locator('option').evaluateAll(rows=>rows.map(row=>row.value))).toEqual(['anchors','anchors-amp-dev','work','work-amp-dev','anchors-work','broken']);
  assert.equal(await picker().locator('option[value="work-amp-dev"]').innerText(),'Work · Amplifier development');
  await picker().selectOption('work-amp-dev');
  await page.waitForFunction(()=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId)?.bundle==='work-amp-dev');

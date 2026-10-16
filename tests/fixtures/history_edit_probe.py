@@ -64,6 +64,11 @@ Reply with the fixture response.
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
         AMPLIFIER_SESSION_STATE_HOME=str(root / "shared"),
     )
+    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+    settings = root / "amplifier-home" / "settings.yaml"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"bundle": {"active": str(bundle), "app": []},
+                                   "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]}}))
     events = []
     import amplifier_web.runtime_worker as worker_module
 

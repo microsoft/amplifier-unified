@@ -1,0 +1,538 @@
+{
+  "schemaVersion": 1,
+  "reviewStatus": "scoped boundaries accepted by root; residual outcome dispositions require review; no outcome upgrade",
+  "sourceRevision": "80335d20ea2d4b33cc6dc3fb04458a86c784a6c1",
+  "inventoryBaseline": "1d993e0bb32bc90b75fc66f56f1b9014c2d63f87",
+  "at": "2026-10-15T21:38:05.324733+00:00",
+  "policy": "All source candidates remain individually accountable. Source/file mapping and route discovery are not effect passes; ordinary alternates override Advanced labels. External capabilities and arbitrary extension authoring are not silently treated as standard built-in controls.",
+  "ledgerSummary": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 618,
+      "partially-observed": 36,
+      "not-run": 15
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 168,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "sourceCandidates": {
+    "total": 1666,
+    "dispositions": {
+      "dynamic-pattern-required": 5,
+      "ordinary-or-mixed-required": 1497,
+      "advanced-route-proposed": 138,
+      "not-reachable-built-in-proposed": 26
+    },
+    "missingAccountability": 0,
+    "baselineFiles": 126,
+    "currentCandidates": 1678,
+    "currentFiles": 128,
+    "currentMissingAccountability": 0,
+    "currentCountDelta": [
+      {
+        "path": "frontend/src/archive-feedback.jsx",
+        "before": 0,
+        "current": 3,
+        "workflowCandidates": [
+          "nav.archive-progress",
+          "nav.archive"
+        ]
+      },
+      {
+        "path": "frontend/src/chat-delete.jsx",
+        "before": 3,
+        "current": 4,
+        "workflowCandidates": [
+          "storage.inventory",
+          "storage.review",
+          "storage.delete",
+          "nav.delete-managed"
+        ]
+      },
+      {
+        "path": "frontend/src/conversation-detail.jsx",
+        "before": 7,
+        "current": 8,
+        "workflowCandidates": [
+          "messages.history-pages",
+          "messages.native-alternate",
+          "messages.rail",
+          "messages.copy",
+          "messages.reply",
+          "messages.reaction",
+          "messages.edit",
+          "messages.fork",
+          "messages.fold",
+          "messages.export",
+          "messages.share"
+        ]
+      },
+      {
+        "path": "frontend/src/conversation-library.jsx",
+        "before": 17,
+        "current": 16,
+        "workflowCandidates": [
+          "messages.history-pages",
+          "messages.native-alternate",
+          "messages.rail",
+          "messages.copy",
+          "messages.reply",
+          "messages.reaction",
+          "messages.edit",
+          "messages.fork",
+          "messages.fold",
+          "messages.export",
+          "messages.share"
+        ]
+      },
+      {
+        "path": "frontend/src/settings-ui.jsx",
+        "before": 19,
+        "current": 20,
+        "workflowCandidates": [
+          "bundles.catalog",
+          "composer.bundle-unavailable",
+          "configuration.registry",
+          "configuration.routing",
+          "configuration.routing-config",
+          "configuration.sources"
+        ]
+      },
+      {
+        "path": "frontend/src/shell/navigation-components.jsx",
+        "before": 64,
+        "current": 63,
+        "workflowCandidates": [
+          "nav.drawer",
+          "nav.sections",
+          "nav.select",
+          "nav.details",
+          "nav.activity",
+          "nav.recent-pages",
+          "nav.recent-retry",
+          "nav.search",
+          "nav.filters",
+          "nav.search-pages",
+          "nav.pin",
+          "nav.pin-order",
+          "nav.rename",
+          "nav.mark-unread",
+          "nav.archive",
+          "nav.workspace-pin",
+          "nav.workspace-browse",
+          "nav.workspace-archive",
+          "nav.workspace-remove",
+          "nav.refresh",
+          "nav.delete-managed"
+        ]
+      },
+      {
+        "path": "frontend/src/smart-tool-update-results.jsx",
+        "before": 0,
+        "current": 2,
+        "workflowCandidates": [
+          "updates.tool-recovery"
+        ]
+      },
+      {
+        "path": "frontend/src/work-shell.jsx",
+        "before": 29,
+        "current": 28,
+        "workflowCandidates": [
+          "create.draft",
+          "create.suggestion",
+          "create.workspace-new",
+          "create.workspace-existing",
+          "create.workspace-fault",
+          "create.starter-result",
+          "create.picker",
+          "workspace.tabs",
+          "workspace.files",
+          "workspace.details",
+          "workspace.config",
+          "workspace.review",
+          "workspace.resources",
+          "workspace.storage",
+          "workspace.environment",
+          "workspace.cleanup",
+          "voice.setup",
+          "voice.fallback",
+          "voice.call",
+          "voice.screen"
+        ]
+      },
+      {
+        "path": "frontend/src/workspace-test-environments.jsx",
+        "before": 15,
+        "current": 22,
+        "workflowCandidates": [
+          "workspace.tabs",
+          "workspace.files",
+          "workspace.details",
+          "workspace.config",
+          "workspace.review",
+          "workspace.resources",
+          "workspace.storage",
+          "workspace.environment",
+          "workspace.cleanup"
+        ]
+      }
+    ]
+  },
+  "renderedDiscovery": {
+    "probes": 72,
+    "instances": 1742,
+    "uniqueInstanceIds": 1742,
+    "missingWorkflowCandidates": 0,
+    "effectAssertionPerInstanceComplete": false,
+    "reason": "The 204 discovery assertions qualify route rendering and containment, not 1742 action effects. Exact effects are linked separately by workflow ledger."
+  },
+  "unreachableBuiltIn": {
+    "scope": "Current built-in client only; arbitrary external shell packages are not asserted unreachable.",
+    "method": "Lexical local import graph from main.jsx plus exact marker search of current compiled app and retained actual rendered route snapshots. This is source/evidence audit, not a browser effect pass.",
+    "entry": "frontend/src/main.jsx",
+    "reachableLocalModules": 233,
+    "files": [
+      {
+        "path": "frontend/src/computation.jsx",
+        "sha256": "269839b6a3bf57aa0d584374049b1ffaad834291ba43e33a0ae5f22e7bceca1e",
+        "reachableFromMain": false,
+        "importers": []
+      },
+      {
+        "path": "frontend/src/operations.jsx",
+        "sha256": "0dd8b140d1a7be51d33b04a3d069a36b350c3a958cfa74140fbaf9129b2d95b2",
+        "reachableFromMain": false,
+        "importers": []
+      }
+    ],
+    "build": {
+      "version": "0.20.165",
+      "id": "5f136e8e69c99e41"
+    },
+    "appAssets": [
+      {
+        "path": "amplifier_web/static/assets/app-DvPPLJUO.js",
+        "sha256": "66c671405472f1933866236f77e699bea514f07a12e17136c934037d2873b8f3"
+      }
+    ],
+    "markers": [
+      {
+        "label": "Computation language",
+        "inCompiledApp": false,
+        "inRenderedDiscovery": false
+      },
+      {
+        "label": "Create runtime",
+        "inCompiledApp": false,
+        "inRenderedDiscovery": false
+      },
+      {
+        "label": "Start command",
+        "inCompiledApp": false,
+        "inRenderedDiscovery": false
+      },
+      {
+        "label": "Refresh operations",
+        "inCompiledApp": false,
+        "inRenderedDiscovery": false
+      }
+    ],
+    "dynamicImports": [
+      {
+        "path": "frontend/src/canvas-workspace.jsx",
+        "line": 21,
+        "expression": "if(!factoryCache.has(url))factoryCache.set(url,import(/* @vite-ignore */ url).then(module=>{"
+      },
+      {
+        "path": "frontend/src/shell/runtime.jsx",
+        "line": 280,
+        "expression": "import(/* @vite-ignore */ metadata.url).then(module=>{"
+      },
+      {
+        "path": "frontend/src/shell/validation.jsx",
+        "line": 31,
+        "expression": "const factory=(await import(/* @vite-ignore */ moduleUrl)).default;"
+      }
+    ],
+    "renderedEvidence": "output/readiness-day-20261015/ui-inventory/discovery-summary.json",
+    "disposition": "not-reachable-in-built-in-client-proposed-review; not browser-passed"
+  },
+  "advancedRoutes": {
+    "frontend/src/artifact-runtime.jsx": [
+      "Chat \u2192 Advanced \u2192 Model & tools",
+      "frontend/src/runtime-settings.jsx:45"
+    ],
+    "frontend/src/chat-file-access.jsx": [
+      "Chat \u2192 Advanced \u2192 Files this chat can edit",
+      "frontend/src/chat-pages.jsx:83",
+      "frontend/src/chat-pages.jsx:85"
+    ],
+    "frontend/src/configuration-grants.jsx": [
+      "Chat \u2192 Advanced \u2192 Model & tools \u2192 Agent permissions for settings",
+      "frontend/src/runtime-settings.jsx:40"
+    ],
+    "frontend/src/portability.jsx": [
+      "Chat \u2192 Advanced \u2192 Work & automation \u2192 Move task between hosts",
+      "frontend/src/runtime-settings.jsx:41"
+    ],
+    "frontend/src/recall.jsx": [
+      "Chat \u2192 Advanced \u2192 Memory & past work",
+      "frontend/src/chat-pages.jsx:82",
+      "frontend/src/chat-pages.jsx:85"
+    ],
+    "frontend/src/schedules.jsx": [
+      "Chat \u2192 Advanced \u2192 Work & automation \u2192 Scheduled work",
+      "frontend/src/runtime-settings.jsx:41"
+    ],
+    "frontend/src/task-continuity.jsx": [
+      "Chat \u2192 Advanced \u2192 Work & automation \u2192 Saved task",
+      "frontend/src/runtime-settings.jsx:41"
+    ],
+    "frontend/src/worker-retention.jsx": [
+      "Settings \u2192 Advanced \u2192 Performance & runtime \u2192 Ready conversations",
+      "frontend/src/settings-everyday.jsx:23",
+      "frontend/src/settings-experience.jsx:75"
+    ],
+    "frontend/src/worktrees.jsx": [
+      "Chat \u2192 Advanced \u2192 Work & automation \u2192 Task execution folder",
+      "frontend/src/runtime-settings.jsx:41"
+    ]
+  },
+  "advancedRenderedWitnesses": [
+    {
+      "probe": "desktop-pointer.settings.advanced-boundary",
+      "evidence": "output/readiness-day-20261015/ui-inventory/discovery/evidence/discovery-updates-v3/observations.json",
+      "assertions": [
+        "Active Settings content is visible",
+        "Dialog has no horizontal overflow",
+        "Settings content has no horizontal overflow"
+      ]
+    },
+    {
+      "probe": "narrow-touch.settings.advanced-boundary",
+      "evidence": "output/readiness-day-20261015/ui-inventory/discovery/evidence/discovery-inputs-v3/observations.json",
+      "assertions": [
+        "Active Settings content is visible",
+        "Dialog has no horizontal overflow",
+        "Settings content has no horizontal overflow"
+      ]
+    },
+    {
+      "probe": "desktop-keyboard.settings.advanced-boundary",
+      "evidence": "output/readiness-day-20261015/ui-inventory/discovery/evidence/discovery-inputs-v3/observations.json",
+      "assertions": [
+        "Active Settings content is visible",
+        "Dialog has no horizontal overflow",
+        "Settings content has no horizontal overflow"
+      ]
+    },
+    {
+      "probe": "narrow-keyboard.settings.advanced-boundary",
+      "evidence": "output/readiness-day-20261015/ui-inventory/discovery/evidence/discovery-inputs-v3/observations.json",
+      "assertions": [
+        "Active Settings content is visible",
+        "Dialog has no horizontal overflow",
+        "Settings content has no horizontal overflow"
+      ]
+    }
+  ],
+  "ordinaryAlternatesRetained": [
+    "Workspace Work exposes coordination/assignment/task/validation controls despite other Advanced entry points.",
+    "Privacy exposes Backups & recovery and screen-readiness controls.",
+    "Workspace Details exposes routing/sources/bundle; Smart Tools exposes tool connections.",
+    "Composer reasoning/options and actual custom appearance entries remain ordinary."
+  ],
+  "universalClaimsNotMade": [
+    "Every pointer action traversed by sequential Tab",
+    "Every external provider/device/extension account accepted",
+    "All dynamic renderer instances activated",
+    "Arbitrary payload redaction or external-effect exactly-once behavior",
+    "Every route has the same performance characteristics"
+  ],
+  "artifacts": {
+    "sourceCandidates": "source-control-accountability.json",
+    "renderedInstances": "rendered-control-accountability.json",
+    "sharedPatternCrosswalk": "shared-control-evidence-audit.json"
+  },
+  "mandatoryActions": [
+    {
+      "owner": "root",
+      "action": "Retain all residual outcome limits and review any newly discovered finite ordinary gap; this is named-context acceptance, not universal proof."
+    }
+  ],
+  "finalControlWitness": "final-controls-qualification.json",
+  "finalDispositionArtifact": "final-completion-dispositions.json",
+  "independentBoundaryReview": {
+    "reviewer": "issue_validation_day",
+    "verdict": "Advanced route boundaries and nonexistent generic dirty Cancel confirmed; ordinary Workspace RelatedWork retained."
+  },
+  "compiledArtifactLimit": "Compiled app identity is recorded separately; current source census does not assert that the recorded asset contains every newer integration change.",
+  "completionAuditDelta": {
+    "at": "2026-10-15T22:03:29.393151+00:00",
+    "testRevision": "26533c68cdf4cca9b43d9bb4e5b426407a553ea3",
+    "receipt": "docs/validation/finite-standard-control-qualification-20261015.json",
+    "resolvedOutcomes": [
+      "composer.removed-provider:1",
+      "nav.workspace-pin:2"
+    ],
+    "remainingFiniteWorkerAcceptance": [
+      {
+        "id": "composer.stop:0",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      },
+      {
+        "id": "composer.stop:2",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      },
+      {
+        "id": "privacy.file-policy:1",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      },
+      {
+        "id": "connections.default-model:1",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      },
+      {
+        "id": "configuration.sources:2",
+        "owner": "perf_remaining",
+        "status": "actual-normal-worker-acceptance-pending",
+        "rationale": "Finite local worker boundary acceptance must not be relabeled external/unavailable solely because existing synthetic/UI checks pass."
+      }
+    ]
+  },
+  "previousWorkerClosureSnapshot": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 609,
+      "partially-observed": 42,
+      "not-run": 18
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 160,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "normalWorkerOutcomeDelta": {
+    "receipt": "docs/validation/standard-ux-worker-outcome-delta-20261015.json",
+    "resolvedOutcomes": [
+      "composer.stop:0",
+      "composer.stop:2",
+      "configuration.sources:2",
+      "connections.default-model:1",
+      "privacy.file-policy:1"
+    ],
+    "remainingOutcomes": 55
+  },
+  "previousNamedWorkSnapshot": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 614,
+      "partially-observed": 37,
+      "not-run": 18
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 164,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "namedWorkOutcomeDelta": {
+    "receipt": "docs/validation/work-required-modules-20261015.json",
+    "resolvedOutcomes": [
+      "bundles.selection:2"
+    ],
+    "remainingOutcomes": 54
+  },
+  "previousArchiveSnapshot": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 615,
+      "partially-observed": 37,
+      "not-run": 17
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 165,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "archiveOutcomeDelta": {
+    "receipt": "docs/validation/archive-running-worker-20261015.json",
+    "resolvedOutcomes": [
+      "nav.archive:0"
+    ],
+    "remainingOutcomes": 53,
+    "finiteRuntimeAcceptancePending": []
+  },
+  "previousRecoverySnapshot": {
+    "workflows": 199,
+    "outcomes": 669,
+    "outcomeStatus": {
+      "covered-in-context": 616,
+      "partially-observed": 36,
+      "not-run": 17
+    },
+    "workflowsWithOutcomeEvidence": 197,
+    "workflowsAllOutcomesObservedInContext": 166,
+    "ordinaryPathStatus": {
+      "observed-in-context": 189,
+      "reviewed-ordinary-ui-observed-platform-acceptance-partial": 1,
+      "reviewed-advanced-boundary-proposed": 1,
+      "reviewed-advanced-only-proposed": 2,
+      "reviewed-crosscutting-audit-not-destination": 6
+    },
+    "completionLimit": "Named-context outcome evidence and ordinary paths are separate; unrun behavior is never credited by shared-pattern reuse."
+  },
+  "recoveryOwnershipOutcomeDelta": {
+    "receipt": "docs/validation/recovery-ownership-worker-20261015.json",
+    "resolvedOutcomes": [
+      "delivery.ownership:2",
+      "delivery.context:2"
+    ],
+    "remainingOutcomes": 51,
+    "limits": [
+      "Competing owner is a separate real Foundation lock/release process, not the complete Amplifier CLI runtime.",
+      "Recovery retained an actual prior local file effect with synthetic committed tool history; arbitrary remote tool effects are not exercised.",
+      "Recovery itself and same-command retries/reopen run without starting a worker; explicit takeover starts one normal worker without input.",
+      "Existing independent browser witnesses qualify the UI entry; this receipt covers the runtime boundary, not additional browser gestures.",
+      "No live provider account, production history, device acceptance or performance claim."
+    ]
+  }
+}

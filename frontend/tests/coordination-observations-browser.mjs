@@ -1,4 +1,5 @@
 import './composer-test-helpers.mjs';
+import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -15,8 +16,12 @@ try{
  const a=await browser.newPage(options),b=await browser.newPage(options),errors=[];
  for(const page of [a,b])page.on('pageerror',error=>errors.push(error.message));
  const act=(page,action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
- const open=async page=>{await act(page,'view.update',{patch:{panel:'chat-work'}});await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();await page.getByText('Changes since your last view and diagnostics',{exact:true}).click();const recap=page.getByRole('region',{name:'Changes since your last view'});await expect(recap).toHaveCount(1);await recap.scrollIntoViewIfNeeded();return recap};
- const close=page=>page.getByRole('button',{name:'Close panel',exact:true}).click();
+ const open=async page=>{await openChatAdvancedPage(page,'Work & automation');await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();await page.getByText('Changes since your last view and diagnostics',{exact:true}).click();const recap=page.getByRole('region',{name:'Changes since your last view'});await expect(recap).toHaveCount(1);await recap.scrollIntoViewIfNeeded();return recap};
+ const close=async page=>{
+  await page.getByRole('button',{name:'Close panel',exact:true}).click();
+  await expect(page.locator('[data-part="dialog"]:visible')).toHaveCount(0);
+  await page.waitForFunction(()=>!window.amplifier.getState().view?.panel);
+ };
  await a.goto(url);await a.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const workspace=(await a.evaluate(()=>window.amplifier.getState())).workspaces[0];
  const source=(await act(a,'session.create',{workspace:workspace.path,title:'Primary owner'})).sessionId;
@@ -50,7 +55,7 @@ try{
  recap=await open(a);await expect.poll(()=>intercepted).toBe(true);await close(a);release();await finished;
  await a.unroute('**/api/actions');
  recap=await open(a);await expect(recap).toContainText('Review helper');
- await a.reload();recap=a.getByRole('region',{name:'Changes since your last view'});await recap.scrollIntoViewIfNeeded();await expect(recap).toContainText('No saved changes since your last view');
+ await a.reload();recap=await open(a);await expect(recap).toContainText('No saved changes since your last view');
  await a.setViewportSize({width:390,height:844});await recap.scrollIntoViewIfNeeded();
  assert.ok(await a.locator('.a-dialog').evaluate(element=>element.scrollWidth<=element.clientWidth));await a.screenshot({path:output+'/mobile.png'});
  await close(a);await expect(a.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('PRIVATE-A-DRAFT');

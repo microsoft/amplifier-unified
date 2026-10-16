@@ -86,6 +86,9 @@ async def test_cold_snapshot_never_runs_query_on_host_and_releases_loop_lock(ser
     complete = await settle(service)
     assert complete['instances']['chats']['resources']['recentNavigation']['value']['recentNavigation']['total'] == 2
     assert service._state['view']['draft'] == 'still editable'
+    receipts = service.performance_diagnostics.snapshot()['shellQueries']
+    assert any(row['operation'] == 'chats' and row['accepted'] and row['decodedRows'] == 2
+               for row in receipts)
 
 
 async def test_exact_existing_query_oracle_and_independent_full_api(service, tmp_path):

@@ -186,21 +186,33 @@ async def prepare_overrides(project, target):
     local_names = {}
     for row in tomllib.loads((project / 'uv.lock').read_text()).get('package', []):
         source = row.get('source') or {}
-        path = source.get('editable') or source.get('directory')
+        path = source.get('editable') or source.get('directory') or source.get('path')
         if path:
-            local_names[(project / path).resolve()] = row['name']
+            resolved = (project / path).resolve()
+            if resolved in local_names and local_names[resolved] != row['name']:
+                raise ValueError('An exported local source has ambiguous names in its worker lock.')
+            local_names[resolved] = row['name']
     lines = []
     for line in output.splitlines():
         value, separator, marker = line.partition(' ; ')
         editable = value.startswith('-e ')
         reference = value[3:] if editable else value
-        if editable or reference.startswith(('.', '/')):
+        if editable or reference.startswith(('.', '/', 'file:')):
             parsed = urlsplit(reference)
-            path = Path(unquote(parsed.path)) if parsed.scheme == 'file' else project / reference
+            if parsed.scheme == 'file':
+                from urllib.request import url2pathname
+                authority = '//' + parsed.netloc if parsed.netloc and parsed.netloc != 'localhost' else ''
+                path = Path(url2pathname(authority + parsed.path))
+            else:
+                path = project / reference
             path = path.resolve()
             if path not in local_names:
                 raise ValueError('An exported local source did not match its worker lock.')
-            value = ('-e ' if editable else local_names[path] + ' @ ') + path.as_uri()
+            # uv exports wheel files as bare URLs. Keep the locked name so
+            # a later selected source can supersede only that distribution.
+            # Preserve an exported URL's exact spelling, hash and markers.
+            url = reference if parsed.scheme == 'file' else path.as_uri()
+            value = ('-e ' if editable else local_names[path] + ' @ ') + url
         lines.append(value + separator + marker)
     content = '\n'.join(sorted(lines)) + '\n'
     write_private(target, content)

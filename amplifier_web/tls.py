@@ -100,6 +100,8 @@ def ssl_context(data_dir: Path, config: dict) -> ssl.SSLContext | None:
     tls = config["tls"]
     if tls["method"] == "none":
         return None
+    if not tls["cert"] or not tls["key"]:
+        raise ValueError("HTTPS requires both tls.cert and tls.key. Configure both paths before starting the server.")
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     context.load_cert_chain(resolve_path(data_dir, tls["cert"]), resolve_path(data_dir, tls["key"]))
     return context
@@ -152,6 +154,6 @@ def tls_ready(data_dir: Path, config: dict) -> bool:
         return False
     try:
         ssl_context(data_dir, config)
-    except (FileNotFoundError, OSError, ssl.SSLError):
+    except (FileNotFoundError, OSError, ssl.SSLError, ValueError):
         return False
     return True
