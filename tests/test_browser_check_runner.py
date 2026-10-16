@@ -274,9 +274,14 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     install = next(index for index, line in commands if 'uv pip install' in line and '--reinstall .' in line)
     for script in installed_overlap:
         assert any(index > install and f'node {script}' in line for index, line in commands)
+    appearance_preview = 'tests/appearance-preview-navigation-browser.mjs'
+    assert appearance_preview in readiness_scripts
+    assert appearance_preview not in extended_scripts
+    assert sum(f'node {appearance_preview}' in line for _, line in commands) == 1
     # All 108 original scripts, three navigation regressions, confirmed restart,
-    # Smart Tool recovery and archive feedback each retain their owning lane.
-    assert len(readiness_scripts | extended_scripts) == 114
+    # Smart Tool recovery, archive feedback and appearance preview navigation
+    # each retain their owning lane.
+    assert len(readiness_scripts | extended_scripts) == 115
 
 
 def test_performance_reports_are_distinct_and_uploaded():
