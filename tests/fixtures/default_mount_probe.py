@@ -147,13 +147,23 @@ def guarded_environment(request, monkeypatch, tmp_path):
             absent.append("installed distribution " + distribution)
     if absent:
         missing(absent)
-    attempts, git_reads = [], []
+    attempts, git_reads, blocked_platform_probes = [], [], []
     active = True
     phase = "fixture/imports"
 
     def audit(event, args):
         if not active:
             return
+        if event == "socket.bind" and args[-1] == ("::1", 0):
+            frames = traceback.extract_stack(limit=6)
+            if any(frame.name == "_has_ipv6"
+                   and frame.filename.endswith("/urllib3/util/connection.py")
+                   for frame in frames):
+                # urllib3 probes local IPv6 support during import. Deny this
+                # optional bind with its expected OSError, not RuntimeError:
+                # no socket is bound and no application request is permitted.
+                blocked_platform_probes.append("urllib3 IPv6 availability bind")
+                raise OSError("IPv6 probe disabled in offline qualification")
         if event == "subprocess.Popen":
             argv = args[1]
             if (isinstance(argv, (list, tuple)) and len(argv) == 5
@@ -206,7 +216,8 @@ def guarded_environment(request, monkeypatch, tmp_path):
         monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
         monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
         yield SimpleNamespace(env=env, repositories=repositories, attempts=attempts,
-                              git_reads=git_reads, phase=set_phase)
+                              git_reads=git_reads, blocked_platform_probes=blocked_platform_probes,
+                              phase=set_phase)
     finally:
         active = False
         assert not attempts, "Forbidden effects (including caught attempts): " + json.dumps(attempts)
@@ -245,7 +256,9 @@ def remote_path(source, repositories, heads):
     parsed = urlsplit(source[4:])
     assert parsed.netloc == "github.com" and not parsed.query, source
     repository, at, revision = parsed.path.removeprefix("/microsoft/").rpartition("@")
-    assert parsed.path.startswith("/microsoft/") and at and "/" not in repository, source
+    if not at:
+        repository, revision = revision, "main"
+    assert parsed.path.startswith("/microsoft/") and "/" not in repository, source
     repository = repository.removesuffix(".git")
     assert re.fullmatch(r"amplifier[-a-z0-9]+", repository), source
     root = repositories / repository
@@ -604,6 +617,7 @@ async def mounted(inputs, monkeypatch):
                       for row in data.packages.values() if row["package"] in sys.modules},
                   "skill_substitutions": data.substitutions,
                   "agents_retained": sorted(prepared.mount_plan.get("agents", {})),
+                  "blocked_platform_probes": data.state.blocked_platform_probes,
                   "git_reads": data.state.git_reads})
 
 
