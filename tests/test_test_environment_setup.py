@@ -388,17 +388,18 @@ async def test_retained_setup_handles_capacity_denial_without_publishing(app, mo
     app.smart_tools.install.assert_not_called()
 
 
-async def test_cleaned_setup_cannot_republish_retained_candidate(app, monkeypatch):
+@pytest.mark.parametrize('state', ['recovered', 'outcome_unknown'])
+async def test_cleaned_setup_cannot_republish_retained_candidate(app, monkeypatch, state):
     import hashlib
     identity = hashlib.sha256(json.dumps(['session', 'setup'], separators=(',', ':')).encode()).hexdigest()[:32]
     candidate = {'enabled': True, 'backend': 'docker'}
-    record = {'id': identity, 'intent': args(), 'actor': {}, 'backend': 'docker', 'state': 'recovered',
+    record = {'id': identity, 'intent': args(), 'actor': {}, 'backend': 'docker', 'state': state, 'cleanup': {'state': 'failed'},
               'priorConfiguration': None, 'candidateConfiguration': candidate, 'proof': {'probeRemoved': True}}
     setup.write_json(setup.root(app) / (identity + '.json'), record)
     complete = AsyncMock()
     monkeypatch.setattr(setup, 'complete_retained', complete)
     result = await setup.request(app, args(), {})
-    assert result['operation']['state'] == 'recovered'
+    assert result['operation']['state'] == state
     complete.assert_not_awaited()
     assert not (app.data_dir / 'test-environments.json').exists()
 

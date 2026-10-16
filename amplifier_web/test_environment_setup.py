@@ -267,7 +267,7 @@ async def request(app, args, actor, guard=None):
     if existing:
         if existing['intent'] != intent or existing['actor'] != actor:
             raise ValueError('This setup request identity already belongs to another intent.')
-        if existing['state'] in {'outcome_unknown', 'failed'} and existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and identity not in getattr(app, '_test_setup_tasks', {}):
+        if existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and identity not in getattr(app, '_test_setup_tasks', {}):
             existing = await complete_retained(app, path, existing, guard)
         observed = await readiness(app, force=True)
         # A crash after atomic publication can be settled by the exact retained
