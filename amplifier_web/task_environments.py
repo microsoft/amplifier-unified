@@ -522,7 +522,10 @@ def observe_job(app, row, config, *, cancel=False):
         if storage.observe(home, row)['observation'] != 'present':
             raise ValueError('The retained environment directory changed.')
         result = invoke(config, home, row, 'job_cancel' if cancel else 'job_read', job)
-        request = app.operations.requests.finish(request, durable_state(result), resourceId=row['id'], result=result,
+        state = durable_state(result)
+        if request.get('state') == state and request.get('result') == result:
+            return request
+        request = app.operations.requests.finish(request, state, resourceId=row['id'], result=result,
             message='Observed the exact durable guest job; no command was repeated.')
         project_result(home, row, request)
         return request

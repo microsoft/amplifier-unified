@@ -66,6 +66,8 @@ class TestQueue:
         self.backoff = {}
         self.wakeup = asyncio.Event()
         self.notification_cursor = 0
+        self.job_wakeups = {}
+        self.poll_seconds = 5
         app.db.execute("""CREATE INDEX IF NOT EXISTS workspace_test_queue ON commands(
             json_extract(receipt,'$.job.status'), json_extract(receipt,'$.senderSessionId'))
             WHERE json_extract(receipt,'$.commandAction')='workspace.tests.submit'""")
@@ -215,6 +217,7 @@ class TestQueue:
                         row = environments.get(self.app.data_dir, source['id'], receipt['job']['resourceId'])
                         environments.cancel_preparation(self.app, row)
                 self.wakeup.set()
+                self.wake_job(identity)
                 return {'accepted': True, 'result': self.public(receipt)}
             digest = fingerprint([ACTION, args, source['id'], origin])
             previous = self.app.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
@@ -499,8 +502,21 @@ class TestQueue:
                       {'completed': 'passed', 'failed': 'failed', 'cancelled': 'cancelled'}.get(check['state'], 'unknown'))
             self.finish(receipt, status, 'The check outcome is '+status+'. Source, artifacts and operation receipts were retained before the owned environment was removed.')
 
+    def wake_job(self, identity):
+        event = self.job_wakeups.get(identity)
+        if event is not None:
+            event.set()
+
     async def monitor(self, identity, config, check=None):
         """Reattach observation after restart; only guest admission runs commands."""
+        event = self.job_wakeups[identity] = asyncio.Event()
+        try:
+            return await self._monitor(identity, config, check, event)
+        finally:
+            if self.job_wakeups.get(identity) is event:
+                self.job_wakeups.pop(identity, None)
+
+    async def _monitor(self, identity, config, check, event):
         errors = 0
         while True:
             receipt = self.get(identity)
@@ -523,10 +539,15 @@ class TestQueue:
                 self.finish(self.get(identity), 'unknown', 'The backend returned no durable guest receipt. The environment is preserved; no command or cleanup was repeated.')
                 return
             receipt = self.get(identity)
-            receipt['job']['check'] = self.summary(check)
+            summary = self.summary(check)
+            changed = receipt['job'].get('check') != summary
+            receipt['job']['check'] = summary
             if guest:
-                receipt['job']['guestJob'] = {key: guest[key] for key in ('id', 'state', 'terminal', 'startedAt', 'finishedAt', 'cancelRequested', 'reason') if key in guest}
-            self.save(receipt)
+                compact = {key: guest[key] for key in ('id', 'state', 'terminal', 'startedAt', 'finishedAt', 'cancelRequested', 'reason') if key in guest}
+                changed |= receipt['job'].get('guestJob') != compact
+                receipt['job']['guestJob'] = compact
+            if changed:
+                self.save(receipt)
             if guest.get('terminal') is True:
                 receipt['job']['status'] = 'stopping'
                 self.save(receipt)
@@ -538,7 +559,11 @@ class TestQueue:
             # The start acknowledgement may have been lost after guest commit.
             # Observe the exact reserved identity, never call execute again.
             check = None
-            await asyncio.sleep(1)
+            try:
+                await asyncio.wait_for(event.wait(), timeout=self.poll_seconds)
+                event.clear()
+            except TimeoutError:
+                pass
 
     async def recover(self, identity):
         """Reconcile the exact owner and complete cleanup; never rerun the check."""

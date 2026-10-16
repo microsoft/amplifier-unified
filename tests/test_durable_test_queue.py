@@ -14,7 +14,8 @@ from test_test_queue import drive, queue, record, submit
 
 
 @pytest.fixture
-def running(monkeypatch, backend):
+def running(monkeypatch, backend, queue):
+    queue.poll_seconds = 0.05
     if hasattr(environments, 'dependencies'):
         # This fixture controls lifecycle/guest effects. Image preparation has
         # its own physical acceptance; never download/build from a unit fixture.
@@ -70,14 +71,16 @@ async def test_restart_during_check_observes_same_job_without_cleanup_or_replay(
 
 
 async def test_cancel_observes_terminal_before_cleanup(app, queue, running, backend):
+    queue.poll_seconds = 5
     await submit(app, profileId='python-project', timeoutSeconds=1800)
     await admitted(queue, app)
     await app.dispatch('workspace.tests.cancel', {**scope(app), 'requestId': 'check'})
-    await asyncio.wait_for(asyncio.gather(*queue.tasks.values()), 4)
+    await asyncio.wait_for(asyncio.gather(*queue.tasks.values()), 1)
     assert record(queue, app)['job']['status'] == 'cancelled'
     actions = [action for action, _ in backend]
     assert actions.index('job_cancel') < actions.index('stop') < actions.index('remove')
     assert len(running[1]) == 1
+    assert not queue.job_wakeups
 
 
 async def test_missing_supervisor_retains_owner_and_never_cleans_unknown_job(app, queue, running, backend):
@@ -208,3 +211,19 @@ async def test_restart_during_cleanup_observes_stopped_guest_without_job_read(ap
     assert record(recovered, app)['job']['status'] == 'passed'
     assert [action for action, _ in backend].count('stop') == 1
     assert [action for action, _ in backend][-2:] == ['read', 'remove']
+
+
+async def test_unchanged_observation_does_not_rewrite_three_journals(app, queue, running, backend):
+    await submit(app)
+    await admitted(queue, app)
+    receipt = record(queue, app)
+    sid, identity = receipt['senderSessionId'], running[1][0]
+    row = environments.get(app.data_dir, sid, receipt['job']['resourceId'])
+    operation = app.operations.requests.read(sid, identity)
+    await until(lambda: [action for action, _ in backend].count('job_read') >= 3)
+    assert record(queue, app)['job']['updatedAt'] == receipt['job']['updatedAt']
+    assert environments.get(app.data_dir, sid, row['id'])['revision'] == row['revision']
+    assert app.operations.requests.read(sid, identity)['updatedAt'] == operation['updatedAt']
+    running[0][identity] = 'passed'
+    queue.wake_job(queue.identity(sid, 'check'))
+    await asyncio.gather(*queue.tasks.values())

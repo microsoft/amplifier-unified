@@ -215,10 +215,13 @@ def supervise(payload):
                     key.data.extend(chunk[:room])
                     truncated |= len(chunk) > room
             if now - last_saved >= 1:
-                state['result'] = {'stdout': output.decode('utf-8', 'replace'), 'stderr': errors.decode('utf-8', 'replace'),
-                                   'exit_code': None, 'truncated': truncated}
-                state['cancelRequested'] = ending == 'cancelled'
-                publish(root / 'state.json', state)
+                result = {'stdout': output.decode('utf-8', 'replace'), 'stderr': errors.decode('utf-8', 'replace'),
+                          'exit_code': None, 'truncated': truncated}
+                cancelled = ending == 'cancelled'
+                if state.get('result') != result or state.get('cancelRequested') != cancelled:
+                    state['result'] = result
+                    state['cancelRequested'] = cancelled
+                    publish(root / 'state.json', state)
                 last_saved = now
     code = process.wait()
     process.stdout.close()
