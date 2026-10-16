@@ -104,7 +104,7 @@ async def test_restart_reconnect_preserves_document_history_and_does_not_replay(
         await app.close()
 
 
-@pytest.mark.parametrize('change', ['schema', 'resource', 'grant', 'configuration', 'account'])
+@pytest.mark.parametrize('change', ['schema', 'resource', 'grant', 'configuration', 'account', 'description', 'removed'])
 async def test_changed_authority_fails_without_changing_saved_source_or_grants(app, change):
     identity = app.state['canvas']['id']
     binding = deepcopy(app.state['canvas']['mcp'])
@@ -119,6 +119,10 @@ async def test_changed_authority_fails_without_changing_saved_source_or_grants(a
         tools[1]['_meta'] = {'ui': {'visibility': ['model']}}
     elif change == 'configuration':
         server['command'] = 'another-executable'
+    elif change == 'description':
+        tools[1]['description'] = 'A description-only edit'
+    elif change == 'removed':
+        tools.pop()
     else:
         server['accountBinding'] = {'issuer': 'https://issuer.example', 'subject': 'another-account'}
     status = inspect(app, identity)
@@ -245,8 +249,13 @@ async def test_agent_and_user_share_scoped_status_and_reconnect(app):
     identity, sid = app.state['canvas']['id'], app._session()['id']
     app.clients.attach('one')
     app.clients.attach('two')
-    with pytest.raises(AppError, match='Multiple clients'):
-        await app.app_bridge('dispatch', {'action': 'smartTools.viewStatus', 'args': {'canvasId': identity}}, sid)
+    queues = []
+    for client_id in ('one', 'two'):
+        with app.clients.bind(client_id):
+            queues.append(app.subscribe(sid))
+    ambiguous = await app.app_bridge('dispatch', {'action': 'smartTools.viewStatus', 'args': {'canvasId': identity}}, sid)
+    assert ambiguous['result']['status'] == 'client_ambiguous'
+    assert ambiguous['result']['clientIds'] == ['one', 'two']
     result = await app.app_bridge('dispatch', {'action': 'smartTools.viewStatus', 'args': {'canvasId': identity, 'clientId': 'two'}}, sid)
     args = {'canvasId': identity, 'clientId': 'two', 'expectedBindingRevision': result['result']['bindingRevision']}
     receipt = await app.app_bridge('dispatch', {'action': 'smartTools.reconnectView', 'args': args}, sid)
@@ -293,3 +302,74 @@ async def test_http_serves_saved_document_without_live_authority_and_preserves_m
     assert response.status == 404
     await service.dispatch('canvas.select', {'id': identity})
     assert service.state['canvasArtifacts'][0]['body'] == reference
+
+
+@pytest.mark.parametrize('explicit', [None, 'old', 'wrong-chat', 'unknown'])
+async def test_passive_status_without_connected_caller_keeps_saved_information(app, explicit):
+    identity, sid = app.state['canvas']['id'], app._session()['id']
+    app.clients.attach('old')
+    app.clients.attach('wrong-chat')
+    with app.clients.bind('wrong-chat'):
+        await app.dispatch('session.create', {})
+        app.subscribe(app._session()['id'])
+    before = deepcopy(app.clients.records)
+    original = deepcopy(app.smart_tools.operation('original-call'))
+    async def unexpected(*args, **kwargs):
+        raise AssertionError('Passive inspection must not connect or call a tool')
+    app.smart_tools.connect = unexpected
+    args = {'canvasId': identity, **({'clientId': explicit} if explicit else {})}
+    receipt = await app.app_bridge('dispatch', {'action': 'smartTools.viewStatus', 'args': args}, sid)
+    result = receipt['result']
+    assert result['status'] == ('client_unavailable' if explicit else 'no_connected_client')
+    assert result['clientIds'] == [] and result['clientId'] is None
+    assert result['source'] == 'available' and not result['canReconnect']
+    assert result['savedView']['selection'] == 'latest_saved'
+    assert result['savedView']['bindingRevision']
+    assert result['savedView']['status'] == 'ready'
+    assert not result['savedView']['canReconnect']
+    assert app.clients.records == before
+    assert app.smart_tools.operation('original-call') == original
+
+
+async def test_passive_status_selects_only_one_connected_caller_and_reports_closed_view(app):
+    identity, sid = app.state['canvas']['id'], app._session()['id']
+    app.clients.attach('historical')
+    app.clients.attach('connected')
+    with app.clients.bind('connected'):
+        queue = app.subscribe(sid)
+    receipt = await app.app_bridge('dispatch', {'action': 'smartTools.viewStatus', 'args': {'canvasId': identity}}, sid)
+    assert receipt['result']['status'] == 'ready'
+    assert receipt['result']['clientId'] == 'connected'
+    assert receipt['result']['clientIds'] == ['connected']
+    app.clients.records['connected']['canvas']['open'] = False
+    before = deepcopy(app.clients.records)
+    receipt = await app.app_bridge('dispatch', {'action': 'smartTools.viewStatus', 'args': {'canvasId': identity}}, sid)
+    assert receipt['result']['status'] == 'view_not_selected'
+    assert receipt['result']['savedView']['source'] == 'available'
+    assert app.clients.records == before
+    app.unsubscribe(queue)
+
+
+async def test_passive_status_rejects_other_chat_and_unknown_artifacts_before_client_discovery(app):
+    identity = app.state['canvas']['id']
+    await app.dispatch('session.create', {})
+    sid = app._session()['id']
+    for canvas_id in (identity, 'not-a-canvas'):
+        with pytest.raises(AppError, match='unavailable in the calling conversation'):
+            await app.app_bridge('dispatch', {'action': 'smartTools.viewStatus', 'args': {'canvasId': canvas_id}}, sid)
+
+
+async def test_passive_saved_status_distinguishes_missing_source_and_binding(app):
+    identity, sid = app.state['canvas']['id'], app._session()['id']
+    row = app.state['canvasArtifacts'][0]
+    (root(app.db) / (row['mcpState']['$resource'] + '.json')).unlink()
+    args = {'action': 'smartTools.viewStatus', 'args': {'canvasId': identity}}
+    result = (await app.app_bridge('dispatch', args, sid))['result']
+    assert result['status'] == 'no_connected_client'
+    assert result['savedView']['status'] == 'binding_unavailable'
+    assert result['source'] == 'available'
+    (root(app.db) / (row['body']['$resource'] + '.json')).unlink()
+    result = (await app.app_bridge('dispatch', args, sid))['result']
+    assert result['status'] == 'no_connected_client'
+    assert result['savedView']['status'] == 'source_unavailable'
+    assert result['source'] == 'unavailable'

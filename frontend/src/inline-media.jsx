@@ -147,11 +147,11 @@ export function MediaFigure({item,messageId,reportMedia,dispatch,openInCanvas=fa
  </figure>;
 }
 
-export function InlineMedia({sessionId,messageId,mediaRevision=0,linkedMediaAvailable,dispatch}){
+export function InlineMedia({sessionId,messageId,mediaRevision=0,linkedMediaAvailable,configurationBusy=false,dispatch}){
  const anchor=useRef(null),[visible,setVisible]=useState(false),[result,setResult]=useState(null),[error,setError]=useState(null),[retry,setRetry]=useState(0);
  const owns=value=>value?.sessionId===sessionId&&value?.messageId===messageId;
  const current=linkedMediaAvailable===true&&owns(result)?result.value:null;
- const failure=linkedMediaAvailable===true&&owns(error)?error.message:'';
+ const failure=!configurationBusy&&linkedMediaAvailable===true&&owns(error)?error.message:'';
  useEffect(()=>{
   if(!globalThis.IntersectionObserver){setVisible(true);return}
   const observer=new IntersectionObserver(rows=>setVisible(rows.some(row=>row.isIntersecting)),{rootMargin:'200px'});
@@ -159,16 +159,19 @@ export function InlineMedia({sessionId,messageId,mediaRevision=0,linkedMediaAvai
  },[]);
  useEffect(()=>{
   if(linkedMediaAvailable===false){setResult(null);setError(null)}
+  if(configurationBusy)setError(null);
   // Only the selected host projection can establish registry availability.
   // Missing coverage is pending, never authority to scan a transcript.
-  if(!visible||linkedMediaAvailable!==true)return;let disposed=false;const abort=new AbortController();
+  // Bundle replacement temporarily rewrites native transcript indices. Keep
+  // already-qualified media, but defer discovery until its identity is stable.
+  if(configurationBusy||!visible||linkedMediaAvailable!==true)return;let disposed=false;const abort=new AbortController();
   const query=new URLSearchParams({sessionId,messageId});
   setError(null);
   api.request(`/api/outputs/media?${query}`,{signal:abort.signal}).then(value=>{
    if(!disposed)setResult({sessionId,messageId,value:validateMediaMetadata(value,sessionId)});
   }).catch(error=>{if(!disposed&&error.name!=='AbortError')setError({sessionId,messageId,message:error.message})});
   return ()=>{disposed=true;abort.abort()};
- },[sessionId,messageId,mediaRevision,linkedMediaAvailable,visible,retry]);
+ },[sessionId,messageId,mediaRevision,linkedMediaAvailable,configurationBusy,visible,retry]);
  return <div ref={anchor} className="a-inline-media">
   {current?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId} dispatch={dispatch} openInCanvas/>)}
   {failure&&<p role="alert">{failure} <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry media metadata</button></p>}

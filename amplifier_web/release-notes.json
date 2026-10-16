@@ -2,6 +2,26 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.171",
+      "title": "Recover conversations and clarify setup",
+      "changes": [
+        "Changing a conversation bundle uses a fresh worker process, preserves saved history and model choices, and restores the previous configuration if the new bundle cannot start. Stopping the conversation prevents a queued configuration change from restarting it.",
+        "Media previews wait for conversation configuration to settle and recover automatically from temporary changes. Saved tool views report connection status accurately and receive verified reconnection updates without replaying work.",
+        "Bundle startup errors retain useful diagnostic categories. Setup and service status distinguish a responding host from an unverified public address; certificate guidance and expected listener errors are clearer.",
+        "Ordinary file searches follow the same read permissions as file reading, including inherited restrictions. Interrupted checkout handoffs retain their recovery state until the new execution folder is durably confirmed.",
+        "Computer Use, Context Intelligence and Model Routing join the ordinary default capabilities, preserving explicit opt-outs, source revisions and model choices. Desktop restrictions remain effective through nested and resumed workers; Context Intelligence forwarding requires explicit configuration.",
+        "Expanded smoke and integration coverage exercises bundle changes, media recovery, onboarding diagnostics, saved tool views, Stories workflows and capability permissions."
+      ],
+      "notices": [
+        {
+          "id": "ordinary-default-capabilities",
+          "title": "Additional capabilities for ordinary conversations",
+          "detail": "Ordinary conversations now include Computer Use, Context Intelligence and Model Routing unless explicitly disabled. Newly introduced Computer Use is read-only and targets the server computer. External Context Intelligence forwarding remains off until configured. Saved snapshot bundles retain their existing composition.",
+          "action": "Review or disable capabilities in Settings \u2192 Configured bundles. Existing explicit access settings and provider/model choices remain authoritative."
+        }
+      ]
+    },
+    {
       "version": "0.20.170",
       "title": "Approve and revoke companion connections",
       "changes": [

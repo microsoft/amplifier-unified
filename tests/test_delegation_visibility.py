@@ -41,6 +41,18 @@ def test_explicit_parent_selection_and_child_override_precedence_are_disclosed(o
     assert (selection is not None)==(source=='inherited_conversation')
 
 
+@pytest.mark.parametrize(("origin", "expected"), [
+    ("role", "agent_model_role"),
+    ("explicit", "delegation_preferences"),
+])
+def test_resolved_preferences_keep_their_selection_origin(origin, expected):
+    parent = SimpleNamespace(coordinator=coordinator(inherit=True))
+    report = child_routing(parent, {"model_role": "coding"},
+                           [{"provider": "chosen", "model": "resolved"}], None,
+                           preferences_source=origin)
+    assert report["selectionSource"] == expected
+
+
 @pytest.mark.asyncio
 async def test_child_actual_provider_usage_and_original_parent_survive_later_lifecycle():
     events=ExecutionEvents('root',lambda _:None)

@@ -4,6 +4,8 @@ The ordinary host suite may omit optional runtime dependencies. That does not
 qualify those integrations. `scripts/integration-coverage.json` assigns every one
 of the 87 skip records audited from revision `d1735f82` to an execution owner.
 Three records skipped entire modules, so 87 is not the number of test cases.
+Later opt-in checks have separate `additionalRecords`; the historical baseline
+and its 87 records remain frozen.
 
 ## When checks run
 
@@ -14,8 +16,9 @@ Three records skipped entire modules, so 87 is not the number of test cases.
   against the immutable published revision. Its report includes the integration
   result; failed, cancelled, missing, or skipped jobs cannot count as success.
 - **Manual:** the same automated matrix can be dispatched on a selected ref.
-  Installed-PWA, optional M365 overlay, and unpublished profiling checks have explicit manual owners
-  below. Neither is implied by a green headless or host-only run.
+  Installed-PWA, optional M365 overlay, unpublished profiling and installed-default
+  checks have explicit manual owners below. None is implied by a green headless
+  or host-only run.
 - **Publication:** the existing short native-runtime group remains the owner of
   ten audited opt-in cases. It now verifies its JUnit report for skips and missing
   required selectors. It is not rerun as another integration lane.
@@ -42,6 +45,9 @@ servers, browsers, displays, or filesystem behavior fail their designated owner.
 | IC-08 context-intelligence | Real isolated server/database, authenticated graph routing and content redaction | 1 passed, 0 skipped; 2.96s | Real disposable Neo4j + server, no production endpoint or account |
 | IC-09 connected-documents | Native upstream composition, shared UI/agent invocation, policy and idempotence | 2 passed, 0 skipped; 1.62s against explicit local upstream copy | Manual optional-overlay acceptance; synthetic Graph transport, no live account writes |
 | IC-10 profiling | Real optional capture library, revocation, privacy, retention and receipts | 10 passed, 0 skipped; 10.28s against clean local library `8edea47c3a05eb4e6206211ac993a0a673245b8a` | Repeat against an explicit clean source; automate when canonical source distribution is available |
+| IC-11 Stories joined | Actual worker storage → real Stories MCP import/retained read → native MCP App review/export/reconnect | Passed against explicit source and supported Agent; separate fresh-install defect repaired upstream | [Manual optional-integration owner](stories-joined-acceptance.md), required on affected changes/source adoption; missing prerequisites fail, never skip |
+| IC-12 native additions | Root/child read policy with actual filesystem/search, both ripgrep and Python fallback; default capability inheritance; Foundation export roundtrip | Registered separately from the 87-record baseline; source-bound execution receipts report actual results | Existing native owner on affected PRs and after publication; current tool packages and ripgrep required before pytest |
+| IC-13 default-installed | Real offline behavior composition, runtime destination/write policy, full mount/export and finite Core/DelegateTool routing | Explicit installed-wheel owner; registration is not a claim of new acceptance | On changes to these boundaries, run copied tests with prepared exact sources and enforce every selector with zero skips |
 
 The initial [GitHub matrix](https://github.com/microsoft/amplifier-unified/actions/runs/38873044197)
 passed all six automated lanes: 88 tests, zero skips, including the macOS cases.
@@ -52,6 +58,19 @@ These native/provider tests use deterministic offline providers; they do not
 prove paid-provider latency, real Microsoft 365 authorization, or live Office
 client acceptance. Their integration claims concern the actual native modules
 and host boundaries exercised by the named tests.
+
+### Terminal lifecycle regression, October 16
+
+The PR812 native run `38968575306` timed out waiting for its stop-test provider.
+The fixture sent that new-turn input after seeing assistant text but before the
+previous generation finished. A delayed assistant-event observation reproduced
+an explicit held-steering receipt; it was not evidence that stop had failed.
+The fixture now waits for the terminal client's idle snapshot and asserts an
+accepted, non-steering receipt before waiting for the provider. The actual
+two-client detach, duplicate delivery, reconnect and cancellation checks remain.
+The existing IC-01 native lane owns this check; no additional lane or retry is
+added. Normal execution and the same 750ms delayed-event probe passed locally;
+the original hosted failure remains recorded separately.
 
 ## Running an owned lane
 
@@ -103,3 +122,51 @@ When adding an integration or discovering another skip, update the ownership
 manifest, affected-path rules, this checklist, and the nearest UX smoke scenario.
 When a selector is removed or renamed, update its owner deliberately: a missing
 selector is a failing result, not permission to shrink coverage silently.
+
+### Additive runtime owners, October 16
+
+PR817's read-policy suite is module-skipped without loop-live and additionally
+needs current filesystem/search packages and real ripgrep. The existing native
+owner now prepares those packages, verifies imports and records `rg --version`;
+its CI job installs ripgrep explicitly. The tests still exercise the Python
+fallback as well. Stale tool implementations or missing binaries cannot become
+a successful owner run through a skip or fallback-only pass.
+
+PR815's default-capability policy tests and its Foundation export roundtrip use
+the same already-required native dependencies. They join that lane. Ordinary
+builtin-behavior and export unit cases remain in the full Python suite.
+
+The four `default-installed` suites require a noneditable candidate wheel,
+source-bound offline behavior checkouts and their matching installed modules.
+The native lane intentionally uses an editable Unified checkout, so it cannot
+substitute for that proof. The Smart Tools/runtime integration owner runs these
+checks in an owned container on changes to composition, forwarding, desktop
+policy, routing or the qualified dependency set, before claiming those boundaries
+qualified. This is explicit affected-feature acceptance, not a new universal
+publication gate or an automatically provisioned hosted lane. Its fake desktop
+backend and finite providers do not exercise physical input or paid accounts.
+
+Prepare the exact prerequisites and copied `tests/` tree described in
+[release qualification](release-qualification.md#focused-default-capability-qualification).
+Set the documented runtime/source variables, then run outside the application
+checkout. The root below contains only the copied `tests/` tree; the interpreter
+contains the candidate wheel. Both commands must succeed:
+
+```sh
+"$UNIFIED_RUNTIME_PYTHON" -I -m pytest --import-mode=prepend \
+  -p pytest_asyncio.plugin -p pytest_aiohttp.plugin \
+  --rootdir=/owned/default-qualification \
+  --junitxml=/owned/evidence/default-installed.xml \
+  /owned/default-qualification/tests/test_default_behaviors_integration.py \
+  /owned/default-qualification/tests/test_default_runtime_safety.py \
+  /owned/default-qualification/tests/test_default_mount_runtime.py \
+  /owned/default-qualification/tests/test_default_routing_runtime.py
+python /owned/candidate/scripts/integration_checks.py check \
+  --lane default-installed --junit /owned/evidence/default-installed.xml
+```
+
+Retain the candidate wheel/source identity, prepared dependency receipts, complete
+log and JUnit alongside the check result. Missing prerequisites, module skips,
+per-test skips or absent selectors mean **unqualified**, even if ordinary pytest
+exits zero. The isolated installed probes reject checkout/editable imports;
+keep their original guards rather than bypassing them to fit the native lane.

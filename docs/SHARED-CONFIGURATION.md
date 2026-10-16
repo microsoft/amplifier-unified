@@ -132,7 +132,7 @@ add-ons remain in capability management. The shared `bundles.list` catalog appli
 this policy to both UI and agent clients, without fetching or mounting bundles.
 New conversations use an explicit bundle choice first,
 then the workspace's shared local/project default, then Unified's optional app
-preference, then the shared user default (falling back to `anchors`). Existing
+preference, then the shared user default (falling back to `work`, shown as **Work**). Existing
 conversations retain their saved root.
 
 The default picker exposes three scopes. **This Unified app** stores `appBundle`

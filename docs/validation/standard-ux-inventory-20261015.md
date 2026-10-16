@@ -8,12 +8,28 @@
 | #712 exact approved storage scope / full Python checks after publication | Existing real Core coordinator mount test now also saves an explicitly authorized session directory, writes there on the next mount, and refuses the sibling. With task-storage acceptance: 35 passed, zero skipped. | Exact scope only; denied/unknown allocation performs no filesystem effects. Joined Stories import/native review/export and actual resumed-delegate continuation remain unrun. |
 | #712 real resumed-native child / Full Python checks after publication | Actual Core/Foundation child checkpoint and resume preserves the old write ceiling after a wider parent grant; a fresh child writes only the approved directory and its own later resume also succeeds. Sibling writes remain refused. Five native child checks passed, zero skipped; removing the retained ceiling fails the new check. | Preserve saved authority and transcript on resume; expose a clear fresh-child continuation when an old child's ceiling excludes the new grant. This does not qualify the outer worker process or original Stories workflow. |
 | #712 resumed-worker refusal explanation / Full Python checks | Actual guarded native resume reports saved-permission guidance only on an access refusal; fresh workers lack that guidance, authorized resumed writes pass, `file_source_access` / `effect: none` remain unchanged. 74 passed; two nonmatching filesystem-alias cases skipped. | Explain how to use a later grant without retrying or widening the saved worker. Do not imply automatic inheritance or claim full Stories acceptance. |
+| #712 joined Stories / optional Smart Tools integration owner | Actual RuntimeManager/Work worker allocates, writes and reads; real Stories MCP imports and reads retained work; packaged MCP App reviews, exports exact panels, reconnects and reloads with one unchanged backend import receipt. | [Reproducible owner and limits](stories-joined-acceptance.md); fresh-install dependency repair is separate from the frozen-source qualification. |
 
 Source identities, original failed setup attempts, limits and observed/desired
 outcomes are in [the additive receipt](standard-ux-followup-20261016.json).
 The original 199-workflow / 669-outcome ledger remains 618 covered-in-context,
 36 partial and 15 unrun. The 51 residual outcomes include broad guarantees and
 external acceptance; they are not 51 ordinary destinations left unvisited.
+
+### Saved tool view recovery follow-up (October 16)
+
+**MCP-807-809** adds ordinary Canvas coverage without changing the frozen counts:
+
+| Check / owner | Current result | Desired result and remaining limit |
+| --- | --- | --- |
+| Passive saved-view status / full Python checks | Zero, one and multiple connected-client cases distinguish live availability from retained source/binding facts; disconnected and wrong-chat clients do not supply live state. | Accurate caller-owned diagnostics without client attachment, navigation, connection or tool calls. |
+| Explicit reconnect and Latest / extended browser checks (`mcp-recovery`) | Real SDK fixture survives disconnect and host restart, preserves input/source/receipts/grants, receives one recovery signal and completes one safe read without repeating a mutation. A deliberate saved version stays read-only, then Latest restores live access. | One understandable host recovery path with no replay. Actual saved Studious behavior and its originally reported historical-selection sequence remain unqualified. |
+| Changed contract / focused and full Python checks | Added ungranted tools do not expand grants; changed description/schema or removed granted actions remain refused. | Preserve current authority while a review/diff proposal is evaluated. Compatibility policy is deferred for judgment. |
+
+[The qualification and #808 recommendation](mcp-recovery-807-809.md) retain exact
+scope, failed attempts, negative controls and platform limits. Current functional
+results are regression witnesses; they do not establish a stable latency percentile
+or replace the inventory's existing interaction-performance targets.
 
 ## Frozen inventory baseline
 
@@ -377,3 +393,97 @@ this change adds no foreground wait or duplicate test lane. A successor run must
 finish every step and publish its qualified-source receipt before the background
 failure is resolved. A focused rerun of the interrupted checks does not replace
 that complete receipt. See [the failure and focused evidence](readiness-budget169.json).
+
+### Delayed work projection and terminal settlement (October 16)
+
+**R170-01** covers the execution-actions failure in post-release run
+`38961050670` (issue #816): wait for the current canonical Work projection,
+then address each expandable group by its stable identity. Late insertion of
+the saved-event group must not make a positional locator toggle a different
+group. The existing execution-actions browser scenario keeps its full payload,
+reload and narrow-screen checks. Normal execution and a diagnostic 500ms view
+update delay passed; the original release result remains 73 of 74 scenarios.
+
+**R170-02** covers the native terminal fixture's next-turn boundary. Seeing the
+last assistant text alone is not proof of idle. Require the idle snapshot and
+an accepted ordinary-input receipt before the explicit-stop stage. The existing
+IC-01 owner retains the real worker, two clients, detach, duplicate-input and
+cancellation assertions. A 750ms event delay reproduces the old held-steering
+receipt and passes after the fixture waits for idle. These are additive checks;
+the frozen 199/669 inventory remains unchanged. Stories cold initial reconnect
+is separately tracked as ST-07 in its [joined workflow checklist](stories-joined-acceptance.md).
+
+### Onboarding report follow-up (October 16)
+
+The peer report on 0.20.167 is evidence of friction, not a replacement design.
+[Qualified diagnostic and certificate-command checks](onboarding-failure-diagnostics.md)
+add `SETUP-BUNDLE-01a` and `SETUP-TLS-01`/`01a` to existing owners without a new
+release lane. The full inherited-settings setup and explicit repair journeys
+remain unexecuted; a subprocess boundary fixture is not complete onboarding.
+
+[The proposed smoke matrix](onboarding-smoke-proposals-20261016.json) records
+current evidence and desired results for remote URL reporting, external TLS,
+bind errors, default provenance, update policy, diagnostic latency, sign-in
+wording and log attribution. Proposed targets are not measured results or new
+release requirements. Native DNS/trust checks remain separate. Enabled bundle
+failures stay explicit; tests must reject silent omission, widened permissions,
+automatic network/trust changes and automatic replay. Frozen inventory counts
+remain unchanged.
+
+### Bundle replacement and media discovery (October 16)
+
+**BUNDLE-SOURCE-01** exercises explicit bundle switching between two revisions
+of a real context module. Each mount uses a distinct worker process and the
+previous owner must have exited before the next spawn. Preserve saved messages
+and the explicit model/reasoning selection, discard the old bundle's control
+overrides only as specified, reject stale previews, and restore exact journaled
+files if candidate mounting fails. No switch, rollback, or picker browsing may
+submit a user input or invoke a model. Stop and revoked configuration authority
+must win across history, lock, admission, preparation and pre-start waits.
+
+The existing native bundle-switch owner exercises real Core/Foundation with a
+synthetic provider; ordinary bundle browser coverage retains its separate UI
+owner. Distinct-process origin checks and injected mount failure now pass where
+the unchanged in-process switch fails Core's mixed-origin import guard. This
+qualifies explicit switching, not the separate parked-settings remount path,
+arbitrary host crashes around commit, or native Windows behavior. Keep measured
+startup durations separate from the existing interaction latency targets.
+
+**MEDIA-CONFIGURATION-TRANSITION** adds the extended browser scenario
+`inline-media-transition`, with no duplicate readiness lane. A real synthetic
+bundle transaction moves an assistant's native index while configuration is
+busy; media identity resolution fails during that interval and succeeds after
+rollback. The old client retains that error. Four new component regressions
+reject the old behavior; all nine media-demand checks pass after the fix.
+
+Require zero new metadata requests while busy, abort and fence unresolved
+requests, retain already-qualified media for the same message, and issue one
+visible lookup after settling. Stable failures keep manual Retry; unchanged
+views never poll, and changing chats never displays the previous owner's media.
+The built-client smoke passes ordinary and collapsed-interim output paths with
+a real AppService/media registry and synthetic busy-state publication. It does
+not prove the timing of the originally reported live request. Backend identity
+validation is unchanged. Frozen inventory counts and original browser-plan hash
+remain unchanged; this is explicit additive coverage.
+
+### Combined October 16 qualification
+
+The combined bundle-isolation, media-transition and onboarding-diagnostic source
+`1b56f04d5` passed 196 Python tests plus two subtests and nine client component
+tests in the owned spark-2 DTU. The built client `8adfaa7aa1173f0a` passed the
+bundle browser journey (switch, rollback, history/artifact preservation, scoped
+defaults, reload and narrow layout) and the additive media-transition journey
+(ordinary and folded interim messages, zero discovery requests while busy,
+retained qualified media, one refresh per settled view and no continued polling).
+The media browser uses real AppService/registry behavior with synthetic busy
+publications; real source-revision worker switching is covered by the separate
+no-model-call native probe. These do not establish native-device trust, arbitrary
+crash recovery, or the full proposed onboarding matrix.
+
+### Listener and public-access follow-up
+
+The peer onboarding findings now have focused qualified slices for local versus
+public readiness, supplied certificates, real occupied ports, bind-error guidance
+and browser opening only after successful binds. See
+[listener readiness qualification](onboarding-listener-readiness.md).
+These do not establish native client trust or remote DNS reachability.

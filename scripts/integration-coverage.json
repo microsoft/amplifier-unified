@@ -52,7 +52,11 @@
         "tests/test_operations.py::test_exact_mount_and_question_recheck_after_approval_before_real_spawn",
         "tests/test_output_image_pairs.py::test_real_loop_core_selected_provider_serializes_both_exact_images_together",
         "tests/test_runtime_controls.py::test_real_core_controls_and_tool_approval",
-        "tests/test_warm_worker.py::test_actual_worker_parks_and_reuses_with_real_shared_state"
+        "tests/test_warm_worker.py::test_actual_worker_parks_and_reuses_with_real_shared_state",
+        "tests/test_bundle_selection.py::test_real_bundle_switch_isolates_module_revisions_and_preserves_history",
+        "tests/test_search_read_policy.py",
+        "tests/test_default_capability_policy.py",
+        "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip"
       ],
       "paths": [
         "tests/fixtures/computation_runtime.py",
@@ -89,7 +93,17 @@
         "tests/fixtures/history_edit_probe.py",
         "tests/fixtures/live_terminal_probe.py",
         "tests/fixtures/standalone_controls_probe.py",
-        "tests/fixtures/warm_worker_probe.py"
+        "tests/fixtures/warm_worker_probe.py",
+        "amplifier_web/bundle_actions.py",
+        "amplifier_web/bundle_selection.py",
+        "tests/test_bundle_selection.py",
+        "tests/fixtures/bundle_switch_probe.py",
+        "amplifier_web/read_policy.py",
+        "amplifier_web/builtin_behaviors.py",
+        "amplifier_web/desktop_policy.py",
+        "tests/test_search_read_policy.py",
+        "tests/test_default_capability_policy.py",
+        "tests/test_default_export_literals.py"
       ]
     },
     "release-runtime": {
@@ -239,6 +253,30 @@
         "tests/test_profiling_host.py"
       ],
       "prerequisite": "Canonical optional amplifier-profiling source must be supplied; no substitute implementation is accepted."
+    },
+    "default-installed": {
+      "runner": "owned-container",
+      "mode": "manual",
+      "selectors": [
+        "tests/test_default_behaviors_integration.py",
+        "tests/test_default_runtime_safety.py",
+        "tests/test_default_mount_runtime.py",
+        "tests/test_default_routing_runtime.py"
+      ],
+      "paths": [
+        "amplifier_web/builtin_behaviors.py",
+        "amplifier_web/host/**",
+        "amplifier_web/desktop_policy.py",
+        "amplifier_web/bundles.py",
+        "amplifier_web/runtime*",
+        "tests/test_default_behaviors_integration.py",
+        "tests/test_default_runtime_safety.py",
+        "tests/test_default_mount_runtime.py",
+        "tests/test_default_routing_runtime.py",
+        "tests/fixtures/default_mount_probe.py",
+        "tests/fixtures/default_routing_probe.py"
+      ],
+      "prerequisite": "Explicit owned container, noneditable candidate wheel and source-bound offline behavior repositories/runtime packages. Run copied tests outside source, then integration_checks.py check --lane default-installed; missing prerequisites/skips fail the owner. See docs/validation/release-qualification.md and integration-coverage.md."
     }
   },
   "baselineRecords": [
@@ -763,6 +801,57 @@
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "WARM_FOUNDATION_PATH"
+    }
+  ],
+  "additionalRecords": [
+    {
+      "node": "tests/test_search_read_policy.py",
+      "kind": "module_collection",
+      "owner": "native",
+      "prerequisite": "loop-live, current tool-filesystem/tool-search and actual ripgrep",
+      "introducedBy": "#817"
+    },
+    {
+      "node": "tests/test_default_capability_policy.py",
+      "kind": "test_module",
+      "owner": "native",
+      "prerequisite": "Core/Foundation/loop-live; deterministic local policy and lifecycle fixtures",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Foundation registry export/import",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_behaviors_integration.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_runtime_safety.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_mount_runtime.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
+      "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_default_routing_runtime.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
+      "introducedBy": "#815"
     }
   ]
 }

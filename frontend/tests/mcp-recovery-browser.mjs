@@ -16,11 +16,20 @@ const htmlPath=join(directory,'app.html'),callsPath=join(directory,'calls.jsonl'
 const source=`import {App} from '@modelcontextprotocol/ext-apps';
 const app=new App({name:'Saved recovery fixture',version:'1.0.0'},{});
 const draw=result=>document.querySelector('#count').textContent=String(result.structuredContent.count);
-app.ontoolresult=draw;
+let inputs=0,results=0,notifications=0;
+app.ontoolinput=()=>document.body.dataset.inputs=String(++inputs);
+app.ontoolresult=result=>{document.body.dataset.results=String(++results);draw(result)};
+app.setNotificationHandler('notifications/tools/list_changed',async()=>{
+ try{
+  const result=await app.callServerTool({name:'counter_read',arguments:{}});
+  document.querySelector('#recovered').textContent=String(result.structuredContent.count);
+  document.body.dataset.recoveries=String(++notifications);
+ }catch(error){document.querySelector('#error').textContent=error.message}
+});
 document.querySelector('#add').onclick=async()=>{try{draw(await app.callServerTool({name:'counter_add',arguments:{amount:1}}))}catch(error){document.querySelector('#error').textContent=error.message}};
 await app.connect();document.body.dataset.booted='true';`;
 const built=await build({stdin:{contents:source,resolveDir:process.cwd(),sourcefile:'recovery.js'},bundle:true,write:false,format:'esm'});
-await writeFile(htmlPath,`<!doctype html><h1>Original saved document</h1><output id="count"></output><button id="add">Add one</button><input aria-label="Unfinished tool input"><p id="error"></p><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script>`);
+await writeFile(htmlPath,`<!doctype html><h1>Original saved document</h1><output id="count"></output><output id="recovered"></output><button id="add">Add one</button><input aria-label="Unfinished tool input"><p id="error"></p><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script>`);
 let fixture,browser;
 async function start(port=0){
  fixture=spawn(python,[root+'tests/fixtures/canvas_restart_ui_server.py',directory,String(port)],{stdio:['ignore','pipe','inherit'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
@@ -77,8 +86,24 @@ try{
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(frame.getByRole('textbox',{name:'Unfinished tool input'})).toHaveValue('Keep me through reconnect');
  await expect(frame.locator('body')).toHaveAttribute('data-retained','yes');
+ await expect(frame.locator('#recovered')).toHaveText('7');
+ await expect(frame.locator('body')).toHaveAttribute('data-recoveries','1');
+ await expect(frame.locator('body')).toHaveAttribute('data-inputs','1');
+ await expect(frame.locator('body')).toHaveAttribute('data-results','1');
  assert.equal(await mutations(),1);
  assert.deepEqual(await snapshot(),before);
+ // Ordinary Latest reopen and deliberately selected history are distinct.
+ await page.getByRole('button',{name:'Canvas options',exact:true}).click();
+ await page.getByLabel('Artifact version',{exact:true}).selectOption('1');
+ await expect(page.getByRole('status').filter({hasText:'Saved version · Read only'})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Reconnect tool view',exact:true})).toBeDisabled();
+ await frame.getByRole('button',{name:'Add one'}).click();
+ await expect(frame.locator('#error')).toContainText('read-only');
+ assert.equal(await mutations(),1);
+ await page.getByRole('button',{name:'Go to Latest',exact:true}).click();
+ await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
+ await expect(frame.locator('body')).toHaveAttribute('data-inputs','1');
+ assert.equal(await mutations(),1);
  await frame.getByRole('button',{name:'Add one'}).click();
  await expect(frame.locator('#count')).toHaveText('8');
  assert.equal(await mutations(),2);
@@ -91,6 +116,10 @@ try{
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep the unsent message');
  await page.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
+ await expect(frame.locator('#recovered')).toHaveText('8');
+ await expect(frame.locator('body')).toHaveAttribute('data-recoveries','1');
+ await expect(frame.locator('body')).toHaveAttribute('data-inputs','1');
+ await expect(frame.locator('body')).toHaveAttribute('data-results','1');
  assert.deepEqual(await snapshot(),before);
  assert.equal(await mutations(),2);
  // An actual changed MCP schema must stay rejected after discovery.
@@ -100,11 +129,12 @@ try{
  await page.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(page.locator('.a-mcp-status')).toContainText('action schemas changed');
  assert.equal(await mutations(),2);
+ assert.equal(await frame.locator('body').getAttribute('data-recoveries'),null,'Denied schema changes do not notify the app to retry');
  assert.deepEqual(await snapshot(),before);
  await frame.getByRole('button',{name:'Add one'}).click();
  await expect(frame.locator('#error')).toContainText('action schemas changed');
  assert.equal(await mutations(),2);
  await page.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT||join(directory,'mcp-recovery.png')});
  assert.deepEqual(errors,[]);
- console.log('MCP recovery browser passed: actual MCP SDK, disconnect and host restart, same artifact/source hash, historical launch receipt, explicit unchanged-contract rebind without frame/input replacement, no replayed mutations, changed schema denied, composer preserved.');
+ console.log('MCP recovery browser passed: actual MCP SDK, disconnect and host restart, same artifact/source hash, historical launch receipt, explicit unchanged-contract rebind without frame/input replacement, single SDK recovery notification and safe read, explicit history/Latest selection, no replayed mutations, changed schema denied, composer preserved.');
 }finally{await browser?.close();await stop();await rm(directory,{recursive:true,force:true})}

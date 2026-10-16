@@ -1,6 +1,7 @@
 """An ordinary work/ directory must not replace the registered Work bundle."""
 import pytest
 from amplifier_foundation.exceptions import BundleLoadError
+from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
 from amplifier_web.host.bundle_paths import canonical_bundle_reference, local_bundle_path
 from amplifier_web.host.config import HostConfig
 from amplifier_web.host.session import load_root_bundle
@@ -14,7 +15,8 @@ def configured(tmp_path):
     registered = tmp_path / 'registered.yaml'
     registered.write_text('bundle:\n  name: registered-work\n  version: 1.0.0\n')
     return HostConfig(tmp_path / 'app', workspace,
-        {'bundle': {'app': [], 'added': {'work': str(registered)}}}, tmp_path / 'registry')
+        {'bundle': {'app': [], 'added': {'work': str(registered)}},
+         'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}, tmp_path / 'registry')
 
 
 async def test_registered_work_loads_despite_unrelated_workspace_directory(configured):
