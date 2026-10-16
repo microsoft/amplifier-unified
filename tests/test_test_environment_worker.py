@@ -318,3 +318,50 @@ def test_admission_rechecks_actual_daemon_before_launch(library, tmp_path, monke
     result = worker.execute_call(payload(tmp_path, 'start'))
     assert result['code'] == 'backend_changed' and result['effectAdmitted'] is False
     assert not any(name == 'launch' for name, _, _ in library[1])
+
+
+def test_partial_proof_write_never_publishes_final_marker(tmp_path,monkeypatch):
+    path=tmp_path/'backend-launched.json'
+    def partial(value,stream):
+        stream.write('{"state":')
+        stream.flush()
+        raise OSError('interrupted write')
+    monkeypatch.setattr(worker.json,'dump',partial)
+    with pytest.raises(OSError):
+        worker.write_private_record(path,{'state':'launched'})
+    assert not path.exists() and not list(tmp_path.glob('.backend-proof-*'))
+
+
+def test_private_proof_publication_never_replaces_existing(tmp_path):
+    path=tmp_path/'proof.json'
+    worker.write_private_record(path,{'exact':1})
+    with pytest.raises(FileExistsError):
+        worker.write_private_record(path,{'exact':2})
+    assert worker.read_private_record(path)=={'exact':1}
+    assert not list(tmp_path.glob('.backend-proof-*'))
+
+
+@pytest.mark.parametrize('action', ['read','stop','remove'])
+def test_present_owner_cleanup_survives_corrupt_settlement(library,tmp_path,monkeypatch,action):
+    value=payload(tmp_path,action)
+    path=tmp_path/'backend-launched.json';path.write_text('{"partial":');path.chmod(0o600)
+    def actual_owner(payload,identity,backend,source):
+        result=worker.docker_reconcile(payload,identity,backend,source)
+        assert result['observation']['ownership']=='matched'
+        assert result['observation']['admissionSettled'] is False
+    monkeypatch.setattr(worker,'docker_owner',actual_owner)
+    labels='com.docker.compose.project=owned,io.amplifier.root-owner=parent-root,io.amplifier.operation-id=durable-launch'
+    def query(args,**kwargs):
+        return SimpleNamespace(stdout=json.dumps({'State':'exited','Labels':labels}) if 'ps' in args else '')
+    monkeypatch.setattr(worker.subprocess,'run',query)
+    result=worker.execute_call(value)
+    assert result['ok'] and result['status'] in {'stopped','removed'}
+    assert path.read_text()=='{"partial":'
+
+
+def test_corrupt_settlement_never_proves_absence(library,tmp_path,monkeypatch):
+    value=payload(tmp_path,'reconcile')
+    path=tmp_path/'backend-launched.json';path.write_text('{');path.chmod(0o600)
+    monkeypatch.setattr(worker.subprocess,'run',lambda *a,**k:SimpleNamespace(stdout=''))
+    result=worker.execute_call(value)
+    assert result['status']=='unknown' and not result['observation']['absenceConfirmed']

@@ -34,16 +34,21 @@ def read_private_record(path):
 
 
 def write_private_record(path, value):
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, 'w') as stream:
-        json.dump(value, stream)
-        stream.flush()
-        os.fsync(stream.fileno())
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptor, temporary = tempfile.mkstemp(prefix='.backend-proof-', dir=path.parent)
     try:
-        os.fsync(fd)
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(value, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)  # Atomic publication, never replace earlier proof.
+        Path(temporary).unlink()
+        fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        Path(temporary).unlink(missing_ok=True)
 
 
 def binding(payload, universe, backend):
@@ -80,7 +85,13 @@ def retain_settlement(payload, universe, backend, state):
 
 def settled(payload, universe, backend):
     for state in ('removed', 'launched'):
-        if read_private_record(Path(payload['root']) / ('backend-' + state + '.json')) == {**binding(payload, universe, backend), 'state': state}:
+        try:
+            recorded = read_private_record(Path(payload['root']) / ('backend-' + state + '.json'))
+        except (OSError, ValueError, TypeError):
+            # Incomplete historical proof prevents absence retirement. It must
+            # not prevent stopping/preserving a currently observed owned guest.
+            return False
+        if recorded == {**binding(payload, universe, backend), 'state': state}:
             return True
     return False
 
@@ -127,17 +138,20 @@ def docker_reconcile(payload, universe, backend, source):
             check_owner(item)
         remaining |= bool(rows)
     directory = Path(payload['admissionRoot']) / hashlib.sha256(backend['daemon'].encode()).hexdigest()
-    if any(path.is_symlink() for path in (directory, *directory.parents)):
-        raise ValueError('The retained admission directory traverses a symlink.')
-    if directory.exists():
-        # Reconciliation must not create or modify admission state.
-        info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
-            raise ValueError('The retained admission directory is unsafe.')
-        pending = any(row['universeId'] == universe for row in pending_admissions(directory))
-    else:
-        pending = False
-    complete = settled(payload, universe, backend) and not pending
+    try:
+        if any(path.is_symlink() for path in (directory, *directory.parents)):
+            raise ValueError('The retained admission directory traverses a symlink.')
+        if directory.exists():
+            # Reconciliation must not create or modify admission state.
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+                raise ValueError('The retained admission directory is unsafe.')
+            pending = any(row['universeId'] == universe for row in pending_admissions(directory))
+        else:
+            pending = False
+        complete = settled(payload, universe, backend) and not pending
+    except (OSError, ValueError, TypeError):
+        complete = False
     absent = not containers and not remaining and complete
     status = ('stopped' if all(item['State'] in {'exited', 'dead'} for item in containers) else 'running') if containers else 'absent' if absent else 'unknown'
     return {'ok': status != 'unknown', 'status': status, 'universeId': universe,

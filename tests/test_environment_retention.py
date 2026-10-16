@@ -120,3 +120,46 @@ def test_large_flat_selection_indexes_ancestors_once():
         name=f'workspace/file-{number}'
         retention.validate_member(tarfile.TarInfo(name),name,names,links,ancestors)
     assert len(names)==50000 and ancestors=={'workspace'}
+
+
+def raw_header(name, kind=tarfile.DIRTYPE, size=0):
+    item=tarfile.TarInfo(name);item.type=kind;item.size=size
+    return item.tobuf()
+
+
+@pytest.mark.parametrize('corruption', ['middle', 'after-footer', 'missing-footer', 'short-footer', 'truncated-header'])
+def test_strict_input_never_turns_corruption_into_successful_retention(tmp_path,corruption):
+    roots=raw_header(retention.PREFIX+'workspace')+raw_header(retention.PREFIX+'artifacts')
+    lost=raw_header(retention.PREFIX+'workspace/lost.txt',tarfile.REGTYPE,4)+b'lost'.ljust(512,b'\0')
+    raw={
+        'middle':roots+b'not-a-tar-header'.ljust(512,b'x')+lost+bytes(1024),
+        'after-footer':roots+bytes(1024)+lost+bytes(1024),
+        'missing-footer':roots+lost,
+        'short-footer':roots+lost+bytes(512),
+        'truncated-header':roots+b'not-complete',
+    }[corruption]
+    with pytest.raises((ValueError,tarfile.TarError)):
+        retention.filter_incus_stream(io.BytesIO(raw),tmp_path,'owned')
+    assert not (tmp_path/'retention.json').exists()
+
+
+def test_selected_archive_verification_also_rejects_corrupt_later_header(tmp_path):
+    path=tmp_path/'workspace.tar'
+    path.write_bytes(raw_header('workspace')+b'invalid'.ljust(512,b'x')+bytes(1024))
+    with pytest.raises(ValueError,match='header'):
+        retention.inspect_archive(path,'workspace')
+
+
+def test_read_archives_do_not_cache_skipped_metadata(tmp_path,monkeypatch):
+    opened=[]
+    original=retention.tarfile.open
+    def record(*args,**kwargs):
+        value=original(*args,**kwargs)
+        if kwargs.get('stream'):
+            opened.append(value)
+        return value
+    monkeypatch.setattr(retention.tarfile,'open',record)
+    archives=retention.filter_incus_stream(backup(ROOTS+[('etc/skip',tarfile.REGTYPE,b'ignored')]),tmp_path,'owned')
+    for row in archives:
+        retention.inspect_archive(row['destination'],row['source'].strip('/'))
+    assert len(opened)==3 and all(not value.members for value in opened)

@@ -17,6 +17,18 @@ SELECTION = ('workspace', 'artifacts')
 
 
 class BoundedTarInfo(tarfile.TarInfo):
+    @classmethod
+    def fromtarfile(cls, archive):
+        try:
+            return super().fromtarfile(archive)
+        except tarfile.EOFHeaderError:
+            archive.verified_zero_termination = True
+            raise
+        except tarfile.HeaderError as exc:
+            # TarFile.next normally treats a corrupt later header as EOF.
+            # Preservation must fail instead of silently dropping later files.
+            raise ValueError('The archive contains an invalid or incomplete header.') from exc
+
     def _proc_pax(self, archive):
         if self.size > 1024 * 1024:
             raise ValueError('Archive metadata exceeds its bound.')
@@ -35,6 +47,20 @@ class BoundedTarInfo(tarfile.TarInfo):
 
     _proc_gnusparse_01 = _proc_gnusparse_00
     _proc_gnusparse_10 = _proc_gnusparse_00
+
+
+def verified_footer(archive):
+    if not getattr(archive, 'verified_zero_termination', False):
+        raise ValueError('The archive has no verified terminator.')
+    remaining = 0
+    # Read through TarFile's stream wrapper: it may already hold read-ahead
+    # bytes that are no longer visible on the original subprocess pipe.
+    while block := archive.fileobj.read(65536):
+        remaining += len(block)
+        if any(block):
+            raise ValueError('The archive has nonzero data after its terminator.')
+    if remaining < 512 or remaining % 512:
+        raise ValueError('The archive is missing its complete footer.')
 
 
 def canonical(value):
@@ -64,7 +90,7 @@ def digest(path):
 def inspect_archive(path, expected_root):
     """Validate an independently exported selection before destructive removal."""
     count, logical, names, links, ancestors = 0, 0, {}, {}, set()
-    with tarfile.open(path, 'r:', tarinfo=BoundedTarInfo) as archive:
+    with tarfile.open(path, 'r:', tarinfo=BoundedTarInfo, stream=True) as archive:
         for item in archive:
             count += 1
             if count > MEMBER_LIMIT:
@@ -76,14 +102,7 @@ def inspect_archive(path, expected_root):
             logical += item.size if item.isfile() else 0
             if logical > SELECTED_LIMIT:
                 raise ValueError('The retained selection exceeds its bound.')
-        end = archive.offset
-    with Path(path).open('rb') as stream:
-        stream.seek(end)
-        if stream.read(1024) != bytes(1024):
-            raise ValueError('The retained archive is missing its complete footer.')
-        while chunk := stream.read(65536):
-            if any(chunk):
-                raise ValueError('The retained archive contains unverified trailing data.')
+        verified_footer(archive)
     validate_links(names, links)
     if names.get(expected_root) != 'directory':
         raise ValueError('The selected root directory was not retained.')
@@ -151,7 +170,7 @@ def filter_incus_stream(stream, destination, identity):
             outputs[selection] = tarfile.open(fileobj=files[selection], mode='w', format=tarfile.PAX_FORMAT)  # noqa: SIM115 - closed before fsync in finally.
             names[selection], links[selection] = {}, {}
             ancestors[selection] = set()
-        with tarfile.open(fileobj=stream, mode='r|', tarinfo=BoundedTarInfo) as archive:
+        with tarfile.open(fileobj=stream, mode='r|', tarinfo=BoundedTarInfo, stream=True) as archive:
             for item in archive:
                 count += 1
                 if count > MEMBER_LIMIT:
@@ -182,6 +201,7 @@ def filter_incus_stream(stream, destination, identity):
                 if logical > SELECTED_LIMIT:
                     raise ValueError('The selected filesystem exceeds its retention limit.')
                 outputs[selection].addfile(selected, archive.extractfile(item) if item.isfile() else None)
+            verified_footer(archive)
         if roots != set(SELECTION):
             raise ValueError('The instance export does not contain both selected roots.')
         for selection in SELECTION:
