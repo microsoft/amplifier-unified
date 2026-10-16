@@ -1682,7 +1682,7 @@ class AppService:
         if candidate is not None and candidate is not self.runtime and not getattr(candidate, "_closed", False):
             await candidate.close()
 
-    async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
+    async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         # Directory preparation yields outside the service lock. Keep concurrent
         # retries on the same creation command behind its durable receipt, so a
         # conflicting retry cannot create a second folder during that interval.
@@ -1705,12 +1705,12 @@ class AppService:
             if action in {'session.create', 'coordination.create', 'workspace.setup.reconcile'} and command_id:
                 lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
                 async with lock:
-                    return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
-            return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+                    return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id, admission_check=admission_check)
+            return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id, admission_check=admission_check)
         finally:
             self.worktrees.release_creation(reservation)
 
-    async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
+    async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
         for key in ("sessionId", "id") if action in SESSION_ID_ACTIONS else ("sessionId",):
             if key == "sessionId" and args.get(key) is None and action in {
@@ -2130,6 +2130,8 @@ class AppService:
                     if include_state and getattr(self, '_progress_dirty', False):
                         self._commit_pending_progress()
                     return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                if admission_check is not None:
+                    admission_check()
                 if expected_revision is not None and expected_revision != self.state['revision']:
                     raise AppError('The app changed. Refresh its state and retry.', 409)
                 try:
@@ -2296,6 +2298,11 @@ class AppService:
                     if action == 'question.answer':
                         saved_receipt['result'] = self.questions.read('question.read', args)
                     return {**saved_receipt, **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
+            # A shielded task may have waited on history, configuration, creation
+            # or this lock after HTTP revocation. Recheck before new acceptance;
+            # existing receipt replay above and already accepted work stay intact.
+            if admission_check is not None:
+                admission_check()
             self.configuration_authority.check(configuration_authority)
             guard_history_action(self, action, args, origin, caller_session_id)
             if checked_session:

@@ -33,8 +33,8 @@ def _set_response_headers(response: web.StreamResponse, request: web.Request) ->
     # Chromium sends Origin: null on navigation POSTs from a no-referrer
     # document. Keep the login form same-origin without leaking referrers to
     # other sites; do not weaken the Origin check to accept opaque origins.
-    response.headers["Referrer-Policy"] = "same-origin" if path == "/login" else "no-referrer"
-    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/")) or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
+    response.headers["Referrer-Policy"] = "same-origin" if path in {"/login", "/devices", "/devices/pair"} else "no-referrer"
+    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/", "/devices")) or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
     response.headers.setdefault("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' {sockets} https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     return response
 
@@ -63,8 +63,9 @@ async def boundaries(request, handler):
         if exc.code:
             payload['code'] = exc.code
         if exc.receipt is not None:
-            payload['receipt'] = exc.receipt
-        if exc.code == 'session_busy':
+            from .device_pairing import companion_receipt
+            payload['receipt'] = companion_receipt(exc.receipt) if request.get('companion_device') else exc.receipt
+        if exc.code == 'session_busy' and not request.get('companion_device'):
             payload['state'] = getattr(exc, 'client_state', None) or request.app['service'].browser_state()
         return _set_response_headers(web.json_response(payload, status=exc.status), request)
     except (json.JSONDecodeError, ValueError, KeyError) as exc:
@@ -117,6 +118,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     computer_visual_routes(app)
     from .terminal_setup import setup_routes as setup_terminal
     setup_terminal(app)
+    from .device_pairing import setup_routes as setup_device_pairing
+    setup_device_pairing(app)
     from .smart_tools import SmartToolsManager
     from .smart_canvas import SmartCanvas
     service.smart_tools = SmartToolsManager(service)
@@ -352,10 +355,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if isinstance(payload, dict) and payload.get('action') == 'terminal.prepare':
             from .terminal_setup import require_safe_transport
             require_safe_transport(request)
-        compact = request.headers.get('X-Amplifier-State-Transport') == 'delta-v1'
+        compact = request.get('companion_device') or request.headers.get('X-Amplifier-State-Transport') == 'delta-v1'
+        from .device_pairing import command_admission
         task = service._task(service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
                                         command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"),
-                                        include_state=not compact))
+                                        include_state=not compact, admission_check=command_admission(request)))
         result = await asyncio.shield(task)
         # Reads and validated no-ops can be complete without a state publication.
         # Consume this marker in both transports; clients never author it.
@@ -370,6 +374,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             if not state_independent and (not payload['action'].startswith('shell.') or payload['action'] == 'shell.command'):
                 result['stateRevision'] = result.get('revision', service._state['revision'])
             result['hostInstanceId'] = service.instance_id
+        if request.get('companion_device'):
+            from .device_pairing import companion_receipt
+            result = companion_receipt(result)
         return web.json_response(result)
 
     async def profiling_content(request):
