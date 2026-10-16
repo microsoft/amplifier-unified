@@ -1,0 +1,129 @@
+{
+  "sourceRevision": "4504b70950668253ce932f3e3eb715765a829785",
+  "kind": "proposed additive smoke inventory",
+  "noChecksExecuted": true,
+  "targetsAreProposalsNotMeasuredResults": true,
+  "items": [
+    {
+      "id": "SETUP-BUNDLE-01",
+      "priority": "P1",
+      "journey": "Inherited broken add-on",
+      "scenario": "Fresh synthetic shared settings contain working provider/root and one enabled add-on with missing local include; use setup assistant and model selector.",
+      "currentEvidence": "Broken enabled dependency source confirmed upstream; ten worker-boundary protocol cases now preserve safe bundle failure details. Full inherited-settings/setup/model-selector journey remains unexecuted.",
+      "desiredResult": "Named safe dependency/scope failure and receipt; draft preserved; zero provider calls; no implicit disable or replay.",
+      "ownerAndCoverage": "Worker bridge + browser; test_runtime.py/test_session_health.py and setup journey fixture",
+      "executed": false
+    },
+    {
+      "id": "SETUP-BUNDLE-02",
+      "priority": "P1",
+      "journey": "Explicit repair scope",
+      "scenario": "Disable the one broken add-on using existing settings control, then explicitly retry.",
+      "currentEvidence": "Existing toggle path present; joined failure-to-repair flow unqualified here.",
+      "desiredResult": "Original config bytes preserved until consent; precise shared/workspace scope; only chosen entry changes; retry starts once.",
+      "ownerAndCoverage": "Settings + runtime integration",
+      "executed": false
+    },
+    {
+      "id": "SETUP-TLS-01",
+      "priority": "P1",
+      "journey": "Fingerprint public CLI",
+      "scenario": "Follow README literally: setup CA, export, plain doctor; compare fingerprint.",
+      "currentEvidence": "Fingerprint instructions corrected to setup-tls status. Actual cli.main test and standalone rendered setup instructions pass; native device trust installation remains separate.",
+      "desiredResult": "Documented command displays exact X.509 fingerprint without generating/replacing trust material.",
+      "ownerAndCoverage": "tests/test_tls_deployment.py + real cli.main entrypoint",
+      "executed": false
+    },
+    {
+      "id": "SETUP-URL-01",
+      "priority": "P1",
+      "journey": "Broken public DNS with healthy listener",
+      "scenario": "Configure valid HTTPS local listener and unresolved public origin.",
+      "currentEvidence": "Source reports public origin after only a local pinned probe.",
+      "desiredResult": "Local service healthy and public origin unresolved are distinct; actual TLS-scheme local fallback shown; no control token sent to public destination.",
+      "ownerAndCoverage": "tests/test_cli_deployment.py + bounded synthetic resolver",
+      "executed": false
+    },
+    {
+      "id": "SETUP-URL-02",
+      "priority": "P1",
+      "journey": "Remote reachability qualification",
+      "scenario": "Valid host DNS/TLS with a client that cannot resolve name or does not trust CA.",
+      "currentEvidence": "Reported peer failure, not reproduced.",
+      "desiredResult": "Host-local success not shown as all-device success; client DNS/trust guidance does not alter managed networking.",
+      "ownerAndCoverage": "Native device smoke; explicit device access only",
+      "executed": false
+    },
+    {
+      "id": "SETUP-TLS-02",
+      "priority": "P2",
+      "journey": "Supplied certificate without app CA",
+      "scenario": "Use valid supplied leaf/key with no app-owned ca.crt; run doctor verbose/setup-tls status.",
+      "currentEvidence": "ssl_context loads it; tls_ready reports not ready.",
+      "desiredResult": "Listener readiness true; local-CA export unavailable reported separately; malformed/mismatched keys still rejected.",
+      "ownerAndCoverage": "tests/test_tls_config_sequence.py",
+      "executed": false
+    },
+    {
+      "id": "SETUP-BIND-01",
+      "priority": "P2",
+      "journey": "Expected listener failure",
+      "scenario": "Attempt occupied port/address; inject or qualify permission failure on supported OS.",
+      "currentEvidence": "Source has no expected bind translation; macOS claimed rule unverified.",
+      "desiredResult": "One actionable error, no misleading ready URL; no wildcard fallback; safe no-change outcome.",
+      "ownerAndCoverage": "tests/test_cli_deployment.py; optional native macOS fixture for platform policy",
+      "executed": false
+    },
+    {
+      "id": "SETUP-DEFAULT-01",
+      "priority": "P2",
+      "journey": "Root provenance matrix",
+      "scenario": "Fresh app, CLI global, project/local, app override, explicit conversation, import with/without metadata.",
+      "currentEvidence": "Fresh Work; docs say Anchors; old migration/import retain different fallbacks.",
+      "desiredResult": "Current documented precedence agrees with code; saved roots never silently overwritten.",
+      "ownerAndCoverage": "tests/test_bundle_selection.py/test_draft_defaults.py",
+      "executed": false
+    },
+    {
+      "id": "SETUP-UPDATES-01",
+      "priority": "P2",
+      "journey": "Update policy matrix",
+      "scenario": "Fresh state, explicit opt-out, legacy saved schedule, settings reset.",
+      "currentEvidence": "Fresh check/install on; reset install off; explicit opt-out tested.",
+      "desiredResult": "Each chosen behavior documented and visible; schedule preserved; no reenable by observation; no unsolicited restart.",
+      "ownerAndCoverage": "tests/test_updates.py/test_recovery.py",
+      "executed": false
+    },
+    {
+      "id": "SETUP-DOCTOR-01",
+      "priority": "P2",
+      "journey": "Bounded quick diagnostic",
+      "scenario": "Cold/warm command timings with local config, missing TLS file, PAM import failure; network disabled.",
+      "currentEvidence": "90-second report unverified; basic path has no network check/wait.",
+      "desiredResult": "Proposed <=5s first summary target measured separately from deep checks; JSON parseable; no provider request/config write.",
+      "ownerAndCoverage": "CLI subprocess timing in owned DTU, separate native macOS result",
+      "executed": false
+    },
+    {
+      "id": "SETUP-AUTH-01",
+      "priority": "P2",
+      "journey": "Host account wording",
+      "scenario": "Two hosts with distinct display identity; failed username/password; cross-origin request.",
+      "currentEvidence": "Generic host wording and intentionally generic auth failure.",
+      "desiredResult": "Clear execution host; no new username disclosure or differentiated auth leak; exact origin protections retained.",
+      "ownerAndCoverage": "tests/test_browser_auth.py after wording/identity decision",
+      "executed": false
+    },
+    {
+      "id": "SETUP-LOG-01",
+      "priority": "P2",
+      "journey": "Generation log attribution",
+      "scenario": "Staged candidate fails while serving generation stays healthy.",
+      "currentEvidence": "Peer claim unverified; candidate diagnostic stages and stable service logs present.",
+      "desiredResult": "PID/revision/stage identify failures without conflating live health; no lost candidate diagnostics.",
+      "ownerAndCoverage": "Update diagnostics/install fixture, not live host restarts",
+      "executed": false
+    }
+  ],
+  "note": "These proposed journeys remain unexecuted as complete journeys. The separately qualified diagnostic/CLI slices are recorded in onboarding-failure-diagnostics.md; they do not convert the broader journey to a pass."
+}

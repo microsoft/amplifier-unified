@@ -412,3 +412,20 @@ cancellation assertions. A 750ms event delay reproduces the old held-steering
 receipt and passes after the fixture waits for idle. These are additive checks;
 the frozen 199/669 inventory remains unchanged. Stories cold initial reconnect
 is separately tracked as ST-07 in its [joined workflow checklist](stories-joined-acceptance.md).
+
+### Onboarding report follow-up (October 16)
+
+The peer report on 0.20.167 is evidence of friction, not a replacement design.
+[Qualified diagnostic and certificate-command checks](onboarding-failure-diagnostics.md)
+add `SETUP-BUNDLE-01a` and `SETUP-TLS-01`/`01a` to existing owners without a new
+release lane. The full inherited-settings setup and explicit repair journeys
+remain unexecuted; a subprocess boundary fixture is not complete onboarding.
+
+[The proposed smoke matrix](onboarding-smoke-proposals-20261016.json) records
+current evidence and desired results for remote URL reporting, external TLS,
+bind errors, default provenance, update policy, diagnostic latency, sign-in
+wording and log attribution. Proposed targets are not measured results or new
+release requirements. Native DNS/trust checks remain separate. Enabled bundle
+failures stay explicit; tests must reject silent omission, widened permissions,
+automatic network/trust changes and automatic replay. Frozen inventory counts
+remain unchanged.
