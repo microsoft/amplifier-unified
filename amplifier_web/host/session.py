@@ -12,6 +12,7 @@ import stat
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
+from .components import declarations, git_source
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
@@ -495,6 +496,15 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
             default_behavior_uri, resolve_builtin_behavior,
         )
         from ..session_files import capture_dir, project_slug
+        context_repository = 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence'
+        # The capture fallback must share an explicit root sibling's revision,
+        # even when no capability default registers the root's sources. Seed
+        # only this repository before app overlays so later selections still win.
+        for row in declarations(loaded.to_mount_plan()):
+            source = config.module_sources.get(row['module']) or row.get('source')
+            repository = git_source(source)
+            if repository and repository[0] == context_repository:
+                components.select(row['module'], source)
         context_defaults = set()
         for behavior in config.app_bundles:
             selected, _ = await load_configured_bundle(registry, config, resolve_builtin_behavior(behavior))
@@ -529,7 +539,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
             # App destinations are explicit; ambient server keys never enable
             # forwarding merely because this default hook is present.
             loaded.hooks.append({'module': 'hook-context-intelligence',
-                'source': 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence',
+                'source': context_repository + '@main#subdirectory=modules/hook-context-intelligence',
                 'config': {'destinations': {}, 'base_path': str(capture_dir(config.workspace, 'root').parents[3]),
                            'project_slug': project_slug(config.workspace),
                            'additional_events': ['delegate:agent_spawned', 'delegate:agent_resumed', 'delegate:agent_completed', 'delegate:agent_cancelled', 'delegate:error']}})

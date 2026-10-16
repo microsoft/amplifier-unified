@@ -12,7 +12,7 @@ from amplifier_web.builtin_behaviors import (
 from amplifier_web.bundles import SNAPSHOT_VERSION
 from amplifier_web.host.components import capability_defaults, compose_bundles
 from amplifier_web.host.config import HostConfig
-from amplifier_web.host.session import compose_configured_bundle
+from amplifier_web.host.session import LOOP_SOURCE, compose_configured_bundle
 
 
 def addition(uri):
@@ -263,6 +263,69 @@ async def test_default_ci_hook_keeps_existing_sibling_repository_pin(tmp_path, m
     result = await compose_configured_bundle(None, root, config)
     assert next(row for row in result.tools if row['module'] == 'tool-context-intelligence-transcript')['source'] == tool_source
     assert next(row for row in result.hooks if row['module'] == 'hook-context-intelligence')['source'] == hook_source.replace('@main#', '@explicit#')
+
+
+@pytest.mark.parametrize('snapshot', [False, True])
+async def test_fallback_ci_hook_keeps_existing_sibling_pin_with_defaults_disabled(tmp_path, monkeypatch, snapshot):
+    async def unexpected(*args):
+        pytest.fail('No behavior may load for this snapshot/opt-out')
+    monkeypatch.setattr('amplifier_web.host.session.load_configured_bundle', unexpected)
+    repository = 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@'
+    tool = {'module': 'tool-context-intelligence-transcript', 'instance_id': 'owned-transcript',
+            'source': repository + 'explicit#subdirectory=modules/tool-context-intelligence-transcript',
+            'config': {'base_path': '/explicit-captures'}}
+    root = Bundle(name='chosen', version=SNAPSHOT_VERSION if snapshot else '1.0.0',
+                  tools=[copy.deepcopy(tool)], session={'orchestrator': {
+                      'module': 'loop-live', 'source': 'explicit-loop', 'config': {'max_iterations': 7}}})
+    config = HostConfig(tmp_path / 'app', tmp_path, {
+        'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
+    }, tmp_path / 'registry')
+    result = await compose_configured_bundle(None, root, config)
+    assert result.tools == [tool]
+    assert result.name == 'chosen'
+    assert result.version == (SNAPSHOT_VERSION if snapshot else '1.0.0')
+    # Registering the CI pin must not replace the required host loop source.
+    assert result.session['orchestrator'] == {
+        'module': 'loop-live', 'source': LOOP_SOURCE, 'config': {'max_iterations': 7}}
+    if snapshot:
+        assert result.hooks == []
+    else:
+        hook, = result.hooks
+        assert hook['module'] == 'hook-context-intelligence'
+        assert hook['source'] == repository + 'explicit#subdirectory=modules/hook-context-intelligence'
+        assert hook['config']['destinations'] == {}
+        assert not result.agents
+
+
+@pytest.mark.parametrize('scoped_source', [False, True])
+async def test_fallback_ci_pin_keeps_later_app_and_scoped_source_precedence(tmp_path, monkeypatch, scoped_source):
+    repository = 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@'
+    suffix = '#subdirectory=modules/tool-context-intelligence-transcript'
+    root = Bundle(name='chosen', tools=[{'module': 'tool-context-intelligence-transcript',
+        'source': repository + 'root-pin' + suffix, 'config': {'base_path': '/explicit-captures'}}])
+    calls = []
+    async def load(registry, config, reference):
+        calls.append(reference)
+        return Bundle(name=reference, tools=[{'module': 'tool-context-intelligence-transcript',
+            'source': repository + reference + suffix, 'config': {'selection': reference}}]), reference
+    monkeypatch.setattr('amplifier_web.host.session.load_configured_bundle', load)
+    settings = {
+        'bundle': {'app': ['first-overlay', 'last-overlay']},
+        'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
+    }
+    if scoped_source:
+        settings['overrides'] = {'tool-context-intelligence-transcript': {
+            'source': repository + 'scoped-pin' + suffix, 'config': {'selection': 'scoped'}}}
+    config = HostConfig(tmp_path / 'app', tmp_path, settings, tmp_path / 'registry')
+    result = await compose_configured_bundle(None, root, config)
+    revision = 'scoped-pin' if scoped_source else 'last-overlay'
+    assert calls == ['first-overlay', 'last-overlay']
+    assert result.tools == [{'module': 'tool-context-intelligence-transcript',
+        'source': repository + revision + suffix,
+        'config': {'base_path': '/explicit-captures', 'selection': 'scoped' if scoped_source else 'last-overlay'}}]
+    hook, = result.hooks
+    assert hook['source'] == repository + revision + '#subdirectory=modules/hook-context-intelligence'
+    assert hook['config']['destinations'] == {}
 
 
 async def test_existing_root_ambient_placeholders_are_not_explicit_forwarding(tmp_path, monkeypatch):
