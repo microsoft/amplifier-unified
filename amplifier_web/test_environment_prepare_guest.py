@@ -48,8 +48,11 @@ def main():
     # virtual projects naturally install dependencies only. Python source checks
     # still prefer the exact workspace through the executor's PYTHONPATH.
     # The manifest's default groups are honored, not every optional integration.
-    run(uv, 'sync', '--locked', '--no-editable', '--python',
-        '3.13', cwd='/workspace')
+    if plan['pythonProject']:
+        run(uv, 'sync', '--locked', '--no-editable', '--python',
+            '3.13', cwd='/workspace')
+    else:
+        run(uv, 'venv', '--python', '3.13', str(PREFIX / 'venv'))
     inventory = {'profileId': plan['profileId'], 'preparationId': plan['preparationId'],
                  'sourceSha256': plan['sourceSha256'], 'lockfiles': plan['lockfiles'],
                  'uv': run(uv, '--version', capture=True).strip(),

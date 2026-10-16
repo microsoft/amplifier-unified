@@ -103,8 +103,9 @@ def plan(archive, snapshot, profile_id):
                 if not item.isfile() or item.size > MAX_INPUT:
                     raise ValueError('Dependency manifests must be bounded ordinary files.')
                 files[name] = stream.extractfile(item).read()
-    required = {'pyproject.toml', 'uv.lock'}
-    value = {'version': 1, 'profileId': profile_id, 'sourceSha256': source_hash}
+    python_project = profile_id == 'python-project' or bool({'pyproject.toml', 'uv.lock'} & files.keys())
+    required = {'pyproject.toml', 'uv.lock'} if python_project else set()
+    value = {'version': 1, 'profileId': profile_id, 'sourceSha256': source_hash, 'pythonProject': python_project}
     if profile_id == 'browser-test':
         directory = 'frontend' if 'frontend/package-lock.json' in files else ''
         prefix = directory + '/' if directory else ''
@@ -230,7 +231,7 @@ def memory_available(config, folder, profile_id):
         memory = json.loads(run([settings['incusExecutable'], '--project', settings['project'], 'query', '/1.0/resources'], env, log, timeout=30, require_complete=True))['memory']
         total = int(memory['total'])
         available = min(available, total - int(memory['used']))
-    return available >= required + max(1024 ** 3, total // 10)
+    return available >= required + max(1024 ** 3, min(2 * 1024 ** 3, total // 10))
 
 
 @contextmanager

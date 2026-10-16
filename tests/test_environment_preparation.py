@@ -87,6 +87,14 @@ def test_browser_requires_playwright_in_committed_lock(tmp_path):
         preparation.plan(tmp_path / 'source.tar', snapshot, 'browser-test')
 
 
+def test_node_only_browser_project_does_not_require_a_dummy_python_project(tmp_path):
+    snapshot = archive(tmp_path, {'package.json': '{}',
+        'package-lock.json': json.dumps({'packages': {'node_modules/playwright': {'version': '1.63.0'}}})})
+    value = preparation.plan(tmp_path / 'source.tar', snapshot, 'browser-test')
+    assert value['pythonProject'] is False and value['nodeDirectory'] == ''
+    assert len(value['lockfiles']) == 2
+
+
 def test_prepare_retains_exact_image_and_never_rebuilds_ready_request(tmp_path, backend, monkeypatch):
     snapshot = archive(tmp_path)
     receipt = preparation.prepare(config(tmp_path), tmp_path, snapshot, 'python-project', 'request')
