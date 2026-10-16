@@ -52,6 +52,7 @@
     {"id": "canvas-media", "command": ["node", "tests/canvas-media-browser.mjs"]},
     {"id": "app-toolbar", "command": ["node", "tests/app-toolbar-browser.mjs"]},
     {"id": "smart-tools", "command": ["node", "tests/smart-tools-browser.mjs"]},
+    {"id": "mcp-recovery", "command": ["node", "tests/mcp-recovery-browser.mjs"], "env": {"MCP_RECOVERY_SCREENSHOT": "{root}/output/browser-checks/mcp-recovery.png"}},
     {"id": "shell-components", "command": ["node", "tests/shell-components-browser.mjs"]},
     {"id": "mobile-navigation", "command": ["node", "tests/mobile-navigation-browser.mjs"]},
     {"id": "cache-usage", "command": ["node", "tests/cache-usage-browser.mjs"]},
