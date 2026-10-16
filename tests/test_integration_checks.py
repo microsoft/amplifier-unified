@@ -145,3 +145,58 @@ def test_run_is_source_bound_and_cannot_reuse_stale_success(tmp_path, monkeypatc
     if outcome == 'launch-error':
         assert not junit.exists() and result['exitCode'] is None
         assert 'interpreter missing' in result['error']
+
+
+def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
+    import hashlib
+    coverage = checks.manifest()
+    # Do not rewrite the historical audit when later features add optional cases.
+    frozen = json.dumps({'baseline': coverage['baseline'],
+                         'records': coverage['baselineRecords']}, sort_keys=True).encode()
+    assert hashlib.sha256(frozen).hexdigest() == '8356817d31275554bf00c526c4f76b467646d2146f06907cd0ed564ac455b9f0'
+    records = coverage['additionalRecords']
+    expected = {
+        'tests/test_search_read_policy.py': 'native',
+        'tests/test_default_capability_policy.py': 'native',
+        'tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip': 'native',
+        **{f'tests/test_{name}.py': 'default-installed' for name in (
+            'default_behaviors_integration', 'default_runtime_safety',
+            'default_mount_runtime', 'default_routing_runtime')},
+    }
+    assert {row['node']: row['owner'] for row in records} == expected
+    assert len(records) == len(expected)
+    for row in records:
+        lane = coverage['lanes'][row['owner']]
+        assert row['node'] in lane['selectors'] and row['prerequisite']
+        if lane['mode'] == 'automatic':
+            assert row['owner'] in {job['lane'] for job in checks.select_lanes([row['node'].split('::')[0]])}
+    assert coverage['lanes']['default-installed']['mode'] == 'manual'
+    assert 'default-installed' not in {job['lane'] for job in checks.select_lanes()}
+
+
+def test_new_default_and_search_skips_cannot_be_ownerless():
+    import ast
+    coverage = checks.manifest()
+    registered = {row['node'] for row in coverage['additionalRecords']}
+    paths = [*ROOT.glob('tests/test_default_*.py'), ROOT / 'tests/test_search_read_policy.py']
+    for path in paths:
+        tree = ast.parse(path.read_text())
+        file = path.relative_to(ROOT).as_posix()
+        for statement in tree.body:
+            skipped = any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                          and isinstance(node.func.value, ast.Name) and node.func.value.id == 'pytest'
+                          and node.func.attr in {'skip', 'importorskip'} for node in ast.walk(statement))
+            if not skipped:
+                continue
+            function = statement.name if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) else ''
+            assert file in registered or (function.startswith('test_') and file + '::' + function in registered), (
+                f'New optional runtime check has no additive execution owner: {file}:{function}')
+
+
+def test_native_search_owner_prepares_actual_ripgrep():
+    import yaml
+    workflow = yaml.load((ROOT / '.github/workflows/integration-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    setup = next(step for step in workflow['jobs']['integration']['steps']
+                 if step.get('name') == 'Prepare actual search backend')
+    assert setup['if'] == "matrix.lane == 'native'"
+    assert 'apt-get install -y ripgrep' in setup['run']
