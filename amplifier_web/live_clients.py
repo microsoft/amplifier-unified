@@ -154,8 +154,9 @@ def setup_routes(app, streams):
         args = payload.get("args", {})
         if not isinstance(args, dict) or (key in args and args[key] != identity):
             raise AppError("The command targets a different session.")
+        from .device_pairing import command_admission
         task = service._task(service.dispatch(action, {**args, key: identity}, command_id=command_id,
-            expected_revision=payload.get("expectedRevision"), include_state=False))
+            expected_revision=payload.get("expectedRevision"), include_state=False, admission_check=command_admission(request)))
         result = await asyncio.shield(task)
         if request.get('companion_device'):
             from .device_pairing import companion_receipt

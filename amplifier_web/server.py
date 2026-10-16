@@ -356,9 +356,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             from .terminal_setup import require_safe_transport
             require_safe_transport(request)
         compact = request.get('companion_device') or request.headers.get('X-Amplifier-State-Transport') == 'delta-v1'
+        from .device_pairing import command_admission
         task = service._task(service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
                                         command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"),
-                                        include_state=not compact))
+                                        include_state=not compact, admission_check=command_admission(request)))
         result = await asyncio.shield(task)
         # Reads and validated no-ops can be complete without a state publication.
         # Consume this marker in both transports; clients never author it.

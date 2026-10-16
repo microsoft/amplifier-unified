@@ -51,6 +51,21 @@ async def permits_companion(request):
     return False
 
 
+def command_admission(request):
+    """Carry revocable authority into shielded work, through pre-admission waits."""
+    identity = request.get('companion_device')
+    if identity is None:
+        return None
+    devices = request.app['terminal_setup'].devices
+    token = request.headers['Authorization'][7:]
+
+    def check():
+        if devices.identify(token) != identity:
+            from .service import AppError
+            raise AppError('Device access was removed before this command was accepted.', 403)
+    return check
+
+
 def companion_receipt(value):
     """An authorization projection, independent of caller transport choices."""
     return {key: value[key] for key in ('accepted', 'revision', 'sessionId',

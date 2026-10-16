@@ -53,6 +53,10 @@ returns browser state; create/send return only bounded receipts. Errors do not
 include browser snapshots or unfiltered receipts, regardless of the requested
 state transport. Revocation observation starts before reading a request body;
 commands not yet admitted are rejected or disconnected when access is removed.
+A shielded HTTP dispatch carries a revocable admission check through history,
+configuration and lock waits. The service checks before creation preparation and
+again before accepting new effects under its mutation lock. Receipt replay and
+work already durably accepted are preserved.
 
 The `device-pairing` scenario in `frontend/tests/browser-checks.json` owns browser
 sign-in, approval and revocation acceptance. It provisions and cleans its own
