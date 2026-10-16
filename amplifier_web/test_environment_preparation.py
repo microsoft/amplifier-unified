@@ -477,7 +477,7 @@ def _incus(config, folder, expected, env):
     call('exec', name, '--', 'rm', '-rf', '/prepare', '/workspace', '/tmp/build-home')
     call('stop', name, '--timeout', '30')
     call('config', 'device', 'remove', name, 'prepare-network')
-    call('publish', name, '--alias', name, '--property', 'user.amplifier.preparation=' + name)
+    call('publish', name, '--alias', name, 'user.amplifier.preparation=' + name)
     images = json.loads(call('image', 'list', name, '--format', 'json', timeout=30))
     if len(images) != 1 or not re.fullmatch(r'[a-f0-9]{64}', str(images[0].get('fingerprint', ''))):
         raise ValueError('Incus did not return a single immutable prepared image.')

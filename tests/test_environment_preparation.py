@@ -274,3 +274,22 @@ def test_incus_observations_scope_query_uri_without_unsupported_project_flag(tmp
         'backend': 'incus', 'daemon': 'exact-daemon', 'project': 'owned-project'}
     assert preparation.memory_available(settings, tmp_path, 'python-project')
     assert observed == ['/1.0?project=owned-project', '/1.0/resources?project=owned-project']
+
+
+def test_incus_publish_uses_positional_ownership_property_after_disconnect(tmp_path, monkeypatch):
+    folder = tmp_path / 'preparation'
+    (folder / 'context').mkdir(parents=True)
+    config = {'backend': 'incus', 'incus': {'incusExecutable': '/qualified/incus',
+        'project': 'owned-project', 'image': 'b' * 64, 'preparationNetwork': 'owned-network', 'preparationStorage': 'pool'}}
+    commands = []
+    def call(arguments, *args, **kwargs):
+        commands.append(arguments)
+        assert '--property' not in arguments  # Not part of the installed CLI contract.
+        return json.dumps([{'fingerprint': 'c' * 64}]) if 'image' in arguments else '{}'
+    monkeypatch.setattr(preparation, 'run', call)
+    image, _ = preparation._incus(config, folder, {'resourceName': 'owned-builder', 'profileId': 'python-project'}, {})
+    assert image == 'c' * 64
+    publish = next(row for row in commands if 'publish' in row)
+    assert publish[3:] == ['publish', 'owned-builder', '--alias', 'owned-builder', 'user.amplifier.preparation=owned-builder']
+    disconnect = next(row for row in commands if 'remove' in row)
+    assert commands.index(disconnect) < commands.index(publish)
