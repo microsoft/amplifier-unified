@@ -12,6 +12,7 @@ import json
 import os
 import re
 import selectors
+import shlex
 import shutil
 import signal
 import stat
@@ -93,6 +94,28 @@ def package_digest(directory):
     return digest.hexdigest()
 
 
+def launcher_interpreter(path):
+    lines = Path(path).read_text().splitlines()
+    if not lines:
+        raise ValueError('The legacy launcher is empty.')
+    if lines[0] == '#!/bin/sh':
+        # uv uses this exact Python-compatible trampoline when the venv path
+        # exceeds the kernel shebang limit. Parse data; never execute the shell.
+        match = re.fullmatch(r"'''exec' (.+) \"\$0\" \"\$@\"", lines[1] if len(lines) > 1 else '')
+        if not match or len(lines) < 3 or lines[2] != "' '''":
+            raise ValueError('The legacy launcher has an unsupported shell wrapper.')
+        words = shlex.split(match.group(1))
+        if len(words) != 1:
+            raise ValueError('The legacy launcher needs one explicit Python interpreter.')
+        interpreter = Path(words[0])
+    else:
+        interpreter = Path(lines[0][2:]) if lines[0].startswith('#!/') else None
+    if (not interpreter or not interpreter.is_absolute()
+            or not interpreter.is_file() or not re.fullmatch(r'python(?:\d+(?:\.\d+)?)?', interpreter.name)):
+        raise ValueError('The legacy launcher needs an explicit Python interpreter.')
+    return interpreter
+
+
 def validate_configuration(value):
     """Read-only qualification of an explicitly installed legacy CLI generation."""
     required = {'executable', 'executableSha256', 'packageSha256', 'incusExecutable', 'configDir', 'admissionDir', 'project', 'image'}
@@ -120,10 +143,7 @@ def validate_configuration(value):
         raise ValueError('The selected Incus executable must be named incus.')
     if file_digest(config['executable'], 65536)[0] != config['executableSha256']:
         raise ValueError('The qualified legacy launcher changed.')
-    line = Path(config['executable']).read_text().splitlines()[0]
-    interpreter = Path(line[2:]) if line.startswith('#!/') else None
-    if not interpreter or not interpreter.is_file() or ' ' in str(interpreter):
-        raise ValueError('The legacy launcher needs an explicit Python interpreter.')
+    interpreter = launcher_interpreter(config['executable'])
     # Normal venv interpreter symlinks are legitimate. The package source and
     # launcher, not the venv symlink spelling, define this qualification.
     probe = run([str(interpreter), '-I', '-c',
