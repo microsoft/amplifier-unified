@@ -72,6 +72,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     {!setupOwned&&<p>Open the chat that started setup to manage this request.</p>}
     <p>The previous setup did not finish. Its saved resources have been kept; inspect its result before starting again.</p>
     <button type="button" className="a-soft" disabled={controlsBlocked||!setupOwned} onClick={()=>mutate('workspace.environments.setup.reconcile',{requestId:setup.requestId})}>Check setup result</button>
+    {!readOnly&&setup.operation.canComplete&&<button type="button" className="a-soft" disabled={controlsBlocked||!setupOwned} onClick={()=>mutate('workspace.environments.setup',{requestId:setup.requestId,backend:setup.operation.backend})}>Finish verified setup</button>}
     {!readOnly&&<button type="button" className="a-soft" disabled={controlsBlocked||!setupOwned||!!setup.operation.cleanup} onClick={()=>mutate('workspace.environments.setup.cleanup',{requestId:setup.requestId})}>Clean up interrupted setup</button>}
    </>}
   </section>}

@@ -106,7 +106,8 @@ def write_json(path, value):
 
 def public(record):
     return {**{key: record[key] for key in ('id', 'state', 'phase', 'detail', 'backend', 'createdAt', 'updatedAt', 'proof', 'cleanup') if key in record},
-            **{key: record['intent'][key] for key in ('sessionId', 'workspaceId')}}
+            **{key: record['intent'][key] for key in ('sessionId', 'workspaceId')},
+            'canComplete': record.get('state') in {'outcome_unknown', 'failed'} and bool(record.get('candidateConfiguration') and record.get('proof', {}).get('probeRemoved')) and not record.get('cleanup')}
 
 
 def executable(name):

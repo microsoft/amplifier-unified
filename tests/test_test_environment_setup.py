@@ -401,3 +401,13 @@ async def test_cleaned_setup_cannot_republish_retained_candidate(app, monkeypatc
     assert result['operation']['state'] == 'recovered'
     complete.assert_not_awaited()
     assert not (app.data_dir / 'test-environments.json').exists()
+
+
+def test_completion_capability_excludes_cleaned_or_unproven_setup():
+    record = {'intent': args(), 'state': 'outcome_unknown', 'candidateConfiguration': {'enabled': True}, 'proof': {'probeRemoved': True}}
+    assert setup.public(record)['canComplete']
+    record['cleanup'] = {'state': 'completed'}
+    assert not setup.public(record)['canComplete']
+    del record['cleanup']
+    record['proof']['probeRemoved'] = False
+    assert not setup.public(record)['canComplete']

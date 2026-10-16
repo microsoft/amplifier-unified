@@ -185,3 +185,18 @@ test('unsupported platform explains needs without a misleading setup button',asy
   assert.match(text(root.toJSON()),/Use a supported Linux host/);assert.equal(button(root,'Set up with Docker'),undefined);
  }finally{await act(async()=>root?.unmount())}
 });
+
+test('verified setup completion reuses original request and remains owner scoped',async()=>{
+ let root;const calls=[],setup={status:'unavailable',requestId:'original',operation:{state:'outcome_unknown',canComplete:true,backend:'incus',sessionId:'a',workspaceId:'w'}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?{items:[],setup,capability:{status:'unavailable'}}:{operation:{state:'completed'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  await act(async()=>button(root,'Finish verified setup').props.onClick());
+  const mutation=calls.find(row=>row.action==='workspace.environments.setup');
+  assert.deepEqual(mutation.args,{workspaceId:'w',sessionId:'a',requestId:'original',backend:'incus'});
+  await act(async()=>{root.update(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'other',act:dispatch,active:true}))});
+  assert.equal(button(root,'Finish verified setup').props.disabled,true);
+  assert.equal(button(root,'Check setup result').props.disabled,true);
+  assert.equal(button(root,'Clean up interrupted setup').props.disabled,true);
+ }finally{await act(async()=>root?.unmount())}
+});
