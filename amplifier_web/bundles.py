@@ -199,7 +199,7 @@ def _expand_prose_mentions(text, mention, replace):
     those examples too, including when the same reference also occurs in prose.
     Declarative resource fields do not use this helper and remain strict.
     """
-    inline = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)", re.DOTALL)
+    inline = re.compile(r"(?<!`)(`+)(?!`)(?:(?!\r?\n[ \t]*\r?\n).)*?(?<!`)\1(?!`)", re.DOTALL)
     fence = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n|$)", re.MULTILINE)
 
     def prose(value):

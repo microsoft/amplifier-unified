@@ -141,6 +141,9 @@ the delegation fails visibly. Explicit matrices, including an explicitly chosen
 `balanced` matrix or a user-authored override, remain strict, as do unavailable
 provider/model pins and resolver errors. A saved explicit app-behavior list is
 treated as explicit routing when its original intent is ambiguous.
+An effective-plan edit containing `hooks` also makes routing explicit, even if
+the hook values are unchanged. A custom child orchestrator that cannot apply the
+inherited selection fails visibly rather than substituting another model.
 
 For ordinary roots already including the upstream logging behavior, its ambient
 URL/key placeholders alone no longer opt into forwarding; configure a destination

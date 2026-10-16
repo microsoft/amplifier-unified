@@ -963,6 +963,10 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
                 identity = result.output["session_id"]
                 assert observation["session_id"] == identity
                 assert registry.rows[identity]["status"] == "completed"
+                if case in {"role-only-custom-matrix", "call-role-vs-agent-role", "resume-role-only"}:
+                    assert registry.rows[identity]["routing"]["selectionSource"] == "agent_model_role"
+                elif case in {"agent-pin-vs-role", "call-pin-vs-agent-pin", "resume-agent-pin", "resume-call-pin"}:
+                    assert registry.rows[identity]["routing"]["selectionSource"] == "delegation_preferences"
                 messages, metadata = store.load(identity)
                 assert metadata["parent_id"] == parent.session_id
                 assert json.loads(messages[-1]["content"]) == observation

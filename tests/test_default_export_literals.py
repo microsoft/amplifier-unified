@@ -133,6 +133,19 @@ def test_nested_missing_resource_still_blocks_export(tmp_path):
         ])
 
 
+@pytest.mark.parametrize("separator", ["\n\n", "\n \t\n", "\r\n\r\n"])
+def test_stray_backtick_cannot_hide_references_in_later_paragraph(tmp_path, separator):
+    text = "Don`t forget @sample:context/a.md here." + separator + (
+        "Later @sample:context/b.md and `code` end.")
+    result = export_text(tmp_path, text, context=[
+        {"name": "sample:context/a.md", "text": "FIRST RESOURCE"},
+        {"name": "sample:context/b.md", "text": "SECOND RESOURCE"},
+    ])
+    assert "@sample:" not in result
+    assert "`code`" in result
+    assert result.count("FIRST RESOURCE") == result.count("SECOND RESOURCE") == 1
+
+
 def test_context_cycle_keeps_existing_marker_and_literal_self_reference(tmp_path):
     result = export_text(tmp_path, "@sample:context/a.md", context=[
         {"name": "sample:context/a.md",

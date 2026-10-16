@@ -441,7 +441,8 @@ class Children:
             (session_metadata or {}).get("tool_call_id") if not resumed else None)
         row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": str(uuid.uuid4()),
                "agent": agent, "status": "starting", "persistent": persistent, "report": "", "reports": 0,
-               "routing": child_routing(parent, overlay, preferences, selection),
+               "routing": child_routing(parent, overlay, preferences, selection,
+                                        preferences_source=preferences_source if routing_policy else None),
                "task": asyncio.current_task()}
         self.rows[identity] = row
         self._emit(row)

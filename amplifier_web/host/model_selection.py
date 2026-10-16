@@ -1,5 +1,6 @@
 """Model inheritance policy independent of the runtime implementation."""
 import copy
+import logging
 
 
 def routing_hooks(plan):
@@ -72,6 +73,12 @@ async def child_preferences(coordinator, overlay, requested, *, saved=None):
     resolved = await resolver.resolve(overlay["model_role"])
     if not resolved:
         if isinstance(resolved, list) and automatic_default_routing(coordinator, overlay, saved=saved):
+            roles = overlay["model_role"]
+            known = getattr(resolver, "known_roles", ())
+            requested_roles = [roles] if isinstance(roles, str) else roles
+            reason = ("unknown_role" if known and not any(role in known for role in requested_roles)
+                      else "no_available_candidate")
+            logging.getLogger(__name__).debug("Using conversation selection for automatic routing: %s", reason)
             return []
         raise ProviderSelectionError("The requested child model role has no available candidates; no default was substituted.")
     return resolved
@@ -163,9 +170,10 @@ def delegation_routing(coordinator):
     return result
 
 
-def child_routing(parent, overlay, preferences, selection):
+def child_routing(parent, overlay, preferences, selection, *, preferences_source=None):
     result = delegation_routing(parent.coordinator)
     result["selectionSource"] = (
+        "agent_model_role" if preferences and preferences_source == "role" else
         "delegation_preferences" if preferences else
         "agent_provider" if overlay.get("providers") else
         "inherited_conversation" if selection else
