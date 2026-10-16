@@ -51,6 +51,7 @@
     {"id": "message-outbox", "command": ["node", "tests/message-outbox-browser.mjs"]},
     {"id": "message-delivery", "command": ["node", "tests/message-delivery-browser.mjs"]},
     {"id": "canvas-media", "command": ["node", "tests/canvas-media-browser.mjs"]},
+    {"id": "inline-media-transition", "command": ["node", "tests/inline-media-transition-browser.mjs"], "env": {"EVIDENCE_DIR": "{root}/output/browser-checks/inline-media-transition"}},
     {"id": "app-toolbar", "command": ["node", "tests/app-toolbar-browser.mjs"]},
     {"id": "smart-tools", "command": ["node", "tests/smart-tools-browser.mjs"]},
     {"id": "mcp-recovery", "command": ["node", "tests/mcp-recovery-browser.mjs"], "env": {"MCP_RECOVERY_SCREENSHOT": "{root}/output/browser-checks/mcp-recovery.png"}},
