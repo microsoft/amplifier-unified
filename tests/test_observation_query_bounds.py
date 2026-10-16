@@ -201,10 +201,18 @@ def test_notice_membership_avoids_activity_join_work(tmp_path):
         actual = visible_ids(directory, state, ids, notices=True)
     finally:
         directory.db.set_progress_handler(None, 0)
-    sql, params = directory.effective(state, public_ids=ids)
-    expected = {row[0] for row in directory.db.execute(sql +
-        " SELECT id FROM directory_rows WHERE session_kind!='internal'", params)}
+    membership_work, statements = statements, 0
+    directory.db.set_progress_handler(progress, 100)
+    try:
+        sql, params = directory.effective(state, public_ids=ids)
+        expected = {row[0] for row in directory.db.execute(sql +
+            " SELECT id FROM directory_rows WHERE session_kind!='internal'", params)}
+    finally:
+        directory.db.set_progress_handler(None, 0)
     assert actual == expected
-    assert statements < 75000
-    print(json.dumps({'membershipVm': statements, 'localRows': 258, 'noticeOwners': 101}))
+    # Compare the canonical full-row oracle on this SQLite build; do not make
+    # one platform's exact VM count a portable performance contract.
+    assert membership_work < statements * .95
+    print(json.dumps({'membershipVm': membership_work, 'fullRowVm': statements,
+                      'localRows': 258, 'noticeOwners': 101}))
     observations.close()

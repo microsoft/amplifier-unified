@@ -4258,11 +4258,16 @@ class AppService:
                 # Lifecycle may update an originating schedule or a peer's
                 # saved receipt reference on another chat.
                 changed = self.schedules.sync()
-                # An exact input receipt normally changes only its message.
-                # Keep every affected owner; the save guard still widens for
-                # status, attention, or accumulated progress changing navigation.
+                # Repeated working reports and generation-start details often
+                # leave navigation/attention unchanged. The save guard proves
+                # that before reusing shared projections. Terminal generation
+                # and schedule/collaboration changes retain broad publication.
+                detail_only = (kind == 'runtime.delivery' or
+                               kind == 'runtime.status' and payload.get('status') == 'working' or
+                               kind == 'runtime.generation' and payload.get('event') == 'generation.started')
                 self._publish_changes(sessions={session['id']} | changed | collaboration_changed,
-                                      detail_only=kind == 'runtime.delivery')
+                                      detail_only=detail_only and not changed and not collaboration_changed)
+
 
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""

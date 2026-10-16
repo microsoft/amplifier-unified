@@ -100,3 +100,61 @@ async def test_unbound_send_ack_persists_legacy_view_draft_clear(app_factory):
     assert app._state['view']['draft'] == ''
     assert load(app.db)['view']['draft'] == ''
     assert contents(app, current['id'])['messages'][0]['delivery']['status'] == 'accepted'
+
+
+@pytest.mark.parametrize(('kind', 'payload'), [
+    ('runtime.status', {'status': 'working', 'detail': 'Still running'}),
+    ('runtime.generation', {'event': 'generation.started', 'generation_id': 'current'}),
+])
+@pytest.mark.parametrize('changes_shared_status', [False, True])
+async def test_lifecycle_detail_keeps_shared_projections_until_status_changes(
+        app_factory, monkeypatch, kind, payload, changes_shared_status):
+    app, rows = chats(app_factory)
+    current, peer = rows
+    current['status'] = 'working'
+    app._publish()
+    queues = []
+    for client in ('0', '1'):
+        with app.clients.bind(client):
+            queues.append(app.subscribe())
+            app.browser_state()
+    projections = []
+    original = app.browser_state
+    def observe(*args, **kwargs):
+        projections.append(app.clients.current.get())
+        return original(*args, **kwargs)
+    monkeypatch.setattr(app, 'browser_state', observe)
+    if changes_shared_status:
+        if kind == 'runtime.status':
+            payload = {**payload, 'status': 'idle'}
+        else:
+            current['status'] = 'starting'
+    await app.on_runtime_event(kind, {'sessionId': current['id'], **payload})
+    frame = queues[0].get_nowait()
+    visible = next(row for row in frame['sessions'] if row['id'] == current['id'])
+    assert visible['status'] == current['status']
+    assert contents(app, current['id'])['status'] == current['status']
+    broadened = changes_shared_status
+    assert sorted(projections) == (['0', '1'] if broadened else ['0'])
+    assert queues[1].empty() is (not broadened)
+
+
+@pytest.mark.parametrize('owner', ['schedules', 'collaboration'])
+async def test_lifecycle_with_peer_side_effect_still_refreshes_other_client(app_factory, monkeypatch, owner):
+    app, rows = chats(app_factory)
+    current, peer = rows
+    current['status'] = 'working'
+    app._publish()
+    with app.clients.bind('1'):
+        queue = app.subscribe()
+        app.browser_state()
+    def peer_changed(*args):
+        peer['streaming'] = 'Peer change from lifecycle observer'
+        return {peer['id']}
+    monkeypatch.setattr(getattr(app, owner), 'sync' if owner == 'schedules' else 'observe', peer_changed)
+    await app.on_runtime_event('runtime.generation', {
+        'sessionId': current['id'], 'event': 'generation.started', 'generation_id': 'peer-change'})
+    frame = queue.get_nowait()
+    visible = next(row for row in frame['sessions'] if row['id'] == peer['id'])
+    assert visible['streaming'] == peer['streaming']
+    assert contents(app, peer['id'])['streaming'] == peer['streaming']
