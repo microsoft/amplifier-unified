@@ -1,0 +1,310 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "base": "7b539a36e42a7897afb32b656b5d8fce893210b4",
+    "evidenceFixCommit": "a3704b3dd",
+    "productFixCommit": "a72d7e4edbcfa5390bd8bb03af4825d9d492667b",
+    "files": {
+      "amplifier_web/client_layout.py": "83d461b73ad67e0a0a170116c47af377f8db0f77398b266343edb5f334311f4a",
+      "amplifier_web/server.py": "09d7f93b90b29b075bcc099a3dde3e6430f3243bb87bdff308c01d13ccb3c5a6",
+      "tests/test_state_transport.py": "9314501769c2ff517a7a313e8ad055da27790985ab94b5b8c404f0d4e44be57e",
+      "frontend/tests/active-client-performance-browser.mjs": "f06ba952515e618217f198f194615d0fcf93dd7510a5cc2db9f3f87fe6fed740",
+      "frontend/tests/browser-checks.json": "5cf0bb66e0eb4eeff3a8abc50b172106c0d6c0a28fb540ec33665f3b245aa87f",
+      "tests/test_browser_check_runner.py": "213f1d230f5bd12dd8fa543158e2666bc56e9e9ca7acb1829ad5c00e3d86cc63",
+      "tests/fixtures/active_client_performance_server.py": "3d32f4215bf3e14550e1a6605b810799ffedb644238008b7fa1e36d1a4bfaa6e",
+      "tests/fixtures/active_client_diagnostics.py": "3021b8386a207baa1e93efd87c2b853bb4a87907bf39921f8d958c6a9796204b",
+      "scripts/browser_check_runner.py": "b3fcbce305c7b3680aa3e80afed2c869ffc1e36f7941cd3f5a44cf888f6e7bff",
+      "amplifier_web/static/build.json": "ac7067d2988297b52826ed7f20e75d8b18c561563c890703c8af76982b76dd04"
+    },
+    "builtClient": {
+      "version": "0.20.166",
+      "id": "5be69901991dca64"
+    },
+    "frontendRebuilt": false
+  },
+  "hostedFailure": {
+    "run": "https://github.com/microsoft/amplifier-unified/actions/runs/38849349256",
+    "scenarios": 72,
+    "passed": 70,
+    "failed": [
+      "active-client-performance",
+      "settings-completeness"
+    ],
+    "allScenarioCleanupTerminated": 0,
+    "activeClientActionsP95Ms": 3442,
+    "activeClientActionsLimitMs": 2000,
+    "cause": "Unattributed: state-transport overwrote the active-client diagnostic report. The aggregate failing log is retained; the later local finding does not establish the original outlier cause."
+  },
+  "evidencePreservation": {
+    "change": "Separate active-client-performance and state-transport report destinations; remove unused demand report env; retain both existing artifact-upload directories.",
+    "tests": "3 focused runner-plan/upload contract tests passed."
+  },
+  "confirmedDefect": {
+    "cause": "An unchanged attached-client layout request returned the unrelated global revision but intentionally published no client frame. Idle-chat clients waited for the 1500ms missing-stream recovery and fetched /api/state.",
+    "fix": "Only the validated no-op carries the existing internal state-independent marker; the durable retry receipt preserves it. HTTP strips the marker in both transports. Changed layout values keep authoritative state acknowledgement.",
+    "beforeSlowSamples": [
+      {
+        "sample": 6,
+        "clientIndex": 2,
+        "actionMs": 1549.7188719999995,
+        "matchingRequests": [
+          {
+            "route": "/api/actions",
+            "method": "POST",
+            "startedAt": 1792125097.6145904,
+            "elapsedMs": 5.9
+          },
+          {
+            "route": "/api/companion",
+            "method": "GET",
+            "startedAt": 1792125098.237043,
+            "elapsedMs": 69.79
+          },
+          {
+            "route": "/api/state",
+            "method": "GET",
+            "startedAt": 1792125099.1246617,
+            "elapsedMs": 27.58
+          }
+        ]
+      },
+      {
+        "sample": 7,
+        "clientIndex": 3,
+        "actionMs": 1530.5388440000006,
+        "matchingRequests": [
+          {
+            "route": "/api/actions",
+            "method": "POST",
+            "startedAt": 1792125099.3505187,
+            "elapsedMs": 6.67
+          },
+          {
+            "route": "/api/companion",
+            "method": "GET",
+            "startedAt": 1792125100.2368736,
+            "elapsedMs": 84.12
+          },
+          {
+            "route": "/api/state",
+            "method": "GET",
+            "startedAt": 1792125100.865483,
+            "elapsedMs": 4.23
+          }
+        ]
+      },
+      {
+        "sample": 10,
+        "clientIndex": 2,
+        "actionMs": 1537.1518100000012,
+        "matchingRequests": [
+          {
+            "route": "/api/actions",
+            "method": "POST",
+            "startedAt": 1792125101.3278043,
+            "elapsedMs": 5.94
+          },
+          {
+            "route": "/api/companion",
+            "method": "GET",
+            "startedAt": 1792125102.2459579,
+            "elapsedMs": 64.83
+          },
+          {
+            "route": "/api/state",
+            "method": "GET",
+            "startedAt": 1792125102.8440075,
+            "elapsedMs": 3.26
+          }
+        ]
+      },
+      {
+        "sample": 11,
+        "clientIndex": 3,
+        "actionMs": 1527.1593189999985,
+        "matchingRequests": [
+          {
+            "route": "/api/actions",
+            "method": "POST",
+            "startedAt": 1792125102.9862914,
+            "elapsedMs": 5.99
+          },
+          {
+            "route": "/api/companion",
+            "method": "GET",
+            "startedAt": 1792125103.2348115,
+            "elapsedMs": 79.67
+          },
+          {
+            "route": "/api/companion",
+            "method": "GET",
+            "startedAt": 1792125104.2389982,
+            "elapsedMs": 73.98
+          },
+          {
+            "route": "/api/state",
+            "method": "GET",
+            "startedAt": 1792125104.4952254,
+            "elapsedMs": 3.78
+          }
+        ]
+      }
+    ]
+  },
+  "validation": {
+    "oldProductRegression": "2 new compact/legacy HTTP cases fail against original client_layout.py.",
+    "fixedPython": "16 layout/state-transport tests passed in 10.55s.",
+    "invariants": [
+      "No-op does not advance revision or publish an SSE frame to the client.",
+      "No-op duplicate keeps its original revision and state-independent receipt.",
+      "Stale expected revision and reused ID with changed contents still reject.",
+      "Actual changes publish the new client view and retain compact stateRevision.",
+      "Caller-supplied internal marker cannot disable actual-change acknowledgement.",
+      "All four browser drafts and selected chats remain correct.",
+      "All eight repeated no-op samples have no stateRevision and zero /api/state recovery reads.",
+      "All initial four changed-value samples retain stateRevision.",
+      "Companion sparse facts, non-overlap and zero additional subscriptions/readers remain correct.",
+      "Zero provider/model calls."
+    ],
+    "strictBrowserRunner": {
+      "id": "active-client-performance",
+      "command": [
+        "node",
+        "tests/active-client-performance-browser.mjs"
+      ],
+      "env": {
+        "AMPLIFIER_PERF_EVIDENCE": "{root}/output/active-client-performance/report.json"
+      },
+      "status": "passed",
+      "reason": null,
+      "log": "active-client-performance.log",
+      "exitCode": 0,
+      "cleanup": {
+        "remaining": [],
+        "terminated": 0
+      },
+      "durationSeconds": 13.022
+    }
+  },
+  "localComparison": {
+    "platform": "ARM Chromium with canonical DTU launcher (--no-zygote, --renderer-process-limit=2, --disable-gpu), four isolated contexts in one browser; private PID/network namespace",
+    "fixture": "Frozen synthetic catalog of 22,915 sessions and 3,932 workspaces; 4 isolated browser contexts, 1 terminal stream, 1 non-overlapping companion client; fresh fixture state per run.",
+    "samplesPerMetric": 12,
+    "metrics": {
+      "health": {
+        "before": {
+          "samples": 12,
+          "medianMs": 7,
+          "p95Ms": 242,
+          "maxMs": 242
+        },
+        "after": {
+          "samples": 12,
+          "medianMs": 10,
+          "p95Ms": 253,
+          "maxMs": 253
+        },
+        "unchangedLimitMs": 1500
+      },
+      "admission": {
+        "before": {
+          "samples": 12,
+          "medianMs": 17,
+          "p95Ms": 147,
+          "maxMs": 147
+        },
+        "after": {
+          "samples": 12,
+          "medianMs": 21,
+          "p95Ms": 42,
+          "maxMs": 42
+        },
+        "unchangedLimitMs": 1500
+      },
+      "actions": {
+        "before": {
+          "samples": 12,
+          "medianMs": 44,
+          "p95Ms": 1550,
+          "maxMs": 1550
+        },
+        "after": {
+          "samples": 12,
+          "medianMs": 33,
+          "p95Ms": 142,
+          "maxMs": 142
+        },
+        "unchangedLimitMs": 2000
+      }
+    },
+    "noOpSamples": [
+      {
+        "index": 4,
+        "actionMs": 62.777626000000964,
+        "stateAcknowledgement": false,
+        "stateRecoveryReads": 0
+      },
+      {
+        "index": 5,
+        "actionMs": 11.833165000000008,
+        "stateAcknowledgement": false,
+        "stateRecoveryReads": 0
+      },
+      {
+        "index": 6,
+        "actionMs": 11.091398000000481,
+        "stateAcknowledgement": false,
+        "stateRecoveryReads": 0
+      },
+      {
+        "index": 7,
+        "actionMs": 8.648700000001554,
+        "stateAcknowledgement": false,
+        "stateRecoveryReads": 0
+      },
+      {
+        "index": 8,
+        "actionMs": 10.094763000000967,
+        "stateAcknowledgement": false,
+        "stateRecoveryReads": 0
+      },
+      {
+        "index": 9,
+        "actionMs": 12.916185000000041,
+        "stateAcknowledgement": false,
+        "stateRecoveryReads": 0
+      },
+      {
+        "index": 10,
+        "actionMs": 75.00393099999928,
+        "stateAcknowledgement": false,
+        "stateRecoveryReads": 0
+      },
+      {
+        "index": 11,
+        "actionMs": 9.92197699999997,
+        "stateAcknowledgement": false,
+        "stateRecoveryReads": 0
+      }
+    ],
+    "limitations": [
+      "One finite before/after run on the same owned ARM DTU and built client; this is not a distribution or hosted-x86 comparison.",
+      "With 12 samples this test\u2019s p95 is its maximum. The unchanged thresholds were not widened.",
+      "The original hosted 3442ms observation remains unexplained because its detailed evidence was overwritten.",
+      "The fixture uses synthetic progress and no inference; it does not measure live-provider concurrency."
+    ]
+  },
+  "retainedEvidence": {
+    "output/post-release166-fixes/active-client-diagnosis/report.json": "3c7b7f87bf1a285d3dc366d8af6dea55b0729b1adf948a08304a3e8c0e5b67e1",
+    "output/post-release166-fixes/active-client-diagnosis/report-fixed.json": "f042e61a3267e5e9961824fcde41e0f5b89c1d9f9170bbc9bc8e7240f6ba31d1",
+    "output/post-release166-fixes/active-client-diagnosis/slow-noop-correlation.json": "e2015e7cdaadf8822a230f39e3688fa94d1f19b8155814218815afdc92c9c0ab",
+    "output/post-release166-fixes/active-client-diagnosis/evidence/unchanged-threshold/results.json": "a835ee14690eaba8fe6f0563f207c1fa4a82aca546e9867af828c4a73d5ece0f",
+    "output/post-release166-fixes/active-client-diagnosis/evidence/noop-fixed/results.json": "77a9f28762a24dfde654e1d1f0b51f9d84b8f9971eed33c9a3b30790655fad1c",
+    "output/post-release166-fixes/active-client-diagnosis/evidence/noop-red/pytest.log": "1ad2040ba2b3ea495d6b788aec41ae956bc17932a0eb102ce1ea694aedc76b8f",
+    "output/post-release166-fixes/active-client-diagnosis/evidence/noop-green/pytest.log": "dae451bb5c5cf79c227c587b671316faea6e086f3f84f116528d9c92b5a459f0"
+  },
+  "cleanup": {
+    "testProcesses": "Both private PID/network namespaces exited; strict runner terminated 0 and reports no remaining children.",
+    "ownedResources": "Owned source/state retained temporarily for final integration equality; parent consolidates cleanup receipt. Shared preview/dependencies and production unchanged."
+  }
+}
