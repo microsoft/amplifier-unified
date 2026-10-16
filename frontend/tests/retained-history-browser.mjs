@@ -69,6 +69,7 @@ try{
  await page.reload();await expect(page.locator(`[data-message-id="${readingId}"]`)).toHaveCount(1);
  await expect.poll(offset).toBeCloseTo(before,0);
  assert.ok(await rows.count()<=100,'Reload restores a bounded reading window');
+ assert.equal(navigationReads.length,0,'Native reading restoration never requests the full-history index');
  const final=await metrics();assert.equal(final.unchanged,true);assert.deepEqual(final.runtimeCalls,[]);assert.deepEqual(errors,[]);
  console.log('Retained history passed: cold bounded open, requested-window navigator, sequential paging, independent readers, unique rows, bounded reading position after switch/reload, unchanged source and no model work.');
 }finally{await browser?.close();fixture.kill('SIGTERM')}
