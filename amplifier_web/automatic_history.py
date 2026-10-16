@@ -21,6 +21,7 @@ from .shared_state_probe import text_content
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
 INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'nativeNameRevision', 'nativeNamePolicyRevision', 'autoName', 'naming', 'description', 'bundle', 'workspace',
                 'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt', 'navigationActivityPending',
+                'workingDirectory', 'executionRevision', 'executionHost', 'executionHandoffId',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose',
