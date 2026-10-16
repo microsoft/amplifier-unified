@@ -35,10 +35,11 @@ def execute(lane, work, output):
             install_browser_dependencies=sys.platform.startswith('linux'))
         env = prepared['environment']
         python = prepared['interpreter']
+        (output / 'preparation.json').write_text(json.dumps(prepared, indent=2) + '\n')
+        (output / 'packages.txt').write_bytes((work / 'evidence/packages.txt').read_bytes())
         subprocess.run([python, str(ROOT / 'scripts/integration_clients.py'), 'preflight',
                         '--lane', lane, '--state-dir', str(work), '--output', str(output / 'preflight.json')],
                        env={**os.environ, **env}, check=True)
-        (output / 'preparation.json').write_text(json.dumps(prepared, indent=2) + '\n')
         return run_lane(lane, python, output, env)
     if lane not in {'context-intelligence', 'connected-documents'}:
         raise ValueError('This lane requires its explicit manual or publication owner')

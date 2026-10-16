@@ -37,13 +37,17 @@ servers, browsers, displays, or filesystem behavior fail their designated owner.
 | IC-03 browser-headless | External-link authentication, service-worker forwarding, narrow/wide setup renderer | 3 passed, 0 skipped; 5.91s | Reproducible disposable Chromium on affected PRs and post-release |
 | IC-04 browser-installed | Real installed-PWA launch and entry behavior | Not qualified by this Linux/headless run | Explicit installed-app/display acceptance for changes to PWA launch/install/entry behavior |
 | IC-05 cli-interop | CLI → Unified → CLI history, ownership, provider settings and portability | 3 passed, 0 skipped; 4.15s with freshly prepared CLI environment | Same execution with recorded CLI and loop revisions |
-| IC-06 filesystem-aliases | Concurrent create cannot overwrite case/Unicode filename aliases | Linux prerequisite probe correctly rejects non-aliasing filesystem; macOS result pending | Both alias variants execute on macOS; a skip fails |
+| IC-06 filesystem-aliases | Concurrent create cannot overwrite case/Unicode filename aliases | 3 passed, 0 skipped on GitHub macOS; Linux prerequisite probe correctly rejects non-aliasing filesystem | Both alias variants execute on macOS; a skip fails |
 | IC-07 uv-reset | Actual package corruption/missing-dependency repair using uv | 1 passed, 0 skipped; 0.62s in fresh prepared environment | Repeat on reset/dependency changes and post-release |
 | IC-08 context-intelligence | Real isolated server/database, authenticated graph routing and content redaction | 1 passed, 0 skipped; 2.96s | Real disposable Neo4j + server, no production endpoint or account |
 | IC-09 connected-documents | Native upstream composition, shared UI/agent invocation, policy and idempotence | 2 passed, 0 skipped; 1.62s against explicit local upstream copy | Manual optional-overlay acceptance; synthetic Graph transport, no live account writes |
 | IC-10 profiling | Real optional capture library, revocation, privacy, retention and receipts | 10 passed, 0 skipped; 10.28s against clean local library `8edea47c3a05eb4e6206211ac993a0a673245b8a` | Repeat against an explicit clean source; automate when canonical source distribution is available |
 
-Times are test execution observations on spark-2, not CI provisioning targets.
+The initial [GitHub matrix](https://github.com/microsoft/amplifier-unified/actions/runs/38873044197)
+passed all six automated lanes: 88 tests, zero skips, including the macOS cases.
+Each lane recorded unchanged source throughout execution.
+
+Times in the table are test execution observations on spark-2, not CI provisioning targets.
 These native/provider tests use deterministic offline providers; they do not
 prove paid-provider latency, real Microsoft 365 authorization, or live Office
 client acceptance. Their integration claims concern the actual native modules
