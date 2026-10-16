@@ -1,0 +1,23 @@
+{
+  "at": "2026-10-16T13:47:35.433030+00:00",
+  "baseRevision": "c218a17891c249c37074590417c2429551baee2d",
+  "files": {
+    "amplifier_web/file_source_guard.py": "590e92377b2e738102cc4a89211c0e91c2b83f2c50ebc279cc1689fe4291fdf0",
+    "amplifier_web/host/children.py": "d5ca033d50f25c2516594643f9ccb403b640da775308613aaeadfd81dbd4fddf",
+    "tests/test_file_source_native_children.py": "b7b808ca3778ab02f757bd4601ce60ba81a001952cbd6ead84b64cd1f00f6b4c"
+  },
+  "passed": 74,
+  "skipped": 2,
+  "failed": 0,
+  "durationSeconds": 2.85,
+  "skipReason": "Linux filesystem treats case/unicode names as distinct files; corresponding alias concurrency cases skip",
+  "negativeControl": "Disabling guidance fails exact resumed refusal assertion; restored afterward",
+  "scope": "Actual Core/Foundation resumed child plus production app access/file guard; deterministic orchestrator, no provider calls",
+  "limits": [
+    "No outer RuntimeManager process or Stories joined workflow",
+    "No new graphical continuation action"
+  ],
+  "evidenceRoot": "output/delegate-guidance168/receipts/delegate-guidance168",
+  "authorityChanges": false,
+  "replay": false
+}
