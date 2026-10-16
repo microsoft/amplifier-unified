@@ -90,8 +90,8 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    {row.reason&&<p>{row.reason}</p>}
    {row.observation?.status==='unverified'&&<p>Current state could not be verified. This is a saved observation.</p>}
    {['outcome_unknown','unknown'].includes(row.status)&&<p>The previous outcome is uncertain. Inspect the environment before taking another action.</p>}
-   {row.lastRecovery&&<p role="status">Last recovery check: {row.lastRecovery.state?.replaceAll('_',' ')||'unknown'}. {row.lastRecovery.result?.detail||'The original request result is kept separately.'}</p>}
-   {savedBytes!==null&&<p>Saved files: {savedBytes}. {accounting.format==='full'?'Includes a complete environment export.':'Includes the source snapshot, working folder and artifacts.'} These files stay saved until deliberately removed.</p>}
+   {row.lastRecovery&&<p role="status">Last recovery check: {row.lastRecovery.state?.replaceAll('_',' ')||'unknown'}. {row.lastRecovery.message||'The original request result is kept separately.'}</p>}
+   {savedBytes!==null&&<p>Saved files: {savedBytes}. {accounting.policy==='full'?'Includes a complete environment export.':'Includes the source snapshot, working folder and artifacts.'} These files stay saved until deliberately removed.</p>}
    {row.status==='removed'&&savedBytes===null&&<p>Saved files are retained. Their storage size has not been verified.</p>}
    <details><summary>Environment details</summary><pre className="a-state-view">{JSON.stringify(row,null,2)}</pre></details>
    {!readOnly&&row.status!=='removed'&&<>
@@ -104,7 +104,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
     </form>
     <button type="button" className="a-soft" disabled={cleanupBlocked||['stopped','not-started'].includes(row.status)} onClick={()=>mutate('workspace.environments.stop',{id:row.id,expectedRevision:row.revision})}>Stop and keep data</button>
     {removing!==row.id?<button type="button" className="a-soft" disabled={cleanupBlocked||!['stopped','not-started'].includes(row.status)} onClick={()=>setRemoving(row.id)}>Remove environment…</button>:<div role="group" aria-label="Confirm environment removal">
-     <p>The working folder, artifacts and saved check results will be retained. The environment will be removed only after those files are saved. Files elsewhere in the container are not retained.</p>
+     <p>{row.retention?.mode==='full'?'A complete environment export and saved check results will be retained.':'The working folder, artifacts and saved check results will be retained.'} The environment will be removed only after those files are saved. {row.retention?.mode==='files'?'Files elsewhere in the container are not retained.':''}</p>
      <button type="button" className="a-soft" disabled={cleanupBlocked} onClick={()=>mutate('workspace.environments.remove',{id:row.id,expectedRevision:row.revision})}>Save files and remove environment</button>
      <button type="button" className="a-soft" disabled={busy} onClick={()=>setRemoving(null)}>Keep environment</button>
     </div>}

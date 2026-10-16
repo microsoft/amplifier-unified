@@ -71,7 +71,7 @@ async def main(home, port):
                     'operationId': row['launchOperationId'], 'universeId': identity, 'ownership': 'matched', 'absenceConfirmed': False}
             if action == 'remove':
                 value['retention'] = {'verified': True, 'sourceBytes': 23, 'archiveBytes': 2025,
-                    'totalBytes': 2048, 'format': 'files', 'policy': 'preserve-until-explicit-removal'}
+                    'totalBytes': 2048, 'format': 'tar', 'policy': 'files'}
             return value
     environments.invoke = invoke
     environments.capacity = lambda app, config: {'available': mode['capacityAvailable'],

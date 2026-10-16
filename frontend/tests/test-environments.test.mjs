@@ -36,7 +36,7 @@ for(const available of [true,false])test(`original environment cleanup remains $
 
 test('retained size is shown only from verified accounting and an uncertain operation stays visible',async()=>{
  let root;const props={workspaceId:'w',sessionId:'a',active:true};
- const resource={id:'env',revision:9,status:'removed',lastOperation:{state:'outcome_unknown'},lastRecovery:{state:'completed'},retention:{accounting:{verified:true,totalBytes:2048,format:'files'}}};
+ const resource={id:'env',revision:9,status:'removed',lastOperation:{state:'outcome_unknown'},lastRecovery:{state:'completed'},retention:{accounting:{verified:true,totalBytes:2048,format:'tar',policy:'files'}}};
  try{
   await act(async()=>{root=create(React.createElement(TaskEnvironments,{...props,act:async()=>accepted({items:[resource]})}))});
   assert.match(text(root.toJSON()),/Saved files: 2 KiB/);assert.match(text(root.toJSON()),/Last request: outcome unknown/);assert.match(text(root.toJSON()),/Last recovery check: completed/);
