@@ -192,6 +192,42 @@ def sanitize_export(value, path=(), secrets=None):
     return copy.deepcopy(value)
 
 
+def _expand_prose_mentions(text, mention, replace):
+    """Keep Markdown code examples literal while expanding prose references.
+
+    Foundation excludes code from instruction @mentions. Export must preserve
+    those examples too, including when the same reference also occurs in prose.
+    Declarative resource fields do not use this helper and remain strict.
+    """
+    inline = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)", re.DOTALL)
+    fence = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n|$)", re.MULTILINE)
+
+    def prose(value):
+        parts, end = [], 0
+        for code in inline.finditer(value):
+            parts.extend((mention.sub(replace, value[end:code.start()]), code[0]))
+            end = code.end()
+        parts.append(mention.sub(replace, value[end:]))
+        return "".join(parts)
+
+    parts, end = [], 0
+    for opening in fence.finditer(text):
+        if opening.start() < end:
+            continue
+        marker, info = opening.groups()
+        if marker[0] == "`" and "`" in info:
+            continue  # Backtick fences cannot have backticks in their info string.
+        closing = re.compile(
+            r"^ {0,3}" + re.escape(marker[0]) + "{" + str(len(marker)) + r",}[ \t]*(?:\r?\n|$)",
+            re.MULTILINE,
+        ).search(text, opening.end())
+        parts.append(prose(text[end:opening.start()]))
+        end = closing.end() if closing else len(text)
+        parts.append(text[opening.start():end])
+    parts.append(prose(text[end:]))
+    return "".join(parts)
+
+
 def profile_candidates(config):
     """Registered candidates; loading/composition determines completeness."""
     # The runtime resolves aliases from scoped settings, never the persisted
@@ -491,7 +527,7 @@ class BundleManager:
                     return "[Context already included: " + key + "]"
                 used.add(key)
                 return "\n<!-- Bundle context: " + key + " -->\n" + expand(row["text"], (*stack, key)) + "\n"
-            return mention.sub(replace, text or "")
+            return _expand_prose_mentions(text or "", mention, replace)
 
         def portable_reference(value):
             match = mention.fullmatch(value)
