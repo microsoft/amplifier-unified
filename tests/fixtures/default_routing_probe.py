@@ -1,8 +1,10 @@
 """Offline installed-wheel routing seam; execute only in a qualified runtime.
 
 The pytest driver supplies UNIFIED_RUNTIME_PYTHON, WARM_FOUNDATION_PATH and
-WARM_ROUTING_PATH. No source-checkout fallback, bundle.prepare(), activation,
-installation or live provider calls are permitted. Core, Foundation, context,
+WARM_ROUTING_PATH. Warmed sources verify installed delegate/router wheel bytes;
+only installed package paths are supplied to Core. No source-checkout fallback,
+bundle.prepare(), activation, installation or live provider calls are permitted.
+Core, Foundation, context,
 loop-live's provider selector, hooks-routing, DelegateTool and Unified's child
 launcher are real. Only providers and the finite turn body are synthetic.
 
@@ -32,6 +34,10 @@ PREFIX = "DEFAULT_ROUTING_PROBE "
 MATRIX_NAME = "offline-routing-probe"
 PROVIDER_MODULE = "provider-routing-probe"
 PROVIDER_PACKAGE = "amplifier_module_provider_routing_probe"
+UPSTREAM_PACKAGES = {
+    "tool-delegate": ("amplifier_module_tool_delegate", "amplifier-module-tool-delegate"),
+    "hooks-routing": ("amplifier_module_hooks_routing", "amplifier-module-hooks-routing"),
+}
 ALPHA_MODELS = ["alpha-default-v1", "agent-pin-v1", "caller-alt-v1",
                 "matrix-review-v1", "conversation-v1", "conversation-v2"]
 BETA_MODELS = ["beta-default-v1", "declared-pin-v1", "call-pin-v1", "matrix-coding-v1"]
@@ -107,13 +113,25 @@ def prerequisite_paths():
         return None, missing
     foundation = Path(os.environ["WARM_FOUNDATION_PATH"]).expanduser().resolve()
     routing = Path(os.environ["WARM_ROUTING_PATH"]).expanduser().resolve()
-    paths = {
+    warmed_paths = {
         "tool-delegate": foundation / "modules/tool-delegate/amplifier_module_tool_delegate",
         "hooks-routing": routing / "modules/hooks-routing/amplifier_module_hooks_routing",
     }
-    for name, path in paths.items():
+    paths = {}
+    for name, path in warmed_paths.items():
         if not (path / "__init__.py").is_file():
             missing.append(f"{name} package at the exact warmed path: {path}")
+        package, distribution_name = UPSTREAM_PACKAGES[name]
+        spec = importlib.util.find_spec(package)
+        if spec is None:
+            missing.append(f"runtime package {package}")
+        else:
+            assert spec.origin, f"Installed package has no file origin: {package}"
+            paths[name] = Path(spec.origin).resolve().parent
+        try:
+            importlib.metadata.distribution(distribution_name)
+        except importlib.metadata.PackageNotFoundError:
+            missing.append(f"installed {distribution_name} distribution")
     for name in ("amplifier_web", "amplifier_core", "amplifier_foundation",
                  "amplifier_module_loop_live", "amplifier_module_loop_streaming",
                  "amplifier_module_context_simple"):
@@ -127,7 +145,7 @@ def prerequisite_paths():
     except importlib.metadata.PackageNotFoundError:
         missing.append("installed amplifier-unified distribution")
         distribution = None
-    return (paths, routing, distribution), missing
+    return (paths, warmed_paths, routing, distribution), missing
 
 
 def verify_wheel(distribution):
@@ -159,10 +177,78 @@ def verify_wheel(distribution):
     return {"version": distribution.version, "origin": str(expected_init), "checked_modules": checked}
 
 
+def verify_upstream(paths, warmed_paths):
+    """Attest every installed delegate/router Python file, not just imports."""
+    evidence = {}
+    for module_id, (package, distribution_name) in UPSTREAM_PACKAGES.items():
+        distribution = importlib.metadata.distribution(distribution_name)
+        assert distribution.read_text("WHEEL"), f"{distribution_name} must be a wheel"
+        assert distribution.read_text("RECORD"), f"{distribution_name} has no RECORD"
+        direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
+        assert not direct_url.get("dir_info", {}).get("editable"), (
+            f"Editable {distribution_name} is not wheel qualification")
+        recorded = {str(path): path for path in distribution.files or []}
+        entry = recorded.get(package + "/__init__.py")
+        assert entry is not None, f"No installed package RECORD entry: {package}"
+        expected_init = Path(distribution.locate_file(entry)).resolve(strict=True)
+        installed = paths[module_id].resolve(strict=True)
+        source = warmed_paths[module_id].resolve(strict=True)
+        assert expected_init == installed / "__init__.py", (
+            f"{package} resolves outside its installed distribution")
+        assert not installed.is_relative_to(source) and not source.is_relative_to(installed), (
+            f"{package} must run from its installed wheel, not the warmed checkout")
+        spec = importlib.util.find_spec(package)
+        assert spec is not None and spec.origin, f"No runtime package origin: {package}"
+        assert Path(spec.origin).resolve(strict=True) == expected_init, (
+            f"{package} is shadowed by another package")
+
+        expected = {path.relative_to(source).as_posix() for path in source.rglob("*.py")}
+        actual = {path.relative_to(installed).as_posix() for path in installed.rglob("*.py")}
+        package_records = {
+            name.removeprefix(package + "/"): record
+            for name, record in recorded.items()
+            if name.startswith(package + "/") and name.endswith(".py")
+        }
+        assert actual == expected == set(package_records), (
+            f"{package} Python file sets differ between wheel, RECORD and warmed source")
+        hashes = {}
+        for relative in sorted(expected):
+            path = (installed / relative).resolve(strict=True)
+            source_path = (source / relative).resolve(strict=True)
+            assert path.is_relative_to(installed), f"Installed file escapes package: {relative}"
+            assert source_path.is_relative_to(source), f"Warmed file escapes package: {relative}"
+            record = package_records[relative]
+            assert Path(distribution.locate_file(record)).resolve(strict=True) == path, relative
+            assert record.hash is not None and record.hash.mode == "sha256", (
+                f"Missing SHA-256 RECORD hash: {package}/{relative}")
+            data = path.read_bytes()
+            digest = hashlib.sha256(data)
+            encoded = base64.urlsafe_b64encode(digest.digest()).decode().rstrip("=")
+            assert encoded == record.hash.value and len(data) == record.size, (
+                f"Installed file differs from wheel RECORD: {package}/{relative}")
+            assert data == source_path.read_bytes(), (
+                f"Installed file differs from warmed source: {package}/{relative}")
+            hashes[relative] = digest.hexdigest()
+        for name, module in list(sys.modules.items()):
+            if name != package and not name.startswith(package + "."):
+                continue
+            origin = getattr(module, "__file__", None)
+            assert origin is not None, f"Loaded upstream module has no origin: {name}"
+            path = Path(origin).resolve(strict=True)
+            assert path.is_relative_to(installed), f"Shadowed upstream module: {name}"
+            assert path.relative_to(installed).as_posix() in hashes, (
+                f"Loaded upstream module is not verified Python source: {name}")
+        evidence[module_id] = {
+            "distribution": distribution_name, "version": distribution.version,
+            "origin": str(expected_init), "source": str(source), "python_sha256": hashes,
+        }
+    return evidence
+
+
 def exact_package(name, package_path):
     module = importlib.import_module(name)
     package_path = package_path.resolve()
-    assert Path(module.__file__).resolve() == package_path / "__init__.py", f"Wrong warmed source for {name}"
+    assert Path(module.__file__).resolve() == package_path / "__init__.py", f"Wrong runtime origin for {name}"
     for imported_name, imported in list(sys.modules.items()):
         if imported_name.startswith(name + ".") and getattr(imported, "__file__", None):
             assert Path(imported.__file__).resolve().is_relative_to(package_path), imported_name
@@ -178,7 +264,8 @@ def preference(instance, model):
     return [{"provider": instance, "model": model}]
 
 
-async def run(paths, routing_root, distribution, attempts, negative_control=False):
+async def run(paths, warmed_paths, routing_root, distribution, attempts, negative_control=False):
+    upstream = verify_upstream(paths, warmed_paths)
     from amplifier_core import AmplifierSession, HookResult
     from amplifier_core._engine import RustSession
     from amplifier_core.events import MODULE_LOAD_FAILED, MODULE_ON_SESSION_READY_FAILED
@@ -453,6 +540,9 @@ async def run(paths, routing_root, distribution, attempts, negative_control=Fals
             await parent.cleanup()
         assert not attempts, f"Forbidden effects during cleanup: {attempts}"
         assert not synthetic.COMPLETION_ATTEMPTS, "Cleanup attempted a model call"
+        assert verify_upstream(paths, warmed_paths) == upstream, (
+            "Installed upstream packages or warmed sources changed during the probe")
+        report["upstream_wheels"] = upstream
         emit(report)
 
 
@@ -465,16 +555,17 @@ def main():
     if missing:
         emit({"status": "missing_prerequisites", "missing": missing})
         return 77
-    paths, routing_root, distribution = prerequisites
+    paths, warmed_paths, routing_root, distribution = prerequisites
     verify_wheel(distribution)
     if sys.argv[1:] == ["--preflight"]:
-        emit({"status": "ready", "version": distribution.version})
+        upstream = verify_upstream(paths, warmed_paths)
+        emit({"status": "ready", "version": distribution.version, "upstream_wheels": upstream})
         return 0
     # Deliberately no setup/install/fallback here. The caller owns these homes.
     for name in ("AMPLIFIER_WEB_HOME", "AMPLIFIER_HOME", "AMPLIFIER_SESSION_STATE_HOME"):
         assert os.environ.get(name), f"The test driver must supply an isolated {name}"
         assert Path(os.environ[name]).resolve().is_relative_to(Path.cwd().resolve()), name
-    asyncio.run(run(paths, routing_root, distribution, attempts,
+    asyncio.run(run(paths, warmed_paths, routing_root, distribution, attempts,
                     negative_control=sys.argv[1:] == ["--negative-control"]))
     return 0
 

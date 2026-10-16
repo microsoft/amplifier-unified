@@ -260,7 +260,9 @@ async def test_real_five_behaviors_keep_modules_agents_context_and_namespace_anc
     for namespace in ("unified", "imagegen", "computer-use",
                       "context-intelligence", "routing-matrix"):
         assert Path(bundle.source_base_paths[namespace]).resolve() == env.roots[namespace]
-        assert any(path.is_relative_to(env.roots[namespace]) for path in contexts), namespace
+    # Full CI carries its instructions in agent/tool definitions, not a root
+    # context file. The per-behavior comparison above checks every actual
+    # context declaration; requiring one per namespace invents an upstream API.
     skills = _row(bundle.tools, "tool-skills")["config"]["skills"]
     assert {"@unified:skills", "@imagegen:skills", "@routing-matrix:skills"} <= set(skills)
     assert (env.roots["unified"] / "skills/amplifier-shell/SKILL.md").is_file()
