@@ -207,11 +207,31 @@ try{
  await checkReading(savedPosition,'streaming must preserve scrollback');
  // Retain the original raw-position invariant explicitly at a stable Work
  // boundary as well as checking notice-changing geometry above.
- await workReady();const stableBefore=await readingPosition();
+ await workReady();
+ // Observe the actual React-owned Work notice at mutation delivery, before
+ // the next animation frame can hide a one-frame reading jump. The prior
+ // settled anchor remains authoritative through both loading and ready.
+ await pane.evaluate(element=>{
+  const top=element.getBoundingClientRect().top,rows=[...element.querySelectorAll('[data-message-id]')];
+  const anchor=rows.find(row=>row.getBoundingClientRect().bottom>top)||rows.at(-1);
+  const offset=anchor.getBoundingClientRect().top-top;
+  let notice=!!element.querySelector('[data-part="work-projection-status"]');
+  window.workNoticeFrames=[];
+  window.workNoticeObserver=new MutationObserver(()=>{
+   const next=!!element.querySelector('[data-part="work-projection-status"]');if(next===notice)return;notice=next;
+   window.workNoticeFrames.push({notice:next,expected:offset,actual:anchor.getBoundingClientRect().top-element.getBoundingClientRect().top});
+  });
+  window.workNoticeObserver.observe(element,{subtree:true,childList:true});
+ });
+ const stableBefore=await readingPosition();
  await grow();await workReady();const stableAfter=await readingPosition();
  assert.ok(Math.abs(stableAfter.contentTop-stableBefore.contentTop)<3,'Settled Work preserves the anchor content position');
  assertReading(stableBefore,stableAfter,'streaming with stable geometry preserves raw scrollback');
  readingChecks.push({message:'stable Work geometry',before:stableBefore,after:stableAfter});
+ const noticeFrames=await page.evaluate(()=>{window.workNoticeObserver.disconnect();return window.workNoticeFrames});
+ assert.ok(noticeFrames.some(row=>row.notice)&&noticeFrames.some(row=>!row.notice),'Exercise actual Work notice insertion and removal');
+ for(const frame of noticeFrames)assert.ok(Math.abs(frame.actual-frame.expected)<3,'Work notice preserves reading position before paint: '+JSON.stringify(frame));
+ console.log('Work notice pre-paint positions:',JSON.stringify(noticeFrames));
  // Counterchecks exercise real scroll changes without a compensating layout
  // change: an 80px reading shift and a jump to latest must both be rejected.
  const beforeShift=await readingPosition();
