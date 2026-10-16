@@ -717,3 +717,30 @@ filesystem write allow/deny override keys. Shared workspace settings, read polic
 and other settings are preserved. Inherited configuration changes invalidate the
 preview; saved changes reach the existing runtime refresh boundary before the
 next input, with no replay or unsolicited turn.
+
+
+### Ordinary file reads and search
+
+Read authority is independent of write roots and configuration administration.
+Unified supplies an explicit unrestricted read policy when no file/search read
+boundary is configured; reading installed package source requires no
+`file_access` or `runtime_configuration` grant. Filesystem `allowed_read_paths`
+and search `allowed_paths` support unrestricted null and restrictive lists,
+including empty deny-all lists. The standalone search module retains its omitted
+configuration default of the working directory; Unified deliberately supplies
+null instead. Explicit module/per-tool search declarations and filesystem read
+ceilings intersect across root, child, spawn, overlay and retained plans; denials
+accumulate. Resuming a child cannot widen its saved explicit read boundary.
+
+The reference reader, grep and glob check denied paths, including filesystem
+aliases, before exposing contents or names. Grep chooses its Python engine when
+explicit denials exist so ripgrep cannot implicitly open denied ignore files.
+This policy mode uses Python regex semantics and may be slower. Unrestricted
+search retains ripgrep; restricted search uses explicit tool exclusions rather
+than ambient ignore files. These controls do not grant writes, widen scoped
+history APIs, expose private drafts, or establish shell/OS isolation.
+
+Root and child mounting reject reference modules that cannot honor the selected
+read policy before model input. The same check runs in existing no-model runtime
+qualification. Dependency updates use the existing checked staging/activation
+path; no capability approval or automatic replay repairs a recorded old worker.

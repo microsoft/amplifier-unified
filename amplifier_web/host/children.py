@@ -44,7 +44,8 @@ def _restrict_child_tools(rows, policies, working_dir, modules):
     restrictions = {}
     for kind in ("read", "write"):
         allowed, denied = f"allowed_{kind}_paths", f"denied_{kind}_paths"
-        limits = [paths(policy[allowed]) for policy in policies if allowed in policy]
+        limits = [paths(policy[allowed]) for policy in policies if allowed in policy
+                  and not (kind == "read" and policy[allowed] is None)]
         if limits:
             effective = limits[0]
             for limit in limits[1:]:
@@ -80,11 +81,14 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
     image_policies = []
     file_policies = []
     patch_policies = []
+    search_configs = []
     if retained_image_tools is not None and not isinstance(retained_image_tools, list):
         raise ValueError("Saved child tools must be a list of module declarations.")
     for index, rows in enumerate((parent.get("tools", []), spawn.get("tools", []), overlay.get("tools", []),
                                   retained_image_tools or [])):
         for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and row.get("module") == "tool-search":
+                search_configs.append(copy.deepcopy(row.get("config", {})))
             if not isinstance(row, dict) or row.get("module") not in {"tool-image", "tool-filesystem", "tool-apply-patch"}:
                 continue
             config = row.get("config", {})
@@ -138,6 +142,11 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
     _restrict_child_tools(result.get("tools", []), file_policies, working_dir, {"tool-filesystem"})
     _restrict_child_tools(result.get("tools", []), [*file_policies, *patch_policies], working_dir, {"tool-apply-patch"})
     _restrict_child_tools(result.get("tools", []), image_policies, working_dir, {"tool-image"})
+    from ..read_policy import policy_paths, restrict_search
+    for row in result.get("tools", []):
+        if row.get("module") == "tool-search":
+            row["config"] = restrict_search(row.get("config", {}), files=file_policies,
+                searches=search_configs, paths=lambda values: policy_paths(values, working_dir or Path.cwd()))
     if agent_filter == "none":
         result["agents"] = {}
     elif isinstance(agent_filter, list):
@@ -336,7 +345,7 @@ class Children:
         effective = compose_bundles(prepared.bundle, overlay_bundle)
         # Preserve the qualified file boundaries in the prepared bundle as well
         # as its mount plan, including child tool-inheritance exclusions.
-        file_modules = {"tool-image", "tool-filesystem", "tool-apply-patch"}
+        file_modules = {"tool-image", "tool-filesystem", "tool-apply-patch", "tool-search"}
         effective.tools = [row for row in effective.tools if row.get("module") not in file_modules]
         effective.tools.extend(copy.deepcopy(row) for row in plan.get("tools", [])
                                if row.get("module") in file_modules)
@@ -387,6 +396,8 @@ class Children:
                 approval_system=self.approvals, display_system=getattr(parent.coordinator, "display_system", None),
                 session_cwd=cwd, is_resumed=resumed)
             coordinator = child.coordinator
+            from ..read_policy import validate_mounted_read_policy
+            validate_mounted_read_policy(coordinator)
             from ..session_files import capture_dir
             history_workspace = parent.coordinator.get_capability('web.history_workspace') or cwd
             install_request_redaction(coordinator, directory=capture_dir(history_workspace, identity))

@@ -1270,3 +1270,31 @@ context-simple modules. Run it with the qualified runtime interpreter and a new
 private output directory; it uses no provider credentials or user history. This
 establishes runtime lifecycle with scripted model replies, not real-model
 cooperation, browser behavior, packaged-release acceptance or production adoption.
+
+
+### Ordinary reads and searches
+
+Unified now composes filesystem read limits into the reference grep/glob tools
+separately from write policy. Absent or null read limits remain unrestricted;
+explicit empty lists deny all, explicit narrower declarations remain ceilings,
+and read denials accumulate through fresh and retained child plans. The
+standalone search module keeps its working-directory default when configuration
+is omitted; Unified supplies explicit null for ordinary unrestricted reads.
+Module-level and per-tool search settings cannot erase inherited limits.
+
+Reference-module changes enforce reader denials and select the Python grep
+engine whenever explicit denials require per-file checks before opening.
+Case/Unicode aliases and hardlinks to denied files are checked by filesystem
+identity; unrelated hardlinks do not create allowlist grants. This mode uses
+Python regex semantics and may be slower. Restricted searches use tool exclusions
+instead of ambient ignore-file contents. Writes and history/draft authority are
+unchanged. Arbitrary shell/external tools remain outside these guarantees.
+
+Qualification checks the actual mounted reference modules before input admission,
+including the existing no-model update probe. Older recorded modules with missing
+semantics require Settings > Updates to check/install component updates; they do
+not justify a configuration grant. Fresh qualified generations can adopt updated
+sources, while already active work and retained explicit child ceilings remain
+preserved. Source tests and a provider-free Core/Foundation mount cover this
+behavior; release, installed-worker adoption and the reported provider conversation
+remain separate acceptance steps.
