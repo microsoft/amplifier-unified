@@ -4,11 +4,14 @@ import copy
 import pytest
 from amplifier_foundation import Bundle
 
-from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI, SHELL_BEHAVIOR_URI
+from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS, IMAGEGEN_BEHAVIOR_URI
 from amplifier_web.bundles import BundleManager, SNAPSHOT_VERSION
 from amplifier_web.host.components import compose_bundles, imagegen_defaults
 from amplifier_web.host.config import HostConfig
 from amplifier_web.host.session import compose_configured_bundle
+
+
+OTHER_DEFAULTS = tuple(uri for uri in DEFAULT_BEHAVIORS if uri != IMAGEGEN_BEHAVIOR_URI)
 
 
 def behavior():
@@ -54,7 +57,9 @@ async def test_default_adds_capability_without_replacing_root(tmp_path, monkeypa
     root = Bundle(name=name, instruction='Keep these instructions.',
                   session={'orchestrator': {'module': 'own-loop'}, 'context': {'module': 'own-context'}},
                   providers=[{'module': 'provider-owned', 'config': {'model': 'owned-model'}}])
-    settings = {'bundle': {'app': []}} if saved_list else {'web_bundles': {'excluded': [SHELL_BEHAVIOR_URI]}}
+    settings = {'web_bundles': {'excluded': list(OTHER_DEFAULTS)}}
+    if saved_list:
+        settings['bundle'] = {'app': []}
     original = copy.deepcopy(settings)
     config = HostConfig(tmp_path / 'app', tmp_path, settings, tmp_path / 'registry')
     result = await compose_configured_bundle(None, root, config)
@@ -73,9 +78,9 @@ async def test_materialized_defaults_do_not_enable_a_root_paid_opt_out(tmp_path,
     settings = {}
     entries = BundleManager.entries(settings)
     for row in entries:
-        if row['uri'] == SHELL_BEHAVIOR_URI:
+        if row['uri'] != IMAGEGEN_BEHAVIOR_URI:
             row['enabled'] = False
-    BundleManager.save_entries(settings, entries)
+    BundleManager.save_entries(settings, entries, excluded=OTHER_DEFAULTS)
     root = Bundle(name='owned', tools=[{'module': 'tool-image', 'source': 'owned-source',
                                        'config': {'allow_paid': False}}])
     result = await compose_configured_bundle(None, root,
@@ -87,9 +92,10 @@ async def test_materialized_defaults_do_not_enable_a_root_paid_opt_out(tmp_path,
 async def test_module_settings_and_sources_remain_authoritative(tmp_path, monkeypatch):
     from amplifier_web.host import session
     async def load(registry, config, uri):
+        assert uri == IMAGEGEN_BEHAVIOR_URI
         return behavior(), uri
     monkeypatch.setattr(session, 'load_configured_bundle', load)
-    settings = {'web_bundles': {'excluded': [SHELL_BEHAVIOR_URI]},
+    settings = {'web_bundles': {'excluded': list(OTHER_DEFAULTS)},
         'sources': {'modules': {'tool-image': 'local-image-source'}},
         'config': {'tools': [
             {'module': 'tool-skills', 'config': {'skills': []}},
@@ -111,7 +117,10 @@ async def test_disabled_defaults_and_saved_snapshot_do_not_load_new_behavior(tmp
     async def unexpected_load(*args):
         pytest.fail('A complete snapshot or explicitly disabled capability must not load a new behavior.')
     monkeypatch.setattr(session, 'load_configured_bundle', unexpected_load)
-    settings = {} if snapshot else {'bundle': {'app': []}, 'web_bundles': {'excluded': [IMAGEGEN_BEHAVIOR_URI]}}
+    settings = {'web_bundles': {'excluded': list(OTHER_DEFAULTS)}}
+    if not snapshot:
+        settings['bundle'] = {'app': []}
+        settings['web_bundles']['excluded'].append(IMAGEGEN_BEHAVIOR_URI)
     root = Bundle(name='saved', version=SNAPSHOT_VERSION if snapshot else '1.0.0',
                   tools=[{'module': 'tool-existing', 'source': 'saved-source'}])
     result = await compose_configured_bundle(None, root,

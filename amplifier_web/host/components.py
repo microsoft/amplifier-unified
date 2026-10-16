@@ -121,6 +121,30 @@ class HostComponents:
         if bundle.name and bundle.base_path:
             self.roots.setdefault(bundle.name, bundle.base_path)
 
+    def select_defaults(self, bundle, base, overrides):
+        """Preserve only base pins that collide with this default's declarations."""
+        declared = getattr(bundle, '_host_default_sources', None)
+        if declared is None:
+            declared = [(row['module'], row.get('source'))
+                        for row in declarations(bundle.to_mount_plan())]
+        modules = {module for module, _ in declared}
+        repositories = set()
+        for module, source in declared:
+            git = git_source(overrides.get(module) or source)
+            if git:
+                repositories.add(git[0])
+        self.select_bundle(bundle, overrides)
+        for row in declarations(base.to_mount_plan()):
+            source = overrides.get(row['module']) or row.get('source')
+            git = git_source(source)
+            if row['module'] not in modules and (not git or git[0] not in repositories):
+                continue
+            # Non-Git sources collide by module only, never by a shared None
+            # repository. Resolve relative base pins against their own bundle.
+            if isinstance(source, str) and source.startswith('./') and base.base_path:
+                source = str((base.base_path / source).resolve())
+            self.select(row['module'], source)
+
     def source(self, module, source, *, installed=False):
         if installed and module in self.installed:
             return self.installed[module]()
@@ -224,6 +248,93 @@ def imagegen_defaults(base, behavior):
     behavior.tools = [row for row in behavior.tools
                       if row['module'] not in {'tool-image', 'tool-skills'} or row['module'] not in existing]
     return base, behavior
+
+
+def capability_defaults(base, behavior, defaults):
+    """Add discovery and missing modules without overriding prior choices.
+
+    A default behavior is not a user configuration overlay. Fixed-name tools
+    and hooks already declared by a root/earlier behavior keep their identity,
+    source and configuration. Only additive discovery paths are extended.
+    Scoped module settings are applied afterward by the host.
+    """
+    base, behavior = copy.deepcopy(base), copy.deepcopy(behavior)
+
+    def prepare(node):
+        for row in declarations(node):
+            if row['module'] in defaults:
+                row.setdefault('config', {}).update(copy.deepcopy(defaults[row['module']]))
+
+    plan = behavior.to_mount_plan()
+    # Selection follows duplicate removal. Retain the original collision set,
+    # including a default whose only declaration was an existing root module.
+    behavior._host_default_sources = [(row['module'], row.get('source'))
+                                      for row in declarations(plan)]
+    prepare(plan)
+    for section in ('tools', 'hooks', 'agents', 'spawn'):
+        if section in plan:
+            setattr(behavior, section, plan[section])
+    for section in ('tools', 'hooks'):
+        existing = getattr(base, section)
+        additions = []
+        for row in getattr(behavior, section):
+            previous = [item for item in existing if item['module'] == row['module']]
+            if not previous:
+                additions.append(row)
+                continue
+            # Preserve explicit empty/restrictive configurations too. These two
+            # paths add capability discovery; settings can still replace them.
+            path_key = {'tool-skills': 'skills', 'hooks-mode': 'search_paths'}.get(row['module'])
+            if path_key:
+                for item in previous:
+                    config = item.setdefault('config', {})
+                    config[path_key] = list(dict.fromkeys([
+                        *config.get(path_key, []), *row.get('config', {}).get(path_key, [])]))
+        setattr(behavior, section, additions)
+    # A default can introduce a specialist, not reconfigure a same-named one.
+    behavior.agents = {name: agent for name, agent in behavior.agents.items()
+                       if name not in base.agents}
+    return base, behavior
+
+
+def explicit_context_forwarding(bundle, settings, default_instances=()):
+    """Legacy forwarding needs configuration, not just ambient credentials.
+
+    The canonical logging behavior carries the ambient placeholders itself.
+    Existing literal/custom bindings and scoped scalar/destination overrides
+    are explicit selections. Empty destinations remain a deliberate opt-out.
+    """
+    ambient = {
+        "context_intelligence_server_url": "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}",
+        "context_intelligence_api_key": "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}",
+    }
+    for row in bundle.hooks:
+        if row.get("module") != "hook-context-intelligence":
+            continue
+        config = row.setdefault("config", {})
+        patches = [item.get("config", {}) for section in ("modules", "config")
+                   for item in settings.get(section, {}).get("hooks", [])
+                   if item.get("module") == row["module"]]
+        overrides = settings.get("overrides", {})
+        patches.extend(overrides.get(key, {}).get("config", {}) for key in
+                       (row["module"], row.get("id") or row.get("instance_id")) if key)
+        scoped_legacy = any(any(key in patch for key in ambient) for patch in patches)
+        identity = row.get("id") or row.get("instance_id") or row["module"]
+        explicit_legacy = any(config.get(key) and config[key] != placeholder
+                              for key, placeholder in ambient.items())
+        if (identity in default_instances and scoped_legacy
+                and not any("destinations" in patch for patch in patches)
+                and config.get("destinations") == {}):
+            # Scoped explicit legacy settings are applied next. Drop only the
+            # host's empty default, not a nonempty selected destination map.
+            config.pop("destinations", None)
+        elif "destinations" not in config:
+            if not scoped_legacy and not explicit_legacy:
+                config["destinations"] = {}
+        if not scoped_legacy and not explicit_legacy:
+            for key, placeholder in ambient.items():
+                if config.get(key) == placeholder:
+                    config[key] = ""
 
 
 class ComponentResolver:
