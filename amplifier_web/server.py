@@ -33,8 +33,8 @@ def _set_response_headers(response: web.StreamResponse, request: web.Request) ->
     # Chromium sends Origin: null on navigation POSTs from a no-referrer
     # document. Keep the login form same-origin without leaking referrers to
     # other sites; do not weaken the Origin check to accept opaque origins.
-    response.headers["Referrer-Policy"] = "same-origin" if path == "/login" else "no-referrer"
-    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/")) or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
+    response.headers["Referrer-Policy"] = "same-origin" if path in {"/login", "/devices", "/devices/pair"} else "no-referrer"
+    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/", "/devices")) or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
     response.headers.setdefault("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' {sockets} https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     return response
 
@@ -117,6 +117,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     computer_visual_routes(app)
     from .terminal_setup import setup_routes as setup_terminal
     setup_terminal(app)
+    from .device_pairing import setup_routes as setup_device_pairing
+    setup_device_pairing(app)
     from .smart_tools import SmartToolsManager
     from .smart_canvas import SmartCanvas
     service.smart_tools = SmartToolsManager(service)

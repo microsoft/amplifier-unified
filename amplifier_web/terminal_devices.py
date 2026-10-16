@@ -78,7 +78,7 @@ class TerminalDevices:
         return identity if row and hmac.compare_digest(row['digest'], digest(token)) else None
 
     def listing(self):
-        return [{k: row[k] for k in ('id', 'name', 'createdAt', 'setupId', 'setupExpiresAt') if k in row}
+        return [{k: row[k] for k in ('id', 'name', 'createdAt', 'setupId', 'setupExpiresAt', 'scope') if k in row}
                 for row in self.read()['devices'].values()]
 
     def revoke(self, identity):
