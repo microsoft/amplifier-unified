@@ -15,6 +15,13 @@ from test_test_queue import drive, queue, record, submit
 
 @pytest.fixture
 def running(monkeypatch, backend):
+    if hasattr(environments, 'dependencies'):
+        # This fixture controls lifecycle/guest effects. Image preparation has
+        # its own physical acceptance; never download/build from a unit fixture.
+        monkeypatch.setattr(environments.dependencies, 'prepare', lambda config, root, snapshot, profile_id, request_id: {
+            'status': 'ready', 'profileId': profile_id, 'sourceSha256': snapshot['archive_sha256'],
+            'backend': config.get('backend', 'docker'), 'image': 'sha256:'+'a'*64})
+        monkeypatch.setattr(environments.dependencies, 'cleanup', lambda *args: {'complete': True, 'status': 'removed'})
     invoke = environments.invoke
     states, starts = {}, []
     def guest(config, home, row, action, args):
