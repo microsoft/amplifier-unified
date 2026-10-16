@@ -89,13 +89,21 @@ def main():
         # exact hashes, then install only from that local wheel set.
         wheels = PREFIX / 'browser-wheels'
         wheels.mkdir()
+        package_probe = 'import importlib.metadata,json; print(json.dumps({d.metadata["Name"].lower().replace("_", "-"):d.version for d in importlib.metadata.distributions()}))'
+        locked_packages = json.loads(run(str(PREFIX / 'venv/bin/python'), '-c', package_probe, capture=True))
+        constraints = PREFIX / 'python-base-constraints.txt'
+        constraints.write_text(''.join(name + '==' + version + '\n' for name, version in sorted(locked_packages.items())))
         run(bootstrap, '-m', 'pip', '--isolated', 'download', '--only-binary=:all:',
             '--index-url', 'https://pypi.org/simple', '--dest', str(wheels),
-            '--python-version', '3.13', 'playwright==' + plan['playwrightVersion'])
+            '--constraint', str(constraints), '--python-version', '3.13', 'playwright==' + plan['playwrightVersion'])
         wheel_lock = [{'filename': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
                       for path in sorted(wheels.iterdir())]
         run(uv, 'pip', 'install', '--python', str(PREFIX / 'venv/bin/python'),
-            '--no-index', '--find-links', str(wheels), 'playwright==' + plan['playwrightVersion'])
+            '--no-index', '--find-links', str(wheels), '--constraint', str(constraints),
+            'playwright==' + plan['playwrightVersion'])
+        installed = json.loads(run(str(PREFIX / 'venv/bin/python'), '-c', package_probe, capture=True))
+        if any(installed.get(name) != version for name, version in locked_packages.items()):
+            raise ValueError('Browser dependency preparation changed a locked Python project dependency.')
         inventory['browserWheels'] = wheel_lock
         shutil.rmtree(wheels)
         run('apt-get', 'install', '-y', '--no-install-recommends', 'xvfb', 'xauth', 'libxss1', 'x11-utils')
