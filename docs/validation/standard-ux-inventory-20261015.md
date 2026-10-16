@@ -218,3 +218,27 @@ process. Existing UX latency targets above remain targets, not newly achieved
 results. Functional scenario duration is not interaction latency. In particular,
 the 12-sample active-client comparison retains its unchanged thresholds and
 sample-size limits; it does not establish the original global p95 targets.
+
+### PR787 environment-control coverage follow-up
+
+**R166-13** extends the existing `workspace.environment` checklist without changing
+its three outcomes or the frozen **199 workflows / 669 outcomes** baseline.
+From the workspace heading, open **Details → Managed resources → Test environments**.
+Start and run a harmless check; inspect an unknown result, then **Check and recover**
+using the retained backend while new execution is unavailable. Stop, open
+**Remove environment… → Save more files**, verify complete-copy defaults off for a files-policy environment,
+toggle it, cancel, reopen, and explicitly confirm a complete copy. Check the exact
+resource/revision, retained backend, `retentionMode: full`, verified size, unchanged
+workspace files, and the next queued check's unchanged files-only default.
+
+`test-environments-browser.mjs` now belongs once to **Task coordination contracts**,
+with an always-retained evidence directory. Its controlled Incus transport exercises
+real host actions/receipts; it does not allocate Incus instances or verify a real
+archive. Desktop and narrow pointer interaction are covered here. The existing
+`test-environments.test.mjs` cases through Fast `npm test` separately verify both
+unchecked (`files`) and checked (`full`) confirmation handlers. Existing backend
+recovery/retention tests cover backend ownership and archive-validation contracts separately.
+
+Fast's existing release-contract step also runs `test_browser_check_runner.py` and
+`test_active_client_diagnostics.py`, catching scenario ownership/report metadata
+errors before a full Python run. This adds no new workflow or broad gate.

@@ -12764,7 +12764,7 @@
       "priority": "P1",
       "scope": "standard-path",
       "entryPath": [
-        "Workspace heading → Chats / Files / Details"
+        "Workspace heading → Details → Managed resources → Test environments"
       ],
       "prerequisites": [
         "Two workspaces with same-named chats",
@@ -12777,8 +12777,11 @@
         "Choose available fixture profile",
         "Start",
         "Run harmless check",
+        "Refresh an unknown result; Check and recover using its retained backend even when new execution is unavailable",
         "Stop and keep data",
-        "Review Remove then Keep/remove"
+        "Review Remove → Save more files; confirm complete-copy choice defaults off for a files-policy Incus environment",
+        "Toggle complete copy, Keep environment, reopen and verify the original default; explicitly select complete copy and confirm removal",
+        "Read verified saved-copy size; verify a later queued check still uses its original files-only default"
       ],
       "expectedResults": [
         "Only exact owned disposable environment",
@@ -12856,6 +12859,13 @@
           "args": [],
           "relation": "candidate",
           "note": "Existing scenario to inspect/reuse; mapping is not a passing assertion or complete coverage claim."
+        },
+        {
+          "path": "frontend/tests/test-environments-browser.mjs",
+          "scenarioId": "test-environments",
+          "args": [],
+          "relation": "routine-owner",
+          "note": "Task coordination contracts owns public entry, recovery and exact full-copy request/retained-backend effects; controlled Incus transport only. See R166-13 for current proof and limits."
         }
       ],
       "controlDiscovery": "See source-controls rows for all native control declarations in these files; dynamic values must be enumerated in the actual fixture.",
@@ -12866,7 +12876,9 @@
         "desiredProfile": "standard-interaction",
         "measurementStatus": "not_measured"
       },
-      "notes": [],
+      "notes": [
+        "R166-13 extends the named steps and assertion crosswalk after PR787. Frozen baseline outcome counts and browserStatus are historical and unchanged; the additive current qualification is recorded in docs/validation/standard-ux-completion-20261015.md."
+      ],
       "coverageContexts": [
         "synthetic-standard",
         "private-scale-read-only"

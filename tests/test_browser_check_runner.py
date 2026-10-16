@@ -283,6 +283,24 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # each retain their owning lane.
     assert len(readiness_scripts | extended_scripts) == 115
 
+    # The environment journey belongs to coordination, outside these two lanes.
+    environment = 'tests/test-environments-browser.mjs'
+    assert environment not in readiness_scripts | extended_scripts
+    owners = []
+    for path in workflows.glob('*.yml'):
+        value = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+        for job in value.get('jobs', {}).values():
+            for step in job.get('steps', []):
+                if f'node {environment}' in step.get('run', ''):
+                    owners.append((path.name, step))
+    assert len(owners) == 1 and owners[0][0] == 'coordination.yml'
+    assert owners[0][1]['env']['AMPLIFIER_TEST_OUTPUT_DIR'] == '${{ runner.temp }}/test-environments'
+    coordination = yaml.load((workflows / 'coordination.yml').read_text(), Loader=yaml.BaseLoader)
+    assert 'frontend/' + environment in coordination['on']['pull_request']['paths']
+    assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
+               and step.get('with', {}).get('path') == '${{ runner.temp }}/test-environments'
+               for step in coordination['jobs']['contracts']['steps'])
+
 
 def test_performance_reports_are_distinct_and_uploaded():
     rows = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())['scenarios']

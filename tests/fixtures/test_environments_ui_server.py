@@ -4,6 +4,7 @@ import asyncio
 from collections import Counter
 import json
 import os
+import signal
 from pathlib import Path
 import sys
 import tempfile
@@ -37,7 +38,7 @@ class Runtime:
         return {}
 
 
-async def main(home, port):
+async def main(home, port, backend='docker'):
     home = home.resolve()
     os.environ['AMPLIFIER_HOME'] = str(home / 'native')
     os.environ['AMPLIFIER_WEB_HOME'] = str(home)
@@ -49,12 +50,20 @@ async def main(home, port):
                                  'backendAvailable': True, 'longOutput': False, 'executeFailure': False}
     lock = threading.Lock()
     config = {'python': '/fixture/managed/python', 'dockerHost': 'unix:///fixture/docker.sock', 'image': environments.APPROVED_IMAGE}
+    if backend == 'incus':
+        config = {'python': '/fixture/managed/python', 'backend': 'incus',
+                  'incus': {'project': 'fixture-project', 'daemonFingerprint': 'a' * 64}}
     environments.configuration = lambda app: (config, 'ready', 'Browser fixture: controlled Linux test backend; no Docker or provider calls.') if mode['backendAvailable'] else (None, 'unavailable', 'New execution is unavailable in this controlled fixture.')
-    environments.validate_configuration_value = lambda app, value: (config, 'ready', 'Retained controlled fixture backend.')
-    backend_identity = {'backend': 'docker', 'daemon': 'fixture-daemon'}
+    environments.validate_configuration_value = lambda app, value: ({**value, 'python': config['python']}, 'ready', 'Retained controlled fixture backend.')
+    backend_identity = ({'backend': 'incus', 'daemon': 'a' * 64, 'project': 'fixture-project'}
+                        if backend == 'incus' else {'backend': 'docker', 'daemon': 'fixture-daemon'})
     def invoke(config, home, row, action, args):
         with lock:
-            calls.append({'action': action, 'requestId': args.get('requestId'), 'resourceId': row['id']})
+            calls.append({'action': action, 'requestId': args.get('requestId'), 'resourceId': row['id'],
+                          'sessionId': row['sessionId'], 'workspaceId': row['workspaceId'],
+                          'backendKey': environments.config_key(config), 'backend': config.get('backend', 'docker'),
+                          **({'retentionMode': args.get('retentionMode', config.get('retentionMode', 'files'))}
+                             if action == 'remove' else {})})
             identity = 'fixture-' + row['id']
             if action == 'prepare':
                 (environments.storage.directory(home, row) / 'source.tar').write_bytes(b'fixture-retained-source')
@@ -81,7 +90,8 @@ async def main(home, port):
                     'operationId': row['launchOperationId'], 'universeId': identity, 'ownership': 'matched', 'absenceConfirmed': False}
             if action == 'remove':
                 value['retention'] = {'verified': True, 'sourceBytes': 23, 'archiveBytes': 2025,
-                    'totalBytes': 2048, 'format': 'tar', 'policy': 'files'}
+                    'totalBytes': 2048, 'format': 'tar',
+                    'policy': args.get('retentionMode', config.get('retentionMode', 'files'))}
             return value
     environments.invoke = invoke
     environments.capacity = lambda app, config: {'available': mode['capacityAvailable'],
@@ -102,6 +112,10 @@ async def main(home, port):
         sid = service.state['selectedSessionId']
         with lock:
             observed = {'calls': list(calls), 'callCounts': dict(Counter(call['action'] for call in calls)), 'states': dict(states), 'mode': dict(mode)}
+        observed['resources'] = [{key: row.get(key) for key in ('id', 'sessionId', 'workspaceId',
+            'revision', 'backendKey', 'backendType', 'retentionMode', 'environmentState')}
+            for identity in dict.fromkeys(call['resourceId'] for call in observed['calls'])
+            for row in [environments.get(home, sid, identity)]]
         observed['requests'] = service.operations.requests.list(sid)
         observed['sessionId'] = sid
         observed['workspaceId'] = next(row['id'] for row in service.state['workspaces'] if row['path'] == str(workspace))
@@ -131,17 +145,20 @@ async def main(home, port):
     return app
 
 
-async def serve(home, port):
-    app = await main(home, port)
+async def serve(home, port, backend):
+    app = await main(home, port, backend)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', port)
     await site.start()
     url = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins'] = app['allowed_origins'] | {url}
+    stopped = asyncio.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        asyncio.get_running_loop().add_signal_handler(sig, stopped.set)
     print(json.dumps({'url': url, 'sessionId': app['service'].state['selectedSessionId']}), flush=True)
     try:
-        await asyncio.Event().wait()
+        await stopped.wait()
     finally:
         await runner.cleanup()
 
@@ -149,6 +166,8 @@ async def serve(home, port):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=0)
+    parser.add_argument('--backend', choices=('docker', 'incus'), default='docker',
+                        help='Controlled transport capability only; never contacts Docker or Incus.')
     parser.add_argument('--interactive', action='store_true', help='Enable fixture-only login for manual browser acceptance on loopback.')
     options = parser.parse_args()
     if options.interactive:
@@ -157,4 +176,4 @@ if __name__ == '__main__':
         from amplifier_web import auth
         auth.authenticate_pam = lambda username, password: username == 'fixture' and password == TOKEN
     with tempfile.TemporaryDirectory(prefix='amplifier-environments-ui-') as temporary:
-        asyncio.run(serve(Path(temporary), options.port))
+        asyncio.run(serve(Path(temporary), options.port, options.backend))

@@ -187,3 +187,26 @@ The cases now have named routine owners in the inventory crosswalk. The wider
 result remains pending until those jobs complete on the rebuilt candidate;
 neither a focused pass nor this documentation update closes a historical failure
 report by itself.
+
+### PR787 environment controls: additive current qualification
+
+| Check | Previous evidence | Current follow-up | Desired result |
+| --- | --- | --- | --- |
+| **R166-13** `workspace.environment` recovery and saved-copy choice | The old browser entered Details programmatically, used Docker capability, omitted the conditional full-copy checkbox, and had no routine workflow owner. Component tests already covered both confirmation modes. | Public entry, exact recovery ownership, complete-copy default/toggle/cancel/reset/confirm, retained backend and next-check default are exercised by the existing environment browser in Task coordination contracts. Focused browser passed in 10.254 s with zero leftover descendants; a deliberately rewritten removal mode failed at `files != full`. Existing component tests passed 14/14 and workflow/metadata contracts passed 134 with one unrelated packaging prerequisite skip. | Only the explicitly confirmed resource/mode changes; recovery does not replay unknown work; cancellation has no effect; original files/history remain intact. |
+
+The original 199/669 inventory baseline is preserved. This is an expanded assertion
+crosswalk for an existing workflow, not an added workflow or a historical pass.
+The browser uses controlled Incus transport and synthetic retained-byte accounting;
+real archive bytes, physical touch, complete keyboard traversal, and live providers
+are outside this result. Whole-scenario time is functional-test duration, not an
+interaction-performance measurement. The unchanged component suite supplies the
+unchecked-confirmation branch; it is not claimed as a second browser journey.
+
+The shared fixture's existing default-Docker queued-check journey also passes,
+covering cancellation, failed/unknown results and reload without replay. The
+skipped ancillary test is the real source-distribution build (`uv` absent from
+this isolated lane's restricted PATH); no packaging source changed and no pass
+is inferred for it. Source-bound receipts, including original setup failures,
+are retained in `output/post-release166-fixes/pr787-followup/`. These focused
+checks use unchanged product source/assets from `e861b67d8`; no release, production
+update, or real backend allocation is part of this follow-up.
