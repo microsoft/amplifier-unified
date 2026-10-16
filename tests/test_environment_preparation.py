@@ -36,6 +36,7 @@ def backend(monkeypatch, tmp_path):
     identity = {'backend': 'docker', 'daemon': 'fixture'}
     (tmp_path / 'backend-binding.json').write_text(json.dumps({'backendIdentity': identity}))
     monkeypatch.setattr(preparation, 'backend_identity', lambda *args: identity)
+    monkeypatch.setattr(preparation, 'memory_available', lambda *args: True)
     def build(config, folder, plan, env):
         return 'sha256:' + '2' * 64, json.dumps({'preparationId': plan['preparationId'], 'sourceSha256': plan['sourceSha256']})
     monkeypatch.setattr(preparation, '_docker', build)
