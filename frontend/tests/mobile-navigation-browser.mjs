@@ -1,7 +1,7 @@
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 let base=process.env.AMPLIFIER_TEST_URL,fixture;
@@ -16,6 +16,16 @@ const errors=[];page.on('pageerror',e=>errors.push(e.message));
 const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
 const patch=patch=>action('view.update',{patch});
 const results=[];
+const readingPosition=()=>page.locator('.a-messages').evaluate(pane=>{
+ const rect=pane.getBoundingClientRect(),message=[...pane.querySelectorAll('[data-message-id]')].find(row=>row.getBoundingClientRect().bottom>rect.top);
+ if(!message)throw Error('No visible conversation message');
+ const offset=message.getBoundingClientRect().top-rect.top;
+ return {id:message.dataset.messageId,offset,scrollTop:pane.scrollTop,contentTop:offset+pane.scrollTop,width:rect.width,height:rect.height};
+});
+const workReady=()=>page.waitForFunction(()=>{
+ const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===state.selectedSessionId);
+ return session?.workProjection?.status==='ready'&&!document.querySelector('[data-part="work-projection-status"]');
+});
 try{
  await page.goto(base);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await action('theme.reset');
@@ -78,9 +88,12 @@ try{
   await page.keyboard.press('Escape');
  }
  await page.setViewportSize({width:390,height:844});await page.waitForTimeout(200);
+ // A loading/retry notice above the messages legitimately changes scrollTop
+ // when it settles. This first case deliberately fixes that geometry.
+ await workReady();
  await page.locator('.a-messages').evaluate(el=>{el.dispatchEvent(new WheelEvent('wheel',{deltaY:-500}));el.scrollTop=150});
  await page.waitForTimeout(100);
- const scrollBefore=await page.locator('.a-messages').evaluate(el=>el.scrollTop);assert.equal(scrollBefore,150);
+ const before=await readingPosition(),scrollBefore=before.scrollTop;assert.equal(scrollBefore,150);
  await action('canvas.show',{kind:'html',title:'Persistent viewer',content:'<!doctype html><html><body><button onclick="this.textContent=String(Number(this.textContent)+1)">0</button><input aria-label="Retained canvas input"></body></html>'});
  const frame=page.frameLocator('.a-canvas-html');await frame.getByRole('button',{name:'0',exact:true}).click();await frame.getByRole('textbox').fill('Keep my viewer state');
  const iframe=await page.locator('.a-canvas-html').elementHandle();
@@ -102,7 +115,9 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.controls.some(control=>control.label==='Message Amplifier')),false);
  await page.getByRole('button',{name:'Close canvas',exact:true}).click();
  assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
- assert.equal(await page.locator('.a-messages').evaluate(el=>el.scrollTop),scrollBefore);
+ const after=await readingPosition();
+ assert.deepEqual(after,before,'Stable geometry retains both raw scrollTop and the visible message anchor');
+ results.push({reading:'stable',before,after});
  await page.waitForTimeout(1500);
  await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();assert.equal(await page.locator('#workspace-canvas').isVisible(),false);
  await page.unroute('**/api/actions');
@@ -122,5 +137,32 @@ try{
  await page.getByRole('button',{name:'Close canvas',exact:true}).click();assert.equal(await page.locator('#workspace-canvas').isVisible(),false);
  await page.getByText('Fixture visibility save failed',{exact:true}).waitFor();assert.equal(await page.locator('#workspace-canvas').isVisible(),true);
  await page.getByRole('button',{name:'Dismiss error',exact:true}).click();await page.unroute('**/api/actions',reject);
+ if(fixture){
+  // Reproduce a delayed Work retry finishing while Canvas covers the chat.
+  // The same message must stay at the same position even though the notice
+  // disappears and raw scrollTop must decrease by its height plus the gap.
+  await page.getByRole('button',{name:'Close canvas',exact:true}).click();
+  await workReady();
+  const sessionId=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+  const work=async operation=>{const response=await page.request.post(base+'/api/fixture/work-reader',{data:{operation,sessionId}});assert.equal(response.ok(),true)};
+  await work('retry');
+  const notice=page.locator('[data-part="work-projection-status"]');
+  await expect(notice).toHaveText('Work details could not finish loading. Retrying shortly. You can keep reading this chat.');
+  const removedHeight=await notice.evaluate(node=>node.getBoundingClientRect().height+parseFloat(getComputedStyle(node.parentElement).rowGap));
+  await page.locator('.a-messages').evaluate(el=>{el.dispatchEvent(new WheelEvent('wheel',{deltaY:-500}));el.scrollTop=150});
+  await expect.poll(async()=>(await readingPosition()).scrollTop).toBe(150);
+  const retryBefore=await readingPosition();
+  await page.getByRole('button',{name:'Open canvas',exact:true}).click();
+  await work('release');await workReady();
+  await page.getByRole('button',{name:'Close canvas',exact:true}).click();
+  await expect.poll(async()=>Math.abs((await readingPosition()).offset-retryBefore.offset)).toBeLessThan(1);
+  const retryAfter=await readingPosition();
+  assert.equal(retryAfter.id,retryBefore.id);
+  assert.equal(retryAfter.width,retryBefore.width);assert.equal(retryAfter.height,retryBefore.height);
+  assert.ok(Math.abs(retryAfter.contentTop-retryBefore.contentTop+removedHeight)<1);
+  assert.ok(Math.abs(retryAfter.scrollTop-retryBefore.scrollTop+removedHeight)<1);
+  assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
+  results.push({reading:'retry-to-ready',removedHeight,before:retryBefore,after:retryAfter});
+ }
  assert.deepEqual(errors,[]);await writeFile(`${out}/results.json`,JSON.stringify({results,errors},null,2));console.log('Responsive layouts, drawer focus, sheets, typography, delayed rapid toggles, retained viewer, draft and reload passed');
 }finally{await browser.close();fixture?.kill()}

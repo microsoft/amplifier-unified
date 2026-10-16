@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const source=await readFile(new URL('../src/chat-scroll.js',import.meta.url),'utf8');
-const browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
+const browser=await chromium.launch({headless:true});
 try {
  const page=await browser.newPage();
  await page.goto('about:blank');
@@ -100,5 +100,33 @@ try {
  // Deliberate navigation cancels restoration authority before a late result.
  await page.evaluate(()=>controller.reveal());assert.equal(await page.evaluate(()=>loadCurrent()),false);
  await page.evaluate(()=>finishLoad());
+ await page.evaluate(async source=>{
+  controller.dispose();
+  pane.innerHTML='<div class="notice" style="height:70px">Preparing work</div><article data-message-id="spoken" style="height:1800px">Spoken transcript</article>';
+  const {createChatScroll}=await import('data:text/javascript;base64,'+btoa(source));
+  controller=createChatScroll(pane,following);controller.select('call');controller.setCall('live-call','call');
+ },source);
+ const remaining=()=>page.evaluate(()=>pane.scrollHeight-pane.scrollTop-pane.clientHeight);
+ await expect.poll(remaining).toBe(0);
+ // Removing a completed preparation notice clamps scrollTop in the browser.
+ // Deliver its scroll before the layout observer's frame, the failing order
+ // observed in the production voice view. It must not pause voice following.
+ await page.evaluate(()=>{pane.querySelector('.notice').remove();void pane.scrollTop;pane.dispatchEvent(new Event('scroll'))});
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ await page.evaluate(()=>pane.querySelector('article').style.height='2200px');
+ await expect.poll(remaining).toBe(0);
+ // Actual scrollback still pauses the call across later growth and resize.
+ await page.evaluate(()=>{pane.dispatchEvent(new WheelEvent('wheel',{deltaY:-400}));pane.scrollTop=500;pane.dispatchEvent(new Event('scroll'))});
+ await page.evaluate(()=>pane.querySelector('article').style.height='2600px');
+ await page.waitForTimeout(100);assert.equal(await top(),500);
+ await page.evaluate(()=>controller.reveal());await expect.poll(remaining).toBe(0);
+ await page.evaluate(()=>{const target=document.createElement('button');target.textContent='Call transcript control';target.style.marginTop='600px';pane.querySelector('article').append(target);target.scrollIntoView({block:'center'})});
+ await expect.poll(remaining).toBeGreaterThan(500);
+ const callFocused=await top();
+ await page.evaluate(()=>pane.querySelector('article').style.height='3000px');
+ await page.waitForTimeout(100);assert.equal(await top(),callFocused,'Browser focus scrolling still pauses a live call');
+ await page.evaluate(()=>controller.reveal());await expect.poll(remaining).toBe(0);
+ await page.evaluate(()=>{pane.style.height='350px';pane.querySelector('article').style.height='3400px'});
+ await expect.poll(remaining).toBe(0);
  await page.evaluate(()=>controller.dispose());console.log('PASS: return during reply, top alignment, growth, manual scrollback, controller reload, explicit latest jump, missing history anchor.');
 }finally{await browser.close()}

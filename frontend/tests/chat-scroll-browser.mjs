@@ -60,7 +60,46 @@ try{
  const requests=[];page.on('request',request=>requests.push(new URL(request.url()).pathname));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  const pane=page.locator('.a-messages'),input=page.getByRole('textbox',{name:'Message Amplifier'});
+ // Work notices can change the content above a message during streaming.
+ // Capture one settled frame and preserve the reader's message/offset; raw
+ // scrollTop is invariant only when that message's content position is too.
+ const readingPosition=()=>pane.evaluate(element=>new Promise((resolve,reject)=>requestAnimationFrame(()=>requestAnimationFrame(()=>{
+  const bounds=element.getBoundingClientRect(),top=bounds.top,rows=[...element.querySelectorAll('[data-message-id]')];
+  const anchor=rows.find(row=>row.getBoundingClientRect().bottom>top)||rows.at(-1);
+  if(!anchor)return reject(Error('No conversation message for reading-position assertion'));
+  const offset=anchor.getBoundingClientRect().top-top;
+  // An uncommitted streamed reply has no message ID yet. Also retain its
+  // first visible paragraph within the reply owned by the submitted message.
+  const paragraphs=[...element.querySelectorAll(':scope > .a-assistant:not([data-message-id]) .a-message-body p')];
+  const index=paragraphs.findIndex(node=>{const box=node.getBoundingClientRect();return box.bottom>top&&box.top<bounds.bottom});
+  const paragraph=index<0?null:paragraphs[index];
+  if(!paragraph)return reject(Error('No visible streaming paragraph for reading-position assertion'));
+  resolve({id:anchor.dataset.messageId,offset,scrollTop:element.scrollTop,contentTop:offset+element.scrollTop,
+   stream:{owner:rows.at(-1)?.dataset.messageId,index,offset:paragraph.getBoundingClientRect().top-top,text:paragraph.textContent},
+   notice:document.querySelector('[data-part="work-projection-status"]')?.textContent||null});
+ }))));
+ const assertReading=(before,after,message)=>{
+  const detail=message+': '+JSON.stringify({before,after});
+  assert.equal(after.id,before.id,detail+' (message)');
+  assert.ok(Math.abs(after.offset-before.offset)<3,detail+' (visible offset)');
+  if(before.stream){
+   assert.equal(after.stream?.owner,before.stream.owner,detail+' (stream owner)');
+   assert.equal(after.stream?.index,before.stream.index,detail+' (stream paragraph)');
+   assert.equal(after.stream?.text,before.stream.text,detail+' (stream text)');
+   assert.ok(Math.abs(after.stream.offset-before.stream.offset)<3,detail+' (visible stream offset)');
+  }
+  if(Math.abs(after.contentTop-before.contentTop)<3)
+   assert.ok(Math.abs(after.scrollTop-before.scrollTop)<3,detail+' (stable geometry)');
+ };
+ const readingChecks=[];
+ const checkReading=async(before,message)=>{
+  const after=await readingPosition();assertReading(before,after,message);readingChecks.push({message,before,after});
+ };
  const atBottom=()=>page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight<3});
+ const workReady=()=>page.waitForFunction(()=>{
+  const pane=document.querySelector('.a-messages');
+  try{const receipt=JSON.parse(pane?.dataset.workProjection);return receipt.status==='ready'&&receipt.current===true&&!pane.querySelector('[data-part="work-projection-status"]')}catch{return false}
+ });
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const scrollBack=async()=>{const box=await pane.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.wheel(0,-1200);await page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight>500});await page.waitForTimeout(150)};
  await atBottom();
@@ -152,19 +191,54 @@ try{
 
  // The response may grow, but the start stays visible once there is enough
  // content to position the submitted message near the top of the viewport.
- const grow=async()=>{const height=await pane.evaluate(element=>element.scrollHeight);await page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));await expect.poll(()=>pane.evaluate(element=>element.scrollHeight)).toBeGreaterThan(height)};
+ const streamingChunks=async()=>((await pane.innerText()).match(/More streaming content\./g)||[]).length;
+ const grow=async()=>{const chunks=await streamingChunks();await page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));await expect.poll(streamingChunks).toBe(chunks+25)};
  await grow();await grow();await grow();await page.waitForTimeout(300);
  await page.waitForFunction(()=>{const pane=document.querySelector('.a-messages'),user=[...pane.querySelectorAll('.a-user')].at(-1);return Math.abs(user.getBoundingClientRect().bottom-pane.getBoundingClientRect().top-16)<3});
- const replyStart=await pane.evaluate(element=>element.scrollTop);
+ const replyStart=await readingPosition();
  await grow();await page.waitForTimeout(300);
- assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-replyStart)<3,'streaming should stop following at the submitted message: '+JSON.stringify(await pane.evaluate(element=>({top:element.scrollTop,height:element.scrollHeight,viewport:element.clientHeight})))+' previous '+replyStart);
+ await checkReading(replyStart,'streaming should stop following at the submitted message');
  await page.getByRole('button',{name:'Jump to latest messages'}).click();await atBottom();
  await grow();await page.waitForTimeout(300);
  assert.ok(await pane.evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight)>80,'jumping is a one-time action, not continuous follow: '+JSON.stringify(await pane.evaluate(element=>({top:element.scrollTop,height:element.scrollHeight,viewport:element.clientHeight}))));
  await scrollBack();
- const savedTop=await pane.evaluate(element=>element.scrollTop);
+ const savedPosition=await readingPosition();
  await grow();await page.waitForTimeout(200);
- assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-savedTop)<3,'streaming must preserve scrollback');
+ await checkReading(savedPosition,'streaming must preserve scrollback');
+ // Retain the original raw-position invariant explicitly at a stable Work
+ // boundary as well as checking notice-changing geometry above.
+ await workReady();const stableBefore=await readingPosition();
+ await grow();await workReady();const stableAfter=await readingPosition();
+ assert.ok(Math.abs(stableAfter.contentTop-stableBefore.contentTop)<3,'Settled Work preserves the anchor content position');
+ assertReading(stableBefore,stableAfter,'streaming with stable geometry preserves raw scrollback');
+ readingChecks.push({message:'stable Work geometry',before:stableBefore,after:stableAfter});
+ // Counterchecks exercise real scroll changes without a compensating layout
+ // change: an 80px reading shift and a jump to latest must both be rejected.
+ const beforeShift=await readingPosition();
+ await pane.evaluate(element=>element.scrollTop+=80);
+ const afterShift=await readingPosition();
+ assert.throws(()=>assertReading(beforeShift,afterShift,'deliberate reading shift'),/deliberate reading shift/);
+ readingChecks.push({message:'rejected real 80px reading shift',before:beforeShift,after:afterShift});
+ await pane.evaluate((element,top)=>element.scrollTop=top,beforeShift.scrollTop);
+ assertReading(beforeShift,await readingPosition(),'restore after reading-shift countercheck');
+ await page.getByRole('button',{name:'Jump to latest messages'}).click();await atBottom();
+ const afterJump=await readingPosition();
+ assert.throws(()=>assertReading(beforeShift,afterJump,'deliberate latest jump'),/deliberate latest jump/);
+ readingChecks.push({message:'rejected real jump to latest',before:beforeShift,after:afterJump});
+ await pane.evaluate((element,top)=>element.scrollTop=top,beforeShift.scrollTop);
+ assertReading(beforeShift,await readingPosition(),'restore after latest-jump countercheck');
+ // A stream-only movement must also fail when the identified message and
+ // raw pane position remain unchanged; neither can substitute for visibility.
+ const stream=pane.locator(':scope > .a-assistant:not([data-message-id])');
+ const transform=await stream.evaluate(element=>element.style.transform);
+ await stream.evaluate(element=>element.style.transform='translateY(80px)');
+ const shiftedStream=await readingPosition();
+ assert.equal(shiftedStream.id,beforeShift.id);assert.equal(shiftedStream.offset,beforeShift.offset);
+ assert.equal(shiftedStream.scrollTop,beforeShift.scrollTop);
+ assert.throws(()=>assertReading(beforeShift,shiftedStream,'deliberate stream-only shift'),/\(stream paragraph\)|\(visible stream offset\)/);
+ readingChecks.push({message:'rejected stream-only shift with unchanged message/pane',before:beforeShift,after:shiftedStream});
+ await stream.evaluate((element,value)=>element.style.transform=value,transform);
+ assertReading(beforeShift,await readingPosition(),'restore after stream-only countercheck');
  await input.fill('Keep this draft while I check another chat');
  await page.waitForTimeout(400);
  const anchorBefore=await pane.evaluate(element=>{const top=element.getBoundingClientRect().top;const rows=[...element.querySelectorAll('[data-message-id]')];const node=rows.find(n=>n.getBoundingClientRect().bottom>top)||rows.at(-1);return {id:node.dataset.messageId,offset:node.getBoundingClientRect().top-top}});
@@ -193,6 +267,7 @@ try{
  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
  await expect.poll(messageText).not.toEqual(rendered);
  assert.deepEqual(errors,[]);
+ console.log('Streaming reading positions:',JSON.stringify(readingChecks));
  console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
 }finally{
  await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}

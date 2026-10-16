@@ -64,10 +64,19 @@ export function useConversationDetail(source,beforeApply){
   sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:{mode:'focus',status:'ready'},executionWindow:undefined}:regular,[nativeHere,focusedHere,projected,regular]);
  const annotations=useVisibleMessageAnnotations(windowSession,!nativeHere&&!!(focusedHere||frozen||extra));
  const session=useMemo(()=>windowSession?{...windowSession,messages:annotations.messages}:windowSession,[windowSession,annotations.messages]);
- async function around(messageId,{jump=true,isCurrent=()=>true}={}){
+ async function around(messageId,{jump=true,isCurrent=()=>true,reference}={}){
   if(paging.current||!originalSource)return false;
   const id=originalSource.id,token=beginRead(id);setBusy('conversation');setError('');
   try{
+   // Native display IDs belong to a bounded page, not the canonical navigation
+   // index. Reopen the signed page directly, even after its cache was evicted.
+   if(messageId.startsWith('native-window:')){
+    if(reference?.kind!=='transcript-window'||typeof reference.restoreCursor!=='string'||!reference.restoreCursor)throw Error('This saved reading position is no longer available. Return to latest and load earlier messages.');
+    const result=validateHistoryPage(await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:'messages',native:'true',before:reference.restoreCursor}),{signal:token.abort.signal}),{mode:'cursor'});
+    if(!result.items.some(row=>row.id===messageId))throw Error('This saved reading position is no longer available. Return to latest and load earlier messages.');
+    if(originalId.current===id&&paging.current===token&&isCurrent()){setFocused(null);setNativeView({id,messages:result.items,window:returnedWindow(result)});if(jump)setJumpTarget({id:messageId});return true}
+    return false;
+   }
    const result=await request('/api/conversation/navigation?'+new URLSearchParams({sessionId:id,messageId,window:'true'}),{signal:token.abort.signal});
    if(!Array.isArray(result?.messages)||!result.messages.some(row=>row.id===messageId))throw Error('This message could not be loaded. Try again.');
    if(originalId.current===id&&paging.current===token&&isCurrent()){setFocused({...result,sessionId:id});if(jump)setJumpTarget({id:messageId});return true}

@@ -1,7 +1,6 @@
 """Fixture diagnostics preserve admission behavior and isolate concurrent spans."""
 import asyncio
 import importlib.util
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,11 +108,8 @@ def test_failed_browser_always_retains_active_client_evidence():
     run = next(step for step in steps if 'scripts/browser_check_runner.py' in step.get('run', '')
                and '--initialize' not in step['run'])
     assert '--plan frontend/tests/browser-checks.json' in run['run']
-    plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
-    for identity in ('active-client-performance', 'state-transport', 'demand'):
-        scenario = next(row for row in plan['scenarios'] if row['id'] == identity)
-        assert scenario['command'] == ['node', f'tests/{identity}-browser.mjs']
-        assert scenario['env']['AMPLIFIER_PERF_EVIDENCE'] == '{root}/output/active-client-performance/report.json'
+    # Report ownership and distinct destinations belong to the runner contract
+    # in test_browser_check_runner; this check guards failed-run retention.
     artifact = next(step for step in steps if step.get('uses', '').startswith('actions/upload-artifact@')
                     and 'output/active-client-performance/' in step.get('with', {}).get('path', '').splitlines())
     assert artifact['if'] == 'always()'
