@@ -17,6 +17,7 @@ platform backends, transport delivery, or nested Core session persistence.
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import importlib.metadata
 import importlib.util
@@ -48,6 +49,17 @@ assert _support_spec is not None and _support_spec.loader is not None
 _support = importlib.util.module_from_spec(_support_spec)
 _support_spec.loader.exec_module(_support)
 offline_defaults = _support.offline_defaults
+
+# Reuse the real host resume/checkpoint seam. Its Core mounts are stubs; the
+# tests below separately exercise the actual desktop implementation afterward.
+_lifecycle_path = Path(__file__).with_name("test_default_capability_policy.py")
+_lifecycle_spec = importlib.util.spec_from_file_location(
+    "_unified_desktop_resume_support", _lifecycle_path
+)
+assert _lifecycle_spec is not None and _lifecycle_spec.loader is not None
+_lifecycle = importlib.util.module_from_spec(_lifecycle_spec)
+_lifecycle_spec.loader.exec_module(_lifecycle)
+fallback_lifecycle = _lifecycle.fallback_lifecycle
 
 
 def _require_distribution(name):
@@ -259,3 +271,131 @@ async def test_runtime_computer_read_only_denies_writes_before_backend_effects(
     assert allowed.success is True, allowed.error
     assert backend.calls == [("type_text", "synthetic input")]
     assert config == original
+
+
+@pytest.fixture
+def desktop_policy_boundary(runtime_defaults, monkeypatch):
+    """Real constructor/dispatch, fake backend, no consent UI or desktop."""
+    module = _upstream(
+        runtime_defaults, "computer-use", "tool-computer-use",
+        "amplifier_module_tool_computer_use", "amplifier-module-tool-computer-use",
+    )
+    # Exact public source from the review's qualified revision, not a substitute
+    # implementation of bool(config) or a different installed tool revision.
+    assert hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest() == (
+        "53fd72ca4b49b1b0093398a8a48468b491d45f39e93cef4ed7bd655f91a958ea"
+    ), "Requalify the desktop policy API before changing this source attestation"
+    backend_api = importlib.import_module(module.__name__ + ".backend")
+    monkeypatch.setattr(module, "_build_announcement", lambda *args, **kwargs: None)
+
+    class Backend:
+        name = "desktop-ceiling-fake"
+        is_remote = False
+
+        def __init__(self):
+            self.writes = []
+
+        def list_monitors(self):
+            return [backend_api.MonitorInfo("fake", 0, 0, 800, 600, primary=True)]
+
+        def cursor_position(self):
+            return 20, 30
+
+        def focus_window(self, handle):
+            self.writes.append(handle)
+
+        def list_windows(self):
+            return SimpleNamespace(foreground="fake-window", windows=[])
+
+        def __getattr__(self, name):
+            pytest.fail(f"Unexpected fake-backend access: {name}")
+
+    def create(config):
+        backend = Backend()
+        computer = module.ComputerTool(backend, config=copy.deepcopy(config))
+        computer.resolve_display()
+        return computer, module.DesktopTool(computer), backend
+
+    return create
+
+
+async def _assert_desktop_boundary(create, config, key, restricted):
+    computer, desktop, backend = create(config)
+    read = await computer.execute({"action": "cursor_position"})
+    assert read.success is True, read.error
+    assert backend.writes == []
+    # No hook approval or unattended grant is supplied. For gate_writes this
+    # exercises DesktopTool's real fail-closed gate, not a fabricated denial.
+    result = await desktop.execute({"action": "focus_window", "handle": "fake-window"})
+    if restricted:
+        assert result.success is False, result.output
+        assert ("read_only" if key == "read_only" else "requires confirmation") in result.error["message"]
+        assert backend.writes == [], "Restriction failed before backend dispatch"
+    else:
+        assert result.success is True, result.error
+        assert backend.writes == ["fake-window"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["read_only", "gate_writes"])
+@pytest.mark.parametrize("restricted", [True, False], ids=["restricted-control", "write-control"])
+async def test_runtime_desktop_ceiling_controls(desktop_policy_boundary, key, restricted):
+    config = {"read_only": False, "gate_writes": False, key: restricted}
+    await _assert_desktop_boundary(desktop_policy_boundary, config, key, restricted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["read_only", "gate_writes"])
+@pytest.mark.parametrize("source", ["legacy-saved-tools", "environment"])
+async def test_runtime_inherited_desktop_ceiling_survives_representation(
+    desktop_policy_boundary, fallback_lifecycle, monkeypatch, key, source,
+):
+    """PR #815 review gaps: real host plans and dispatch, stub Core mounts.
+
+    Legacy metadata is an explicit synthetic pre-marker shape, not an assertion
+    that this test ran historical source. A separate future real-Core lifecycle
+    check is still required; do not report this fixture as a Core mount.
+    """
+    from amplifier_web.host.children import child_plan
+    from amplifier_web.host.session import _expand_module_configuration
+
+    h = fallback_lifecycle
+    restriction = {"read_only": False, "gate_writes": False, key: True}
+    if source == "environment":
+        monkeypatch.setenv("DESKTOP_LIMIT", "true")
+        expanded = _expand_module_configuration({
+            "tools": [{"module": "tool-computer-use",
+                       "config": {**restriction, key: "${DESKTOP_LIMIT}"}}],
+        })
+        assert expanded["tools"][0]["config"][key] == "true"
+        await _assert_desktop_boundary(
+            desktop_policy_boundary, expanded["tools"][0]["config"], key, True,
+        )
+        overlay = {"tools": [{"module": "tool-computer-use", "instance_id": "child-alias",
+                              "config": {"read_only": False, "gate_writes": False}}]}
+        before = copy.deepcopy((expanded, overlay))
+        result = child_plan(expanded, overlay, working_dir=h.store.base_dir.parent)
+        assert (expanded, overlay) == before
+        config = next(row["config"] for row in result["tools"]
+                      if row.get("instance_id") == "child-alias")
+    else:
+        assert not h.coordinator.config.get("tools"), "Current parent must not supply the missing ceiling"
+        saved_plan = {"tools": [{"module": "tool-computer-use",
+                                "instance_id": "legacy-alias", "config": restriction}]}
+        assert "_unified_desktop_policy" not in saved_plan
+        await _assert_desktop_boundary(desktop_policy_boundary, restriction, key, True)
+        metadata = {"parent_id": "parent", "agent_name": "worker",
+                    "agent_overlay": {"tools": [{"module": "tool-computer-use",
+                                                "instance_id": "legacy-alias", "config": {}}]},
+                    "effective_selection": copy.deepcopy(h.choice), "mount_plan": saved_plan}
+        h.store.save("legacy-desktop", [], metadata)
+        before = copy.deepcopy(metadata)
+        await h.children.resume("legacy-desktop", "resume without new permission", h.parent)
+        assert metadata == before
+        actual = h.observations[-1]["coordinator"].config
+        config = next(row["config"] for row in actual["tools"]
+                      if row.get("instance_id") == "legacy-alias")
+        retained = h.store.load("legacy-desktop")[1]["mount_plan"]
+        assert next(row["config"] for row in retained["tools"]
+                    if row.get("instance_id") == "legacy-alias") == config
+    await _assert_desktop_boundary(desktop_policy_boundary, config, key, True)
