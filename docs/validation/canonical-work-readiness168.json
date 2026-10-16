@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "baseRevision": "79c8743b3d1fca65d147d39aa4feeed5b255fc48",
+  "failedRelease": "0.20.168",
+  "failedReleaseRevision": "8c1a6247a0ee22ae88b16ade49ded2f5af5a4208",
+  "failedRun": "https://github.com/microsoft/amplifier-unified/actions/runs/38907046620/job/116993247266",
+  "classification": "browser assertion race: an independently paged saved-event group was incorrectly counted as an authoritative canonical live group",
+  "productChanges": 0,
+  "sourceFiles": {
+    "frontend/tests/canonical-work-browser.mjs": "892c72ebc412706f36026009d8335e6a552011b14098d3fed2556c14e8357cff"
+  },
+  "baseline": {
+    "result": "reproduced twice",
+    "expected": 3,
+    "actual": 4,
+    "extraGroup": "event-window:* / Recent saved work",
+    "unchangedOriginalTestSha256": "4ec328e94936b67906cab0fd4739650661ce5a81e98d2cd72682bf9c2a78346a"
+  },
+  "qualification": {
+    "runtime": "owned spark-2 DTU; real bundled client, backend and multi-process Chromium; synthetic provider fixture",
+    "result": "passed",
+    "durationSeconds": 15.148,
+    "cleanup": {
+      "remaining": [],
+      "terminated": 0
+    },
+    "checks": [
+      "Exactly two initial and three appended canonical groups, including their identity/order",
+      "Exactly one separate collapsed saved-event window and current recent-events receipt",
+      "Updated saved-window identity after append, including source-change retry settlement",
+      "Payload expand/download/copy/retry, message ordering, persisted expansion, desktop and narrow viewports",
+      "Same exact group inventory after browser reload"
+    ],
+    "negativeControls": [
+      {
+        "mutation": "missing",
+        "result": "rejected",
+        "durationSeconds": 8.097,
+        "cleanup": {
+          "remaining": [],
+          "terminated": 0
+        }
+      },
+      {
+        "mutation": "duplicate",
+        "result": "rejected",
+        "durationSeconds": 8.088,
+        "cleanup": {
+          "remaining": [],
+          "terminated": 0
+        }
+      },
+      {
+        "mutation": "wrong",
+        "result": "rejected",
+        "durationSeconds": 3.173,
+        "cleanup": {
+          "remaining": [],
+          "terminated": 0
+        }
+      }
+    ]
+  },
+  "limits": [
+    "No real-provider or spark-1 acceptance",
+    "Original168 and167 workflow failures remain recorded; this local correction does not mark either run green",
+    "Initial diagnostic runner receipts inherited an obsolete base label; source transfer was actually79c8743b3, and final-source receipt corrects the provenance"
+  ]
+}

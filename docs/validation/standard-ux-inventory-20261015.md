@@ -302,3 +302,19 @@ are owned by the existing Task coordination contracts and full Python checks. Th
 runtime waits with explicit asynchronous barriers, not a physical filesystem lock
 or an arbitrary concurrent external writer guarantee. They supplement the original
 preflight replacement regression and do not change the frozen 199/669 inventory.
+
+### Live work and saved-window settlement (October 16)
+
+**R168-02** covers the readiness168 canonical-work failure: wait for the real
+current `recent-events` receipt and validate exactly one collapsed saved-event
+window independently from the ordered live work groups. Require two live groups
+initially and three after append, a new saved-window identity after the append,
+and the same inventory after reload. Missing, duplicate, or incorrectly anchored
+live groups must still fail. The fixture keeps the selected-chat reader active.
+
+The existing `canonical-work-browser.mjs` runs in post-release public readiness
+and extended browser coverage; no new foreground or duplicate lane is added.
+It retains group/receipt evidence and failure screenshots in the readiness
+artifact directory. [The focused qualification](canonical-work-readiness168.json)
+records the failed release, corrected source, and three rejected DOM mutations.
+This is an additive regression item; the frozen 199/669 inventory stays intact.
