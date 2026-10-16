@@ -927,6 +927,9 @@ class AppService:
     def _save(self, *, session_ids=None, record_only=False):
         if session_ids is None:
             session_ids = getattr(self, '_publish_save_scope', None)
+        worktrees = getattr(self, 'worktrees', None)
+        if worktrees is not None:
+            worktrees.resolve_placements(session_ids)
         if getattr(self, 'event_log_view', None) is not None:
             self.event_log_view.invalidate(session_ids)
         if session_ids is None:

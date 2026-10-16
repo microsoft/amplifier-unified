@@ -143,6 +143,14 @@ APIs. General update/install/deploy authority and real-time provider effects are
 not covered by this grant slice. Neither a root grant nor assignment membership
 grants stop/steer/settings authority over an independent peer.
 
+## Ordinary file reads
+
+Ordinary `read_file`, `grep` and `glob` calls do not need configuration grants.
+Write roots do not define a read boundary. Explicit configured read limits and
+denials still apply; an agent must not change configuration or switch tools to
+avoid a deliberate denial. An old runtime module that cannot enforce the selected
+policy needs the existing component update path, not broader administration.
+
 ## Read-history audit: separate authority
 
 Configuration grants do not grant or restrict history access. The authenticated
