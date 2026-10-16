@@ -54,7 +54,7 @@ def _native_page(reader, source, before, limit):
             'createdAt': at or source.get('createdAt', 0), 'timestampKnown': at is not None,
             'displayOnly': True, 'windowKey': window['windowKey'],
             'sourceReference': {'kind': 'transcript-window', 'byteOffset': item['byteOffset'],
-                                'revision': window['revision']}})
+                                'revision': window['revision'], 'restoreCursor': window['restoreCursor']}})
     return {'items': items, **window, 'coverage': {'kind': 'native-saved', **result['coverage']},
             'unavailableRanges': result['unavailableRanges'], '_owner': source}
 

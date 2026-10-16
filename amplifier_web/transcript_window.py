@@ -157,9 +157,15 @@ class TranscriptWindowReader:
                 next_end, next_aligned = result.pop('_before')
                 next_cursor = self._token({'owner': owner, 'source': source, 'file': selected,
                                            'end': next_end, 'aligned': next_aligned}) if next_end else None
+                # Replay this exact bounded page without retaining its body or
+                # scanning/indexing intervening history. `before` below instead
+                # starts the preceding page. Both use the same owner/source fence.
+                restore_cursor = self._token({'owner': owner, 'source': source, 'file': selected,
+                                             'end': end, 'aligned': aligned})
                 window_key = hashlib.sha256(_encode([source, selected, end, next_end])).hexdigest()
                 return {'status': 'ready', **result, 'messageWindow': {
                     'mode': 'cursor', 'before': next_cursor, 'hasEarlier': bool(next_end),
+                    'restoreCursor': restore_cursor,
                     'total': None, 'offset': None, 'scope': 'recent', 'revision': source,
                     'windowKey': window_key, 'validation': 'window',
                     'globalInputUniqueness': 'unknown', 'source': 'backup' if selected else 'primary',
@@ -172,6 +178,7 @@ class TranscriptWindowReader:
             return {'status': 'ready', 'rows': [], 'unavailableRanges': [],
                     'coverage': {'scannedBytes': 0, 'scannedRecords': 0, 'rangeStart': 0, 'rangeEnd': 0},
                     'messageWindow': {'mode': 'cursor', 'before': None, 'hasEarlier': False,
+                        'restoreCursor': None,
                         'total': None, 'offset': None, 'scope': 'recent', 'revision': source,
                         'windowKey': source, 'validation': 'window', 'globalInputUniqueness': 'unknown',
                         'source': 'primary', 'recoveredBackup': False}}
