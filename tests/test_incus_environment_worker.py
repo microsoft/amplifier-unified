@@ -15,7 +15,7 @@ from amplifier_web.incus_environment_worker import cli as qualified_cli
 def payload(tmp_path, action='read'):
     source = b'exact archive'
     (tmp_path / 'source.tar').write_bytes(source)
-    return {'action': action, 'root': str(tmp_path), 'source': '/approved/worktree',
+    return {'expectedBackendIdentity': {'backend': 'incus', 'daemon': 'd', 'project': 'tests'}, 'action': action, 'root': str(tmp_path), 'source': '/approved/worktree',
             'snapshot': {'snapshot_commit': 'exact', 'snapshot_tree': 'tree', 'archive_sha256': hashlib.sha256(source).hexdigest()},
             'operationId': 'stable-launch', 'rootOwner': 'parent-root', 'requestId': 'effect-request',
             'command': 'printf checked', 'timeoutSeconds': 2,
@@ -33,7 +33,7 @@ def backend(monkeypatch, tmp_path):
     def cli(config, env, arguments, timeout=30):
         calls.append(('cli', arguments))
         if arguments[0] == 'capacity':
-            return {'scope': {'project': 'tests', 'daemon': 'd'}, 'available': True, 'blockers': []}
+            return {'scope': {'project': 'tests', 'daemon': 'd'}, 'available': True, 'blockers': [], 'storage': {'free_bytes': 20 * 1024**3}}
         if arguments[0] == 'launch-status':
             return {'state': state['launch'], 'name': worker.identity(payload(tmp_path)),
                     'owner_root': state['owner'], 'instance_status': state['instance']}
@@ -62,6 +62,19 @@ def backend(monkeypatch, tmp_path):
         return {'exit_code': 0, 'stdout': output, 'stderr': '', 'truncated': False}
     monkeypatch.setattr(worker, 'cli', cli)
     monkeypatch.setattr(worker, 'incus', incus)
+    def export_selected(config, env, name, destination):
+        import tarfile
+        calls.append(('incus', ['export', name, '-']))
+        if state['export_failed']:
+            raise worker.BackendFailure('export_failed', 'fixture')
+        result = []
+        for selection in ('workspace', 'artifacts'):
+            path = destination / (selection + '.tar')
+            with tarfile.open(path, 'w') as archive:
+                item = tarfile.TarInfo(selection); item.type = tarfile.DIRTYPE; archive.addfile(item)
+            result.append({'id': name, 'source': '/' + selection, 'destination': str(path)})
+        return result
+    monkeypatch.setattr(worker, 'export_selected', export_selected)
     return calls, state
 
 
@@ -144,6 +157,19 @@ def test_old_qualified_backend_checks_exact_image_before_fresh_launch(tmp_path, 
             return {'exit_code': 0, 'stdout': json.dumps(observation), 'truncated': False}
         return original(config, env, args, *extra, **kwargs)
     monkeypatch.setattr(worker, 'incus', incus)
+    def export_selected(config, env, name, destination):
+        import tarfile
+        calls.append(('incus', ['export', name, '-']))
+        if state['export_failed']:
+            raise worker.BackendFailure('export_failed', 'fixture')
+        result = []
+        for selection in ('workspace', 'artifacts'):
+            path = destination / (selection + '.tar')
+            with tarfile.open(path, 'w') as archive:
+                item = tarfile.TarInfo(selection); item.type = tarfile.DIRTYPE; archive.addfile(item)
+            result.append({'id': name, 'source': '/' + selection, 'destination': str(path)})
+        return result
+    monkeypatch.setattr(worker, 'export_selected', export_selected)
     result = worker.execute_call(value)
     launches = [args for kind, args in backend[0] if kind == 'cli' and args[0] == 'launch']
     if code:
@@ -214,7 +240,9 @@ def test_stop_does_not_export_or_remove(tmp_path, backend):
 
 def test_remove_preserves_full_opaque_archive_before_owner_checked_destroy(tmp_path, backend):
     backend[1].update(instance='Stopped', launch='stopped')
-    result = worker.execute_call(payload(tmp_path, 'remove'))
+    value = payload(tmp_path, 'remove')
+    value['retentionMode'] = 'full'
+    result = worker.execute_call(value)
     assert result['status'] == 'removed'
     archive = result['archives'][0]
     assert archive['retainedPaths'] == ['/workspace','/artifacts']
@@ -358,3 +386,87 @@ def test_capacity_probe_needs_no_launch_identity(tmp_path, backend):
     result = worker.execute_call(value)
     assert result['ok'] and result['available']
     assert backend[0] == [('cli', ['capacity'])]
+
+
+def test_default_retention_is_selected_files(tmp_path, backend):
+    backend[1].update(instance='Stopped', launch='stopped')
+    result = worker.execute_call(payload(tmp_path, 'remove'))
+    assert result['status'] == 'removed'
+    assert [row['source'] for row in result['archives']] == ['/workspace', '/artifacts']
+    assert result['retention']['verified'] and result['retention']['policy'] == 'files'
+    assert result['retention']['totalBytes'] == result['retention']['archiveBytes'] + len(b'exact archive')
+
+
+@pytest.mark.parametrize('state,confirmed', [('unknown', False), ('not_recorded', False), ('removed', True), ('ready', True)])
+def test_reconcile_absence_requires_exact_settled_receipt(tmp_path, backend, monkeypatch, state, confirmed):
+    backend[1]['launch'] = state
+    previous = worker.incus
+    def query(config, env, arguments, **kwargs):
+        if arguments == ['query', '/1.0/instances?recursion=1']:
+            return {'exit_code': 0, 'truncated': False, 'stdout': '[]'}
+        return previous(config, env, arguments, **kwargs)
+    monkeypatch.setattr(worker, 'incus', query)
+    result = worker.execute_call(payload(tmp_path, 'reconcile'))
+    assert result['observation']['absenceConfirmed'] is confirmed
+    assert result['observation']['admissionSettled'] is confirmed
+    assert result['status'] == ('absent' if confirmed else 'unknown')
+    assert not any(args[0] in {'launch', 'stop', 'destroy'} for _, args in backend[0])
+
+
+def test_reconcile_daemon_change_and_missing_legacy_identity_are_unverified(tmp_path, backend):
+    value = payload(tmp_path, 'reconcile')
+    value['expectedBackendIdentity']['daemon'] = 'another'
+    assert worker.execute_call(value)['code'] == 'backend_unverified'
+    value.pop('expectedBackendIdentity')
+    assert worker.execute_call(value)['code'] == 'backend_unverified'
+
+
+def test_reconcile_query_failure_never_proves_absence(tmp_path, backend, monkeypatch):
+    previous = worker.incus
+    def query(config, env, arguments, **kwargs):
+        if arguments == ['query', '/1.0/instances?recursion=1']:
+            raise worker.BackendFailure('timeout', 'fixture timeout')
+        return previous(config, env, arguments, **kwargs)
+    monkeypatch.setattr(worker, 'incus', query)
+    result = worker.execute_call(payload(tmp_path, 'reconcile'))
+    assert result['status'] == 'unknown' and not result.get('observation', {}).get('absenceConfirmed')
+
+
+def test_explicit_full_retry_preserves_failed_selection_receipt(tmp_path, backend):
+    backend[1].update(instance='Stopped', launch='stopped', export_failed=True)
+    assert worker.execute_call(payload(tmp_path, 'remove'))['status'] == 'unknown'
+    assert not any(args[0] == 'destroy' for _, args in backend[0])
+    backend[1]['export_failed'] = False
+    value = payload(tmp_path, 'remove')
+    value.update(requestId='explicit-full-retention', retentionMode='full')
+    result = worker.execute_call(value)
+    assert result['status'] == 'removed' and result['retention']['policy'] == 'full'
+    assert list(tmp_path.glob('retained-*/incomplete.json'))
+
+
+def test_actual_pool_space_failure_keeps_stopped_instance(tmp_path, backend, monkeypatch):
+    backend[1].update(instance='Stopped', launch='stopped')
+    original = worker.cli
+    def capacity(config, env, arguments, timeout=30):
+        result = original(config, env, arguments, timeout)
+        if arguments == ['capacity']:
+            result['storage']['free_bytes'] = 1
+        return result
+    monkeypatch.setattr(worker, 'cli', capacity)
+    result = worker.execute_call(payload(tmp_path, 'remove'))
+    assert result['code'] == 'retention_storage'
+    assert not any(args[0] in {'export', 'destroy'} for _, args in backend[0])
+
+
+def test_stream_export_is_quiet_bounded_and_never_extracts(tmp_path, monkeypatch):
+    executable = tmp_path/'incus'
+    executable.write_text('#!' + sys.executable + '\nimport sys,tarfile\nassert "--quiet" in sys.argv\nwith tarfile.open(fileobj=sys.stdout.buffer,mode="w|") as t:\n for name in ["workspace","artifacts"]:\n  i=tarfile.TarInfo("backup/container/rootfs/"+name);i.type=tarfile.DIRTYPE;t.addfile(i)\n')
+    executable.chmod(0o700)
+    destination=tmp_path/'selected';destination.mkdir()
+    result=worker.export_selected({'incusExecutable':str(executable),'project':'owned'},{'PATH':os.defpath},'owned',destination)
+    assert len(result)==2 and not (tmp_path/'workspace').exists()
+    smaller=tmp_path/'bounded';smaller.mkdir()
+    monkeypatch.setattr(worker,'EXPORT_BYTES',1024)
+    with pytest.raises(worker.BackendFailure,match='bound'):
+        worker.export_selected({'incusExecutable':str(executable),'project':'owned'},{'PATH':os.defpath},'owned',smaller)
+    assert not (smaller/'retention.json').exists()

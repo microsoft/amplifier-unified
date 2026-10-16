@@ -1,5 +1,8 @@
 """Managed helper protocol, constrained profile and preservation boundaries."""
 import json
+import io
+import tarfile
+import hashlib
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -28,6 +31,7 @@ class Failure(Exception):
 def library(monkeypatch):
     monkeypatch.setattr(worker, 'docker_capacity', lambda payload: {'available': True, 'scope': {'daemon': 'fixture-daemon'}})
     monkeypatch.setattr(worker, 'docker_json', lambda *args: {'ID': 'fixture-daemon'})
+    monkeypatch.setattr(worker, 'docker_owner', lambda *args: None)
     calls = []
     def record(name, value):
         def call(*args, **kwargs):
@@ -42,9 +46,15 @@ def library(monkeypatch):
         execute=record('execute', Value(stdout='ok', stderr='', exit_code=0)),
         status=record('status', Value(id='owned', state='stopped', services=[])),
         stop=record('stop', Value(complete=True, outcome='stopped')),
-        export_files=record('export', Value(bytes=100, sha256='abc')),
+        export_files=None,
         destroy=record('destroy', Value(complete=True, outcome='removed')),
     )
+    def export(identity, source, destination, **kwargs):
+        calls.append(('export', (identity, source, destination), kwargs))
+        with tarfile.open(destination, 'w') as archive:
+            item = tarfile.TarInfo(source.strip('/')); item.type = tarfile.DIRTYPE; archive.addfile(item)
+        return Value(id=identity, source=source, destination=str(destination), bytes=destination.stat().st_size, sha256=hashlib.sha256(destination.read_bytes()).hexdigest())
+    lib.export_files = export
     monkeypatch.setitem(sys.modules, 'digital_twin_universe', SimpleNamespace(lib=lib))
     monkeypatch.setitem(sys.modules, 'digital_twin_universe.schemas',
         SimpleNamespace(BackendConfig=lambda **args: args, DigitalTwinUniverseError=Failure))
@@ -52,7 +62,8 @@ def library(monkeypatch):
 
 
 def payload(tmp_path, action):
-    return {'action': action, 'root': str(tmp_path), 'source': '/approved/task/worktree',
+    (tmp_path/'source.tar').write_bytes(b'source')
+    return {'rootOwner': 'parent-root', 'expectedBackendIdentity': {'backend': 'docker', 'daemon': 'fixture-daemon'}, 'action': action, 'root': str(tmp_path), 'source': '/approved/task/worktree',
             'snapshot': {'snapshot_commit': 'exact', 'snapshot_tree': 'tree', 'archive_sha256': 'digest'},
             'operationId': 'durable-launch', 'universeId': 'owned', 'dockerHost': 'unix:///approved/docker.sock',
             'image': owner.APPROVED_IMAGE, 'requestId': 'stable-request', 'timeoutSeconds': 12, 'command': 'python -V',
@@ -74,7 +85,7 @@ def test_prepare_preserves_source_before_launch_and_uses_pure_identity(library, 
     lib, calls = library
     result = worker.execute_call(payload(tmp_path, 'prepare'))
     assert result['universeId'] == 'owned' and result['snapshot']['snapshot_commit'] == 'exact'
-    assert [name for name, _, _ in calls] == ['snapshot', 'identity']
+    assert [name for name, _, _ in calls] == ['snapshot']
     assert json.loads((tmp_path / 'snapshot.json').read_text())['snapshot_tree'] == 'tree'
 
 
@@ -236,3 +247,74 @@ def test_incus_helper_selection_preserves_exact_root_and_request(tmp_path, monke
     value = owner.invoke({'python': sys.executable, 'backend': 'incus', 'incus': {'project':'owned'}},
         home, row, 'read', {'requestId':'same-request'})
     assert value == {'ok':True, 'owner':'root', 'incus':{'project':'owned'}, 'request':'same-request'}
+
+
+def test_docker_full_retention_is_rejected_without_export(library, tmp_path):
+    lib, calls = library
+    result = worker.execute_call({**payload(tmp_path, 'remove'), 'retentionMode': 'full'})
+    assert result['code'] == 'retention_unsupported'
+    assert not any(name in {'export', 'destroy'} for name, _, _ in calls)
+
+
+@pytest.mark.parametrize('has_settlement,has_pending,confirmed', [(False, False, False), (True, True, False), (True, False, True)])
+def test_docker_reconcile_does_not_manufacture_absence(library, tmp_path, monkeypatch, has_settlement, has_pending, confirmed):
+    value = payload(tmp_path, 'reconcile')
+    backend = value['expectedBackendIdentity']
+    if has_settlement:
+        worker.retain_settlement(value, 'owned', backend, 'launched')
+    if has_pending:
+        worker.reserve_admission(value, {'scope': {'daemon': backend['daemon']}})
+    monkeypatch.setattr(worker.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout=''))
+    result = worker.execute_call(value)
+    assert result['observation']['absenceConfirmed'] is confirmed
+    assert result['status'] == ('absent' if confirmed else 'unknown')
+    if has_pending:
+        assert len(list((tmp_path/'admission').glob('*/*.json'))) == 1
+
+
+def test_docker_reconcile_wrong_owner_does_not_adopt(library, tmp_path, monkeypatch):
+    value = payload(tmp_path, 'reconcile')
+    monkeypatch.setattr(worker.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout=json.dumps({'State':'running', 'Labels':'com.docker.compose.project=owned,io.amplifier.root-owner=someone-else,io.amplifier.operation-id=durable-launch'})))
+    with pytest.raises(ValueError, match='owner'):
+        worker.execute_call(value)
+
+
+def test_prepare_retains_backend_identity_and_rejects_another_daemon(library, tmp_path):
+    value = payload(tmp_path, 'prepare')
+    result = worker.execute_call(value)
+    assert result['backendIdentity'] == value['expectedBackendIdentity']
+    value['action'] = 'reconcile'
+    value['expectedBackendIdentity'] = {'backend': 'docker', 'daemon': 'another'}
+    result = worker.execute_call(value)
+    assert result['code'] == 'backend_unverified'
+    assert not result['observation']['absenceConfirmed']
+
+
+def test_profile_binds_all_project_resources_to_root_and_operation(tmp_path):
+    value = payload(tmp_path, 'start')
+    profile = worker.profile(owner.APPROVED_IMAGE, value)
+    labels = {'io.amplifier.root-owner':'parent-root', 'io.amplifier.operation-id':'durable-launch'}
+    assert all(item['labels'] == labels for item in [profile['services']['twin'], *profile['volumes'].values(), *profile['networks'].values()])
+
+
+def test_reconcile_refuses_foreign_project_volume(library, tmp_path, monkeypatch):
+    value = payload(tmp_path, 'reconcile')
+    def query(args, **kwargs):
+        labels = 'com.docker.compose.project=owned,io.amplifier.root-owner=parent-root,io.amplifier.operation-id=durable-launch'
+        if 'volume' in args:
+            labels = labels.replace('parent-root', 'foreign-root')
+        return SimpleNamespace(stdout=json.dumps({'State':'exited','Labels':labels}))
+    monkeypatch.setattr(worker.subprocess, 'run', query)
+    with pytest.raises(ValueError, match='owner'):
+        worker.execute_call(value)
+
+
+def test_admission_rechecks_actual_daemon_before_launch(library, tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    @contextmanager
+    def admission(payload):
+        yield {'available':True,'scope':{'daemon':'replacement'}}
+    monkeypatch.setattr(worker, 'docker_admission', admission)
+    result = worker.execute_call(payload(tmp_path, 'start'))
+    assert result['code'] == 'backend_changed' and result['effectAdmitted'] is False
+    assert not any(name == 'launch' for name, _, _ in library[1])
