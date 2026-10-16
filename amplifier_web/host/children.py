@@ -402,6 +402,7 @@ class Children:
                     raise ValueError("The child orchestrator cannot apply the inherited model selection")
                 child_loop.root_provider = SelectedProvider(providers[provider_identity], selection)
             coordinator.register_capability("live.child", True)
+            coordinator.register_capability("web.child.resumed", resumed)
             coordinator.register_capability("live.child_mode", "persistent" if persistent else "finite")
             coordinator.register_capability("web.worker_run", row["runId"])
             coordinator.register_capability("self_delegation_depth", self_delegation_depth)

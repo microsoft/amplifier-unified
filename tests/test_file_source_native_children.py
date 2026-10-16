@@ -113,7 +113,14 @@ async def test_resumed_native_child_retains_saved_write_ceiling_after_parent_gra
         sibling_result = await tools['write_file'].execute({
             'file_path': str(sibling / (prompt + '.txt')), 'content': 'must not exist'})
         observations.append((prompt, bool(result.success), target.exists(), bool(sibling_result.success)))
+        if not result.success:
+            assert result.error['code'] == 'file_source_access'
+            assert result.error['effect'] == 'none'
+            assert ('ask the parent to start a new worker' in result.error['message']) == (prompt == 'resumed-denied')
+
         assert not sibling_result.success and not (sibling / (prompt + '.txt')).exists()
+        assert sibling_result.error['effect'] == 'none'
+        assert ('ask the parent to start a new worker' in sibling_result.error['message']) == prompt.startswith('resumed-')
         await context.add_message({'role': 'user', 'content': prompt})
         await context.add_message({'role': 'assistant', 'content': 'allowed' if result.success else 'denied'})
         return 'allowed' if result.success else 'denied'
@@ -128,6 +135,15 @@ async def test_resumed_native_child_retains_saved_write_ceiling_after_parent_gra
             Bundle(name='fixture', session=plan['session'], tools=plan['tools'], agents=plan['agents']))
         parent = await prepared.create_session(session_id='root', approval_system=approvals)
         parent.coordinator.register_capability('session.working_dir', str(workspace))
+        # Production access installation propagates the file guard to both
+        # newly created and resumed native child coordinators.
+        from amplifier_web.app_guidance import install_app_access
+        from amplifier_web.runtime_worker import Worker
+        worker = Worker()
+        worker.session = parent
+        worker.runtime = SimpleNamespace(generation={'id': 'root-generation'})
+        worker.bridge = AsyncMock(return_value={})
+        await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
         registry = await install_children(parent, prepared, Runtime('root'), store, approvals)
         return parent, registry
 

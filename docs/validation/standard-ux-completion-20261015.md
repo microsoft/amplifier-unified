@@ -44,13 +44,32 @@ resume can also write there; every sibling-directory attempt is refused.
 Removing the saved ceiling in a private negative control makes this check fail.
 
 This confirms an intentional retained-permission boundary, not automatic adoption
-of wider authority by an old child. The current issue #712 continuation still
-needs an actionable explanation at the caller/UI boundary and joined Stories
-import/read/native review/export acceptance. The controlled orchestrator makes no
+of wider authority by an old child. The follow-up below supplies an actionable refusal explanation; joined Stories
+import/read/native review/export acceptance remains outstanding. The controlled orchestrator makes no
 provider calls; it does not qualify the outer RuntimeManager process. See
 `standard-ux-native-child-grant-20261016.json`. The 669-outcome ledger and its
 36 partial/15 not-run outcomes remain unchanged.
 
+
+### Resumed worker access refusal guidance (October 16)
+
+A resumed worker's denied file operation now explains that its saved permissions
+remain in force. If the folder was approved later, it asks the caller to have the
+parent start a new worker with that approval. The change does not widen access,
+restart a worker, or retry an operation. Fresh workers receive the ordinary
+refusal; resumed workers that already hold the required permission still write
+successfully. The original access error code and `effect: none` are preserved.
+
+The actual native-child test now installs the production app-access/file guard.
+Across native child, guard and retained-image policy checks: **74 passed, two
+filesystem-specific alias cases skipped**, in 2.85 seconds. The Linux filesystem
+treats the case/unicode aliases as distinct files; those skips are not passes.
+Their designated `filesystem-aliases` lane requires both capabilities and rejects
+skips. The [macOS lane passed on the exact product/test source](https://github.com/microsoft/amplifier-unified/actions/runs/38910620015/job/117005451294)
+at `959d8c942`; coverage ownership is in `scripts/integration-coverage.json`.
+Disabling the new explanation fails the exact resumed-denial assertion. This
+qualifies the caller-visible tool refusal, not a new graphical continuation
+button or the full Stories workflow.
 
 ## Original October 15 qualification
 

@@ -216,6 +216,12 @@ class FileSourceGuard:
                     self.observed.pop(path, None)
             error = {'code': getattr(exc, 'code', 'file_source_check_failed'), 'message': str(exc),
                      'effect': 'unknown' if invoked else 'none'}
+            if (not invoked and error['code'] == 'file_source_access'
+                    and self.coordinator.get_capability('web.child.resumed') is True):
+                error['message'] += (
+                    ' This worker retains the permissions saved when it was created. '
+                    'If this folder was approved later, ask the parent to start a new worker '
+                    'with that approval. Resuming this worker does not widen its access.')
             if invoked:
                 error['message'] += ' The operation may have changed files. Inspect them before retrying.'
             return ToolResult(success=False, error=error)
