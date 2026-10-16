@@ -148,3 +148,40 @@ for(const rejected of [false,true])test(`an old mount's late ${rejected?'rejecti
   await act(async()=>settleNew());assert.equal(JSON.parse(storage.get(key)).pending,null);assert.equal(button(root,'Start test environment').props.disabled,false);
  }finally{await act(async()=>root?.unmount())}
 });
+
+test('setup uses the same narrow host action and shows durable progress',async()=>{
+ let root;const calls=[],setup={status:'disabled',reason:'Not set up',backends:[{id:'docker',label:'Docker',available:true,reason:'Available'}],operation:null};
+ const dispatch=async(action,args)=>{calls.push({action,args});if(action!=='workspace.environments.read')setup.operation={id:'setup',state:'running',detail:'Downloading the approved base image.'};return accepted(action==='workspace.environments.read'?{items:[],capability:{status:'disabled'},setup}:{operation:setup.operation})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  assert.match(text(root.toJSON()),/already installed local test service/);
+  await act(async()=>button(root,'Set up with Docker').props.onClick());
+  const mutation=calls.find(row=>row.action!=='workspace.environments.read');
+  assert.equal(mutation.action,'workspace.environments.setup');assert.equal(mutation.args.backend,'docker');assert.ok(mutation.args.requestId);
+  assert.deepEqual(Object.keys(mutation.args).sort(),['backend','requestId','sessionId','workspaceId']);
+  assert.match(text(root.toJSON()),/Downloading the approved base image/);assert.equal(button(root,'Set up with Docker').props.disabled,true);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('browser check profile uses its server budget and automatic preparation',async()=>{
+ let root;const calls=[],view={items:[],capability:{status:'ready',profiles:[{id:'linux-python',label:'Python',timeoutSeconds:600},{id:'linux-browser',label:'Browser',timeoutSeconds:1200,requiresPreparation:true}]}};
+ const dispatch=async(action,args)=>{calls.push({action,args});return accepted(action==='workspace.environments.read'?view:{request:{state:'queued'}})};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  const form=root.root.findByProps({'aria-label':'Queue isolated check'});
+  await act(async()=>form.findByType('select').props.onChange({target:{value:'linux-browser'}}));
+  await act(async()=>form.findByType('textarea').props.onChange({target:{value:'npm test'}}));
+  assert.match(text(root.toJSON()),/20-minute limit/);assert.match(text(root.toJSON()),/prepares this project’s locked dependencies/);
+  await act(async()=>form.props.onSubmit({preventDefault(){}}));
+  const mutation=calls.find(row=>row.action!=='workspace.environments.read');assert.equal(mutation.action,'workspace.tests.submit');
+  assert.equal(mutation.args.profileId,'linux-browser');assert.equal(mutation.args.timeoutSeconds,1200);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('unsupported platform explains needs without a misleading setup button',async()=>{
+ let root;const setup={status:'unavailable',reason:'Local setup is qualified on Linux.',backends:[{id:'docker',label:'Docker',available:false,reason:'Use a supported Linux host.'}]};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:async()=>accepted({items:[],setup,capability:{status:'unavailable'}}),active:true}))});
+  assert.match(text(root.toJSON()),/Use a supported Linux host/);assert.equal(button(root,'Set up with Docker'),undefined);
+ }finally{await act(async()=>root?.unmount())}
+});
