@@ -103,3 +103,20 @@ def test_unverified_archive_set_is_refused(tmp_path, change):
     with pytest.raises((ValueError, tarfile.ReadError)):
         retention.verify_retention(tmp_path, archives)
     assert not (tmp_path / 'retention.json').exists()
+
+
+@pytest.mark.parametrize('kind', [tarfile.REGTYPE, tarfile.SYMTYPE, tarfile.LNKTYPE])
+def test_file_or_link_cannot_replace_implicit_ancestor(tmp_path, kind):
+    value = b'bad' if kind == tarfile.REGTYPE else 'bytes' if kind == tarfile.SYMTYPE else 'backup/container/rootfs/workspace/bytes'
+    entries = ROOTS + [('workspace/bytes',tarfile.REGTYPE,b'good'),
+        ('workspace/implicit/child',tarfile.REGTYPE,b'child'),('workspace/implicit',kind,value)]
+    with pytest.raises(ValueError,match='replaces'):
+        retention.filter_incus_stream(backup(entries),tmp_path,'owned')
+
+
+def test_large_flat_selection_indexes_ancestors_once():
+    names,links,ancestors={},{},set()
+    for number in range(50000):
+        name=f'workspace/file-{number}'
+        retention.validate_member(tarfile.TarInfo(name),name,names,links,ancestors)
+    assert len(names)==50000 and ancestors=={'workspace'}

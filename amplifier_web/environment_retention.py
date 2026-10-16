@@ -63,7 +63,7 @@ def digest(path):
 
 def inspect_archive(path, expected_root):
     """Validate an independently exported selection before destructive removal."""
-    count, logical, names, links = 0, 0, {}, {}
+    count, logical, names, links, ancestors = 0, 0, {}, {}, set()
     with tarfile.open(path, 'r:', tarinfo=BoundedTarInfo) as archive:
         for item in archive:
             count += 1
@@ -72,7 +72,7 @@ def inspect_archive(path, expected_root):
             name = canonical(item.name)
             if name.split('/')[0] != expected_root:
                 raise ValueError('An archive contains files outside its declared selection.')
-            validate_member(item, name, names, links)
+            validate_member(item, name, names, links, ancestors)
             logical += item.size if item.isfile() else 0
             if logical > SELECTED_LIMIT:
                 raise ValueError('The retained selection exceeds its bound.')
@@ -90,15 +90,17 @@ def inspect_archive(path, expected_root):
     return logical
 
 
-def validate_member(item, name, names, links):
+def validate_member(item, name, names, links, ancestors):
     if (name in names or item.size < 0 or item.sparse is not None
             or any(key.startswith('GNU.sparse') for key in item.pax_headers)
             or not (item.isfile() or item.isdir() or item.issym() or item.islnk())):
         raise ValueError('The selected filesystem contains unsupported or duplicate entries.')
-    if any(names.get('/'.join(name.split('/')[:i])) in {'symbolic', 'file', 'hard'} for i in range(1, len(name.split('/')))):
+    parts = name.split('/')
+    parents = ['/'.join(parts[:i]) for i in range(1, len(parts))]
+    if any(names.get(parent) in {'symbolic', 'file', 'hard'} for parent in parents):
         raise ValueError('An archive entry traverses another file or link.')
     kind = 'file' if item.isfile() else 'directory' if item.isdir() else 'symbolic' if item.issym() else 'hard'
-    if kind != 'directory' and any(existing.startswith(name + '/') for existing in names):
+    if kind != 'directory' and name in ancestors:
         raise ValueError('An archive link replaces a selected directory.')
     if item.issym():
         target = item.linkname
@@ -110,6 +112,7 @@ def validate_member(item, name, names, links):
         if names.get(target) != 'file':
             raise ValueError('A hard link does not target an earlier retained regular file.')
     names[name] = kind
+    ancestors.update(parents)
 
 
 def validate_links(names, links):
@@ -140,13 +143,14 @@ def validate_links(names, links):
 def filter_incus_stream(stream, destination, identity):
     """Read one complete plain Incus backup, retaining two verified tar files."""
     destination = Path(destination)
-    outputs, files, names, links, roots = {}, {}, {}, {}, set()
+    outputs, files, names, links, ancestors, roots = {}, {}, {}, {}, {}, set()
     count = logical = 0
     try:
         for selection in SELECTION:
             files[selection] = (destination / (selection + '.tar')).open('xb')
             outputs[selection] = tarfile.open(fileobj=files[selection], mode='w', format=tarfile.PAX_FORMAT)  # noqa: SIM115 - closed before fsync in finally.
             names[selection], links[selection] = {}, {}
+            ancestors[selection] = set()
         with tarfile.open(fileobj=stream, mode='r|', tarinfo=BoundedTarInfo) as archive:
             for item in archive:
                 count += 1
@@ -173,7 +177,7 @@ def filter_incus_stream(stream, destination, identity):
                     if not item.isdir():
                         raise ValueError('A selected root is not a directory.')
                     roots.add(selection)
-                validate_member(selected, relative, names[selection], links[selection])
+                validate_member(selected, relative, names[selection], links[selection], ancestors[selection])
                 logical += selected.size if selected.isfile() else 0
                 if logical > SELECTED_LIMIT:
                     raise ValueError('The selected filesystem exceeds its retention limit.')
