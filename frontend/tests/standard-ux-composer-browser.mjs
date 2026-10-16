@@ -91,4 +91,3 @@ try{
  if(fixture.exitCode===null&&fixture.signalCode===null){const ended=once(fixture,'exit');fixture.kill('SIGTERM');let timer;try{await Promise.race([ended,new Promise(resolve=>{timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},10000)})])}finally{clearTimeout(timer)}}
  if(failed)process.exitCode=1;
 }
-
