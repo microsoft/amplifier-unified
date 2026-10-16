@@ -13,17 +13,24 @@ try{
  const page=await browser.newPage({viewport:{width:1300,height:950},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers}),errors=[],detailReads=[];
  page.setDefaultTimeout(15000);
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().includes('/api/conversation/detail?'))detailReads.push(new URL(r.url()))});
+ // Exercise a live selected-chat reader, including its accepted native-window
+ // receipt. A fixture that closes this reader cannot recover a terminal refresh.
+ const expectCurrentWork=()=>expect.poll(async()=>{
+  const value=await page.locator('.a-messages').getAttribute('data-work-projection');
+  return value?JSON.parse(value):null;
+ }).toMatchObject({status:'ready',current:true,receipt:{scope:'recent-events'}});
  await page.goto(base);const answer=page.locator('[data-message-id="long-answer"]');
+ await expectCurrentWork();
  await answer.getByText('COMPLETE-RESPONSE-END',{exact:false}).waitFor();console.log('Assistant body loaded');
  assert.equal(await answer.getByRole('button',{name:'Show full text'}).count(),0);
  assert.equal(detailReads.filter(url=>url.searchParams.get('id')==='long-answer').length,2);
  assert.equal(detailReads.filter(url=>url.searchParams.get('part')==='nodes').length,0);
  for(const group of await page.locator('button.a-execution-turn-line').all())await group.click();
- const model=page.locator('[data-kind="llm"]'),modelLine=model.locator('.a-execution-line');
- assert.match(await modelLine.innerText(),/running/);
+ const model=page.locator('[data-group-id="inspect@question"] [data-kind="llm"]'),modelLine=model.locator('.a-execution-line');
+ await expect(modelLine).toContainText('running');
  assert.equal(await model.locator('button.a-execution-action-line').count(),1);
  assert.equal(await model.locator('.a-execution-body').count(),0);
- const firstTimer=await modelLine.innerText();await page.waitForFunction(first=>document.querySelector('[data-kind="llm"] .a-execution-line')?.innerText!==first,firstTimer);
+ const firstTimer=await modelLine.innerText();await expect.poll(()=>modelLine.innerText()).not.toBe(firstTimer);
  console.log('Live model timing checked');const turn=page.locator('[data-group-id="inspect@long-answer"]');
  let failOutput=true;await page.route('**/api/conversation/detail?**',route=>{if(failOutput&&new URL(route.request().url()).searchParams.get('field')==='output'){failOutput=false;return route.fulfill({status:503,json:{error:'Temporary result load failure'}})}return route.continue()});
  const tool=turn.locator('[data-kind="tool"]');
@@ -52,11 +59,11 @@ try{
  await expect(tool.getByRole('status')).toHaveText('Copied');
  assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/RESULT-END/);
  assert.equal(detailReads.filter(url=>url.searchParams.get('field')==='output').length,2);
- await control({op:'inspection-finish'});await expect(modelLine).toContainText('120 tokens');
+ await control({op:'inspection-finish'});await expectCurrentWork();await expect(modelLine).toContainText('120 tokens');
  assert.match(await page.locator('[data-group-id="inspect@question"] > .a-execution-turn-line').innerText(),/120 tokens · \$0.004/);
  const finalTimer=await modelLine.innerText();await new Promise(resolve=>setTimeout(resolve,1200));assert.equal(await modelLine.innerText(),finalTimer);
  let failDetail=true;await page.route('**/api/conversation/detail?**',route=>{if(failDetail&&new URL(route.request().url()).searchParams.get('id')==='long-answer'){failDetail=false;return route.fulfill({status:503,json:{error:'Fixture detail temporarily unavailable'}})}return route.continue()});
- await page.reload();await model.waitFor();assert.equal(await modelLine.innerText(),finalTimer);
+ await page.reload();await expectCurrentWork();await model.waitFor();assert.equal(await modelLine.innerText(),finalTimer);
  await answer.scrollIntoViewIfNeeded();await page.getByRole('button',{name:'Retry loading full text'}).click();await page.getByText('COMPLETE-RESPONSE-END',{exact:false}).waitFor();
  await tool.getByRole('link',{name:'https://example.com/artifact',exact:true}).waitFor();
  assert.deepEqual(errors,[]);console.log('Canonical owner content loads once with retry and full-copy support; clipboard denial retains selectable full content and explicit retry succeeds without another detail read; long fences preview 10 lines; model one-liners stay visible; live timing and usage settle across reload.');

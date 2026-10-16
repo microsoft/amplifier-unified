@@ -51,7 +51,8 @@ async def main():
             service.history.task.cancel()
             await asyncio.gather(service.history.task, return_exceptions=True)
             service.history.task = None
-        await service.event_log_view.close()
+        # Keep the selected-chat Work reader active. Its current-window receipt
+        # is part of the browser contract, including after a turn becomes idle.
         await service.dispatch('session.create', {'title':'Alpha conversation','workspace':str(alpha)})
         aid=service.state['selectedSessionId']
         await service.dispatch('session.create', {'title':'Beta conversation','workspace':str(beta)})
@@ -291,7 +292,14 @@ async def main():
                 events.hook(aid,'tool:post',{'tool_call_id':'inspect-tool','result':{'success':True,'output':'Result line.\n'*2000+'RESULT-END','url':'https://example.com/artifact'}})
                 for event in emitted:
                     kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
-                await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'running','startedAt':now-2})
+                # Match ExecutionEvents.publish: current observations remain
+                # live evidence when the native Work window is reconciled.
+                model={'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,
+                    'turnId':'inspect','label':'Model call','phase':'running','startedAt':now-2,
+                    'producerId':'inspection-fixture','revision':1,'liveObservation':True}
+                service.fixture_inspection_model=model
+                log_hook(aid,'provider:request',model,now-2)
+                await service.on_runtime_event('execution.event',model)
             elif op=='inspection-actions':
                 from amplifier_web.execution_events import ExecutionEvents
                 from amplifier_web.runtime import normalize_event
@@ -328,7 +336,10 @@ async def main():
                 await service.on_runtime_event('execution.event',{'id':'legacy','kind':'tool','turnId':'inspect','label':'legacy.tool','phase':'completed','summary':'Tool completed. Expand any delegated actions below for their progress and results.'})
             elif op=='inspection-finish':
                 now=time.time()
-                await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'completed','endedAt':now,'usage':{'inputTokens':100,'outputTokens':20,'totalTokens':120,'costUsd':.004,'costType':'reported'}})
+                model={**service.fixture_inspection_model,'revision':2,'phase':'completed','endedAt':now,
+                    'usage':{'inputTokens':100,'outputTokens':20,'totalTokens':120,'costUsd':.004,'costType':'reported'}}
+                log_hook(aid,'llm:response',model,now)
+                await service.on_runtime_event('execution.event',model)
                 await service.on_runtime_event('runtime.status',{'sessionId':aid,'status':'idle'})
             elif op=='many':
                 template=copy.deepcopy(service._session(aid)); now=time.time()
