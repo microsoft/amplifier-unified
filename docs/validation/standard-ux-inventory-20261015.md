@@ -362,3 +362,18 @@ It retains group/receipt evidence and failure screenshots in the readiness
 artifact directory. [The focused qualification](canonical-work-readiness168.json)
 records the failed release, corrected source, and three rejected DOM mutations.
 This is an additive regression item; the frozen 199/669 inventory stays intact.
+
+### Complete background readiness evidence (October 16)
+
+**R169-01** records the readiness169 budget failure: the background job reached
+the final reviewed-feedback attachment recovery step after 24m55s and exceeded
+its 25-minute limit. Every preceding normal step passed, including R168-02;
+the run remains cancelled and is not a complete qualification.
+
+Allow 45 minutes for this exhaustive background lane. Keep all existing tests,
+exact-revision checkout, failure propagation, success-only source receipt, and
+always-uploaded diagnostic evidence. Publication still uses its focused gates;
+this change adds no foreground wait or duplicate test lane. A successor run must
+finish every step and publish its qualified-source receipt before the background
+failure is resolved. A focused rerun of the interrupted checks does not replace
+that complete receipt. See [the failure and focused evidence](readiness-budget169.json).
