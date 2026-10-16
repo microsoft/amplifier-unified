@@ -366,6 +366,9 @@ function App(){
   });
  },[session?.id,session?.messageWindow,session?.sharedHistoryOffset,session?.historyLoading,detail.busy,act,shell.ready]);
  useLayoutEffect(()=>{const saved=historyScrollAnchor.current;if(!saved||!messagesPane.current)return;historyScrollAnchor.current=null;if(saved.sessionId!==session?.id)return;const pane=messagesPane.current,anchor=[...(pane?.querySelectorAll('[data-message-id]')||[])].find(node=>node.dataset.messageId===saved.messageId);if(anchor)pane.scrollTop+=anchor.getBoundingClientRect().top-saved.top},[session?.id,session?.sharedHistoryOffset,session?.messageWindow,session?.executionWindow,shell.ready]);
+ // Work status occupies space above the transcript. Preserve the current
+ // reading intent in the same commit, before a loading/retry notice can paint.
+ useLayoutEffect(()=>{chatScroll.current?.settleLayout()},[session?.workProjection?.status,session?.id,shell.ready]);
  useLayoutEffect(()=>{resizeComposer(composerRef.current);chatScroll.current?.update()},[draft,state?.selectedSessionId,shell.ready]);
  useEffect(()=>{const resize=()=>resizeComposer(composerRef.current);window.addEventListener('resize',resize);return()=>window.removeEventListener('resize',resize)},[]);
  useEffect(()=>{

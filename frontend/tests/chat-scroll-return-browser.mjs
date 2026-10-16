@@ -28,6 +28,25 @@ try {
  // Reply growth must not pull the reader down the page.
  const anchored=await top();await page.evaluate(()=>pane.querySelector('.reply').style.height='2200px');
  await page.waitForTimeout(100);assert.equal(await top(),anchored);
+ // A React commit may change an above-transcript notice after the observer
+ // frame already ran. The layout effect must settle before that commit paints,
+ // not one animation frame later. This covers insertion and removal while
+ // following the submitted reply, then while deliberately reading scrollback.
+ for(const reading of [false,true]){
+  if(reading)await page.evaluate(()=>{pane.dispatchEvent(new WheelEvent('wheel',{deltaY:-400}));pane.scrollTop=1850;pane.dispatchEvent(new Event('scroll'))});
+  const before=await atStart();
+  for(const insert of [true,false]){
+   const result=await page.evaluate(insert=>new Promise(resolve=>requestAnimationFrame(()=>{
+    if(insert)pane.insertAdjacentHTML('afterbegin','<div class="work-notice" style="height:70px">Loading work details…</div>');
+    else pane.querySelector('.work-notice').remove();
+    controller.settleLayout();
+    resolve({offset:pane.querySelector('[data-message-id="user"]').getBoundingClientRect().bottom-pane.getBoundingClientRect().top,following:following.current});
+   })),insert);
+   assert.ok(Math.abs(result.offset-before)<1,'Work notice must preserve the reading anchor before paint');
+   assert.equal(result.following,!reading,'Layout settlement must preserve explicit scrollback intent');
+  }
+ }
+ await page.evaluate(()=>controller.submitted('input'));await expect.poll(atStart).toBeCloseTo(16,0);
  // Browser-driven scrolling (including focusing an iframe control) is also
  // reading intent. It does not deliver wheel/pointer events to this document.
  await page.evaluate(()=>{

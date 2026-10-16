@@ -93,6 +93,9 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  pane.addEventListener('scroll',scroll,{passive:true});pane.addEventListener('wheel',wheel,{passive:true});pane.addEventListener('touchmove',stop,{passive:true});pane.addEventListener('keydown',keyDown);view.addEventListener('pagehide',persist);
  return {
   update,
+  // React-owned layout changes can arrive after this frame's observer flush.
+  // Settle them before paint; ordinary stream/resize updates stay batched.
+  settleLayout(){view.cancelAnimationFrame(frame);flush()},
   setCall(id,conversationId){
    if(id===callId&&conversationId===callSessionId)return;
    callId=id;callSessionId=conversationId;callPaused=false;update();
