@@ -15,7 +15,7 @@ At 1440×1000 and 720×500 CSS viewports, Tab/Enter can reach and open each sect
 focus is visible, focused controls fit, panels do not overflow horizontally, and
 Back/Close preserve the private draft. The smaller viewport is a 200% browser-zoom
 **reflow equivalent**, not a test of browser zoom controls or an OS magnifier.
-The complete scenario passed in 7.182 seconds with no forced or leftover child
+The complete scenario passed in 7.173 seconds with no forced or leftover child
 processes. This duration is functional-test runtime, not interaction latency.
 The scenario now belongs to routine extended browser checks after publication.
 

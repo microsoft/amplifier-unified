@@ -69,5 +69,6 @@ try{
 }finally{
  await writeFile(output+'/observations-partial.json',JSON.stringify({observations},null,2)+'\n');
  await browser?.close();
- if(fixture.exitCode===null){const stopped=once(fixture,'exit');fixture.kill('SIGTERM');const [code,signal]=await Promise.race([stopped,new Promise((_,reject)=>setTimeout(()=>reject(Error('Fixture shutdown timeout')),5000).unref())]);assert.equal(code,0);assert.equal(signal,null)}
+ if(fixture.exitCode===null&&fixture.signalCode===null){const stopped=once(fixture,'exit');fixture.kill('SIGTERM');await Promise.race([stopped,new Promise((_,reject)=>setTimeout(()=>reject(Error('Fixture shutdown timeout')),5000).unref())])}
+ assert.equal(fixture.exitCode,0);assert.equal(fixture.signalCode,null);
 }

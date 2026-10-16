@@ -1,18 +1,20 @@
 {
   "schemaVersion": 1,
-  "at": "2026-10-16T13:22:59.024756+00:00",
+  "at": "2026-10-16T13:31:51.691784+00:00",
   "baseRevision": "7c23b2b85fca8d7d7d09e0fe19fe3fa8a0c88726",
   "runtime": "actual bundled app and Chromium in owned DTU; synthetic provider fixture",
   "productChanges": 0,
   "sourceFiles": {
-    "frontend/tests/standard-ux-keyboard-reflow-browser.mjs": "09f01a20c5c80fc2a4518d8bea9b8a76f2d4b9e48d5888a3b454ce52ead53316",
+    "frontend/tests/standard-ux-keyboard-reflow-browser.mjs": "7fb6d1f3f0aed9bc48d52ec8978b7b1d78612e028f1d364264bc5136f57af32d",
     "tests/test_chat_permissions.py": "7bf7c70667606762f5eece167521ff4ccb86d2bc540c1dad273bf443dcf3d265",
     "tests/test_workspace_task_storage.py": "2320d40f60d2a7629bebf4eb968dcd2549acd51f6dae872488ed362ccd063aa2",
-    "amplifier_web/static/build.json": "70fe6388e40cedd0ea05a2614899d0af5cd7cf569139a49227b150e87b3bea52"
+    "amplifier_web/static/build.json": "70fe6388e40cedd0ea05a2614899d0af5cd7cf569139a49227b150e87b3bea52",
+    "tests/test_browser_check_runner.py": "76ea96867a42e569de2e6c5babf85fa8b00886eba113866f34ec015bc2f3bbb0",
+    "frontend/tests/browser-checks.json": "3ff309a4b6b3a05410067d2f01fd2ccd5a7f158aeb888a318eec09cf6624d074"
   },
   "browser": {
     "passed": true,
-    "durationSeconds": 7.182,
+    "durationSeconds": 7.173,
     "cleanup": {
       "remaining": [],
       "terminated": 0
@@ -101,5 +103,12 @@
     "Named destinations only; not universal keyboard accessibility",
     "Scenario duration under shared DTU load is not interaction latency"
   ],
-  "evidenceRoot": "output/ux-residual168/receipts/ux-residual168"
+  "evidenceRoot": "output/ux-residual168/receipts/ux-residual168",
+  "runnerContracts": {
+    "passed": 18,
+    "failed": 0,
+    "skipped": 0,
+    "durationSeconds": 3.59,
+    "namespace": "private PID namespace; pytest cache disabled"
+  }
 }
