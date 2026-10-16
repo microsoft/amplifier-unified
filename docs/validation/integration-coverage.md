@@ -42,6 +42,7 @@ servers, browsers, displays, or filesystem behavior fail their designated owner.
 | IC-08 context-intelligence | Real isolated server/database, authenticated graph routing and content redaction | 1 passed, 0 skipped; 2.96s | Real disposable Neo4j + server, no production endpoint or account |
 | IC-09 connected-documents | Native upstream composition, shared UI/agent invocation, policy and idempotence | 2 passed, 0 skipped; 1.62s against explicit local upstream copy | Manual optional-overlay acceptance; synthetic Graph transport, no live account writes |
 | IC-10 profiling | Real optional capture library, revocation, privacy, retention and receipts | 10 passed, 0 skipped; 10.28s against clean local library `8edea47c3a05eb4e6206211ac993a0a673245b8a` | Repeat against an explicit clean source; automate when canonical source distribution is available |
+| IC-11 Stories joined | Actual worker storage → real Stories MCP import/retained read → native MCP App review/export/reconnect | Passed against explicit source and supported Agent; separate fresh-install defect repaired upstream | [Manual optional-integration owner](stories-joined-acceptance.md), required on affected changes/source adoption; missing prerequisites fail, never skip |
 
 The initial [GitHub matrix](https://github.com/microsoft/amplifier-unified/actions/runs/38873044197)
 passed all six automated lanes: 88 tests, zero skips, including the macOS cases.

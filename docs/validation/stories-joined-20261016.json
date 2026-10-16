@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-16T19:04:56.104274+00:00",
+  "issue": 712,
+  "passed": true,
+  "productChanges": 0,
+  "harnessBase": "e4139b8fff97252debdb7d4fb72a9d1ca396f894",
+  "runtime": {
+    "version": "0.20.169",
+    "buildId": "262682b705b1675f",
+    "backendSource": "2e112cdc72df8858200efa2954a4b4ded2f56d3e",
+    "kind": "actual AppService/RuntimeManager/Work worker; deterministic offline provider"
+  },
+  "sources": {
+    "catalog": "a573c23599df94c95e07745b4ebf8081daf16a2f",
+    "storiesBaseline": "709f6727b769ed6a5aebbf41d52700ae3537b330",
+    "storiesCandidate": "c31ab74653dade49e787073db94444567770b307",
+    "agent": "44a83adeb49fc1cfb55eb0c1bf38aa125ff0d705",
+    "work": "50deb9ebb4b9407401c45e624940effc93cfb107",
+    "scripts": {
+      "provider.py": "6f311f68941f321ae5af18f3b9c7cf01a909802e938134e703fade6e28a489e2",
+      "browser.mjs": "e92ed043ec53760fc9e1f3c3f03b03f83351d1afe1f6d1c237ef66929869034b",
+      "retained.py": "d6776e1649bba731ffc2621bfde1c60aaed5bf7df8cb9a5fa31d6fbcd06d1299",
+      "allocate.py": "8a22e142e69a1a4b5573de8e362a44755111535f829f4e0af65e2b86f1531abd",
+      "run.py": "fe09ce99e8ceeaf78f8e6dcf081780afcf3b19f0df791debb746d3a28919d390",
+      "config.py": "2190ff8006c57ac9517368ddd255962d9982cbf2a1b9527be456d15692d015ab",
+      "import_story.py": "7b82aa6ae81f0cc29053c2ae82b55c910dee4641f98452cf4328688714ce0dcf"
+    }
+  },
+  "installation": {
+    "original": "failed: floating Agent main resolved incompatible monorepo root",
+    "originalAgent": "34a66e8fc71f121d7a06a9e6b3b93c8013a7b050",
+    "repair": "fresh Git candidate install with mcp extra; no lock or hidden override",
+    "upstreamPR": "https://github.com/robotdad/amplifier-smart-tool-stories/pull/22",
+    "lockCheck": "passed",
+    "focusedTests": {
+      "passed": 33,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 25.58
+    },
+    "initialTestPrerequisiteFailure": {
+      "passed": 29,
+      "failed": 4,
+      "cause": "missing documented libpangoft2 prerequisite; provided task-private library before rerun"
+    }
+  },
+  "joined": {
+    "elapsedSeconds": 18.169,
+    "nativeWrite": true,
+    "nativeRead": true,
+    "noPermissionExpansion": true,
+    "siblingDenied": {
+      "code": "file_source_access",
+      "effect": "none"
+    },
+    "retainedReadViaNativeWorker": true,
+    "browser": {
+      "passed": true,
+      "errors": [],
+      "canvasId": "33b2697d05164f8086e3a3508ba27025",
+      "reconnect": true,
+      "reload": true,
+      "calls": [
+        "stories_get_story",
+        "stories_get_review_view",
+        "stories_get_preview",
+        "stories_get_export",
+        "stories_update_review_view",
+        "stories_update_review_view",
+        "stories_update_review_view",
+        "stories_get_story",
+        "stories_get_story",
+        "stories_get_review_view",
+        "stories_get_preview"
+      ],
+      "importCallsOnView": 0
+    },
+    "export": {
+      "sha256": "bcbb5fcb75d606971fbbaf0c099ee3602edbe54631df380d6fb45b6848ce75f9",
+      "bytes": 5694,
+      "entries": [
+        "index.html",
+        "storyboard.json",
+        "manifest.json",
+        "README.txt"
+      ],
+      "exactPanels": true
+    },
+    "backendImportReceiptsUnchanged": true,
+    "backendImportCount": 1,
+    "beforeImportReceipts": [
+      {
+        "id": "stories-4a77893501-import-call",
+        "sha256": "01d518c6f224be3a470d146e081a817048405d6b54a129f44efdaa2fc13853fb"
+      }
+    ],
+    "afterImportReceipts": [
+      {
+        "id": "stories-4a77893501-import-call",
+        "sha256": "01d518c6f224be3a470d146e081a817048405d6b54a129f44efdaa2fc13853fb"
+      }
+    ]
+  },
+  "browserArgs": [
+    "--no-sandbox",
+    "--single-process",
+    "--no-zygote",
+    "--disable-gpu"
+  ],
+  "evidenceSha256": {
+    "imports-after.json": "b235962398baac01955a4ff871e1303caa420017358002e67bc3819d067b155c",
+    "browser-first.json": "ee591f564fd17b5aa049a3c78d2486bc0560a37917a7c5009dce05f565a9ea86",
+    "imports-before.json": "b235962398baac01955a4ff871e1303caa420017358002e67bc3819d067b155c",
+    "result.json": "17cc7f2f7cc23f29712832b61c87893375642df70a31842db81a337e1d8e0ed3",
+    "identity.json": "b266f8059b3d1af975ccc0808bc4759998eaa6bf49c85c31d1b1b5b2cf9af795",
+    "native-review.png": "eef951c095b7832123c4cf5bcacbc91baf0ababda20332454e736d82c7c2db82",
+    "native-export.zip": "bcbb5fcb75d606971fbbaf0c099ee3602edbe54631df380d6fb45b6848ce75f9",
+    "preflight.json": "a3d0f71628c60066f76ecefc1c92cbbd6b527128f6ffce46dd371e624e924bce"
+  },
+  "owner": "Manual optional Stories integration owner; run on relevant changes/source adoption and affected post-release qualification; prerequisites fail, not skip",
+  "limits": [
+    "No live model, speech, credentials or OS dialogs",
+    "Headless Linux ARM single-process workaround, not standard multiprocess or native OS acceptance",
+    "Rendered retained storyboard heading and exact exported panels; no model quality judgment",
+    "Backend receipt witness establishes no new host import operation; not universal external-effect observation",
+    "Exact directory grant and saved child ceilings remain separate #797/#799/#800 witnesses",
+    "Fresh-install fix proposed upstream, not yet merged or adopted",
+    "No change to standard UX residual outcome totals"
+  ],
+  "historicalAttempts": [
+    "Bundle placed adjacent to virtualenv refused external source symlink qualification; relocated fixture into own source folder",
+    "Browser harness initially waited for hidden toolbar/status and toggled retained Details state; corrected selectors/state handling; no product change",
+    "Intermediate file-copy path caused stale harness transfer; final preflight hashes match committed runner candidates"
+  ]
+}
