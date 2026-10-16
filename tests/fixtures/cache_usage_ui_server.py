@@ -3,12 +3,22 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import signal
 import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from aiohttp import web
 from amplifier_web.server import create_app
+from amplifier_web.setup import SetupManager
+
+
+async def fixture_routing_catalog(self, workspace):
+    # This fixture exercises synthetic update inventory, not source discovery.
+    pass
+
+
+SetupManager.ensure_routing_catalog = fixture_routing_catalog
 
 
 class Runtime:
@@ -48,8 +58,11 @@ async def main(home):
     port = site._server.sockets[0].getsockname()[1]
     url = f'http://127.0.0.1:{port}'
     app['allowed_origins'] = app['allowed_origins'] | {url}
+    stopped = asyncio.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        asyncio.get_running_loop().add_signal_handler(sig, stopped.set)
     print(json.dumps({'url':url}), flush=True)
-    try:await asyncio.Event().wait()
+    try:await stopped.wait()
     finally:await runner.cleanup()
 
 
