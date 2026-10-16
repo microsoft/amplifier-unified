@@ -7,7 +7,7 @@ This guide is the canonical reference for making Unified available on a LAN or T
 Unified defaults to `127.0.0.1:8941`. Remote access requires:
 
 - an exact HTTPS origin for every address people will use;
-- Unified's local certificate authority (CA) to be trusted on every client device; and
+- a certificate trusted on every client device (trust Unified's local CA when using `setup-tls`); and
 - a non-loopback bind address.
 
 Use an already trusted local console or SSH connection to configure the host. Do not disable certificate checks or enter credentials through an untrusted HTTPS connection.
@@ -48,6 +48,12 @@ an existing pair together, use one atomic setting:
 Starting the server also verifies that the certificate and key files can be loaded
 as a matching pair; saving their paths alone is not a successful TLS check.
 
+`amplifier-unified setup-tls status` reports the certificate/key readiness
+separately from the availability of Unified's local CA. A supplied certificate
+can be ready even when no app-owned CA exists to export. This check does not
+establish that a client trusts the certificate, or that it covers the public
+hostname.
+
 If Unified uses a non-default data directory, pass the same `--data-dir` value to `setup-tls` and `doctor`.
 
 ## Trust the CA on each client
@@ -81,6 +87,19 @@ amplifier-unified service status
 ```
 
 Available lifecycle commands are `install`, `start`, `stop`, `restart`, `status`, `logs`, and `uninstall`. Repeating `install` with the same configuration reuses its definition and starts an inactive service without restarting a running host. After a package update, use `amplifier-unified service restart` to load the new version.
+
+`service status` verifies the expected installation through its configured
+listener on the host. Its `Host listener` address uses the actual listener's
+HTTP or HTTPS scheme. Configured public addresses are listed separately as
+**not checked**: a healthy host does not prove DNS, network access or certificate
+trust on another device. The authenticated status probe never follows redirects
+or sends its control token to a configured public address. Normal launch still
+opens the configured public address when one is set; verify it on the client.
+
+Foreground `serve` announces the listener and schedules browser opening only
+after all configured addresses bind successfully. An occupied port, unavailable
+address or permission refusal gives a specific next step. It does not stop an
+existing process, choose another interface, or change the saved configuration.
 
 If the generated definition differs, rerun the same install command with `--replace` to save a timestamped private backup and restart with the new definition. The command reports the backup location. Custom service files are preserved unless `--replace` is explicit; review them before replacing. Expected service setup errors are reported without a Python traceback and do not undo a separately completed package installation.
 
