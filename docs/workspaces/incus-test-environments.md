@@ -122,8 +122,9 @@ partial evidence. Cleanup never reports preserved files when export failed.
 A durable manifest records selected paths, hashes and byte counts before
 owner-checked deletion. The host stores that bounded accounting with the
 resource; ordinary panel refreshes do not traverse retained file trees. The
-reported total covers the source snapshot and retained archives, not filesystem
-allocation or daemon image/cache usage. Saved check results and manifests remain
+reported total covers the source snapshot and latest verified archives, not earlier
+partial copies, filesystem allocation or daemon image/cache usage. Incomplete
+copies remain available for deliberate recovery and are not automatically deleted. Saved check results and manifests remain
 separate small records. Missing older accounting is unknown, not zero. Retained
 files have no automatic age-based expiry; deliberate cleanup must preserve any
 unique or unresolved evidence.

@@ -91,8 +91,8 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    {row.observation?.status==='unverified'&&<p>Current state could not be verified. This is a saved observation.</p>}
    {['outcome_unknown','unknown'].includes(row.status)&&<p>The previous outcome is uncertain. Inspect the environment before taking another action.</p>}
    {row.lastRecovery&&<p role="status">Last recovery check: {row.lastRecovery.state?.replaceAll('_',' ')||'unknown'}. {row.lastRecovery.message||'The original request result is kept separately.'}</p>}
-   {savedBytes!==null&&<p>Saved files: {savedBytes}. {accounting.policy==='full'?'Includes a complete environment export.':'Includes the source snapshot, working folder and artifacts.'} These files stay saved until deliberately removed.</p>}
-   {row.status==='removed'&&savedBytes===null&&<p>Saved files are retained. Their storage size has not been verified.</p>}
+   {savedBytes!==null&&<p>Latest saved copy: {savedBytes}. {accounting.policy==='full'?'Includes a complete environment export.':'Includes the source snapshot, working folder and artifacts.'} These files stay saved until deliberately removed.</p>}
+   {row.status==='removed'&&savedBytes===null&&<p>Previously saved files and results are kept. Their storage size has not been verified.</p>}
    <details><summary>Environment details</summary><pre className="a-state-view">{JSON.stringify(row,null,2)}</pre></details>
    {!readOnly&&row.status!=='removed'&&<>
     <button type="button" className="a-soft" disabled={cleanupBlocked} onClick={()=>mutate('workspace.environments.reconcile',{id:row.id,expectedRevision:row.revision})}>Check and recover</button>

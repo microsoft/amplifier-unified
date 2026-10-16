@@ -85,7 +85,7 @@ try{
  await panel.getByRole('button',{name:'Remove environment…',exact:true}).click();
  await panel.getByRole('button',{name:'Save files and remove environment',exact:true}).click();
  await expect(panel.getByText('Environment: removed',{exact:true})).toBeVisible();
-  await expect(panel.getByText('Saved files: 2 KiB.',{exact:false})).toBeVisible();
+  await expect(panel.getByText('Latest saved copy: 2 KiB.',{exact:false})).toBeVisible();
  const manual=await facts();assert.equal(manual.callCounts.start,1);assert.equal(manual.callCounts.execute,2);assert.equal(manual.callCounts.stop,1);assert.equal(manual.callCounts.remove,1);
   await page.request.post(url+'/fixture/environment-mode',{data:{executeTimeout:false,capacityAvailable:false,backendAvailable:true}});
   await panel.getByRole('button',{name:'Refresh test environments',exact:true}).click();
