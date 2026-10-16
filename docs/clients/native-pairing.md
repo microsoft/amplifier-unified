@@ -35,3 +35,25 @@ Anonymous pairing is bounded in memory and rate limited. Polling requires a
 and invalid requests do not return a token. Responses are never cached; approval
 pages have no external resources and suppress cross-origin referrers. Old hosts return a clear
 unsupported result; existing manual-token connections continue to work unchanged.
+
+
+## Credential and client isolation
+
+Companion credentials use the distinct `amc_` family. Existing `amt_` terminal
+credentials retain their full authority. Hosts predating pairing reject `amc_`
+credentials even if their device store is retained during manual recovery.
+
+Each native client ID is durably bound to the approving device. Attachment,
+resumption and every header/query client selection reject identities owned by
+another device or browser. Missing attachment is not permission to use shared UI
+state. New native clients do not migrate legacy browser drafts.
+
+Scope controls response bodies as well as allowed operations. Attachment never
+returns browser state; create/send return only bounded receipts. Errors do not
+include browser snapshots or unfiltered receipts, regardless of the requested
+state transport. Revocation observation starts before reading a request body;
+commands not yet admitted are rejected or disconnected when access is removed.
+
+The `device-pairing` scenario in `frontend/tests/browser-checks.json` owns browser
+sign-in, approval and revocation acceptance. It provisions and cleans its own
+synthetic fixture and is part of the standard browser-checks smoke plan.

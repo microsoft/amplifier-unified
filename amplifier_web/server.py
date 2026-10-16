@@ -63,8 +63,9 @@ async def boundaries(request, handler):
         if exc.code:
             payload['code'] = exc.code
         if exc.receipt is not None:
-            payload['receipt'] = exc.receipt
-        if exc.code == 'session_busy':
+            from .device_pairing import companion_receipt
+            payload['receipt'] = companion_receipt(exc.receipt) if request.get('companion_device') else exc.receipt
+        if exc.code == 'session_busy' and not request.get('companion_device'):
             payload['state'] = getattr(exc, 'client_state', None) or request.app['service'].browser_state()
         return _set_response_headers(web.json_response(payload, status=exc.status), request)
     except (json.JSONDecodeError, ValueError, KeyError) as exc:
@@ -354,7 +355,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if isinstance(payload, dict) and payload.get('action') == 'terminal.prepare':
             from .terminal_setup import require_safe_transport
             require_safe_transport(request)
-        compact = request.headers.get('X-Amplifier-State-Transport') == 'delta-v1'
+        compact = request.get('companion_device') or request.headers.get('X-Amplifier-State-Transport') == 'delta-v1'
         task = service._task(service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
                                         command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"),
                                         include_state=not compact))
@@ -372,6 +373,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             if not state_independent and (not payload['action'].startswith('shell.') or payload['action'] == 'shell.command'):
                 result['stateRevision'] = result.get('revision', service._state['revision'])
             result['hostInstanceId'] = service.instance_id
+        if request.get('companion_device'):
+            from .device_pairing import companion_receipt
+            result = companion_receipt(result)
         return web.json_response(result)
 
     async def profiling_content(request):

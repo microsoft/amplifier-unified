@@ -51,6 +51,12 @@ async def permits_companion(request):
     return False
 
 
+def companion_receipt(value):
+    """An authorization projection, independent of caller transport choices."""
+    return {key: value[key] for key in ('accepted', 'revision', 'sessionId',
+            'hostInstanceId', 'stateRevision', 'delivery', 'code') if key in value}
+
+
 class Pairings:
     def __init__(self, devices):
         self.devices = devices
@@ -94,7 +100,7 @@ class Pairings:
             row['state'] = 'denied'
             return
         device_id = secrets.token_hex(16)
-        token = 'amt_' + device_id + '.' + secrets.token_urlsafe(48)
+        token = 'amc_' + device_id + '.' + secrets.token_urlsafe(48)
         with self.devices.transaction() as state:
             if len(state['devices']) >= MAX_DEVICES:
                 raise web.HTTPConflict(text='Remove an unused device before connecting another.')

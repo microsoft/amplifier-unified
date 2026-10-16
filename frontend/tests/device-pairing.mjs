@@ -1,17 +1,46 @@
-// Run inside an owned DTU against device_pairing_ui_server.py only.
+// Self-contained synthetic fixture; run in the owned DTU or CI browser environment.
 import { chromium } from 'playwright';
 import { createHash, randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
-const origin = process.env.TEMPO_PAIRING_FIXTURE_URL ?? 'http://127.0.0.1:8995';
-assert.equal(new URL(origin).hostname, '127.0.0.1');
-const browser = await chromium.launch({headless:true, args: ['--no-sandbox', '--single-process']});
-const context = await browser.newContext();
-const page = await context.newPage();
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+const fixture = spawn(process.env.AMPLIFIER_TEST_PYTHON || fileURLToPath(new URL('../../.venv/bin/python', import.meta.url)),
+  [fileURLToPath(new URL('../../tests/fixtures/device_pairing_ui_server.py', import.meta.url))],
+  {env: {...process.env, TEMPO_PAIRING_FIXTURE_HOME:'', TEMPO_PAIRING_FIXTURE_PORT:'0'}, stdio:['ignore','pipe','inherit']});
+const ready = new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => reject(Error('Pairing fixture startup timed out')), 30000);
+  let output = '';
+  fixture.once('error', error => {clearTimeout(timeout); reject(error)});
+  fixture.once('exit', code => {clearTimeout(timeout); reject(Error('Pairing fixture exited: '+code))});
+  fixture.stdout.on('data', chunk => {
+    output += chunk;
+    for (const line of output.split('\n')) {
+      try { const value = JSON.parse(line); if (value.url) { clearTimeout(timeout); resolve(value.url); } } catch {}
+    }
+  });
+});
+async function stopFixture() {
+  if (fixture.exitCode !== null || fixture.signalCode !== null) return;
+  let escalated = false;
+  const result = await new Promise(resolve => {
+    const timer = setTimeout(() => { escalated = true; fixture.kill('SIGKILL'); }, 10000);
+    fixture.once('exit', (code, signal) => { clearTimeout(timer); resolve([code, signal]); });
+    fixture.kill('SIGTERM');
+  });
+  assert.equal(escalated, false, 'Fixture must clean up within its shutdown budget');
+  if (process.platform !== 'win32') assert.deepEqual(result, [0, null]);
+}
+let origin, browser, context;
 const post = async (path, body, headers = {}) => {
   const response = await fetch(origin + path, {method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
   assert.equal(response.status, 200, `${path}: ${response.status}`); return response.json();
 };
 try {
+  origin = await ready;
+  assert.equal(new URL(origin).hostname, '127.0.0.1');
+  browser = await chromium.launch({headless:true, args:process.env.CHROMIUM_SINGLE_PROCESS === '1' ? ['--single-process', '--no-zygote'] : []});
+  context = await browser.newContext();
+  const page = await context.newPage();
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   const request = await post('/api/devices/pair', {name:'Tempo browser acceptance', challenge});
@@ -41,4 +70,4 @@ try {
   assert.equal((await fetch(origin+'/api/companion',{headers})).status,401);
   assert.equal((await post('/api/devices/pair/token',{id:request.id,verifier})).status,'revoked');
   console.log('PASS: browser sign-in, code comparison, explicit approval, restricted access, device listing, revocation');
-} finally { await context.close(); await browser.close(); }
+} finally { try { await context?.close(); await browser?.close(); } finally { await stopFixture(); } }

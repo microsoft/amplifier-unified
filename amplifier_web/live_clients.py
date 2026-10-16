@@ -18,11 +18,15 @@ async def client_context(request, handler):
     identity = header or query
     if request.path == "/api/clients/attach":
         identity = None
+    if request.get('companion_device') and request.path != '/api/clients/attach':
+        record = service.clients.records.get(identity)
+        if record is None or record.get('deviceOwner') != request['companion_device']:
+            raise AppError("Attach a client owned by this device.", 403)
     with service.clients.bind(identity):
         try:
             return await handler(request)
         except AppError as exc:
-            if identity and exc.code == "session_busy":
+            if identity and exc.code == "session_busy" and not request.get("companion_device"):
                 exc.client_state = service.browser_state()
             raise
 
@@ -44,7 +48,8 @@ def setup_routes(app, streams):
             raise AppError("Unsupported client protocol version.", 409)
         identity = payload.get("clientId")
         async with service.lock:
-            service.clients.attach(identity, payload.get("resumeClientId"), payload.get("kind", "web"))
+            service.clients.attach(identity, payload.get("resumeClientId"), payload.get("kind", "web"),
+                                   device=request.get("companion_device"))
             service._save_changes()
             with service.clients.bind(identity):
                 from .client_observations import discovery
@@ -52,7 +57,7 @@ def setup_routes(app, streams):
                     "hostInstanceId": service.instance_id, "reconnect": "snapshot",
                     **discovery(service),
                     "transports": ["http", "sse", "websocket"],
-                    **({} if payload.get('includeState') is False or request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
+                    **({} if request.get('companion_device') or payload.get('includeState') is False or request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
                        else {"state": service.browser_state()})})
 
     def session_snapshot(identity, snapshot=None):
@@ -152,6 +157,9 @@ def setup_routes(app, streams):
         task = service._task(service.dispatch(action, {**args, key: identity}, command_id=command_id,
             expected_revision=payload.get("expectedRevision"), include_state=False))
         result = await asyncio.shield(task)
+        if request.get('companion_device'):
+            from .device_pairing import companion_receipt
+            return web.json_response(companion_receipt(result))
         return web.json_response({**result, **session_snapshot(identity)})
 
     async def events(request):
