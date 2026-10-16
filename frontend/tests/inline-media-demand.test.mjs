@@ -76,3 +76,65 @@ test('positive registry coverage keeps viewport ownership and disposes pending r
  await act(async()=>visible([{isIntersecting:true}]));assert.equal(requests.length,2);
  await act(async()=>root.unmount());root=null;assert.equal(requests[1].signal.aborted,true);
 });
+
+test('configuration changes defer discovery and settle with one current metadata request',async()=>{
+ await act(async()=>{root=create(render({linkedMediaAvailable:true,configurationBusy:true}))});
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:true,mediaRevision:2})));
+ assert.equal(requests.length,0,'temporary transcript indices cannot start discovery');
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:false,mediaRevision:2})));
+ assert.equal(requests.length,1);
+ await complete(0,metadata(true));
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:false,mediaRevision:2})));
+ assert.equal(requests.length,1,'unchanged settled publication does not poll');
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:true,mediaRevision:2})));
+ assert.equal(root.root.findAllByType('p').length,1,'already-qualified metadata remains visible for this owner');
+ assert.equal(requests.length,1);
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:false,mediaRevision:2})));
+ assert.equal(requests.length,2);await complete(1);
+});
+
+test('entering configuration change aborts and fences pending success and failure',async()=>{
+ await act(async()=>{root=create(render({linkedMediaAvailable:true}))});
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:true})));
+ assert.equal(requests[0].signal.aborted,true);
+ await complete(0,metadata(true));
+ assert.equal(root.root.findAllByType('p').length,0,'late success cannot publish during transition');
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:false})));
+ assert.equal(requests.length,2);
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:true})));
+ assert.equal(requests[1].signal.aborted,true);
+ await act(async()=>requests[1].reject(Error('late identity failure')));
+ assert.equal(root.root.findAllByProps({role:'alert'}).length,0);
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:false})));
+ assert.equal(requests.length,3);await complete(2);
+ assert.equal(root.root.findAllByProps({role:'alert'}).length,0);
+});
+
+test('transition hides an old error, requalifies once, and keeps genuine failures manually retryable',async()=>{
+ await act(async()=>{root=create(render({linkedMediaAvailable:true}))});
+ const rejectIdentity=async index=>act(async()=>requests[index].resolve(new Response(JSON.stringify({
+  accepted:false,error:'Choose an existing saved assistant message in this conversation.'}),{status:400})));
+ await rejectIdentity(0);assert.equal(root.root.findAllByProps({role:'alert'}).length,1);
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:true})));
+ assert.equal(root.root.findAllByProps({role:'alert'}).length,0);
+ assert.equal(requests.length,1);
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:false})));
+ assert.equal(requests.length,2);await rejectIdentity(1);
+ assert.equal(root.root.findAllByProps({role:'alert'}).length,1,'a stable identity failure remains actionable');
+ await act(async()=>root.update(render({linkedMediaAvailable:true,configurationBusy:false})));
+ assert.equal(requests.length,2,'arbitrary failures are not automatically retried');
+ await act(async()=>root.root.findByType('button').props.onClick());
+ assert.equal(requests.length,3);await complete(2);
+ assert.equal(root.root.findAllByProps({role:'alert'}).length,0);
+});
+
+test('selection during configuration change cannot retain or fetch another message metadata',async()=>{
+ await act(async()=>{root=create(render({linkedMediaAvailable:true}))});await complete(0,metadata(true));
+ await act(async()=>root.update(render({sessionId:'chat-b',messageId:'other',linkedMediaAvailable:true,configurationBusy:true})));
+ assert.equal(root.root.findAllByType('p').length,0);assert.equal(requests.length,1);
+ await act(async()=>root.update(render({sessionId:'chat-b',messageId:'other',linkedMediaAvailable:true,configurationBusy:false})));
+ assert.equal(requests.length,2);assert.match(requests[1].url,/sessionId=chat-b&messageId=other/);await complete(1);
+ await act(async()=>root.update(render({sessionId:'chat-b',messageId:'other',linkedMediaAvailable:false,configurationBusy:true})));
+ await act(async()=>root.update(render({sessionId:'chat-b',messageId:'other',linkedMediaAvailable:false,configurationBusy:false})));
+ assert.equal(requests.length,2,'settlement does not manufacture positive registry coverage');
+});
