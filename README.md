@@ -112,6 +112,10 @@ registration; the launcher separately checks that the app responds.
 
 The first message can take a few minutes while Unified prepares its runtime.
 
+After installation, open **Settings → Updates** to check for and install updates,
+review any failed checks, or choose the automatic check interval. See the
+[update guide](docs/UPDATES.md) for active-work handling and recovery details.
+
 ## Create a dedicated desktop or mobile app
 
 You can add Unified to a desktop or mobile device as its own app-like window or home-screen icon. This does not install or move the Unified service; it opens the same workspace more directly.
