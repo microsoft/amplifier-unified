@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.176",
+      "title": "Review tool changes and manage scheduled work",
+      "changes": [
+        "Saved interactive tool views can compare changed actions and explicitly adopt an updated document. Other open views keep their unfinished input and saved version.",
+        "Automation provides a paged overview of scheduled work and its owning chats. Review and resume future new-task runs after configuration changes while preserving uncertain earlier outcomes and Stop decisions.",
+        "Hold Alt+Shift to reveal numbered shortcuts for the first nine displayed chats, then press a number to switch through the existing draft and unsaved-view safeguards.",
+        "Diagrams expose fit, zoom and layout controls directly, improve default readability and keep authored source and styling intact.",
+        "A failed provider account no longer blocks an explicitly selected healthy account. Unavailable selections remain visible and are never silently replaced with another account.",
+        "An optional local status interface lets other tools observe active conversations, tools and plan progress without reading transcripts. Unified and an optional CLI hook share the same redacted, read-only format."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.175",
       "title": "Keep Chat info controls steady while usage loads",
       "changes": [

@@ -215,7 +215,7 @@ source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?
 
 [[package]]
 name = "amplifier-unified"
-version = "0.20.175"
+version = "0.20.176"
 source = { directory = "../../" }
 dependencies = [
     { name = "aiohttp" },
