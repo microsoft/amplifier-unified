@@ -159,7 +159,9 @@ try{
  await expect(review).toContainText('Added actions — not granted');
  if(process.env.MCP_RECOVERY_SCREENSHOT)await page.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT.replace(/\.png$/,'-review.png')});
  await review.getByRole('button',{name:'Approve existing actions',exact:true}).click();
- await expect.poll(async()=>({phase:await page.locator('.a-mcp-status').getAttribute('data-phase'),review:await review.innerText()})).toMatchObject({phase:'ready'}).catch(async error=>{console.error('Review failure:',await review.innerText());throw error});
+ // Successful approval moves the optional review into the closed Canvas options.
+ // Read the visible connection state without waiting on that now-hidden region.
+ await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(frame.getByRole('textbox',{name:'Unfinished tool input'})).toHaveValue('Current client keeps this on contract-only approval');
  assert.equal(await mutations(),2);
  const ungranted=await frame.locator('body').evaluate(async()=>{try{await window.fixtureCall('counter_extra');return 'unexpected success'}catch(error){return error.message}});
