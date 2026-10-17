@@ -1,11 +1,12 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {writeFileSync} from 'node:fs';
+import {mkdirSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
+if(process.env.DIAGRAM_EVIDENCE)mkdirSync(dirname(process.env.DIAGRAM_EVIDENCE),{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;const results=[],errors=[];
 try{

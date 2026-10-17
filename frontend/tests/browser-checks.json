@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "scenarios": [
+    {"id": "diagram-navigation", "command": ["node", "tests/diagram-navigation-browser.mjs"], "env": {"DIAGRAM_EVIDENCE": "{root}/output/browser-checks/diagram-navigation/report.json"}},
     {"id": "chat-shortcuts", "command": ["node", "tests/chat-shortcuts-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/chat-shortcuts"}},
     {"id": "automation-hub", "command": ["node", "tests/automation-hub-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/automation-hub"}},
     {"id": "peer-attribution", "command": ["node", "tests/peer-attribution-browser.mjs"], "env": {"AMPLIFIER_TEST_BUILT_STATIC": "1"}},

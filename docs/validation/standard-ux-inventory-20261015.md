@@ -523,6 +523,25 @@ pending-action and mobile assertions. The original fixture fails on the empty
 baseline; the corrected fixture passes both. This is a harness correction, not
 a change to the app's attention behavior or a new duplicate test lane.
 
+### Numbered chat shortcuts and diagram viewing (October 17)
+
+Add `chat-shortcuts` to the extended browser plan: reveal after a held Alt+Shift
+gesture, freeze nine distinct rendered chat identities across live reorder,
+select through the ordinary guarded row, exclude collapsed rows, and leave
+typing, IME, dialogs and browser tab shortcuts untouched. Require zero row
+geometry change and dismissal on Escape, release and blur. Draft retention,
+dirty-view navigation and scoped/narrow cases remain explicit acceptance items.
+The browser proof does not certify native OS input-source bindings.
+
+Promote the existing `diagram-navigation` scenario into the extended plan as its
+sole automatic owner. Preserve its 22 Mermaid/DOT pan, zoom, touch cancellation,
+persistence and narrow-fit checks; add always-visible ordinary controls, authored
+source/style preservation, optional node details and non-overlapping default
+network layout. Current focused result is 25 passing outcome groups, with zero
+page errors. Embedded scrolling remains owned by Public readiness; the special
+installed-package original-artifact harness remains separate. No frozen inventory
+count or 65-scenario migration hash is relabeled by these additive checks.
+
 ### Everyday Automation overview and reviewed recovery (October 17)
 
 **AUTO-277-679** is additive ordinary navigation coverage. Its sole source-browser
