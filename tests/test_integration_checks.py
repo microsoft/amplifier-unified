@@ -163,6 +163,8 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
         **{f'tests/test_{name}.py': 'default-installed' for name in (
             'default_behaviors_integration', 'default_runtime_safety',
             'default_mount_runtime', 'default_routing_runtime')},
+        'tests/fixtures/status_emitter_probe.py': 'status-installed',
+        'tests/fixtures/status_package_probe.py': 'status-installed',
     }
     assert {row['node']: row['owner'] for row in records} == expected
     assert len(records) == len(expected)
@@ -173,6 +175,20 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
             assert row['owner'] in {job['lane'] for job in checks.select_lanes([row['node'].split('::')[0]])}
     assert coverage['lanes']['default-installed']['mode'] == 'manual'
     assert 'default-installed' not in {job['lane'] for job in checks.select_lanes()}
+
+
+def test_status_installed_owner_is_explicit_and_affected_changes_are_discoverable(tmp_path):
+    coverage = checks.manifest()
+    lane = coverage['lanes']['status-installed']
+    assert lane['mode'] == 'manual'
+    assert lane['command'] == ['python', 'scripts/qualify_status_emitter.py']
+    assert 'status-installed' not in {job['lane'] for job in checks.select_lanes()}
+    for path in ['amplifier_web/status_emitter.py', 'amplifier_web/status_protocol/hook.py',
+                 'amplifier_web/execution_events.py', 'tests/fixtures/status_package_probe.py']:
+        assert 'status-installed' in {job['lane'] for job in checks.select_lanes([path], include_manual=True)}
+    assert 'status-installed' not in {job['lane'] for job in checks.select_lanes(['README.md'], include_manual=True)}
+    with pytest.raises(ValueError, match='explicit qualification runner'):
+        checks.run_lane('status-installed', 'python', tmp_path)
 
 
 def test_new_default_and_search_skips_cannot_be_ownerless():

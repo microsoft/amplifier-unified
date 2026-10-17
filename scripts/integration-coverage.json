@@ -283,6 +283,32 @@
         "tests/fixtures/default_routing_probe.py"
       ],
       "prerequisite": "Explicit owned container, noneditable candidate wheel and source-bound offline behavior repositories/runtime packages. Run copied tests outside source, then integration_checks.py check --lane default-installed; missing prerequisites/skips fail the owner. See docs/validation/release-qualification.md and integration-coverage.md."
+    },
+    "status-installed": {
+      "runner": "owned-container",
+      "mode": "manual",
+      "command": [
+        "python",
+        "scripts/qualify_status_emitter.py"
+      ],
+      "selectors": [
+        "tests/fixtures/status_emitter_probe.py",
+        "tests/fixtures/status_package_probe.py"
+      ],
+      "paths": [
+        "amplifier_web/status_emitter.py",
+        "amplifier_web/status_protocol/**",
+        "amplifier_web/execution_events.py",
+        "amplifier_web/service.py",
+        "amplifier_web/runtime*",
+        "amplifier_web/host/**",
+        "scripts/qualify_status_emitter.py",
+        "tests/test_status_emitter.py",
+        "tests/test_status_qualification.py",
+        "tests/fixtures/status_emitter_probe.py",
+        "tests/fixtures/status_package_probe.py"
+      ],
+      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md."
     }
   },
   "baselineRecords": [
@@ -858,6 +884,20 @@
       "owner": "default-installed",
       "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
       "introducedBy": "#815"
+    },
+    {
+      "node": "tests/fixtures/status_emitter_probe.py",
+      "kind": "executable_probe",
+      "owner": "status-installed",
+      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md.",
+      "introducedBy": "#290"
+    },
+    {
+      "node": "tests/fixtures/status_package_probe.py",
+      "kind": "executable_probe",
+      "owner": "status-installed",
+      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md.",
+      "introducedBy": "#290"
     }
   ]
 }
