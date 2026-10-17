@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "scenarios": [
+    {"id": "peer-attribution", "command": ["node", "tests/peer-attribution-browser.mjs"], "env": {"AMPLIFIER_TEST_BUILT_STATIC": "1"}},
     {"id": "device-pairing", "command": ["node", "tests/device-pairing-browser.mjs"]},
     {"id": "standard-ux-keyboard-reflow", "command": ["node", "tests/standard-ux-keyboard-reflow-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/standard-ux-keyboard-reflow"}},
     {"id": "smart-tool-updates", "command": ["node", "tests/smart-tool-updates-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/smart-tool-updates-artifacts"}},

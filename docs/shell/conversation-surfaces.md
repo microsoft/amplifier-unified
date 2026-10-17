@@ -328,3 +328,28 @@ The theme chooser is test/demo content and is not loaded into ordinary chats.
 Run `npm run test:canvas-apps-browser` in `frontend` after building the frontend.
 `AMPLIFIER_TEST_PYTHON` may point to the repository's Python environment.
 Backend coverage lives in `tests/test_canvas_apps.py`.
+
+
+## Incoming peers and assistant reactions (approved October 16, 2026)
+
+Incoming messages with host peer metadata use a compact expandable exchange,
+following delegate presentation. The summary retains proven host attribution
+when available, otherwise a neutral peer label. Exact text, attachments, quoted
+references and Copy remain available inside. Collapsing is a local presentation
+choice; it does not remove history, change delivery, imply completion, or merge
+peer input with human input. A focused reveal opens the requested exchange.
+Ordinary human input and independently rendered approvals/questions stay visible.
+Text that merely resembles a peer envelope does not change presentation.
+Partial history pages cannot establish global input uniqueness and must not
+promote an unverified caption to proven sender identity.
+
+The existing `message.reaction` operation owns reactions. Interactive origins
+change `reactions`; the host's authenticated agent origin changes
+`assistantReactions` only on human messages in its own conversation. The caller
+cannot supply the actor. Each channel uses the existing desired-state and durable
+receipt semantics and cannot remove the other's reaction. Browser, retained
+history, bounded viewport annotations and restart share that same metadata.
+Assistant reactions are labeled Amplifier and never shown as user-removal buttons.
+They may acknowledge a simple request without an extra written acknowledgment;
+they do not mean the requested work completed and never start a new turn.
+Existing unattributed reactions are not retroactively assigned an actor.
