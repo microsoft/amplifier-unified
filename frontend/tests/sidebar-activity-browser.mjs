@@ -47,14 +47,20 @@ async function humanPostRecency(){
   };
   const control=async data=>{const r=await page.request.post(url+'/fixture/control',{data});assert.equal(r.status(),200);return r.json()};
   const dispatch=(p,action,args)=>p.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+  const showChat=async target=>{
+   if(await target.locator('.a-settings-experience').isVisible())await target.getByRole('button',{name:'Close panel',exact:true}).click();
+   await expect(target.locator('[data-part="overlay"]')).toHaveCount(0);
+  };
   const order=()=>page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
   await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
   await expect(page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]')).toHaveCount(20);
+  await showChat(page);
   const initial=await metrics(),target=initial.target;
   assert.equal(initial.sessions.length,24);
   await expect(page.locator('.a-quiet-sidebar')).toBeVisible();
   const before=await order();assert.equal(before.length,20);assert.ok(!before.includes(target));
   await other.goto(url);await other.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
+  await showChat(other);
   await dispatch(other,'session.select',{id:initial.sessions[1]});
   await other.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep other-client draft');
   await expectDraft(other,'Keep other-client draft');
@@ -86,6 +92,7 @@ async function humanPostRecency(){
   await page.waitForTimeout(1000);
   const key=await page.evaluate(()=>window.amplifier.getState().shellDataKey);
   const workLabel=page.locator('.a-execution-turn-line .a-execution-label');
+  await expect(page.locator('[data-part="overlay"]')).toHaveCount(0);await expect(workLabel).toBeVisible();
   const elapsedBefore=await workLabel.innerText();assert.match(elapsedBefore,/^Working · /);
   traffic.length=0;measuring=true;
   await control({running:true});
@@ -108,6 +115,7 @@ async function humanPostRecency(){
   await control({attention:true});
   await expect.poll(async()=>(await metrics()).navigationActivityAt).toBeGreaterThan(ready);
   await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
+  await showChat(page);
   await expect.poll(order).toEqual(promotedOrder);
   await expectDraft(page,'Explicit human post');
   assert.equal((await metrics()).posts[0].navigationPost.fence,admitted.posts[0].navigationPost.fence);
