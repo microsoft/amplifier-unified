@@ -165,6 +165,34 @@ async def test_late_source_change_and_replaced_demand_never_install_stale_page(s
     assert not owner.queries.jobs
 
 
+async def test_settled_search_tracks_committed_workspace_names_and_paths(service):
+    from test_shell_modules import command
+    prepare(service)
+    client = service.shell.client('browser')
+    client['baselineView']['navRecentView'] = {'navFilter': 'Personal*'}
+    service.shell.put('client', 'browser', client)
+    wanted = ('sidebarSearch',)
+    first = await settle(service, wanted=wanted)
+    def page(value):
+        return value['instances']['chats']['resources']['sidebarSearch']['value']['sidebarNavigation']['search']
+    assert [row['id'] for row in page(first)['items']] == ['alpha']
+    frozen = deepcopy(first)
+    workspace = service.state['workspaces'][0]
+    workspace['name'] = 'Renamed notebook'
+    service._save_changes(globals={'workspaces'})
+    renamed = await settle(service, wanted=wanted)
+    assert page(renamed)['items'] == []
+    await command(service, 'shell.view.update', clientId='browser', instanceId='chats',
+        patch={'navRecentView': {'navFilter': '*/changed/*'}})
+    assert page(await settle(service, wanted=wanted))['items'] == []
+    workspace['path'] = '/changed/canonical/workspace'
+    service._save_changes(globals={'workspaces'})
+    moved = await settle(service, wanted=wanted)
+    assert [row['id'] for row in page(moved)['items']] == ['alpha']
+    assert page(moved)['items'][0]['workspaceName'] == 'Renamed notebook'
+    assert first == frozen
+
+
 async def test_external_write_without_generation_is_rejected_and_retry_backs_off(service):
     import sqlite3
     owner = prepare(service)
