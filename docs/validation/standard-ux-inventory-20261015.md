@@ -581,6 +581,15 @@ The five deterministic frontend checks pass; desired behavior is no obsolete
 review, error or refresh in the newer view.
 The original Studious artifact remains unavailable and is not counted as qualified.
 
+**MCP-REVIEW-09** records the full-run layout regression: optional review added
+43.78125 pixels above a healthy tool. The existing `smart-tools` owner must retain
+its no-gap Canvas geometry assertion. The existing `mcp-recovery` owner also
+checks that required review remains visible with Canvas options closed, while a
+healthy tool exposes optional review only through those options. Existing input
+preservation, denied new actions and explicit document replacement assertions
+remain unchanged. These are added outcomes in the existing owners, not another
+browser lane or a change to the frozen inventory counts.
+
 ### Recent Work receipt recovery (October 17)
 
 **WORK-832** adds publication-race and recovery checks to the existing

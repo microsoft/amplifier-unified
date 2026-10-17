@@ -201,7 +201,7 @@ export function McpAppViewer({canvas,act,connectionKey}){
    {!canvas.readOnlyVersion&&<button type="button" className="a-icon" aria-label={recovering?'Reconnecting tool view…':'Reconnect tool view'} title={recovery?.canReconnect===false?recovery.message:'Reconnect without resetting unfinished inputs'} data-action="smartTools.reconnectView" disabled={recovering||recovery?.canReconnect===false} onClick={()=>reconnect()}><RefreshCw/></button>}
    {status.phase==='error'&&recovery?.source==='available'&&<button type="button" className="a-link" style={{whiteSpace:'nowrap'}} title="Reloading resets unfinished inputs in this tool view" data-action="canvas.view" onClick={()=>{if(window.confirm('Reload this saved tool view? Unfinished input inside it will be reset. Previous tool calls will not be replayed.'))act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}}>Reload saved view</button>}
   </div></CanvasControl>
-  <McpContractReview canvas={canvas} recovery={recovery} command={command} onApplied={()=>refreshConnection.current?.()}/>
+  <CanvasControl inline={recovery?.status!=='ready'}><McpContractReview canvas={canvas} recovery={recovery} command={command} onApplied={()=>refreshConnection.current?.()}/></CanvasControl>
   {canvas.sharedToolView&&<p className="a-caption">This view shares tool work with the original conversation.</p>}
   <iframe ref={frame} title={canvas.title||'Interactive tool'} className="a-canvas-html" style={{flex:1,minHeight:0}} sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer"/>
  </div>;

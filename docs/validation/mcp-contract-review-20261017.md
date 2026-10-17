@@ -17,6 +17,7 @@ the frozen ordinary-UX baseline or erase the October16 evidence.
 | MCP-REVIEW-06: historical action | Disabled reconnect gave no useful next action. | Always-visible Open live view explicitly selects Latest; history remains read-only until that choice. Reload saved HTML asks before resetting input. Browser/lifecycle checks passed. |
 | MCP-REVIEW-07: caller authority | Review approval must not be available to a restricted device or agent. | Restricted companion HTTP requests and agent approval rejected. Review fingerprints bind the actual reviewing client and selection generation, including away/back navigation. Python passed. |
 | MCP-REVIEW-08: original Studious saved bytes | No authenticated original saved Studious document has been available for reproduction. | **Not executed / remains open**: exact old artifact and its original host sequence are still needed. Generic cooperative SDK acceptance is not Studious acceptance. |
+| MCP-REVIEW-09: optional review and Canvas layout | The complete browser census caught a 43.78125-pixel strip above a healthy tool; its unchanged geometry assertion failed. | Healthy review belongs in Canvas options; required review stays visible when those options are closed. Focused rebuilt-client qualification is pending for this correction; the original failure is retained. |
 
 ## Executed checks and limits
 

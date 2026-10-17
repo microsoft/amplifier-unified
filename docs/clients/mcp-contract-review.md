@@ -4,6 +4,11 @@ Approved implementation scope: October 17, 2026, issues #807 and #808. This
 extends the saved-view contract in [Smart Tools](../SMART-TOOLS.md), without
 changing MCP, account consent, device permissions or the self-contained sandbox.
 
+A healthy connected view offers optional review in Canvas options, leaving its
+content area clear. A required review stays visible in the view even when Canvas
+options are closed. Moving that control must not replace the tool iframe, replay
+calls or preserve a stale pending review across an authority change.
+
 Saved HTML, its launch arguments/result and the domain object they identify are
 durable history. Reconnecting must not execute the launcher, recreate domain
 objects, replay a previous call or automatically replace a mounted document.

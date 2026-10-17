@@ -136,6 +136,11 @@ try{
  await frame.getByRole('button',{name:'Add one'}).click();
  await expect(frame.locator('#error')).toContainText('action schemas changed');
  assert.equal(await mutations(),2);
+ // Required review remains visible even when optional Canvas controls are closed.
+ const options=page.getByRole('button',{name:'Canvas options',exact:true});
+ if(await options.getAttribute('aria-expanded')==='true')await options.click();
+ await expect(page.getByRole('button',{name:'Review tool changes',exact:true})).toBeVisible();
+ await expect(page.locator('#canvas-options .a-mcp-contract-review')).toHaveCount(0);
  // A second independently attached client holds the original saved document.
  secondBrowser=await chromium.launch({headless:true});
  const secondContext=await secondBrowser.newContext({viewport:{width:1100,height:850},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
@@ -159,6 +164,10 @@ try{
  assert.equal(await mutations(),2);
  const ungranted=await frame.locator('body').evaluate(async()=>{try{await window.fixtureCall('counter_extra');return 'unexpected success'}catch(error){return error.message}});
  assert.match(ungranted,/not granted/);
+ // A healthy tool keeps optional review in Canvas options, leaving its view clear.
+ await expect(page.getByRole('button',{name:'Review tool changes',exact:true})).toBeHidden();
+ await options.click();
+ await expect(page.locator('#canvas-options .a-mcp-contract-review')).toBeVisible();
  await page.getByRole('button',{name:'Review tool changes',exact:true}).click();
  await review.getByRole('checkbox',{name:/Open updated live view/}).check();
  await expect(review.getByRole('button',{name:'Approve and open updated live view',exact:true})).toBeDisabled();
