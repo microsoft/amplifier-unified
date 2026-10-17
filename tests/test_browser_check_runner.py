@@ -275,7 +275,8 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     assert 'output/browser-checks/' in uploads[0]['with']['path']
     readiness = (workflows / 'public-readiness.yml').read_text()
     files = re.findall(r'tests/test_\w+\.py', readiness)
-    assert len(files) == len(set(files)) == 98
+    assert len(files) == len(set(files)) == 99
+    assert 'tests/test_voice_status.py' in files
 
 
 def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():

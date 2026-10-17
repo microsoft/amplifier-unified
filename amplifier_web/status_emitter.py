@@ -114,8 +114,9 @@ class StatusEmitter:
             status = raw("status", "unknown")
             approvals = raw("approvals", []) or []
             questions = raw("questions", []) or []
-            pending_approvals = sum(row.get("status") == "pending" for row in approvals[:200])
-            pending_questions = sum(row.get("status") == "pending" for row in questions[:200])
+            from .resident_activity import resident_facts
+            facts = resident_facts(session)
+            pending_approvals, pending_questions = facts.approvals, facts.questions
             tools = activity.get("activeTools", [])
             active = status in {'working', 'running', 'starting', 'stopping', 'ready'} or tools or pending_approvals or pending_questions
             if not active and identity != selected:

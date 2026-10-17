@@ -170,6 +170,7 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
             'default_mount_runtime', 'default_routing_runtime')},
         'tests/fixtures/status_emitter_probe.py': 'status-installed',
         'tests/fixtures/status_package_probe.py': 'status-installed',
+        'tests/test_voice_status_worker.py::test_voice_status_held_native_worker_never_replays_or_cancels': 'native',
     }
     assert {row['node']: row['owner'] for row in records} == expected
     assert len(records) == len(expected)

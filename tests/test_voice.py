@@ -428,6 +428,8 @@ async def test_real_service_bridge_ignores_provisional_text_and_keeps_pinned_ses
     runtime=Runtime();service=AppService(tmp_path,runtime,workspace=tmp_path)
     await service.dispatch('session.create',{});pinned=service.get_state()['selectedSessionId']
     socket=Socket();call=VoiceCall(VoiceService(service),pinned);call.id,call.socket='live',socket
+    call.manager.call=call
+    await service.set_voice_status({'id':'live','sessionId':pinned,'status':'connected'})
     await service.dispatch('session.create',{})
     await call.record('user','Check my work.','u1')
     delegated=asyncio.create_task(call.delegate_live('d1'));await runtime.started.wait()
@@ -473,7 +475,8 @@ def test_voice_context_uses_only_its_browser_conversation_source():
 async def test_already_shared_source_is_in_initial_provider_instructions(provider):
     import json
     service, socket = Service(), Socket()
-    service.clients = SimpleNamespace(current=SimpleNamespace(get=lambda: 'origin-browser'))
+    service.clients = SimpleNamespace(current=SimpleNamespace(get=lambda: 'origin-browser'),
+                                      records={'origin-browser': {'view': {'mode': 'chat'}}})
     seen = []
     def project(client):
         seen.append(client)
@@ -522,11 +525,11 @@ async def test_live_delegation_captures_only_single_utterance_identity():
     await call.record('user', 'First part', 'u1')
     await call.record('user', 'Second part', 'u2')
     await call.delegate_live('combined')
-    assert call.execute.call_args.kwargs == {'spoken_item_id': None}
+    assert call.execute.call_args.kwargs == {'spoken_item_id': None, 'utterance_version': 2}
     await call.record('user', 'Next request', 'u3')
     await call.delegate_live('next')
     assert call.execute.call_args.args == ('Next request', 'next')
-    assert call.execute.call_args.kwargs == {'spoken_item_id': 'u3'}
+    assert call.execute.call_args.kwargs == {'spoken_item_id': 'u3', 'utterance_version': 3}
 
 @pytest.mark.parametrize('chunks', [
     [('  Check my work.  ', 100)],
@@ -544,6 +547,8 @@ async def test_live_speech_remains_one_bubble_through_delegation_and_reload(tmp_
     sid = service.state['selectedSessionId']
     call = VoiceCall(VoiceService(service), sid)
     call.id, call.socket = 'live', Socket()
+    call.manager.call=call
+    await service.set_voice_status({'id':'live','sessionId':sid,'status':'connected'})
     service.wait_for_response = AsyncMock(return_value={'text': 'Done'})
     try:
         for text, at in chunks:
