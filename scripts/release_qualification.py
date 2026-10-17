@@ -75,6 +75,7 @@ def build_identity(root, runtime):
         'schema': 1,
         'resolvedInputs': files(runtime, ('uv.lock', 'pyproject.toml', 'build-constraints.txt')),
         'loopLive': checkout_identity(root / '.ci/loop-live'),
+        'recipes': checkout_identity(root / '.ci/recipes'),
         'platform': {'system': sys.platform, 'machine': platform.machine(),
                      'osRelease': Path('/etc/os-release').read_text() if Path('/etc/os-release').exists() else platform.platform(),
                      'image': os.environ.get('ImageOS'), 'imageVersion': os.environ.get('ImageVersion')},
