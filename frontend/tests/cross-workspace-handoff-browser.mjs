@@ -1,4 +1,4 @@
-// Real host review/receipts and packaged UI; recipient execution is synthetic.
+// Real host direct-start/review receipts and packaged UI; recipient is synthetic.
 import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -118,9 +118,75 @@ try{
  assert.deepEqual(await inspect(),observations.accepted,'stale target refusal creates and sends nothing');
  observations.final=await inspect();observations.acceptedReceipt=accepted;
  assert.equal(confirmRequests,1);assert.equal(actions.filter(value=>value.action==='session.handoff.confirm'&&value.args.requestId===proposal.requestId).length,1);
- assert.deepEqual(errors,[]);await page.screenshot({path:join(output,'completed-and-stale.png'),animations:'disabled'});
+ await page.screenshot({path:join(output,'completed-and-stale.png'),animations:'disabled'});
+ // An explicit requested start uses the agent bridge directly, without a second
+ // human approval. Lose only the transport reply after the real host accepts it.
+ phase='direct-start-lost-ack';
+ const direct={requestId:'explicit-start-once',title:'Start the explicitly requested chat',
+  text:'The user explicitly asked: create a chat in the target project and send this exact brief.\nNo source history is transferred.',
+  target:'target-project',clientId:(await state(page)).client.id};
+ observations.directBefore=await inspect();
+ let startRequests=0,startReplyLost=false;
+ const interceptStart=async route=>{
+  startRequests++;
+  const response=await route.fetch();assert.equal(response.status(),200,await response.text());
+  observations.directStartResponse=await response.json();startReplyLost=true;await route.abort('failed');
+ };
+ await page.route('**/fixture/start',interceptStart);
+ const directStarted=Date.now();
+ const lostStart=await page.evaluate(async data=>{
+  try{const response=await fetch('/fixture/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return {status:response.status,body:await response.json()}}
+  catch(error){return {transportError:error.message}}
+ },direct);
+ assert.equal(startReplyLost,true);assert.ok(lostStart.transportError,'the initial start reply must actually be lost');
+ assert.equal(observations.directStartResponse.accepted,true,JSON.stringify(observations.directStartResponse));
+ assert.equal(observations.directStartResponse.result.mode,'direct');
+ assert.notEqual(observations.directStartResponse.result.status,'pending','explicit start is not a review proposal');
+ await page.unroute('**/fixture/start',interceptStart);
+ const directCard=card(direct.requestId);
+ await expect(directCard).toBeVisible();
+ await expect(directCard.getByRole('button',{name:'Create and start',exact:true})).toHaveCount(0);
+ await expect.poll(async()=>(await row(direct.requestId))?.status).toBe('accepted');
+ timings.directStartToAcceptedMs=Date.now()-directStarted;
+ const directReceipt=await row(direct.requestId);observations.directAcceptedReceipt=directReceipt;
+ observations.directAccepted=await inspect();
+ assert.equal(observations.directAccepted.sessions.length,observations.directBefore.sessions.length+1);
+ assert.equal(observations.directAccepted.sent.length,observations.directBefore.sent.length+1);
+ const delivered=observations.directAccepted.sent.filter(value=>value.inputId===directReceipt.inputId);
+ assert.equal(delivered.length,1);assert.equal(delivered[0].sessionId,directReceipt.targetSessionId);
+ assert.equal(delivered[0].text,direct.text);assert.equal(delivered[0].workspace,info.target);
+ assert.deepEqual(delivered[0].selection,{instance:'one',model:'fixture-model'});assert.equal(delivered[0].bundle,'anchors');
+ const directTarget=observations.directAccepted.sessions.find(value=>value.id===directReceipt.targetSessionId);
+ assert.equal(directTarget.title,direct.title);assert.equal(directTarget.parentId,null);assert.equal(directTarget.sessionKind,null);
+ assert.equal((await state(page)).selectedSessionId,info.sourceId);await expect(composer).toHaveDraft(draft);
+ assert.equal((await state(other)).selectedSessionId,info.otherSourceId);await expect(otherComposer).toHaveDraft('Other browser private draft');
+ assert.equal(actions.filter(value=>value.action==='session.handoff.confirm'&&value.args.requestId===direct.requestId).length,0,'explicit start never dispatches confirmation');
+ await directCard.scrollIntoViewIfNeeded();await page.screenshot({path:join(output,'direct-start-accepted.png'),animations:'disabled'});
+ // Retrying the identical agent request after its lost acknowledgement returns
+ // the durable receipt; it must not create or send again.
+ phase='direct-start-retry-reload';
+ const retry=await post('/fixture/start',direct);assert.equal(retry.accepted,true,JSON.stringify(retry));
+ assert.equal(retry.result.targetSessionId,directReceipt.targetSessionId);assert.equal(retry.result.inputId,directReceipt.inputId);
+ assert.deepEqual(await inspect(),observations.directAccepted,'identical explicit start retry must not replay work');
+ await page.reload();await expect(directCard.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
+ await expect(composer).toHaveDraft(draft);assert.equal((await state(page)).selectedSessionId,info.sourceId);
+ await directCard.getByRole('button',{name:'Check status',exact:true}).click();
+ await expect.poll(async()=>(await row(direct.requestId))?.status).toBe('accepted');
+ assert.equal((await row(direct.requestId)).targetSessionId,directReceipt.targetSessionId);
+ assert.equal((await row(direct.requestId)).inputId,directReceipt.inputId);
+ assert.deepEqual(await inspect(),observations.directAccepted,'direct-start reload and status read must not replay work');
+ // Deliberately visit the same source in the other client only after asserting
+ // that creation preserved its original selection/draft. Receipt ownership holds.
+ phase='direct-start-other-client';
+ await action(other,'session.select',{id:info.sourceId});await other.reload();await expect(otherComposer).toBeVisible();
+ await expect(other.locator(`[data-handoff-id="${direct.requestId}"]`)).toHaveCount(0);
+ assert.equal((await state(other)).handoffs.some(value=>value.requestId===direct.requestId),false);
+ await action(other,'session.select',{id:info.otherSourceId});await expect(otherComposer).toHaveDraft('Other browser private draft');
+ observations.directFinal=await inspect();assert.deepEqual(observations.directFinal,observations.directAccepted);
+ observations.directStartTransport={initialRequests:startRequests,replyLost:startReplyLost,identicalRequestRetry:true,confirmationRequests:0};
+ assert.equal(startRequests,1);assert.deepEqual(errors,[]);
  await writeFile(join(output,'result.json'),JSON.stringify({passed:true,elapsedMs:Date.now()-started,timings,source:'real host + packaged UI; synthetic recipient',clientId,otherClientId,confirmRequests,idleReceiptObservationMs:1700,observations,errors,limits:['No model, provider, file-reading, host-restart, or native-device acceptance.','The brief is accepted once; its requested work is not claimed complete.']},null,2)+'\n');
- console.log('Cross-workspace handoff passed: exact review, cancel, owner isolation, lost acknowledgement, one durable target/input, preserved drafts, explicit navigation, stale refusal, narrow layout.');
+ console.log('Cross-workspace handoff passed: explicit start without confirmation, replay-safe retry/reload, exact review, cancel, owner isolation, lost acknowledgement, durable target/input counts, preserved drafts, explicit navigation, stale refusal, narrow layout.');
 }catch(error){
  const current=page?await state(page).catch(()=>null):null;
  await writeFile(join(output,'failure.json'),JSON.stringify({phase,message:error.message,elapsedMs:Date.now()-started,observations,actions,errors,state:current?{selectedSessionId:current.selectedSessionId,client:current.client,handoffs:current.handoffs,draft:current.view?.draft}:null},null,2)+'\n');

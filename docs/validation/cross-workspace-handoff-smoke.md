@@ -37,6 +37,7 @@ the listener and temporary state are retired when the scenario ends.
 | H786-06 client isolation | Source selection/draft and a second browser's independent selection/draft survive creation and delivery. Only `Open chat` navigates the requester. | Keep current work in place until explicit navigation. |
 | H786-07 stale folder | Removing only the empty reviewed fixture folder before confirmation shows failure, with no new target or input. | Changed target authority requires a new review. |
 | H786-08 bounded UI | Desktop, 390px and 320px screenshots, no horizontal overflow or uncaught page error; no idle receipt polling. | Review remains readable on narrow screens and stays quiet when idle. |
+| H786-09 explicit request starts directly | Agent dispatches `session.handoff.start` with no confirmation UI/action; one target and exact input survive a lost real reply, a fresh-command retry with the same request ID, reload and status reads. Both clients retain their drafts/selection; the other client cannot see the receipt. | Act on the user's request without asking again; keep suggestions reviewable. |
 
 `result.json` records elapsed time, isolated client identities, the real accepted
 receipt and backend witnesses before/after. These single-run timings are early
@@ -79,3 +80,25 @@ fixed before the final run. The registry ownership checks separately passed
 On this ARM DTU Chromium required process-local `--no-zygote --single-process
 --disable-gpu` launch arguments. The scenario uses separate browser processes to
 keep both clients independent; it does not change browser launch policy elsewhere.
+
+## Clarified direct-start behavior (0.20.174)
+
+The user's October 16 clarification supersedes mandatory confirmation for an
+explicit request. The existing eight review outcomes remain covered; H786-09
+adds direct execution without changing the frozen inventory or scenario count.
+On the owned DTU, the combined scenario passed in **8.057s** against backend and
+built client **0.20.174 / b1233792339f6a5f**. Direct start reached acceptance in
+**464ms**, with zero confirmation actions and exactly one additional chat/input.
+Review visibility was 81ms, reload 237ms, and confirmation reconciliation 315ms.
+The recipient remains synthetic; this proves dispatch and recovery, not live
+provider completion. Evidence and exact source/build hashes are retained under
+`output/direct-handoff786-20261017/browser/root-admission-qualified`.
+Earlier candidates remain retained separately; the final run includes root
+transport/generation admission checks and 83 matching host/DTU source/assets hashes.
+
+The questions smoke also co-renders a real pending handoff and question, saves
+drafts, reloads, cancels the handoff and checks exactly one question card before
+continuing the original answer/retry/voice/mobile checks. Shipped 0.20.173 failed
+that uniqueness check (three cards); distinct sibling component keys in 0.20.174
+passed. This cross-component check prevents the previous isolated handoff smoke
+from hiding an adjacent question-card regression.
