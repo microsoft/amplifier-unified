@@ -1,5 +1,10 @@
 # Saved MCP view diagnostics and recovery
 
+This records the October16 implementation and its original limits. The user
+approved the bounded #808 review/update path on October17; see
+[the subsequent qualification](mcp-contract-review-20261017.md). The authentic
+saved Studious #807 qualification remains open.
+
 Qualification date: October 16, 2026. Baseline:
 `e4139b8fff97252debdb7d4fb72a9d1ca396f894`, version 0.20.169. Canonical owners are
 the host's MCP binding/agent Canvas scope and the web client's official AppBridge.

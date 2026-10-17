@@ -1,5 +1,20 @@
 # Standard UX inventory and execution plan
 
+## Scale follow-up coverage (October 17)
+
+The original inventory and frozen outcome counts remain unchanged. The additive
+[settled navigation checks](settled-shell633-qualification.md) verify fresh
+filters, independent client drafts, canonical directory changes, pending reads,
+explicit retries and cleanup while avoiding redundant completed-result assembly.
+The [bounded encoding checks](batched-projection633-qualification.md) verify exact
+bytes and limits, stop/failure cleanup and concurrent spool reservations. Their
+fixed-input microbenchmark measures encoding only; it is not an app latency claim.
+Both test groups belong to full Python coverage. [Integrated copied-scale browser
+measurements](copied-scale-176.md) retain separate source/runtime identities and
+current versus desired timings; deterministic local workers do not qualify
+live-provider performance. All functional flows passed; warm-send and 12-worker
+streaming targets remain unresolved and #633 stays open.
+
 ## Current follow-up smoke coverage (October 16)
 
 | Case / owner | Current evidence | Desired result and limits |
@@ -487,3 +502,112 @@ public readiness, supplied certificates, real occupied ports, bind-error guidanc
 and browser opening only after successful binds. See
 [listener readiness qualification](onboarding-listener-readiness.md).
 These do not establish native client trust or remote DNS reachability.
+
+### Live Work timer reporting (October 16)
+
+**VIEW-LIVE-TIMER** strengthens the existing `sidebar-activity` browser owner in
+Public readiness; it adds no duplicate lane or frozen-inventory count. Emit
+synthetic progress every 600 ms, slower than the 300 ms automatic view-report
+debounce, while the user watches a running chat. Require its visible elapsed
+time to advance, stable sidebar order and catalog identity, and zero repeated
+shell/view requests during the 2.2-second steady observation window. Preserve
+the other client's draft and reference, held-input identity and once-only
+acknowledgement behavior.
+
+In the isolated DTU, the unchanged packaged 0.20.172 client emitted three view
+reports in that interval; their only changing control field was the Work
+button's elapsed label. The corrected single-turn browser path emits zero
+reports while the timer advances. A renderer regression covers both single and
+grouped Work labels across advancing time and an interrupted terminal outcome.
+It preserves readable elapsed time, expand/collapse state and real outcome
+changes; automatic observations omit redundant live timing already owned by
+the host. These are synthetic no-model proofs, not live-provider latency or
+native-device acceptance. The earlier hosted failure recorded one unexpected
+view request without its payload, so the reproduced defect is not a claim to
+have recovered that exact request's contents.
+
+### Activity inbox baseline (October 16)
+
+The existing `attention-inbox` readiness owner now establishes an empty inbox
+before seeding its exact completion/question/approval counts. A fresh host may
+already be caught up: its visible **Mark all reviewed** button is disabled, so
+setup must only click it when enabled, then require both **All caught up** and
+the disabled action. Isolated diagnostic runs exercised an already empty inbox
+and a known update notice, preserving all later retry, cross-client, badge,
+pending-action and mobile assertions. The original fixture fails on the empty
+baseline; the corrected fixture passes both. This is a harness correction, not
+a change to the app's attention behavior or a new duplicate test lane.
+
+### Numbered chat shortcuts and diagram viewing (October 17)
+
+Add `chat-shortcuts` to the extended browser plan: reveal after a held Alt+Shift
+gesture, freeze nine distinct rendered chat identities across live reorder,
+select through the ordinary guarded row, exclude collapsed rows, and leave
+typing, IME, dialogs and browser tab shortcuts untouched. Require zero row
+geometry change and dismissal on Escape, release and blur. Draft retention,
+dirty-view navigation and scoped/narrow cases remain explicit acceptance items.
+The browser proof does not certify native OS input-source bindings.
+
+Promote the existing `diagram-navigation` scenario into the extended plan as its
+sole automatic owner. Preserve its 22 Mermaid/DOT pan, zoom, touch cancellation,
+persistence and narrow-fit checks; add always-visible ordinary controls, authored
+source/style preservation, optional node details and non-overlapping default
+network layout. Current focused result is 25 passing outcome groups, with zero
+page errors. Embedded scrolling remains owned by Public readiness; the special
+installed-package original-artifact harness remains separate. No frozen inventory
+count or 65-scenario migration hash is relabeled by these additive checks.
+
+### Everyday Automation overview and reviewed recovery (October 17)
+
+**AUTO-277-679** is additive ordinary navigation coverage. Its sole source-browser
+owner is `automation-hub` in extended Browser checks, with no change to the frozen
+65-scenario baseline. From navigation, discover a bounded schedule page, inspect
+its owning chat and future occurrence, page/refresh explicitly, and open the
+existing Work & automation controls while preserving the user's draft. Review
+future new-task runs from a failed owner without warming it; require explicit Stop
+acknowledgement; prove one actual due admission after review and checkpoint.
+Unknown prior work, changed authority/configuration and later Stop remain refused.
+See [the checklist, measured results and limits](automation-hub-277-679.md).
+
+### Saved tool contract review (October 17)
+
+The existing MCP recovery browser scenario now owns explicit contract comparison,
+approval of existing action names, optional updated-document adoption and retention
+of another client's unfinished input. Add delayed contract-read success/failure
+after a view revision changes, and delayed approval completion after revision or
+close, to the review lifecycle checklist. Hold the post-approval status read,
+change authority, then release it and verify the newer refusal remains visible.
+The five deterministic frontend checks pass; desired behavior is no obsolete
+review, error or refresh in the newer view.
+The original Studious artifact remains unavailable and is not counted as qualified.
+
+**MCP-REVIEW-09** records the full-run layout regression: optional review added
+43.78125 pixels above a healthy tool. The existing `smart-tools` owner must retain
+its no-gap Canvas geometry assertion. The existing `mcp-recovery` owner also
+checks that required review remains visible with Canvas options closed, while a
+healthy tool exposes optional review only through those options. Existing input
+preservation, denied new actions and explicit document replacement assertions
+remain unchanged. These are added outcomes in the existing owners, not another
+browser lane or a change to the frozen inventory counts.
+
+### Recent Work receipt recovery (October 17)
+
+**WORK-832** adds publication-race and recovery checks to the existing
+`tests/test_work_windows.py` owner in Full Python checks. Hold a cached source
+probe across published invalidation, then require quiet recovery with the exact
+accepted receipt and no false worker failure. Cover owner/source/fence replacement
+with both late success and late failure; neither may overwrite newer status.
+Real source errors must retain retry/backoff, and quiet cache reuse must restore
+the receipt. Include removal before task admission and explicit latest-page
+replacement. The existing `execution-inspection` extended browser scenario remains
+the sole browser owner for a current recent-events receipt, live/terminal Work,
+retry, copy and reload. See [qualification and limits](work-receipt832.md).
+No frozen inventory or 65-scenario migration hash changes.
+
+**INTERIM-832** strengthens the existing extended `interim-replies` owner. Before
+testing long-scrollback completion and the explicit Jump to latest transition,
+require this generation's rendered message and exact completed-response binding.
+A delayed real terminal frame must not be mistaken for settled browser layout.
+Keep the existing zero-folded-group while reading and one-group after the user's
+return-to-latest assertions. [The diagnostic](interim-browser-terminal832.md)
+preserves the forced failing ordering separately; no folding behavior changed.

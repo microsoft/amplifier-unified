@@ -16,6 +16,18 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 
+def saved_history(store, session_id):
+    """Inspect one native checkpoint while the idle worker may park/save.
+
+    history.snapshot awaits its own checkpoint, not the independently scheduled
+    idle checkpoint. Use the writer's existing cross-process lock for assertions;
+    never retry a rejected read or bypass SessionStore's integrity checks.
+    """
+    from amplifier_foundation.session.metadata import metadata_lock
+    with metadata_lock(store.directory(session_id)):
+        return store.load(session_id)
+
+
 async def main():
     root = Path(sys.argv[1]).resolve()
     workspace = root/'workspace'; workspace.mkdir(parents=True)
@@ -63,7 +75,8 @@ async def mount(coordinator, config=None):
             'context': {'module': 'context-switchfixture', 'source': str(package.parent), 'config': {'max_tokens': budget}}},
             'providers': [{'module': 'provider-fixture', 'source': str(provider.parent), 'config': {'fail': name=='bad'}}]}
         bundle = root/(name+'.yaml'); bundle.write_text(json.dumps(plan)); bundles[name] = str(bundle)
-    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.module_failures import ConfiguredModuleError, REMEDIATION
     from amplifier_web.service import AppService
     from amplifier_web.management import Management
     from amplifier_web.host.storage import SessionStore
@@ -88,7 +101,7 @@ async def mount(coordinator, config=None):
     try:
         await app.management.ensure_runtime(source)
         await runtime.control(sid, 'history.snapshot', {})
-        history = store.load(sid)[0]
+        history = saved_history(store, sid)[0]
         first_pid = runtime.workers[sid]['process'].pid
         await perform(app.management, 'bundle.preview', {'sessionId':sid, 'bundle':bundles['second']})
         assert runtime.workers[sid]['process'].pid == first_pid
@@ -96,23 +109,27 @@ async def mount(coordinator, config=None):
         await perform(app.management, 'bundle.switch', {'sessionId':sid,'bundle':bundles['second'],'previewId':preview['previewId']})
         second_pid = runtime.workers[sid]['process'].pid
         assert second_pid != first_pid
-        assert store.load(sid)[0] == history
-        assert store.load(sid)[1]['bundle_name'] == bundles['second']
+        saved, metadata = saved_history(store, sid)
+        assert saved == history
+        assert metadata['bundle_name'] == bundles['second']
         controls = await runtime.control(sid,'configuration.providers',{})
         assert controls['effective']['model']=='fixture' and controls['effective']['effort']=='high'
         assert json.loads(states.joinpath('control-state.json').read_text())['budget']['contextTokens']==2000000
         await perform(app.management, 'bundle.switch', {'sessionId':sid,'bundle':bundles['first']})
         third_pid = runtime.workers[sid]['process'].pid
         assert len({first_pid,second_pid,third_pid})==3
-        before = store.load(sid)
+        before = saved_history(store, sid)
         try:
             await perform(app.management, 'bundle.switch', {'sessionId':sid,'bundle':bundles['bad']})
-        except RuntimeStartupError:
-            pass
+        except ConfiguredModuleError as exc:
+            assert exc.failures == [{'module': 'provider-fixture', 'type': 'provider',
+                'instance_id': 'fixture', 'reason_code': 'provider_mount_failed',
+                'guidance': REMEDIATION['provider_mount_failed']}], exc.failures
         else:
             raise AssertionError('Broken replacement was accepted')
-        assert store.load(sid)[0] == before[0]
-        assert store.load(sid)[1]['bundle_name'] == bundles['first']
+        saved, metadata = saved_history(store, sid)
+        assert saved == before[0]
+        assert metadata['bundle_name'] == bundles['first']
         assert source['bundle']==bundles['first'] and source['bundleChange']['phase']=='error'
         restored_pid = runtime.workers[sid]['process'].pid
         assert restored_pid not in {first_pid,second_pid,third_pid}
@@ -128,7 +145,8 @@ async def mount(coordinator, config=None):
         print(json.dumps({'reviewed_and_direct_switch':True,'fresh_worker_per_revision':True,
             'previous_worker_reaped_before_spawn':True,
             'same_name_cached_child':True,'history_preserved':True,'model_effort_preserved':True,
-            'old_budget_reset':True,'failed_mount_rolled_back':True,'restored_worker_usable':True,
+            'old_budget_reset':True,'failed_mount_diagnostic':'provider_mount_failed',
+            'failed_mount_rolled_back':True,'restored_worker_usable':True,
             'model_calls':0,'replayed_work':False,'mounts':mounts}))
     finally:
         await app.close()
@@ -136,4 +154,5 @@ async def mount(coordinator, config=None):
         assert all(process.returncode is not None for process in processes)
 
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())

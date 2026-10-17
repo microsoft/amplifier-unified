@@ -62,6 +62,40 @@ def source_settings(service, source, plan):
     return result
 
 
+
+def normalized_controls(controls, selection):
+    """Only execution-equivalent representation differences are normalized."""
+    value = copy.deepcopy(controls)
+    # The selected model is already an authoritative top-level binding; retain
+    # one consistent copy for the inherited runtime even before first persist.
+    if selection: value['selection'] = copy.deepcopy(selection)
+    else: value.pop('selection', None)
+    if value.get('mode') is None: value.pop('mode', None)
+    if 'budget' in value:
+        value['budget'] = {key: item for key, item in value['budget'].items() if item is not None}
+        if not value['budget']: value.pop('budget')
+    if 'configurator' in value:
+        settings = value['configurator']
+        if 'disabled' in settings:
+            settings['disabled'] = {key: sorted(set(items)) for key, items in settings['disabled'].items() if items}
+            if not settings['disabled']: settings.pop('disabled')
+        if not settings: value.pop('configurator')
+    return value
+
+
+def configuration_matches(previous, current):
+    expected = previous.get('configurationHash')
+    return (isinstance(expected, str) and len(expected) == 64
+            and all(char in '0123456789abcdef' for char in expected)
+            and expected in {current.get('configurationHash'), current.get('legacyConfigurationHash')})
+
+
+def configuration_changes(previous, current):
+    before, after = previous.get('configurationParts'), current.get('configurationParts')
+    if not before or not after: return []
+    return sorted(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
+
+
 def template(service, source):
     identity = source.get('runtimeSessionId') or source['id']
     directory = service.data_dir / 'sessions' / identity
@@ -84,8 +118,17 @@ def template(service, source):
     sources = source_settings(service, source, plan)
     if sources:
         config['sourceSettings'] = sources
+    legacy = fingerprint(config)
+    config['controls'] = normalized_controls(controls, selection)
+    categories = {key: config.get(key) for key in ('workspace', 'bundle', 'selection', 'sourceSettings', 'location')}
+    from .runtime_controls import PLAN_KEYS
+    categories.update({'plan.' + key: plan.get(key) for key in PLAN_KEYS})
+    categories['plan.other'] = {key: value for key, value in plan.items() if key not in PLAN_KEYS}
+    categories.update({'controls.' + key: value for key, value in config['controls'].items()})
     return config, {**location, 'workspace': config['workspace'], 'bundle': config['bundle'],
-                    'selection': public_config(selection), 'configurationHash': fingerprint(config)}
+                    'selection': public_config(selection), 'configurationHash': fingerprint(config),
+                    'legacyConfigurationHash': legacy,
+                    'configurationParts': {key: fingerprint(value) for key, value in categories.items()}}
 
 
 def prepare(service, args, origin, caller_session_id):
@@ -119,7 +162,7 @@ def prepare(service, args, origin, caller_session_id):
     if source.get('configurationBusy') or source.get('fileAccessPending'):
         raise ValueError('Source configuration is changing; review it again')
     config, summary = template(service, source)
-    if inheritance['configurationHash'] != summary['configurationHash']:
+    if not configuration_matches(inheritance, summary):
         raise ValueError('The reviewed source configuration changed; preview again')
     if args.get('selection') and args['selection'] != config['selection']:
         raise ValueError('The explicit model selection must match the reviewed inherited configuration')

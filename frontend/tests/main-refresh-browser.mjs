@@ -2,6 +2,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {settingsButton} from './browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/main_refresh_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
@@ -38,10 +39,10 @@ try{
  await page.getByRole('button',{name:'Focus canvas',exact:true}).click();await expect(panel).toHaveAttribute('data-focused','true');
  await page.keyboard.press('Escape');await expect(panel).toHaveAttribute('data-focused','false');
  await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await settingsButton(page).click();
  await expect(page.getByRole('button',{name:'Help me with settings',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
- await page.getByRole('button',{name:'Activity',exact:true}).click();
+ await page.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/}).click();
  await expect(page.getByRole('region',{name:'Activity to review',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  for(const scheme of ['light','dark']){

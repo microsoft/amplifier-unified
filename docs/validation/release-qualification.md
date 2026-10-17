@@ -65,6 +65,33 @@ runtime checks require their declared runtime dependencies; report host-only
 skips accurately. Keep source, state, services and ports isolated and clean up
 owned temporary resources after evidence is retained.
 
+### Real filesystem-permission browser checks
+
+`native-history-error-browser.mjs` and `standard-ux-storage-denial-browser.mjs`
+require actual OS read/write refusal. Run their existing assertions as an
+unprivileged fixture owner. On Linux, a root-owned disposable environment may
+instead launch only the test process and descendants with `setpriv
+--bounding-set=-dac_override,-dac_read_search
+--inh-caps=-dac_override,-dac_read_search
+--ambient-caps=-dac_override,-dac_read_search --no-new-privs --`.
+Do not change the container's or shared service's privileges.
+
+Before execution, prove that the exact child identity cannot read an owned
+mode-000 file, then can restore its mode and read the unchanged bytes. Record
+UID/GID, effective/permitted/bounding/ambient capabilities and `NoNewPrivs`.
+Also prove that this identity can traverse and import the exact interpreter,
+installed dependencies, browser binaries and evidence adapters. If a shared
+dependency lives behind a private home, use task-owned byte-verified copies;
+never broaden shared permissions. Keep source/package identities unchanged and
+disable bytecode writes when reusing dependency directories.
+
+A privileged read succeeding, a missing prerequisite or a startup error is not
+permission-denial acceptance. Preserve those failed attempts separately. Retain
+the ordinary browser assertions and strict process-owner cleanup result: both
+cases must pass without residual-process retirement. This prerequisite applies
+to local and CI owners; it does not add a universal release gate or establish
+Windows/macOS permission behavior.
+
 ### Focused default-capability qualification
 
 For changes to default composition, forwarding, desktop permissions or routing,
@@ -327,7 +354,7 @@ prebuilt wheels remains a separate proposal.
 ## Published Core binaries
 
 The app host, worker project and Work acceptance project require
-`amplifier-core>=2.0.1` from PyPI. This is a minimum supported release, not a
+`amplifier-core>=2.0.2` from PyPI. This is a minimum supported release, not a
 standing exact-version pin. Core's Git source override is removed. The uv
 `no-build-package` policy forbids compiling Core; other source dependencies can
 still build. The worker uses the same explicit public index as the host so an

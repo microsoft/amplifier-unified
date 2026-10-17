@@ -16,7 +16,7 @@ def definitions(schema, string):
             schema({**target, **client}, ['sessionId', 'messageId'])),
         'message.replyClear': ('Remove the selected quoted reply from one browser composer, preserving its text. expectedReplyId prevents removing a newer quote.',
             schema({'sessionId': string(200), 'expectedReplyId': string(64), **client}, ['sessionId', 'expectedReplyId'])),
-        'message.reaction': ('Set or remove a shared single-user emoji reaction on a saved message. present is the desired state, so repeating it never toggles twice. Does not send a turn or notify anyone.',
+        'message.reaction': ('Set or remove your emoji reaction on a saved message. The host attributes agent calls to Amplifier and interactive calls to the user; each changes only its own reactions. Agents may react only to human messages in their own conversation. present is the desired state, so retries never toggle twice. A reaction can acknowledge a simple request without a written reply; it does not claim work completed, send a turn, or notify anyone.',
             schema({**target, 'emoji': {'enum': REACTIONS}, 'present': {'type': 'boolean'}}, ['sessionId', 'messageId', 'emoji', 'present'])),
         'message.reveal': ('Reveal a saved message in a connected browser displaying the calling chat. Loads presentation history only; never runs or replays work. Unavailable originals keep their quoted snapshot.',
             schema({**target, **client}, ['sessionId', 'messageId'])),
@@ -64,20 +64,27 @@ def reconcile_native_reveal(session, native):
         session["messages"].insert(position, native)
 
 
-def command(service, action, args):
+def command(service, action, args, *, origin="ui"):
     from .service import AppError
     session = service._session(args['sessionId'])
     if action == 'message.reaction':
         row = message(session, args['messageId'])
+        actor = 'assistant' if origin == 'agent' else 'user'
+        if actor == 'assistant' and (row['role'] != 'user'
+                or row.get('inputOrigin') in {'agent', 'peer', 'scheduler'}
+                or row.get('via') in {'peer', 'schedule'}
+                or service.peer_attribution.resolve(session, [row])[0].get('attribution')):
+            raise AppError('Amplifier can react only to a human message in this conversation.', 400)
+        key = 'assistantReactions' if actor == 'assistant' else 'reactions'
         annotations = session.setdefault('messageAnnotations', {}).setdefault(row['id'], {})
-        selected = set(annotations.get('reactions', []))
+        selected = set(annotations.get(key, []))
         (selected.add if args['present'] else selected.discard)(args['emoji'])
         updated = [emoji for emoji in REACTIONS if emoji in selected]
-        if updated != annotations.get('reactions', []):
+        if updated != annotations.get(key, []):
             session['messageAnnotationRevision'] = session.get('messageAnnotationRevision', 0) + 1
-        annotations['reactions'] = updated
+        annotations[key] = updated
         return {'sessionId': session['id'], 'messageId': row['id'], **copy.deepcopy(annotations),
-                'annotationRevision': session.get('messageAnnotationRevision', 0), 'sent': False}
+                'annotationRevision': session.get('messageAnnotationRevision', 0), 'reactionActor': actor, 'sent': False}
     client = service.clients.record()
     if client is None or action != 'message.reveal' and service.state.get('selectedSessionId') != session['id']:
         raise AppError('Choose a connected browser displaying this conversation.', 409)
@@ -163,8 +170,9 @@ def read_annotations(session, identities):
         raise ValueError('Choose between 1 and 100 distinct message IDs.')
     annotations = session.get('messageAnnotations', {})
     return {'sessionId': session['id'], 'revision': session.get('messageAnnotationRevision', 0),
-            'items': {key: {'reactions': [emoji for emoji in annotations.get(key, {}).get('reactions', [])
-                                       if emoji in REACTIONS]} for key in identities}}
+            'items': {key: {field: [emoji for emoji in annotations.get(key, {}).get(field, [])
+                                  if emoji in REACTIONS]
+                            for field in ('reactions', 'assistantReactions')} for key in identities}}
 
 
 def install_routes(app):

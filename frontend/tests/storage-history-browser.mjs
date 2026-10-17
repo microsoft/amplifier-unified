@@ -1,3 +1,4 @@
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -5,7 +6,8 @@ import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/storage_history_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
-let browser,browser2,vite;
+const stop=ownFixture(fixture,{label:"Storage history fixture"});
+let browser,vite,failure;
 try{
  const target=await new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(Error('Fixture timed out')),20000);let output='';
@@ -66,4 +68,5 @@ try{
  await expect(filter).toBeVisible();assert.ok(await page.locator('#amp-one').evaluate(el=>el.scrollWidth<=el.clientWidth));
  await page.screenshot({path:'/tmp/unified-storage-history-mobile.png'});
  assert.deepEqual(errors,[]);console.log('PASS: project and single-session cleanup, retained project files, breadcrumbs, filter/sort layout, cached back/revisit/cancel, refresh and leave invalidation, mobile.');
-}finally{await browser?.close();await vite?.close();fixture.kill()}
+}catch(error){failure=error;throw error}
+finally{await finishFixture({label:"Storage history fixture",close:[["Storage browser",()=>browser?.close()],["Storage Vite",()=>vite?.close()]],stop,originalError:failure})}
