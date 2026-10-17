@@ -580,3 +580,17 @@ change authority, then release it and verify the newer refusal remains visible.
 The five deterministic frontend checks pass; desired behavior is no obsolete
 review, error or refresh in the newer view.
 The original Studious artifact remains unavailable and is not counted as qualified.
+
+### Recent Work receipt recovery (October 17)
+
+**WORK-832** adds publication-race and recovery checks to the existing
+`tests/test_work_windows.py` owner in Full Python checks. Hold a cached source
+probe across published invalidation, then require quiet recovery with the exact
+accepted receipt and no false worker failure. Cover owner/source/fence replacement
+with both late success and late failure; neither may overwrite newer status.
+Real source errors must retain retry/backoff, and quiet cache reuse must restore
+the receipt. Include removal before task admission and explicit latest-page
+replacement. The existing `execution-inspection` extended browser scenario remains
+the sole browser owner for a current recent-events receipt, live/terminal Work,
+retry, copy and reload. See [qualification and limits](work-receipt832.md).
+No frozen inventory or 65-scenario migration hash changes.
