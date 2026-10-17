@@ -14,6 +14,7 @@ No inferred historical turn association or resolver architecture is qualified.
 """
 
 import asyncio
+import hashlib
 import json
 import time
 from contextlib import asynccontextmanager
@@ -72,7 +73,7 @@ async def _emit(service, sid, event):
     await service.on_runtime_event(*normalized)
 
 
-async def _seed(service, calls):
+async def _seed(service, calls, audit=None):
     await service.dispatch("session.create", {})
     session = service._session()
     sid = session["id"]
@@ -108,9 +109,16 @@ async def _seed(service, calls):
                 assert row["turnId"] == INPUT_ID
                 assert row["sessionId"] == row["rootSessionId"] == sid
                 stamp = row["startedAt"] if name == "tool:pre" else row["endedAt"]
-                stream.write(json.dumps({"event": name, "timestamp": stamp,
-                    "session_id": sid, "data": data}, ensure_ascii=False) + "\n")
+                encoded = json.dumps({"event": name, "timestamp": stamp,
+                    "session_id": sid, "data": data}, ensure_ascii=False) + "\n"
+                offset = stream.tell()
+                stream.write(encoded)
                 stream.flush()
+                if audit is not None:
+                    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+                    audit["authored"][f"event:{sid}:{offset}:{digest[:16]}"] = {
+                        "call": call["call"], "event": name, "path": str(path),
+                        "offset": offset, "sha256": digest}
                 kind, payload = normalize_event(envelope, sid)
                 assert kind == "execution.event" and not BODY_FIELDS.intersection(payload)
                 await service.on_runtime_event(kind, payload)
@@ -131,28 +139,66 @@ async def _seed(service, calls):
 
 
 @asynccontextmanager
-async def _scenario(authenticated_client, tmp_path, later_calls, reopen):
+async def _scenario(authenticated_client, tmp_path, later_calls, reopen, audit=None):
     home = tmp_path / "regular-detail-app"
     app = await create_app(home, workspace=tmp_path, runtime=Runtime(),
                            voice=False, background_updates=False, preload_providers=False)
     client = await authenticated_client(app)
     stream = None
+    patch = pytest.MonkeyPatch()
     try:
         service = app["service"]
         calls = _calls(later_calls)
-        sid, user_id, interim_id, final_id = await _seed(service, calls)
+        if audit is not None:
+            from amplifier_web import session_files
+            from amplifier_web.event_window import _source
+            from amplifier_web.work_windows import source_identity
+            audit.update(authored={}, diagnostic={}, sources=[])
+            original_append = session_files.append_event
+            call_ids = {call["call"] for call in calls}
+
+            def observed_append(workspace, identity, event, data):
+                receipt = original_append(workspace, identity, event, data)
+                if data.get("tool_call_id") in call_ids and event in {"tool:pre", "tool:post"}:
+                    assert len(audit["diagnostic"]) < 2 * len(calls), "Diagnostic receipt budget exceeded"
+                    key = f"event:{identity}:{receipt['offset']}:{receipt['sha256'][:16]}"
+                    audit["diagnostic"][key] = {
+                        "call": data["tool_call_id"], "event": event,
+                        "path": receipt["$event"], "kind": data.get("kind"),
+                        "turnId": data.get("turnId"), "inputId": data.get("input_id"),
+                        "inputPresent": "tool_input" in data or "input" in data,
+                        "outputPresent": "result" in data}
+                return receipt
+
+            patch.setattr(session_files, "append_event", observed_append)
+
+            def snapshot(label, owner):
+                source = source_identity(owner)
+                path, identity, _ = _source(source)
+                audit["sources"].append({
+                    "label": label, "descriptor": source, "path": str(path),
+                    "identity": identity, "contextIntelligence":
+                    "contextIntelligence" in owner.get("runtimeReport", {})})
+
+        sid, user_id, interim_id, final_id = await _seed(service, calls, audit)
+        if audit is not None:
+            snapshot("seeded", service._session(sid, hydrate=False))
         if reopen:
             # Reload real stores, not a copied execution dict or replayed rows.
             old_service = service
             await client.close()
             assert old_service.closed
             assert not old_service.runtime.sent and not old_service.runtime.started
+            if audit is not None:
+                snapshot("closed", old_service._session(sid, hydrate=False))
             app = await create_app(home, workspace=tmp_path, runtime=Runtime(),
                                    voice=False, background_updates=False, preload_providers=False)
             service = app["service"]
             client = await authenticated_client(app)
             assert service is not old_service
             restored = service._session(sid)
+            if audit is not None:
+                snapshot("reopened", restored)
             assert not any(row.get("liveObservation")
                            for row in restored.get("execution", {}).get("nodes", []))
 
@@ -171,6 +217,7 @@ async def _scenario(authenticated_client, tmp_path, later_calls, reopen):
         if stream is not None:
             await stream.close()
         await client.close()
+        patch.undo()
 
 
 async def _get(client, query):
@@ -427,4 +474,69 @@ async def test_regular_saved_observation_bodies(
             assert isinstance(row.get(field + "Detail"), dict), (
                 "Saved bodies must be read through their returned owned reference")
             await _field(client, sid, row, field, body)
+        assert not service.runtime.sent and not service.runtime.started
+
+
+@pytest.mark.parametrize("later_calls", [0, 140], ids=["recent", "behind-tail"])
+async def test_cold_observation_exact_origin_diagnostic(authenticated_client, tmp_path, later_calls):
+    """Diagnostic only: distinguish authored bodies from fallback receipts.
+
+    The original cold ownership/body tests remain unchanged and failing.
+    No event file is reread: identities come from bytes this fixture wrote and
+    transparent append receipts, compared with the supported bounded HTTP read.
+    """
+    audit = {}
+    async with _scenario(authenticated_client, tmp_path, later_calls, True, audit) as fixture:
+        service, client, calls, sid, _, _, _ = fixture
+        observations, before, cursors = {}, None, set()
+        for _ in range(8):
+            query = {"sessionId": sid, "part": "groups"}
+            if before is not None:
+                query["before"] = before
+            page = await _get(client, query)
+            assert not page["unavailableRanges"]
+            for group in page["items"]:
+                nodes = await _get(client, {"sessionId": sid, "part": "nodes",
+                    "group": group["id"], "revision": group["detailRevision"]})
+                assert nodes["before"] is None
+                for row in nodes["items"]:
+                    assert row["id"] not in observations
+                    observations[row["id"]] = row
+            before = page["before"]
+            if before is None:
+                assert page["coverage"]["rootExhausted"]
+                break
+            assert before not in cursors
+            cursors.add(before)
+        else:
+            pytest.fail("Diagnostic exceeded eight bounded pages")
+
+        authored = set(audit["authored"])
+        diagnostic = set(audit["diagnostic"])
+        print("REGULAR-EXACT-ORIGINS", {
+            "authored": len(authored), "authoredVisible": len(authored & observations.keys()),
+            "diagnostic": len(diagnostic), "diagnosticVisible": len(diagnostic & observations.keys()),
+            "sources": audit["sources"]})
+        assert len(authored) == 2 * len(calls)
+        assert authored <= observations.keys(), "An authored record is not visible"
+        assert len(diagnostic) == 2 * len(calls)
+        assert diagnostic <= observations.keys(), "A fallback receipt is not visible"
+        assert authored.isdisjoint(diagnostic)
+        assert len({row["path"] for row in audit["sources"]}) == 1
+        by_call = {call["call"]: call for call in calls}
+        for identity in authored:
+            row = observations[identity]
+            expected = audit["authored"][identity]
+            assert row["inputId"] == INPUT_ID
+            assert (row["toolCallId"], row["event"]) == (expected["call"], expected["event"])
+            field = "input" if row["event"] == "tool:pre" else "output"
+            await _field(client, sid, row, field, by_call[expected["call"]][field])
+        for identity in diagnostic:
+            row = observations[identity]
+            receipt = audit["diagnostic"][identity]
+            assert receipt["kind"] == "tool" and receipt["turnId"] == INPUT_ID
+            assert receipt["inputId"] is None
+            assert not receipt["inputPresent"] and not receipt["outputPresent"]
+            assert "inputId" not in row
+            assert "inputDetail" not in row and "outputDetail" not in row
         assert not service.runtime.sent and not service.runtime.started
