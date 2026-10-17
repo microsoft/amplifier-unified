@@ -327,7 +327,7 @@ prebuilt wheels remains a separate proposal.
 ## Published Core binaries
 
 The app host, worker project and Work acceptance project require
-`amplifier-core>=2.0.1` from PyPI. This is a minimum supported release, not a
+`amplifier-core>=2.0.2` from PyPI. This is a minimum supported release, not a
 standing exact-version pin. Core's Git source override is removed. The uv
 `no-build-package` policy forbids compiling Core; other source dependencies can
 still build. The worker uses the same explicit public index as the host so an
