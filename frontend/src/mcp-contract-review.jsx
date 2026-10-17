@@ -1,21 +1,24 @@
-import React,{useEffect,useState} from 'react';
+import React,{useEffect,useRef,useState} from 'react';
 import './mcp-contract-review.css';
 
 export function McpContractReview({canvas,recovery,command,onApplied}){
  const [review,setReview]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[replace,setReplace]=useState(false),[discard,setDiscard]=useState(false);
- useEffect(()=>{setReview(null);setReplace(false);setDiscard(false);setError('')},[canvas.id,canvas.revision,recovery?.bindingRevision]);
+ const generation=useRef(0);
+ useEffect(()=>{generation.current++;setReview(null);setReplace(false);setDiscard(false);setError('');setBusy(false);return()=>{generation.current++}},[canvas.id,canvas.revision,canvas.readOnlyVersion,recovery?.bindingRevision]);
  if(!recovery||!['ready','reconnect_required','contract_changed','review_required'].includes(recovery.status)||canvas.readOnlyVersion)return null;
  const read=async()=>{
+  const request=++generation.current;
   setBusy(true);setError('');
-  try{setReview(await command('smartTools.reviewView',{canvasId:canvas.id,expectedBindingRevision:recovery.bindingRevision}))}
-  catch(error){setError(error.message)}finally{setBusy(false)}
+  try{const value=await command('smartTools.reviewView',{canvasId:canvas.id,expectedBindingRevision:recovery.bindingRevision});if(generation.current===request)setReview(value)}
+  catch(error){if(generation.current===request)setError(error.message)}finally{if(generation.current===request)setBusy(false)}
  };
  const apply=async()=>{
+  const request=++generation.current;
   setBusy(true);setError('');
   try{
    await command('smartTools.updateView',{canvasId:canvas.id,expectedBindingRevision:review.bindingRevision,reviewedContract:review.fingerprint,replaceDocument:replace,discardLocalInput:discard});
-   setReview(null);await onApplied();
-  }catch(error){setError(error.message)}finally{setBusy(false)}
+   if(generation.current===request){setReview(null);await onApplied()}
+  }catch(error){if(generation.current===request)setError(error.message)}finally{if(generation.current===request)setBusy(false)}
  };
  const changes=review?.changes;
  const names=(label,values)=><p><strong>{label}:</strong> {values.length?values.join(', '):'None'}</p>;

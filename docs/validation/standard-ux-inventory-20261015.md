@@ -553,3 +553,13 @@ future new-task runs from a failed owner without warming it; require explicit St
 acknowledgement; prove one actual due admission after review and checkpoint.
 Unknown prior work, changed authority/configuration and later Stop remain refused.
 See [the checklist, measured results and limits](automation-hub-277-679.md).
+
+### Saved tool contract review (October 17)
+
+The existing MCP recovery browser scenario now owns explicit contract comparison,
+approval of existing action names, optional updated-document adoption and retention
+of another client's unfinished input. Add delayed contract-read success/failure
+after a view revision changes, and delayed approval completion after revision or
+close, to the review lifecycle checklist. The four deterministic frontend checks
+pass; desired behavior is no obsolete review, error or refresh in the newer view.
+The original Studious artifact remains unavailable and is not counted as qualified.

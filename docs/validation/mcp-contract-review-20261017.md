@@ -61,3 +61,15 @@ was an older unrelated design-system application, not the October2026 MCP board
 app. It is not substituted as acceptance evidence. No external reporter message
 was sent. #807 must remain open for the actual saved artifact and original sequence;
 the independently proven host actions and safe replacement flow can still ship.
+
+## Delayed review response regression
+
+Integration review found that a held contract read could finish after the view's
+binding changed, displaying obsolete definitions or an old error in the new view.
+The host already refused stale approval. The client now discards responses from
+superseded or closed reviews, including a late approval receipt's refresh callback.
+Both read-outcome cases failed on the unchanged candidate. All four new lifecycle
+checks and the ten existing MCP viewer checks pass in the owned DTU (14 total).
+The full frontend suite owns these checks automatically through its existing glob;
+no extra browser lane was introduced. Evidence: `late-review-before.json` and
+`late-review-final.json` under the task's MCP evidence directory.
