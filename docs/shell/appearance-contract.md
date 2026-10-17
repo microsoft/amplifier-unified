@@ -222,3 +222,23 @@ upgrade by content hash. Edited custom CSS remains unchanged.
 
 `surface-radius-browser.mjs` checks computed corners for every bundled appearance
 and both schemes, narrow layouts, forced colors, reduced motion and draft retention.
+
+### Execution metrics
+
+`presentation.executionVisibility` has optional boolean `step`, `turn` and
+`conversation` entries. An explicit entry overrides Reveal for that scope;
+absence retains its default. `executionMetrics` is an allowlisted array of
+`elapsedSeconds`, `grossInputTokens`, `outputTokens`, `grossTotalTokens`,
+`cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `costUsd` and `calls`.
+Omission selects all supported fields; an empty array selects none. Updates
+replace these values using the existing revision-bound presentation protocol.
+UI edits preserve the other scope entries. `conversationStatus` enables the
+optional compact, demand-refreshed status display and defaults to false.
+
+These are display preferences. They never hide required decisions or stop/error
+state, change execution, widen authority or reinterpret accounting. Known,
+partial, estimated, live/pending and unavailable values stay distinguishable.
+Exports include selected accounting fields and bounded identity, never reasoning
+text or request/response captures. Missing context-window, queue and internal
+retry telemetry is not fabricated. Desktop and narrow layouts must wrap, and
+hidden conversation totals must not initiate an accounting read.

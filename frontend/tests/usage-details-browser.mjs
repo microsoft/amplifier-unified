@@ -50,7 +50,7 @@ try{
   else await expect(call.locator('.a-usage-breakdown')).toBeHidden();
   const line=call.locator(':scope > button');
   if(level!=='minimal'){
-   const phase=await line.locator('.a-execution-phase').boundingBox(),usageBox=await line.locator('.a-execution-usage').boundingBox();
+   const {phase,usageBox}=await line.evaluate(el=>({phase:el.querySelector('.a-execution-phase').getBoundingClientRect().toJSON(),usageBox:el.querySelector('.a-execution-usage').getBoundingClientRect().toJSON()}));
    if(Math.abs(phase.y-usageBox.y)>=2)await page.screenshot({path:`/tmp/unified-usage-alignment-${scheme}-${level}.png`,fullPage:true});
    assert.ok(Math.abs(phase.y-usageBox.y)<2,'Duration must align with first usage line: '+JSON.stringify({scheme,level,phase,usageBox,markup:await line.innerHTML()}));
   }
@@ -76,27 +76,27 @@ try{
  // A call without cache telemetry must not masquerade as 0% cached.
  await control({op:'patch',sessions:{[alpha]:{execution:{turns:[],nodes:[model,{...model,id:'model-two',usage:{inputTokens:10,outputTokens:2,totalTokens:12}}]}}}});
  await page.getByRole('button',{name:'Refresh usage',exact:true}).click();
- await expect(value(totals,'Session cost (USD)')).toHaveText('$1.62');
+ await expect(value(totals,'Session cost (USD)')).toHaveText('$1.62Partial');
  await totals.getByText('Cache and accounting details',{exact:true}).click();
- await expect(value(totals,'Read from cache')).toHaveText('80,000');
+ await expect(value(totals,'Read from cache')).toHaveText('80,000Partial');
  await expect(value(totals,'Input tokens')).toHaveText('100,010');
  await page.setViewportSize({width:390,height:844});assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
- // No placeholders before usage arrives; retain actual zeroes; add later metrics.
+ // Pending is distinct from zero; unavailable metrics remain explicit; add later metrics.
  await control({op:'patch',sessions:{[alpha]:{execution:{turns:[],nodes:[{...model,phase:'running',endedAt:null,usage:null}]}}}});
  await page.getByRole('button',{name:'Refresh usage',exact:true}).click();
- await expect(totals).toHaveCount(0);
+ await expect(value(totals,'Input tokens')).toHaveText('Pending');await expect(value(totals,'Session cost (USD)')).toHaveText('Pending');
  await control({op:'patch',sessions:{[alpha]:{execution:{turns:[],nodes:[{...model,phase:'running',endedAt:null,usage:{inputTokens:10,outputTokens:0,costUsd:0,costType:'reported'}}]}}}});
  await page.getByRole('button',{name:'Refresh usage',exact:true}).click();
  await expect(value(totals,'Input tokens')).toHaveText('10');
  await expect(value(totals,'Output tokens')).toHaveText('0');
  await expect(value(totals,'Session cost (USD)')).toHaveText('$0');
- await expect(value(totals,'Reasoning tokens')).toHaveCount(0);
- await expect(totals).not.toContainText(/partial|pending|so far|not reported/i);
+ await expect(value(totals,'Reasoning tokens')).toHaveText('Pending');
+ await expect(value(totals,'Input tokens')).not.toContainText(/partial|pending/i);
  await control({op:'patch',sessions:{[alpha]:{execution:{turns:[],nodes:[model]}}}});
  await page.getByRole('button',{name:'Refresh usage',exact:true}).click();
  await expect(value(totals,'Input tokens')).toHaveText('100,00080% cached');
  await expect(value(totals,'Reasoning tokens')).toHaveText('400');
- await expect(totals).not.toContainText(/partial|pending|so far|not reported/i);
+ await expect(value(totals,'Input tokens')).not.toContainText(/partial|pending/i);
  assert.deepEqual(payloadReads,[]);assert.deepEqual(errors,[]);
  console.log('Usage details browser passed: model/work/session parity, cache arithmetic, partial coverage, exact costs, timezone/timing, mobile layout, and no raw recording reads.');
 }finally{await browser?.close();fixture.kill()}

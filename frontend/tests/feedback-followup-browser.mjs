@@ -163,7 +163,7 @@ try{
  await usage.getByText(/3 recorded model calls/).waitFor();
  assert.match(await usage.innerText(),/30/);assert.match(await usage.innerText(),/\$0.03/);
  await page.getByText('Usage data',{exact:true}).click();
- const exported=JSON.parse(await usage.locator('pre').innerText());assert.equal(exported.calls,3);assert.equal(exported.metrics.totalTokens.value,30);
+ const exported=JSON.parse(await usage.locator('pre').innerText());assert.equal(exported.metrics.calls.value,3);assert.equal(exported.metrics.grossTotalTokens.value,30);
  assert.deepEqual(errors,[]);
  console.log('Feedback lifecycle browser passed: report/comments, unknown delivery reconciliation without reposting, persistent correction drafts, explicit original/previous/latest/proposed review and confirmation, maintainer text preservation, exact agent retry, close/reopen without body changes, independent client drafts, narrow layout, and complete conversation usage totals; no live GitHub writes.');
 }catch(error){

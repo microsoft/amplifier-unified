@@ -237,5 +237,5 @@ export function combinedWork(turns,now){
  }
  usage.costType=!usage.pricedCalls?'unavailable':usage.unknownCalls?'partial':usage.estimatedCalls?'estimated':'reported';
  return {running,phase:failure?(failure.status||failure.phase):running?'running':turns.every(turn=>['completed','complete','done','success'].includes(turn.status||turn.phase))?'completed':'recorded',
-  elapsed:intervals.length?elapsedLabel({startedAt:0,endedAt:duration}):null,usage};
+  elapsed:intervals.length?elapsedLabel({startedAt:0,endedAt:duration}):null,elapsedSeconds:intervals.length?duration:null,usage};
 }
