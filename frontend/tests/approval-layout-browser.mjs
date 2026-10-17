@@ -72,7 +72,13 @@ try{
   for(const [index,identity] of ['layout-object','layout-string',ready.grant].entries()){
    const approval=page.locator(`[data-approval-id="${identity}"]`);
    const allow=approval.getByRole('button',{name:'Allow',exact:true}),deny=approval.getByRole('button',{name:'Deny',exact:true});
-   if(index===0)await allow.focus();else await page.keyboard.press('Tab');
+   if(index===0)await allow.focus();
+   else{
+    await page.keyboard.press('Tab');
+    // Chromium includes the next request's scrollable details in tab order.
+    // Permit that exact reading stop, never skip an arbitrary focused control.
+    if(await approval.evaluate(el=>document.activeElement===el.querySelector('pre')))await page.keyboard.press('Tab');
+   }
    await visibleControl(allow);
    await page.keyboard.press('Tab');await visibleControl(deny);
    await page.keyboard.press('Shift+Tab');await visibleControl(allow);
@@ -121,10 +127,11 @@ try{
 }catch(error){failure=error;console.error(error.stack);console.error(logs)}
 finally{
  await browser?.close();
- if(fixture.exitCode===null&&fixture.pid){
+ if(fixture.exitCode===null&&fixture.signalCode===null&&fixture.pid){
   const exited=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);
-  try{const [code,signal]=await exited;if(code!==0||signal)failure||=Error(`Fixture cleanup failed: ${code} ${signal}`)}finally{clearTimeout(timer)}
+  try{await exited}finally{clearTimeout(timer)}
  }
+ if(fixture.pid&&(fixture.exitCode!==0||fixture.signalCode))failure||=Error(`Fixture cleanup failed: ${fixture.exitCode} ${fixture.signalCode}`);
  await writeFile(join(output,'approval-layout-result.json'),JSON.stringify({status:failure?'failed':'passed',results,error:failure?.stack??null,fixtureLog:logs},null,2)+'\n');
 }
 if(failure)process.exitCode=1;
