@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.175",
+      "title": "Keep Chat info controls steady while usage loads",
+      "changes": [
+        "Chat info keeps its controls in place while usage arrives or refreshes, so a late response cannot move a control out from under your click. Usage details remain available below the chat controls.",
+        "Browser checks now exercise delayed usage and workspace-starter responses, including clicks while usage is arriving.",
+        "Feedback corrections use reviewed comments and separately reviewed attachments, preserving the original report and later maintainer edits."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.174",
       "title": "Start requested chats directly and keep question cards stable",
       "changes": [
