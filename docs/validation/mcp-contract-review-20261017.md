@@ -17,7 +17,7 @@ the frozen ordinary-UX baseline or erase the October16 evidence.
 | MCP-REVIEW-06: historical action | Disabled reconnect gave no useful next action. | Always-visible Open live view explicitly selects Latest; history remains read-only until that choice. Reload saved HTML asks before resetting input. Browser/lifecycle checks passed. |
 | MCP-REVIEW-07: caller authority | Review approval must not be available to a restricted device or agent. | Restricted companion HTTP requests and agent approval rejected. Review fingerprints bind the actual reviewing client and selection generation, including away/back navigation. Python passed. |
 | MCP-REVIEW-08: original Studious saved bytes | No authenticated original saved Studious document has been available for reproduction. | **Not executed / remains open**: exact old artifact and its original host sequence are still needed. Generic cooperative SDK acceptance is not Studious acceptance. |
-| MCP-REVIEW-09: optional review and Canvas layout | The complete browser census caught a 43.78125-pixel strip above a healthy tool; its unchanged geometry assertion failed. | Healthy review belongs in Canvas options; required review stays visible when those options are closed. Focused rebuilt-client qualification is pending for this correction; the original failure is retained. |
+| MCP-REVIEW-09: optional review and Canvas layout | The complete browser census caught a 43.78125-pixel strip above a healthy tool; its unchanged geometry assertion failed. | Healthy review belongs in Canvas options; required review stays visible when those options are closed. Production build, all 1,033 frontend tests, unchanged Smart Tools geometry (8.704s) and extended MCP recovery (14.178s) passed in the owned DTU. Required review remains visible; ready-state review is inside Canvas options. The original failure is retained. |
 
 ## Executed checks and limits
 
@@ -78,3 +78,21 @@ The full frontend suite owns these checks automatically through its existing glo
 no extra browser lane was introduced. Evidence: `late-review-before.json` and
 `late-review-final.json`, plus `late-status-before.json` and
 `late-status-after.json`, under the task's MCP evidence directory.
+
+## Full-census layout correction
+
+The final combined build is `b41404f961f5873c` (311 static files). The
+full frontend suite passed 1,033 tests with no skips. The ordinary Smart Tools
+geometry assertion is unchanged. The recovery check now observes the visible
+ready status after approval, because the optional review intentionally moves
+into closed Canvas options. It still proves retained input, unchanged mutation
+count, refusal of newly added actions, explicit document replacement and the
+second client's preserved read-only iframe. No assertion was replaced by a
+forced click or an arbitrary delay. Both browser cases exited with no processes
+left for the strict owner to terminate.
+
+These final checks used Chromium 153.0.8010.12 with the owned ARM launch adapter
+(`--no-sandbox --no-zygote --disable-gpu`, without `--single-process`). This is
+separate evidence from the earlier launch workaround described above. Receipts
+and the original failing attempt are under
+`output/afk-approved-20261017/mcp-controls832`.
