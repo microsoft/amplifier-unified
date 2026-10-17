@@ -522,3 +522,15 @@ and a known update notice, preserving all later retry, cross-client, badge,
 pending-action and mobile assertions. The original fixture fails on the empty
 baseline; the corrected fixture passes both. This is a harness correction, not
 a change to the app's attention behavior or a new duplicate test lane.
+
+### Everyday Automation overview and reviewed recovery (October 17)
+
+**AUTO-277-679** is additive ordinary navigation coverage. Its sole source-browser
+owner is `automation-hub` in extended Browser checks, with no change to the frozen
+65-scenario baseline. From navigation, discover a bounded schedule page, inspect
+its owning chat and future occurrence, page/refresh explicitly, and open the
+existing Work & automation controls while preserving the user's draft. Review
+future new-task runs from a failed owner without warming it; require explicit Stop
+acknowledgement; prove one actual due admission after review and checkpoint.
+Unknown prior work, changed authority/configuration and later Stop remain refused.
+See [the checklist, measured results and limits](automation-hub-277-679.md).

@@ -399,7 +399,7 @@ for _access, _actions in {
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
         "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
-        "schedule.list", "schedule.read", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
+        "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
     },
@@ -4509,8 +4509,8 @@ class AppService:
                     raise AppError(str(exc), 409) from None
                 if row:
                     action_args[key] = row['id']
-            schedule_read = args['action'] in {'schedule.list', 'schedule.read'}
-            if schedule_read:
+            schedule_read = args['action'] in {'schedule.list', 'schedule.read', 'schedule.overview'}
+            if schedule_read and args['action'] != 'schedule.overview':
                 # The app instance is the authenticated user's library. Reads
                 # may inspect another registered chat; mutations stay caller-owned.
                 action_args.setdefault('sessionId', session_id)
@@ -4579,7 +4579,8 @@ class AppService:
                     raise AppError('References must target the calling conversation.', 409)
             if schedule_read:
                 result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), include_state=False, caller_session_id=session_id)
-                result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
+                if args['action'] != 'schedule.overview':
+                    result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_domain_receipt = args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
