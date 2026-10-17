@@ -42,6 +42,7 @@
     "build:shell-example": "node scripts/build-shell-example.mjs",
     "test:draft-switch-browser": "node tests/draft-switch-browser.mjs",
     "test:live-clients-browser": "node tests/live-clients-browser.mjs",
+    "test:chat-reference-browser": "node tests/chat-reference-browser.mjs",
     "test:review-during-send-browser": "node tests/review-during-send-browser.mjs",
     "test:typing-audit-browser": "node tests/typing-audit-browser.mjs",
     "test:bootstrap-recovery-browser": "node tests/bootstrap-recovery-browser.mjs",
