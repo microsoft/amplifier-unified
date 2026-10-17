@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.174",
+      "title": "Start requested chats directly and keep question cards stable",
+      "changes": [
+        "An explicit request to create and start an independent chat in another existing workspace now runs directly, without another confirmation. Suggestions that have not been authorized still offer a review.",
+        "Direct starts preserve one saved chat and initial-message identity through lost responses, retries and reloads. Current selections, drafts and file permissions remain intact.",
+        "Fixed duplicate question cards after rerenders and reloads. Browser smoke coverage now checks question cards alongside chat handoffs, as well as direct-start recovery."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.173",
       "title": "Review and start a chat in another workspace",
       "changes": [

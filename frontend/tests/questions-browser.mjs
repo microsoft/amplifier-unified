@@ -26,12 +26,29 @@ try{
  const check=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
  await page.goto(ready.url);
  await expect(card(ready.required)).toBeVisible();
+ const uniqueQuestions=async()=>{for(const id of [ready.required,ready.optional,ready.skipped])await expect(card(id)).toHaveCount(1)};
+ await uniqueQuestions();
  await expect(card(ready.required).getByText('This step waits for your answer. Other work can continue.')).toBeVisible();
  assert.equal(await card(ready.required).getByRole('button',{name:'Skip question'}).count(),0);
+ // A neighboring handoff must not reuse the questions component identity.
+ // Keep the strict, unscoped question selectors: duplicate cards are a defect.
+ const questionDraft='Keep this question draft through neighboring updates';
+ await card(ready.required).getByRole('textbox').fill(questionDraft);
  const draftSaved=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='view.update'&&response.request().postDataJSON()?.args?.patch?.draft==='Keep this unsent message');
  await composer().fill('Keep this unsent message');await draftSaved;
- await page.reload();await expect(card(ready.required)).toBeVisible();
+ await uniqueQuestions();await expect(card(ready.required).getByRole('textbox')).toHaveValue(questionDraft);
+ const response=await page.request.post(ready.url+'/fixture/handoff',{data:{clientId:await page.evaluate(()=>window.amplifier.getState().client.id)}});
+ assert.equal(response.status(),200,await response.text());const proposal=await response.json();assert.equal(proposal.accepted,true);
+ const handoff=page.locator(`[data-handoff-id="${proposal.result.requestId}"]`);
+ await expect(handoff).toHaveCount(1);await expect(handoff).toBeVisible();await uniqueQuestions();
+ await expect(card(ready.required).getByRole('textbox')).toHaveValue(questionDraft);
+ await page.reload();await expect(card(ready.required)).toBeVisible();await uniqueQuestions();
+ await expect(handoff).toHaveCount(1);await expect(handoff).toBeVisible();
  await expect(composer()).toHaveDraft('Keep this unsent message');
+ await handoff.getByRole('button',{name:'Not now',exact:true}).click();
+ await expect(handoff.getByRole('button',{name:'Not now',exact:true})).toHaveCount(0);
+ await uniqueQuestions();await expect(composer()).toHaveDraft('Keep this unsent message');
+ assert.deepEqual((await check()).sessionIds,[ready.sessionId],'A cancelled review creates no chat');
  assert.equal((await check()).sent.length,0,'Reconnect cannot submit an unanswered question');
  await expect(card(ready.required).getByRole('radio')).toHaveCount(0);
  await expect(card(ready.required).getByRole('button',{name:/Full report/})).toHaveCSS('justify-content','flex-start');
@@ -92,5 +109,5 @@ try{
  await expect(card(voice.id)).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await page.screenshot({path:'/tmp/amplifier-durable-questions-mobile.png'});
  assert.deepEqual(errors,[]);
- console.log('Durable questions browser passed: reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout.');
+ console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout.');
 }finally{await browser?.close();fixture.kill()}

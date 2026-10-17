@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import signal
 import tempfile
+import uuid
 
 from aiohttp import web
 import settings_ui_server as fixture
@@ -34,6 +35,7 @@ async def main(home):
     runtime = Runtime()
     service.runtime = app['runtime'] = runtime
     source = service._session()
+    source['collaborationGeneration'] = {'id': 'fixture-user-turn', 'inputIds': ['fixture-request'], 'terminal': False}
     await service.dispatch('session.rename', {'id': source['id'], 'title': 'Handoff source'})
     await service.dispatch('session.create', {'title': 'Other window source',
         'workspace': source['workspace'], 'bundle': 'anchors', 'select': False})
@@ -47,16 +49,26 @@ async def main(home):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
             raise web.HTTPForbidden()
 
-    async def propose(request):
+    async def handoff(request, action):
         authorize(request)
         args = await request.json()
-        result = await service.app_bridge('dispatch', {'action': 'session.handoff.propose',
-            'id': 'proposal-' + args['requestId'], 'args': {
+        # Each transport attempt has a fresh outer command ID, so retry proof
+        # depends on the handoff request's durable identity, not command caching.
+        result = await service.app_bridge('dispatch', {'action': action,
+            'id': action + '-' + uuid.uuid4().hex,
+            '_runtimeSessionId': source['id'], '_generationId': 'fixture-user-turn',
+            '_inputBindings': [{'inputId': 'fixture-request'}], 'args': {
                 'requestId': args['requestId'], 'sessionId': source['id'],
                 'clientId': args['clientId'], 'workspace': str(targets[args.get('target', 'target-project')]),
                 'title': args['title'], 'text': args['text'], 'bundle': 'anchors',
                 'selection': {'instance': 'one', 'model': 'fixture-model'}}}, source['id'])
         return web.json_response(result)
+
+    async def propose(request):
+        return await handoff(request, 'session.handoff.propose')
+
+    async def start(request):
+        return await handoff(request, 'session.handoff.start')
 
     async def check(request):
         authorize(request)
@@ -70,6 +82,7 @@ async def main(home):
         return web.json_response({'removed': str(targets['removed-project'])})
 
     app.router.add_post('/fixture/propose', propose)
+    app.router.add_post('/fixture/start', start)
     app.router.add_get('/fixture/check', check)
     app.router.add_post('/fixture/remove-target', remove_target)
     runner = web.AppRunner(app)

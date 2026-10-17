@@ -42,6 +42,14 @@ async def propose(app, source, args):
     return (await app.app_bridge('dispatch', {'action': PREFIX + 'propose', 'args': args}, source))['result']
 
 
+async def start(app, source, args, **transport):
+    source_row = app._session(source, hydrate=False)
+    source_row.setdefault('collaborationGeneration', {'id': 'human-turn', 'inputIds': ['user-request'], 'terminal': False})
+    return (await app.app_bridge('dispatch', {'action': PREFIX + 'start', 'args': args,
+        '_runtimeSessionId': source, '_generationId': 'human-turn',
+        '_inputBindings': [{'inputId': 'user-request'}], **transport}, source))['result']
+
+
 async def confirm(app, row, **kwargs):
     return (await command(app, 'owner', PREFIX + 'confirm', {
         'requestId': row['requestId'], 'reviewHash': row['reviewHash']}, **kwargs))['result']
@@ -61,6 +69,115 @@ def private_view(app, client):
     selected = state['selectedSessionId']
     row = next(s for s in state['sessions'] if s['id'] == selected)
     return selected, state['view']['draft'], copy.deepcopy(row['draftAttachments'])
+
+
+async def test_direct_request_creates_and_starts_once_without_confirmation(handoff):
+    app, runtime, source, peer, args = handoff
+    before = {client: private_view(app, client) for client in ('owner', 'other')}
+    row = await start(app, source, args)
+    assert row['mode'] == 'direct' and row['status'] == 'creating'
+    assert (await start(app, source, args))['targetSessionId'] == row['targetSessionId']
+    result = await finish(app, row)
+    assert result['status'] == result['delivery'] == 'accepted'
+    target = app._session(result['targetSessionId'])
+    assert target['workspace'] == args['workspace'] and target['bundle'] == args['bundle']
+    assert target['selection'] == args['selection']
+    assert not target.get('parentSessionId') and not target.get('collaboration')
+    assert not target.get('assignmentId') and not target.get('workingDirectory')
+    assert (await start(app, source, args))['status'] == 'accepted'
+    assert len(app.state['sessions']) == 3 and runtime.sent == [(target['id'], args['text'], result['inputId'])]
+    assert len([m for m in target['messages'] if m.get('role') == 'user']) == 1
+    assert snapshot(app, 'other')['handoffs'] == []
+    for client in before:
+        assert private_view(app, client) == before[client]
+    with pytest.raises(AppError, match='different handoff'):
+        await start(app, source, {**args, 'text': 'Changed task'})
+
+
+async def test_direct_start_cannot_upgrade_pending_review_or_change_source(handoff):
+    app, runtime, source, peer, args = handoff
+    row = await propose(app, source, args)
+    with pytest.raises(AppError, match='different handoff'):
+        await start(app, source, args)
+    with pytest.raises(AppError, match='calling conversation'):
+        await start(app, peer, {**args, 'requestId': 'wrong-source'})
+    assert app.handoffs.load(row['requestId'])['status'] == 'pending'
+    assert len(app.state['sessions']) == 2 and not runtime.sent
+
+
+async def test_direct_publication_failure_is_retained_without_retry_effects(handoff, monkeypatch):
+    app, runtime, source, _, args = handoff
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_publish_changes', Mock(side_effect=RuntimeError('publication failed')))
+        with pytest.raises(RuntimeError, match='publication failed'):
+            await start(app, source, args)
+    result = await start(app, source, args)
+    assert result['status'] == 'unknown' and result['creation'] == result['delivery'] == 'not_started'
+    assert not runtime.sent and len(app.state['sessions']) == 2
+
+
+@pytest.mark.parametrize('transport', [
+    {'_runtimeSessionId': 'actual-child'},
+    {'_generationId': 'stale-generation'},
+    {'_generationId': None},
+    {'_runtimeSessionId': None},
+])
+async def test_direct_start_requires_actual_current_root_transport(handoff, transport):
+    app, runtime, source, _, args = handoff
+    with pytest.raises(AppError):
+        await start(app, source, args, **transport)
+    assert app.handoffs.load(args['requestId']) is None
+    assert not runtime.sent and len(app.state['sessions']) == 2
+
+
+async def test_direct_start_refuses_terminal_generation_but_retained_receipts_are_readable(handoff):
+    app, runtime, source, _, args = handoff
+    row = await start(app, source, args)
+    await finish(app, row)
+    app._session(source)['collaborationGeneration']['terminal'] = True
+    with pytest.raises(AppError, match='current transport-bound root'):
+        await start(app, source, {**args, 'requestId': 'later-request'})
+    assert (await start(app, source, args))['status'] == 'accepted'
+    assert len(runtime.sent) == 1
+
+
+async def test_direct_start_queued_before_source_stop_has_no_effects(handoff):
+    app, runtime, source, _, args = handoff
+    async with app.lock:
+        task = asyncio.create_task(start(app, source, args))
+        await asyncio.sleep(0)
+        source_row = app._session(source)
+        source_row['interruptionRevision'] = source_row.get('interruptionRevision', 0) + 1
+        source_row['status'] = 'stopping'
+    with pytest.raises(AppError, match='source conversation was stopped'):
+        await task
+    assert app.handoffs.load(args['requestId']) is None
+    assert not runtime.sent and len(app.state['sessions']) == 2
+
+
+async def test_direct_start_rechecks_admission_after_waiting_for_lock(handoff):
+    app, runtime, source, _, args = handoff
+    live = True
+    def admission():
+        if not live:
+            raise AppError('Connection revoked', 403)
+    async with app.lock:
+        task = asyncio.create_task(command(app, 'owner', PREFIX + 'start', args, admission_check=admission))
+        await asyncio.sleep(0)
+        live = False
+    with pytest.raises(AppError, match='revoked'):
+        await task
+    assert app.handoffs.load(args['requestId']) is None
+    assert not runtime.sent and len(app.state['sessions']) == 2
+
+
+async def test_direct_start_cannot_escape_stopped_assignment(handoff, monkeypatch):
+    app, runtime, source, _, args = handoff
+    monkeypatch.setattr(app.assignments, 'blocked', lambda session: 'This assignment was stopped.')
+    with pytest.raises(AppError, match='assignment was stopped'):
+        await start(app, source, args)
+    assert app.handoffs.load(args['requestId']) is None
+    assert not runtime.sent and len(app.state['sessions']) == 2
 
 
 async def test_review_create_and_send_once_preserves_clients_and_has_no_source_authority(handoff, monkeypatch):
@@ -180,9 +297,10 @@ async def test_global_update_pause_refuses_confirmation_without_effects(handoff)
     assert not runtime.sent and len(app.state['sessions']) == 2
 
 
-async def test_stop_between_creation_and_input_prevents_delivery(handoff, monkeypatch):
+@pytest.mark.parametrize('direct', [False, True])
+async def test_stop_between_creation_and_input_prevents_delivery(handoff, monkeypatch, direct):
     app, runtime, source, _, args = handoff
-    row = await propose(app, source, args)
+    row = None if direct else await propose(app, source, args)
     original = app.dispatch
     async def dispatch(action, *values, **kwargs):
         result = await original(action, *values, **kwargs)
@@ -190,7 +308,10 @@ async def test_stop_between_creation_and_input_prevents_delivery(handoff, monkey
             await original('conversation.stop', {'sessionId': result['sessionId']})
         return result
     monkeypatch.setattr(app, 'dispatch', dispatch)
-    await confirm(app, row)
+    if direct:
+        row = await start(app, source, args)
+    else:
+        await confirm(app, row)
     result = await finish(app, row)
     assert result['status'] == 'failed' and result['creation'] == 'created'
     assert result['delivery'] == 'not_started' and not runtime.sent
@@ -214,17 +335,24 @@ async def test_revoked_confirmation_waiting_for_service_lock_has_no_effects(hand
     assert not runtime.sent and len(app.state['sessions']) == 2
 
 
-async def test_unknown_delivery_never_replays_and_exact_late_receipt_reconciles(handoff, monkeypatch):
+@pytest.mark.parametrize('direct', [False, True])
+async def test_unknown_delivery_never_replays_and_exact_late_receipt_reconciles(handoff, monkeypatch, direct):
     app, runtime, source, _, args = handoff
     async def uncertain(session, text, identity, emit):
         runtime.sent.append((session['id'], text, identity))
         raise TimeoutError('Lost acknowledgement')
     monkeypatch.setattr(runtime, 'send', uncertain)
-    row = await propose(app, source, args); await confirm(app, row)
+    if direct:
+        row = await start(app, source, args)
+    else:
+        row = await propose(app, source, args); await confirm(app, row)
     result = await finish(app, row)
     assert result['status'] == result['delivery'] == 'unknown'
     assert result['creation'] == 'created' and len(runtime.sent) == 1
-    await confirm(app, row)
+    if direct:
+        await start(app, source, args)
+    else:
+        await confirm(app, row)
     await command(app, 'owner', PREFIX + 'read', {'requestId': row['requestId']})
     assert len(runtime.sent) == 1
     await app.on_runtime_event('runtime.delivery', {'sessionId': result['targetSessionId'], 'inputId': result['inputId'], 'delivery': 'accepted'})
@@ -373,7 +501,7 @@ async def test_main_and_source_streams_receive_private_review_and_late_receipt(h
     assert len(runtime.sent) == 1
 
 
-@pytest.mark.parametrize('action', ['propose', 'read', 'confirm', 'cancel'])
+@pytest.mark.parametrize('action', ['start', 'propose', 'read', 'confirm', 'cancel'])
 async def test_restricted_companion_cannot_access_handoff_actions(aiohttp_client, tmp_path, action):
     from test_companion_authority import fixture, attach
     app, client, headers, _ = await fixture(aiohttp_client, tmp_path)
@@ -384,7 +512,7 @@ async def test_restricted_companion_cannot_access_handoff_actions(aiohttp_client
     args = {'requestId': 'restricted-probe'}
     if action == 'confirm':
         args['reviewHash'] = '0' * 64
-    if action == 'propose':
+    if action in {'start', 'propose'}:
         args.update(sessionId='foreign', workspace=str(tmp_path), title='Forbidden', text='Never sent')
     response = await client.post('/api/actions', headers=native,
         json={'id': 'restricted-' + action, 'action': PREFIX + action, 'args': args})
