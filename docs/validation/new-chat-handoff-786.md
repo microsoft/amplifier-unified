@@ -66,3 +66,14 @@ because its separately owned dependency is absent from this environment.
 No newly skipped test is represented as a pass.
 It does not exercise a model, make network/provider calls, or establish the
 missing end-to-end user workflow.
+
+
+## Existing-chat evidence, October 16 follow-up
+
+The user named their spark-1 Readiness Manager conversation as a working example.
+Read-only inspection found nine accepted `coordination.create` receipts, including
+the voice issue-intake chat and a spark-2 test-host investigation. Every receipt
+kept the parent's `the parent workspace` workspace. That
+confirms the existing same-workspace creation path works. It does not cover the
+issue's independently targeted different workspace/folder. No new creation path
+or live host change was needed to reproduce the named example.

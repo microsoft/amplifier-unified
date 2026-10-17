@@ -218,6 +218,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        'peer-attribution': {'AMPLIFIER_TEST_BUILT_STATIC': '1'},
         'device-pairing': {},
         'standard-ux-keyboard-reflow': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/standard-ux-keyboard-reflow'},
         'smart-tool-updates': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/smart-tool-updates-artifacts'},
@@ -229,6 +230,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
         'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
         'inline-media-transition': {'EVIDENCE_DIR': '{root}/output/browser-checks/inline-media-transition'},
+        'execution-observability': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/execution-observability'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
@@ -236,7 +238,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row.get('env', {}) == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 76
+    assert len(original) == 65 and len(rows) == 78
     # The same bundle scenario now writes screenshots into its owned evidence.
     bundle = next(row for row in original if row['id'] == 'bundle')
     assert bundle['env'] == {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'}
@@ -273,7 +275,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     extended_scripts = {row['command'][1] for row in plan['scenarios']}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
-        'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition')}
+        'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability')}
     assert source_only <= extended_scripts
     assert not source_only & readiness_scripts
     installed_overlap = {f'tests/{name}-browser.mjs' for name in (
@@ -290,7 +292,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # Smart Tool recovery, archive feedback and appearance preview navigation
     # and sequential keyboard reflow, saved MCP recovery, device pairing, and media transition
     # each retain an explicit owning lane.
-    assert len(readiness_scripts | extended_scripts) == 119
+    assert len(readiness_scripts | extended_scripts) == 121
     assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/device-pairing-browser.mjs' in extended_scripts - readiness_scripts
 

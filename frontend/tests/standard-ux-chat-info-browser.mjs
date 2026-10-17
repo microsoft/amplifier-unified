@@ -23,8 +23,8 @@ try{
  const usage=info.getByRole('region',{name:'Conversation usage',exact:true});await expect(usage).toContainText('1 recorded model call');
  await expect(usage).toContainText('Cumulative tokens are not the current context-window size.');
  await expect(usage).toContainText('Historical calls without telemetry and provider-internal retries may be missing. Unavailable values are not zero.');
- const totals=usage.getByRole('region',{name:'Conversation totals',exact:true});await expect(totals).toContainText('10');await expect(totals.getByText('Session cost (USD)',{exact:true})).toHaveCount(0);
- await usage.getByText('Usage data',{exact:true}).click();const exported=JSON.parse(await usage.locator('pre').innerText());assert.ok(JSON.stringify(exported).includes('observed'));
+ const totals=usage.getByRole('region',{name:'Conversation totals',exact:true});await expect(totals).toContainText('10');await expect(totals.locator('.a-usage-grid>div').filter({has:page.getByText('Session cost (USD)',{exact:true})}).locator('dd')).toHaveText('Unavailable');
+ await usage.getByText('Usage data',{exact:true}).click();const exported=JSON.parse(await usage.locator('pre').innerText());assert.equal(exported.schema,'execution-metrics-v1');assert.equal(exported.identity.sessionId,alpha);assert.equal(exported.metrics.grossTotalTokens.value,10);assert.equal(exported.metrics.costUsd.value,null);
  const read=await control({op:'inspect'});assert.equal(read.runtimeStarts,original.runtimeStarts);assert.equal(read.runtimeSends,0);assert.equal(read.retainedSessions,original.retainedSessions);assert.deepEqual(read.runtimeControls,[]);
  assert.equal(requests.some(path=>/^\/api\/conversation\/(detail|text|work)/.test(path)),false,'Opening information must not read more transcript or Work pages');
  await info.getByRole('button',{name:'Inspect current model context',exact:true}).click();

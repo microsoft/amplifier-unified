@@ -2764,7 +2764,7 @@ class AppService:
                     from .message_interactions import reconcile_native_reveal
                     reconcile_native_reveal(session, reveal_message)
                 from .message_interactions import command
-                diagnostic_result = command(self, action, args)
+                diagnostic_result = command(self, action, args, origin=origin)
             elif action == 'message.copy':
                 source = self._session(args['sessionId'])
                 message = next((m for m in source['messages'] if m['id']==args['messageId']), None)
@@ -3154,7 +3154,7 @@ class AppService:
                 view=self.state['view']
                 if view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
                     view['panel']=None
-            elif action in {"feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
+            elif action in {"feedback.edits.review", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                             "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
                 if self.feedback.followups.accept(action, args, origin):
                     pending.append((self.feedback.followups.run, (args['requestId'],)))
