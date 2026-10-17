@@ -55,7 +55,12 @@ try{
  await operation('smartTools.configure',{id:'recovery',name:'Recovery fixture',command:python,args:[root+'tests/fixtures/canvas_recovery_mcp_server.py',htmlPath,callsPath,modePath]});
  await operation('smartTools.connect',{id:'recovery'});
  const launch=await action('smartTools.call',{id:'recovery',name:'counter_add',arguments:{amount:7}});
- await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(row=>row.id===id&&row.status==='completed'),launch.operationId);
+ // The compact browser frame intentionally omits the operation collection.
+ // Wait on this exact durable receipt before opening its saved result.
+ await expect.poll(async()=>{
+  const response=await page.request.get(url+'/api/smart-tools/operations/'+launch.operationId);
+  assert.ok(response.ok());const row=await response.json();return {id:row.id,status:row.status};
+ },{timeout:15000}).toEqual({id:launch.operationId,status:'completed'});
  await operation('smartTools.open',{id:'recovery',tool:'counter_add',operationId:launch.operationId});
  const frame=page.frameLocator('.a-mcp-app-viewer iframe');
  await expect(frame.locator('body')).toHaveAttribute('data-booted','true');
