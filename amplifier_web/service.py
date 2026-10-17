@@ -399,7 +399,7 @@ for _access, _actions in {
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
         "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
-        "schedule.list", "schedule.read", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
+        "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
     },
@@ -734,6 +734,8 @@ class AppService:
                     self.cold_display.recent.pop(identity, None)
             self.projections.invalidate(state=self._state)
         self.cold_display.track_restored()
+        from .status_emitter import create as create_status_emitter
+        self.status_emitter = create_status_emitter(self)
 
     def default_theme(self):
         for name in ("unified.amplifier.css", "default-theme.css"):
@@ -1216,6 +1218,8 @@ class AppService:
         # detail publication must broaden when status/attention actually changed.
         if handoff_sources:
             self.handoffs.changed_sources.difference_update(handoff_sources)
+        if getattr(self, 'status_emitter', None):
+            self.status_emitter.publish(session_ids)
         if record_only:
             detail_only = self._publish_client_narrow
         published = {}
@@ -2047,15 +2051,17 @@ class AppService:
                 from .automatic_history import read_transcript
                 window = await asyncio.to_thread(read_transcript, copy.deepcopy(session), limit=None)
                 reveal_message = next((row for row in window["messages"] if row["id"] == args["messageId"]), None)
-        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'smartTools.reviewView', 'smartTools.updateView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
-        if action == 'smartTools.reconnectView' and origin == 'agent' and (
+        if action in {'smartTools.reconnectView', 'smartTools.reviewView'} and origin == 'agent' and (
                 not caller_session_id or self.state.get('selectedSessionId') != caller_session_id):
             raise AppError('Choose a client displaying the calling conversation before recovering its tool view.', 409)
+        if action == 'smartTools.updateView' and origin not in {'ui', 'user'}:
+            raise AppError('A person must review and approve changed tool contracts in their own view.', 403)
         if action == 'smartTools.viewStatus':
             from .mcp_view_recovery import inspect, inspect_for_session
             if not self.smart_tools:
@@ -3184,6 +3190,9 @@ class AppService:
                         scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
                     if action == 'smartTools.appCall':
                         self.smart_canvas.admit_call(args)
+                    if action in {'smartTools.reviewView', 'smartTools.updateView'}:
+                        from .mcp_contract_review import _guard
+                        _guard(self, args)
                     if action == 'smartTools.reconnectView':
                         from .mcp_view_recovery import admit
                         admit(self, args)
@@ -3946,6 +3955,8 @@ class AppService:
     def _ingest_runtime_execution(self, session, payload):
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
+        if getattr(self, 'status_emitter', None):
+            self.status_emitter.execution(session, payload)
         if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
             # Auxiliary preparation failures stay on their call. The
             # manager's terminal generation.failed event owns whether
@@ -4509,8 +4520,8 @@ class AppService:
                     raise AppError(str(exc), 409) from None
                 if row:
                     action_args[key] = row['id']
-            schedule_read = args['action'] in {'schedule.list', 'schedule.read'}
-            if schedule_read:
+            schedule_read = args['action'] in {'schedule.list', 'schedule.read', 'schedule.overview'}
+            if schedule_read and args['action'] != 'schedule.overview':
                 # The app instance is the authenticated user's library. Reads
                 # may inspect another registered chat; mutations stay caller-owned.
                 action_args.setdefault('sessionId', session_id)
@@ -4579,7 +4590,8 @@ class AppService:
                     raise AppError('References must target the calling conversation.', 409)
             if schedule_read:
                 result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), include_state=False, caller_session_id=session_id)
-                result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
+                if args['action'] != 'schedule.overview':
+                    result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_domain_receipt = args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
@@ -4624,7 +4636,7 @@ class AppService:
             elif args['action'] == 'smartTools.viewStatus':
                 result = await self.dispatch(args['action'], action_args, origin='agent', caller_session_id=session_id)
                 canvas_client = result['result'].get('clientId')
-            elif args['action'] in {'canvas.select', 'smartTools.reconnectView'}:
+            elif args['action'] in {'canvas.select', 'smartTools.reconnectView', 'smartTools.reviewView'}:
                 from .agent_canvas import selection_target
                 canvas_client = selection_target(self, session_id, {**action_args, 'id': action_args.get('canvasId', action_args.get('id'))})
                 if canvas_client is not None:
@@ -4850,4 +4862,6 @@ class AppService:
         self.schedules.store.close()
         self.observations.store.close()
         await self.recall.close()
+        if getattr(self, 'status_emitter', None):
+            await self.status_emitter.close()
         self.db.close()

@@ -76,13 +76,15 @@ async function phase(name,work,{required=true}={}){
    {...errorEvidence(error),snapshots},required);
  }
 }
-async function action(page,name,args={}){
- // Playwright's action timeout does not bound promises returned by evaluate.
- // Keep an unresolved app receipt from consuming the entire hosted job budget.
+async function receiptDeadline(label,work){
+ // Playwright action timeouts do not bound promises returned by evaluate.
  let timer;
- const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`App action ${name} did not settle within 30 seconds`)),30000)});
- try{return await Promise.race([page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),timeout])}
+ const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`${label} did not settle within 30 seconds`)),30000)});
+ try{return await Promise.race([work(),timeout])}
  finally{clearTimeout(timer)}
+}
+async function action(page,name,args={}){
+ return receiptDeadline(`App action ${name}`,()=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]));
 }
 const canvasPixels=figure=>figure.locator('canvas').evaluate(node=>{
  const data=node.getContext('2d').getImageData(0,0,node.width,node.height).data;
@@ -1202,7 +1204,7 @@ try{
    const client=await newClient(),{page}=client;
    const inline=page.locator(`[data-message-id="${boot.messageId}"] [data-media-id="${saved.id}"]`);
    const canvasRoot=page.locator('[data-canvas-view="primary"]');
-   let releaseEarlier,dirtyHostAdmitted=false,dirtyReceipt,dirtyTarget;
+   let releaseEarlier,dirtyHostAdmitted=false,dirtyReceipt,dirtyTarget,primaryError;
    const earlierGate=new Promise(done=>{releaseEarlier=done});
    const commandOrder=[],blockerId='gif-canvas-earlier-command';
    const holdEarlier=async route=>{
@@ -1254,6 +1256,7 @@ try{
     },target);
     const refused=page.waitForResponse(response=>response.request().method()==='POST'&&
      new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='canvas.openGif');
+    refused.catch(()=>{}); // Preserve its eventual rejection until the ordered receipt checks await it.
     await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
     await expect(inline.getByRole('button',{name:'Opening in Canvas…',exact:true})).toBeDisabled();
     // fetch is observed synchronously at issuance. No sleep or absence timeout
@@ -1263,7 +1266,7 @@ try{
     assert.deepEqual(commandOrder,['earlier-issued']);
     assert.equal((await page.evaluate(()=>window.amplifier.getState())).canvas.id,before.canvas.id);
     releaseEarlier();
-    await page.evaluate(()=>Promise.all([window.__gifEarlier,window.__gifDirty]));
+    await receiptDeadline('Queued Canvas edit receipts',()=>page.evaluate(()=>Promise.all([window.__gifEarlier,window.__gifDirty])));
     const rejected=await refused;
     assert.equal(rejected.status(),409);assert.equal((await rejected.json()).accepted,false);
     assert.deepEqual(dirtyReceipt,{status:200,accepted:true});
@@ -1310,18 +1313,39 @@ try{
     await page.unroute('**/api/outputs/*/media?*');
     return {commandOrder,queuedDirtyAdmission:true,dirtyRejectedBeforeMutation:true,visibleError:true,actualDecodeReadiness:true,
      replacementCleanup:true,lateFramesOwned:true,decoderError:'error',mountedReady:false};
+   }catch(error){
+    primaryError=error;
+    // A cleanup receipt can itself be unsettled; retain the first failure now.
+    try{await writeEvidence(join(evidenceDir,'gif-canvas-errors-primary.json'),errorEvidence(error))}
+    catch(writeError){error.cleanupErrors=[{step:'save primary error evidence',...errorEvidence(writeError)}]}
+    throw error;
    }finally{
+    const cleanupErrors=[...(primaryError?.cleanupErrors||[])];
+    const cleanup=async(label,work)=>{
+     try{await receiptDeadline(label,work);return true}
+     catch(error){cleanupErrors.push({step:label,...errorEvidence(error)});return false}
+    };
     releaseEarlier();
     if(!page.isClosed()){
-     await page.unroute('**/api/actions',holdEarlier);
-     await page.evaluate(()=>Promise.allSettled([window.__gifEarlier,window.__gifDirty]));
-     await page.evaluate(async target=>{
+     // Let the released route finish before unregistering its handler.
+     const settled=await cleanup('settle queued Canvas receipts',()=>page.evaluate(()=>Promise.allSettled([window.__gifEarlier,window.__gifDirty])));
+     await cleanup('release action route',()=>page.unroute('**/api/actions',holdEarlier));
+     // Do not enqueue more app commands behind a receipt that never settled.
+     if(settled)await cleanup('clear owned dirty view',()=>page.evaluate(async target=>{
       const view=window.amplifier.getState().canvasWorkspace.views.find(view=>view.viewId==='primary');
       if(target&&view?.dirty&&['resourceId','resourceRevision','generation'].every(key=>view[key]===target[key]))
        await window.amplifier.dispatch('canvas.views.dirty',{...target,dirty:false});
-     },dirtyTarget);
-     await page.evaluate(()=>{window.__mediaProbe.hold=false;window.__mediaProbe.held.splice(0).forEach(done=>done())});
-     await unmountAndClose(client);
+     },dirtyTarget));
+     await cleanup('release held decoder frames',()=>page.evaluate(()=>{window.__mediaProbe.hold=false;window.__mediaProbe.held.splice(0).forEach(done=>done())}));
+     if(settled)await cleanup('unmount and close owned client',()=>unmountAndClose(client));
+     if(!page.isClosed())await cleanup('close unsettled owned page',()=>page.close());
+     if(page.isClosed())pages.delete(page);
+    }
+    if(cleanupErrors.length){
+     try{await writeEvidence(join(evidenceDir,'gif-canvas-errors-cleanup.json'),{errors:cleanupErrors,pageClosed:page.isClosed()})}
+     catch(writeError){cleanupErrors.push({step:'save cleanup evidence',...errorEvidence(writeError)})}
+     if(primaryError)primaryError.cleanupErrors=cleanupErrors;
+     else throw Object.assign(new Error('GIF Canvas failure-check cleanup failed'),{cleanupErrors});
     }
    }
   });

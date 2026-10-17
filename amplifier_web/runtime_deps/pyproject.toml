@@ -5,7 +5,7 @@ description = "Standalone Foundation and loop-live runtime for Amplifier Unified
 requires-python = ">=3.13"
 dependencies = [
   "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
-  "amplifier-core>=2.0.1",
+  "amplifier-core>=2.0.2",
   "amplifier-module-loop-live",
   "amplifier-foundation",
   "amplifier-module-hooks-session-naming",

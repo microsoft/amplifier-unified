@@ -11,6 +11,8 @@ REMEDIATION = {
     'invalid_entry_point': 'Check the module entry point and async mount function.',
     'invalid_module_metadata': 'Check the declared module type and metadata.',
     'validation_failed': 'Check the module contract and its required dependencies.',
+    'provider_preparation_failed': 'Check this connection’s configured module source and dependencies.',
+    'provider_mount_failed': 'Check this connection’s configuration and credentials; its provider could not start.',
     'provider_schema_failed': 'Check this provider’s saved endpoint and installed module. Its configuration fields could not be read.',
     'provider_configuration_failed': 'Check this provider’s saved configuration and required credentials.',
     'unknown': 'The module could not be loaded. Check its configuration and dependencies.',

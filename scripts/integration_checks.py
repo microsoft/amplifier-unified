@@ -24,10 +24,10 @@ def manifest():
     return json.loads(MANIFEST.read_text())
 
 
-def select_lanes(changed=None, coverage=None):
+def select_lanes(changed=None, coverage=None, *, include_manual=False):
     coverage = coverage or manifest()
     return [{'lane': name, 'os': lane['runner']} for name, lane in coverage['lanes'].items()
-            if lane['mode'] == 'automatic' and (changed is None or any(
+            if lane['mode'] in ({'automatic', 'manual'} if include_manual else {'automatic'}) and (changed is None or any(
                 fnmatch.fnmatchcase(path, pattern)
                 for path in changed for pattern in coverage['commonPaths'] + lane['paths']))]
 
@@ -77,6 +77,8 @@ def source_identity(revision=None):
 
 def run_lane(lane, python, output, environment=None, revision=None):
     spec = manifest()['lanes'][lane]
+    if spec.get('command'):
+        raise ValueError('This lane has an explicit qualification runner: ' + ' '.join(spec['command']))
     output.mkdir(parents=True, exist_ok=True)
     junit = output / 'junit.xml'
     # Never accept a stale successful report after an interrupted or empty run.
@@ -114,6 +116,7 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     plan = commands.add_parser('plan')
     plan.add_argument('--changed', type=Path, help='newline-separated changed paths; absent means all automated lanes')
+    plan.add_argument('--include-manual', action='store_true', help='Also report affected manual owners; does not execute them')
     run = commands.add_parser('run')
     run.add_argument('--lane', choices=manifest()['lanes'], required=True)
     run.add_argument('--python', default=sys.executable)
@@ -125,7 +128,8 @@ def main():
     check.add_argument('--junit', type=Path, required=True)
     args = parser.parse_args()
     if args.command == 'plan':
-        print(json.dumps({'include': select_lanes(args.changed.read_text().splitlines() if args.changed else None)}))
+        print(json.dumps({'include': select_lanes(args.changed.read_text().splitlines() if args.changed else None,
+                                                 include_manual=args.include_manual)}))
         return 0
     if args.command == 'check':
         print(f"{verify_junit(args.junit, manifest()['lanes'][args.lane]['selectors'])} passed; no skips")

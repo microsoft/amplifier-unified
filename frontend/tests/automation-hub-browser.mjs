@@ -1,0 +1,48 @@
+import './composer-test-helpers.mjs';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {mkdir,writeFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {chromium,expect} from '@playwright/test';
+const output=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/unified-automation-hub';await mkdir(output,{recursive:true});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/automation_hub_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','pipe']});
+let browser,page,log='',phase='startup';const errors=[],actions=[],timings={},started=Date.now();fixture.stderr.on('data',value=>log+=value);
+try{
+ const info=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error(log||'Fixture timeout')),30000);fixture.stdout.on('data',value=>{text+=value;for(const line of text.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data)}}catch{}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error(`Fixture exited ${code}: ${log}`))})});
+ browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
+ const state=()=>page.evaluate(()=>window.amplifier.getState());
+ const call=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+ const get=async()=>{const value=await page.request.get(info.url+'/fixture/inspect');assert.equal(value.status(),200);return value.json()};
+ const post=async path=>{const value=await page.request.post(info.url+path);assert.equal(value.status(),200,await value.text());return value.json()};
+ await page.goto(info.url);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);await call('session.select',{id:info.sessionId});
+ const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Keep my automation test draft');await expect(composer).toHaveDraft('Keep my automation test draft');
+ const other=await page.context().newPage();await other.goto(info.url);await other.waitForFunction(()=>window.amplifier?.getState()?.client?.id);await other.evaluate(async id=>{await window.amplifier.dispatch('session.select',{id});await window.amplifier.dispatch('view.update',{patch:{draft:'Other client draft',panel:null}})},info.ownerId);
+ const otherView=()=>other.evaluate(()=>{const s=window.amplifier.getState();return {client:s.client.id,selected:s.selectedSessionId,draft:s.view.draft,panel:s.view.panel}});const otherBefore=await otherView();assert.notEqual(otherBefore.client,(await state()).client.id);
+ if(await page.getByRole('button',{name:'Open navigation',exact:true}).count())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ const baseline=await get();const opened=Date.now();await page.getByRole('button',{name:'Automation',exact:true}).click();
+ const hub=page.getByRole('region',{name:'Automation overview'}),row=hub.locator(`[data-automation-id="${info.scheduleId}"]`);
+ await expect(row).toBeVisible();timings.openToRowsMs=Date.now()-opened;await expect(row).toContainText('Exited report owner');await expect(row).toContainText('Needs review');
+ assert.equal(await hub.locator('[data-automation-id]').count(),30);
+ assert.deepEqual(await get(),baseline,'opening overview must not prepare or run any chat');
+ const reads=actions.filter(row=>row.action==='schedule.overview').length;await page.waitForTimeout(1200);assert.equal(actions.filter(row=>row.action==='schedule.overview').length,reads,'no idle overview polling');
+ await hub.getByRole('button',{name:'More schedules',exact:true}).click();await expect(hub.locator('[data-automation-id]')).toHaveCount(2);await hub.getByRole('button',{name:'Previous schedules',exact:true}).click();await expect(row).toBeVisible();
+ await hub.getByRole('combobox',{name:'Show automations'}).selectOption('all');await expect(hub).toContainText('33 schedules');await hub.getByRole('combobox',{name:'Show automations'}).selectOption('current');await expect(hub).toContainText('32 schedules');
+ phase='review-failed-owner';await row.getByRole('button',{name:'Review future runs',exact:true}).click();
+ const review=hub.getByRole('region',{name:'Review future scheduled work'});await expect(review).toBeVisible();await expect(review).toContainText('Check the report and compare its state.');await expect(review).toContainText('test-model');
+ assert.deepEqual(await get(),baseline,'preview must not warm exited owner or submit work');
+ await page.setViewportSize({width:390,height:900});await review.scrollIntoViewIfNeeded();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:output+'/review-mobile.png',animations:'disabled'});await review.getByRole('button',{name:'Resume future runs',exact:true}).scrollIntoViewIfNeeded();await expect(review.getByRole('button',{name:'Resume future runs',exact:true})).toBeInViewport();await page.screenshot({path:output+'/review-mobile-controls.png',animations:'disabled'});
+ const confirmed=Date.now();await review.getByRole('button',{name:'Resume future runs',exact:true}).click();await expect(review).toHaveCount(0);await expect(row).toContainText('Scheduled');timings.confirmToScheduledMs=Date.now()-confirmed;await page.setViewportSize({width:1280,height:1000});
+ let after=await get();assert.equal(after.ownerStatus,'error');assert.deepEqual(after.warmed,[]);assert.deepEqual(after.inputs,[]);assert.equal((await state()).selectedSessionId,info.sessionId);
+ phase='stop-review';await post('/fixture/stop');await hub.getByRole('button',{name:'Refresh automations',exact:true}).click();await row.getByRole('button',{name:'Review future runs',exact:true}).click();await expect(review).toBeVisible();
+ const confirm=review.getByRole('button',{name:'Resume future runs',exact:true});await expect(confirm).toBeDisabled();await review.getByRole('checkbox',{name:'Allow future scheduled tasks after my Stop'}).check();await confirm.click();await expect(review).toHaveCount(0);
+ phase='actual-due';const tick=await post('/fixture/tick');assert.equal(tick.inputs.length,1);assert.notEqual(tick.inputs[0][0],info.ownerId);assert.equal(tick.runs[0].phase,'accepted');after=await get();assert.equal(after.ownerStatus,'stopped');assert.ok(!after.warmed.includes(info.ownerId));
+ await hub.getByRole('button',{name:'Refresh automations',exact:true}).click();await page.screenshot({path:output+'/overview-desktop.png',animations:'disabled'});
+ phase='held-navigation';let release,seen;const held=new Promise(resolve=>seen=resolve),gate=new Promise(resolve=>release=resolve);
+ const intercept=async route=>{const body=route.request().postDataJSON();if(body.action!=='session.select'||body.args?.id!==info.ownerId)return route.continue();const response=await route.fetch();seen();await gate;await route.fulfill({response})};
+ await page.route('**/api/actions',intercept);await row.getByRole('button',{name:'Open owning chat',exact:true}).click();await held;await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(hub).toHaveCount(0);const opens=actions.filter(item=>item.action==='view.update'&&item.args?.patch?.panel==='chat-work').length;release();await page.waitForTimeout(250);assert.equal(actions.filter(item=>item.action==='view.update'&&item.args?.patch?.panel==='chat-work').length,opens);await expect(hub).toHaveCount(0);await page.unroute('**/api/actions',intercept);
+ await call('session.select',{id:info.sessionId});await page.getByRole('button',{name:'Automation',exact:true}).click();await expect(row).toBeVisible();
+ phase='owner-navigation';await row.getByRole('button',{name:'Open owning chat',exact:true}).click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(info.ownerId);await expect(page.getByRole('region',{name:'Scheduled work'})).toBeVisible();
+ await call('session.select',{id:info.sessionId});await call('view.update',{patch:{panel:null}});await expect(composer).toHaveDraft('Keep my automation test draft');assert.deepEqual(await otherView(),otherBefore);assert.deepEqual(errors,[]);
+ await writeFile(output+'/result.json',JSON.stringify({passed:true,elapsedMs:Date.now()-started,timings,build:(await state()).client.build,browser:browser.version(),baseline,after,otherClientPreserved:true,errors,limits:['Synthetic recipient; no external work, M365 incident reproduction, live model/account or native-device acceptance.','Single-run timings are regression witnesses, not latency percentiles.']},null,2)+'\n');console.log('Automation hub passed: bounded discovery/no polling, failed-owner review without waking, explicit Stop acknowledgement, one future due launch, owner navigation and preserved draft.');
+}catch(error){await writeFile(output+'/failure.json',JSON.stringify({phase,error:error.stack,log,actions,errors},null,2)+'\n');await page?.screenshot({path:output+'/failure.png'}).catch(()=>{});throw error}
+finally{await writeFile(output+'/fixture.log',log);await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null||fixture.signalCode!==null)return resolve();const timeout=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},5000);fixture.once('exit',()=>{clearTimeout(timeout);resolve()})})}

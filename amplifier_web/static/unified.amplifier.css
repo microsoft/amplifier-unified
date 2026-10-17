@@ -649,6 +649,13 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-diagram:not(.embedded)>.a-diagram-stage:active{cursor:grabbing}
 #amp-one .a-diagram:not(.embedded)>.a-diagram-stage img{flex:none;max-width:none;max-height:none}
 #amp-one .a-diagram:not(.embedded)>.a-node-inspector{flex:none;max-height:25%;overflow:auto}
+#amp-one .a-diagram-toolbar{flex:none;gap:6px;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:6px;flex-wrap:wrap}
+#amp-one .a-diagram-toolbar>span:first-of-type{min-width:40px;text-align:center;font-variant-numeric:tabular-nums}
+#amp-one .a-diagram-toolbar select{max-width:160px;margin-left:4px}
+#amp-one .a-diagram-hint{margin-left:auto;color:var(--muted);font-size:12px}
+#amp-one .a-diagram:not(.embedded)>.a-diagram-stage{background-color:#fdfdff;background-image:radial-gradient(#a9a4be40 .7px,transparent .7px);background-size:16px 16px;border:1px solid var(--line)}
+#amp-one .a-node-inspector summary{padding:6px 0;color:var(--muted);cursor:pointer;font-size:13px}
+@media(max-width:600px){#amp-one .a-diagram-hint{display:none}}
 #amp-one .a-diagram.embedded .a-diagram-stage{display:block;height:auto;min-height:160px;max-height:650px;overflow:auto;touch-action:auto;cursor:default}
 #amp-one .a-diagram.embedded .a-diagram-stage img{display:block;width:auto;height:auto;max-width:100%;max-height:none;margin:0 auto}
 #amp-one .a-canvas-code-block{white-space:pre-wrap;overflow-wrap:anywhere;margin:1em 0;padding:12px;border-radius:8px;background:rgba(120,130,170,.06)}
@@ -742,7 +749,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one.a-chat-shell .a-canvas-body>.a-canvas-library{padding:16px;overflow:auto}
 #amp-one.a-chat-shell .a-canvas-body>.a-mcp-app-viewer{flex:1;min-width:0}
 #amp-one.a-chat-shell .a-canvas-html{min-height:0}
-#amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-canvas-toolbar,
+#amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-canvas-toolbar:not(.a-diagram-toolbar),
 #amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-canvas-result.success,
 #amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-browser-note,
 #amp-one.a-chat-shell .a-canvas-panel[data-controls="false"]>.a-canvas-event{display:none}

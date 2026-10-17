@@ -3,11 +3,17 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
+import {mkdir,mkdtemp} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
 import {readComposerDraft} from '../frontend/tests/composer-test-helpers.mjs';
 const require=createRequire(new URL('../frontend/package.json',import.meta.url));
 const {chromium,expect}=require('@playwright/test');
 const root=fileURLToPath(new URL('../',import.meta.url));
+const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||await mkdtemp(join(tmpdir(),'unified-block-copy-'));
+await mkdir(artifacts,{recursive:true});
+const tracePath=join(artifacts,'unified-block-copy-trace.zip');
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--canvas-versions'],{stdio:['ignore','pipe','inherit']});
 let browser,context;
 async function bounded(promise,label){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`${label} did not settle within 30 seconds`)),30000)})])}finally{clearTimeout(timer)}}
@@ -246,4 +252,4 @@ try{
  console.log(JSON.stringify({pageErrors:errors,frameExceptions:exceptions}));
  assert.deepEqual(errors,[]);
  console.log('PASS block-copy browser: SSE-first baseline, exact source clipboard, assistant/Canvas list/quote/table blocks, diagrams, code/text/JSON, saved-source readiness/failure, reference spans, reload, permission denial, unsupported API, pending/version race, keyboard/touch, writing/message regression.');
-}finally{try{await context?.tracing.stop({path:'/tmp/unified-block-copy-trace.zip'})}finally{await browser?.close();fixture.kill()}}
+}finally{try{await context?.tracing.stop({path:tracePath});if(context)console.log(JSON.stringify({tracePath}))}finally{await browser?.close();fixture.kill()}}

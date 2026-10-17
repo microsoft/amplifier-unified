@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -242,6 +243,135 @@ async def test_failed_source_probe_has_visible_retry_without_forever_loading(tmp
     assert owner.request('s') is None
     assert owner.project(owner._owner('s'))['workProjection']['status'] == 'retrying'
     await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_published_invalidation_during_cached_probe_retries_without_false_failure(tmp_path, monkeypatch):
+    owner, session, _, _ = fixture(tmp_path, monkeypatch)
+    await owner.read('s', _initial=True)
+    receipt = dict(owner.status['s']['receipt'])
+    original = json.dumps(session, sort_keys=True)
+    entered, release = threading.Event(), threading.Event()
+    matches = owner._matches
+    def held(*args):
+        entered.set()
+        assert release.wait(5), 'Cached probe was not released'
+        return matches(*args)
+    monkeypatch.setattr(owner, '_matches', held)
+    task = owner.request('s')
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        owner.invalidate({'s'})
+        release.set()
+        assert await task is None
+        assert owner.status['s']['status'] == 'loading'
+        assert owner.status['s']['current'] is False
+        assert 's' not in owner.retry_at
+        monkeypatch.setattr(owner, '_matches', matches)
+        await owner.request('s')
+        assert owner.status['s'] == {'status': 'ready', 'current': True, 'receipt': receipt}
+        assert len(owner.projector.inputs) == 1
+        assert json.dumps(session, sort_keys=True) == original
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [OSError('private source unavailable'), ValueError('invalid source record')])
+async def test_real_cached_probe_failure_backs_off_then_restores_exact_receipt(tmp_path, monkeypatch, error):
+    owner, _, _, _ = fixture(tmp_path, monkeypatch)
+    await owner.read('s', _initial=True)
+    receipt = dict(owner.status['s']['receipt'])
+    matches = owner._matches
+    def broken(*args):
+        raise error
+    monkeypatch.setattr(owner, '_matches', broken)
+    try:
+        await owner.request('s')
+        assert owner.status['s'] == {'status': 'retrying', 'current': False, 'reason': 'worker_failed'}
+        assert owner.request('s') is None
+        monkeypatch.setattr(owner, '_matches', matches)
+        # Advance only this owner's retry deadline; no sleeps or broad clock patch.
+        owner.retry_at['s'] = 0
+        await owner.request('s')
+        assert owner.status['s'] == {'status': 'ready', 'current': True, 'receipt': receipt}
+        assert len(owner.projector.inputs) == 1
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_owner_lookup_failure_before_task_admission_keeps_fixed_retry_status(tmp_path, monkeypatch):
+    from amplifier_web.service import AppError
+    owner, _, _, service = fixture(tmp_path, monkeypatch)
+    task = owner.request('s')
+    def missing(*args, **kwargs):
+        raise AppError('No longer selected', 404)
+    service._session = missing
+    try:
+        assert await task is None
+        assert owner.status['s'] == {'status': 'retrying', 'current': False, 'reason': 'worker_failed'}
+        assert owner.request('s') is None
+        assert not owner.pages and not owner.current
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_latest_replacement_keeps_receipt_for_quiet_reuse(tmp_path, monkeypatch):
+    owner, _, _, _ = fixture(tmp_path, monkeypatch)
+    try:
+        await owner.read('s', _initial=True)
+        previous = dict(owner.status['s']['receipt'])
+        await owner.read('s')  # Explicit latest read replaces the same page group.
+        receipt = dict(owner.status['s']['receipt'])
+        assert receipt['generation'] > previous['generation']
+        assert owner.pages[owner.current['s']]['receipt'] == receipt
+        owner.invalidate({'s'})
+        await owner.read('s', _initial=True)
+        assert owner.status['s'] == {'status': 'ready', 'current': True, 'receipt': receipt}
+        assert len(owner.projector.inputs) == 2
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('replacement', ['owner', 'source', 'epoch'])
+@pytest.mark.parametrize('worker_failure', [False, True])
+async def test_superseded_work_request_cannot_overwrite_newer_status(tmp_path, monkeypatch, replacement, worker_failure):
+    owner, session, _, service = fixture(tmp_path, monkeypatch)
+    entered, release = asyncio.Event(), asyncio.Event()
+    project = owner.projector.project
+    async def held(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        if worker_failure:
+            raise OSError('Late failure from obsolete read')
+        return await project(*args, **kwargs)
+    monkeypatch.setattr(owner.projector, 'project', held)
+    task = owner.request('s')
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        if replacement == 'owner':
+            current = dict(session)
+            service._session = lambda identity, hydrate=False: current
+        elif replacement == 'source':
+            session['nativeIdentity'] = 'replacement'
+        else:
+            owner.invalidate({'s'})
+        newer = {'status': 'loading', 'current': False, 'reason': 'newer-owner-read'}
+        owner._state('s', newer)
+        release.set()
+        assert await task is None
+        assert owner.status['s'] is newer
+        assert 's' not in owner.retry_at
+        assert not owner.pages and not owner.current
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
 
 
 def test_failed_or_unretained_request_fences_are_bounded_without_reusing_old_generation(tmp_path, monkeypatch):
