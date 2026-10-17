@@ -61,6 +61,25 @@ async def main(home):
             'id': q['id'], 'expectedRevision': 1, 'optionId': 'plain', 'sourceMessageId': source['id']}}, sid)
         return web.json_response(result['result'])
 
+    async def usage(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        count = (await request.json()).get('count')
+        if count not in (6, 12):
+            raise web.HTTPBadRequest()
+        for index in range(count):
+            await service.on_runtime_event('execution.event', {
+                'id': f'questions-usage-{index}', 'kind': 'llm',
+                'sessionId': sid, 'rootSessionId': sid, 'turnId': 'questions-usage',
+                'producerId': 'questions-fixture', 'revision': count,
+                'liveObservation': True, 'phase': 'completed',
+                'startedAt': 1792220000 + index, 'endedAt': 1792220001 + index,
+                'provider': f'fixture-provider-{index}',
+                'model': f'Long descriptive fixture model name {index} for narrow layout',
+                'usage': {'inputTokens': 100, 'outputTokens': 10, 'totalTokens': 110}})
+        return web.json_response({'calls': count})
+
+    app.router.add_post('/fixture/usage', usage)
     app.router.add_get('/fixture/check', check)
     app.router.add_post('/fixture/voice', voice)
     app.router.add_post('/fixture/handoff', propose_handoff)

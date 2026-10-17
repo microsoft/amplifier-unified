@@ -1,5 +1,10 @@
 # 0.20.172 integration qualification
 
+**October 17 scope update:** the owner accepted correction comments and reviewed
+later attachments as complete for #294; original title/body replacement is no
+longer required. The publication-time assessment and test results below are
+retained unchanged. See the [current feedback contract](../feedback-lifecycle.md#accepted-scope-for-294--october-17-2026).
+
 Candidate includes #819, #820, compact peer messages (#676), assistant reactions
 (#745), independent execution metrics (#293), and the reviewed-correction portion
 of #294. The original GitHub title/body replacement requirement remains open.

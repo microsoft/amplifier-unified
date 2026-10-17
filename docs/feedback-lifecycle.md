@@ -11,7 +11,17 @@ Every mutation requires its own stable request ID. Exact retries are deduplicate
 
 The Feedback panel exposes delivery checking, correction drafts and close/reopen. Correction drafts persist per browser. Publishing a correction or changing report state is explicit; editing a draft does not post anything. The product still does not edit third-party comments or silently add post-submission attachments. Reviewed excerpt attachments are a separate follow-up.
 
-## Review proposed changes (#294, partial delivery)
+## Accepted scope for #294 — October 17, 2026
+
+The product owner accepted reviewed correction comments and separately reviewed
+later attachments as the complete scope of #294. Replacing the original GitHub
+issue title or body is not required. The Review changes workflow shipped in
+0.20.172; #558 delivered later attachments. Together they satisfy that scope.
+This decision changes acceptance, not the implemented mutation behavior
+or its safety guarantees. Earlier qualification records retain their historical
+partial-delivery status; original replacement is no longer outstanding work.
+
+## Review proposed corrections
 
 `feedback.edits.review` is a read-only, durable comparison. It requires an
 attached client, the original local feedback ID, a completed `feedback.get`
@@ -51,18 +61,18 @@ New files continue through the already-shipped #558 attachment review below,
 with their own complete manifest and visibility consent. A text review or
 correction neither selects nor uploads those files.
 
-Protected automatic original title/body replacement remains unresolved and #294
-must remain open. GitHub's [conditional request documentation](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)
+Automatic original title/body replacement is outside the accepted scope.
+GitHub's [conditional request documentation](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)
 excludes unsafe methods unless an endpoint explicitly supports them; the
 [issue update endpoint](https://docs.github.com/en/rest/issues/issues#update-an-issue)
 offers no conditional replacement contract. A GET/compare/PATCH sequence, an
 owner-marked block inside the same issue body, or a local lock cannot protect a
 concurrent remote writer. This implementation makes no such guarantee.
 
-A future decision must choose between keeping the manual-edit handoff, explicitly
-accepting a possible remote lost update, or changing the publishing model so
-proposed revisions are reviewed as separate immutable content. The second choice
-would weaken the accepted no-clobber requirement and is not implemented here.
+The accepted publishing model keeps corrections as separate comments and retains
+the manual Open on GitHub handoff. Any future automatic replacement proposal
+requires a new decision; acceptance of correction comments does not authorize
+lost updates, implicit overwrites or replay of uncertain writes.
 
 Routine coverage: `tests/test_feedback_edits.py`, frontend Node
 `tests/feedback-edits.test.mjs`, and the existing registered `feedback-followup`
@@ -76,10 +86,10 @@ acceptance paths remain independent; #558 is not being redelivered as new work.
 
 Host action routing is present in this source candidate. Fresh installed-package
 qualification is still required; this is not a claim of delivered recovery.
-It does not implement protected original-title/body edits: GitHub's unsupported
-conditional issue PATCH remains a separate blocker. A correction comment is
-not relabelled as an original edit, and this increment does not complete that
-promise.
+It does not implement protected original-title/body edits. That earlier
+requirement was removed from #294 on October 17; a correction comment is not
+relabelled as an original edit. The candidate qualification limits below remain
+historical evidence, not claims of additional testing from that scope decision.
 
 Optional `feedbackId` on `feedback.attachment.add/remove` chooses a separate
 per-client, per-original-feedback ordinary-file draft. Initial drafts, selection
@@ -232,8 +242,8 @@ identity, actual action schemas, HTTP receipts, SSE results and zero runtime/mod
 calls. Serial full Node and whole feedback Python suites, the current receiving
 browser check and both exact-code/results reviews remain parent-owned. None ran
 here; fake-host success cannot discharge installed receiving evidence. Original
-issue title/body editing remains blocked; this does not complete the full
-feedback-edit promise.
+issue title/body editing was outside this qualification and is no longer part
+of #294's accepted scope.
 
 
 ### October 9 attachment recovery review

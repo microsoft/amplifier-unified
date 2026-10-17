@@ -2,31 +2,64 @@ import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 let browser;
+const output=process.env.AMPLIFIER_QUESTIONS_OUTPUT,layoutChecks=[];
+if(output)await mkdir(output,{recursive:true});
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  const card=id=>page.locator(`[data-question-id="${id}"]`),composer=()=>page.getByRole('textbox',{name:'Message Amplifier',exact:true});
- let historyVisits=0;
- const history=async()=>{
-  // The first usage snapshot expands content above the history disclosures.
-  // Hold it once to cover pending UI, then exercise history after it settles.
-  const holdInitial=historyVisits++===0;let releaseUsage,usageStarted=false;
-  const usageGate=new Promise(resolve=>releaseUsage=resolve);
-  const holdUsage=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action==='capacity.read'){usageStarted=true;await usageGate}await route.continue()};
-  if(holdInitial)await page.route('**/api/actions',holdUsage);
+ const usage=()=>page.getByRole('region',{name:'Conversation usage',exact:true});
+ const holdUsageRead=async()=>{
+  let release,arrived=false;const gate=new Promise(resolve=>release=resolve);
+  const route=async pending=>{const raw=pending.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action==='capacity.read'){arrived=true;await gate}await pending.continue()};
+  await page.route('**/api/actions',route);
+  return {release,arrived:()=>arrived,remove:()=>page.unroute('**/api/actions',route)};
+ };
+ const completeUsageDuringClick=async(questions,held,label)=>{
+  await expect.poll(held.arrived).toBe(true);
+  await expect(usage().getByRole('button',{name:'Reading usage…',exact:true})).toBeDisabled();
+  // Scroll only before pointerdown: a completion must not move the target away.
+  await questions.scrollIntoViewIfNeeded();const target=await questions.elementHandle(),before=await questions.boundingBox(),refreshBefore=await usage().getByRole('button',{name:'Reading usage…',exact:true}).boundingBox();
+  if(output)await page.screenshot({path:join(output,label.replace(/\W+/g,'-')+'-before.png')});
+  await page.mouse.move(before.x+before.width/2,before.y+before.height/2);await page.mouse.down();
+  try{
+   held.release();await expect(usage().getByRole('button',{name:'Refresh usage',exact:true})).toBeEnabled();
+   const after=await questions.boundingBox(),refreshAfter=await usage().getByRole('button',{name:'Refresh usage',exact:true}).boundingBox();layoutChecks.push({label,viewport:page.viewportSize(),before,after,refreshBefore,refreshAfter});
+   for(const key of ['x','y','height'])assert.ok(Math.abs(refreshAfter[key]-refreshBefore[key])<=1,`${label}: refresh control ${key} moved from ${refreshBefore[key]} to ${refreshAfter[key]}`);
+   assert.equal(await target.evaluate(element=>element.isConnected),true,'Usage completion preserves the history control');
+   for(const key of ['x','y','width','height'])assert.ok(Math.abs(after[key]-before[key])<=1,`${label}: history target ${key} moved from ${before[key]} to ${after[key]}`);
+  }finally{await page.mouse.up();await held.remove();await target.dispose()}
+  await expect(questions.locator('..')).toHaveAttribute('open','');
+  if(output)await page.screenshot({path:join(output,label.replace(/\W+/g,'-')+'-after.png')});
+ };
+ const history=async({stableUsage=false,usageCalls=0,label='history'}={})=>{
+  const held=stableUsage?await holdUsageRead():null;
   await page.getByRole('button',{name:'Chat',exact:true}).click();
   await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Chat info',exact:true}).click();
-  if(holdInitial){await expect.poll(()=>usageStarted).toBe(true);await expect(page.getByRole('button',{name:'Reading usage…',exact:true})).toBeDisabled();releaseUsage()}
-  await expect(page.getByRole('button',{name:'Refresh usage',exact:true})).toBeEnabled();
-  if(holdInitial)await page.unroute('**/api/actions',holdUsage);
   const questions=page.getByText('Questions & answers',{exact:true});
-  await questions.click();await expect(questions.locator('..')).toHaveAttribute('open','');
+  if(held){
+   await completeUsageDuringClick(questions,held,label+' initial');
+   await questions.click();await expect(questions.locator('..')).not.toHaveAttribute('open','');
+   // Real canonical receipts make the expanded refreshed snapshot taller.
+   await usage().getByText('Model breakdown',{exact:true}).click();
+   const seeded=await page.request.post(ready.url+'/fixture/usage',{data:{count:usageCalls}});
+   assert.equal(seeded.status(),200,await seeded.text());
+   const refresh=await holdUsageRead();await usage().getByRole('button',{name:'Refresh usage',exact:true}).click();
+   await completeUsageDuringClick(questions,refresh,label+' expanded refresh');
+   await expect(usage().getByText(`${usageCalls} recorded model calls ·`,{exact:false})).toBeVisible();
+   await expect(usage().locator('h4')).toHaveCount(usageCalls);
+  }else{
+   await expect(usage().getByRole('button',{name:'Refresh usage',exact:true})).toBeEnabled();
+   await questions.click();await expect(questions.locator('..')).toHaveAttribute('open','');
+  }
   await page.locator('.a-question-history summary').click();
  };
  const close=async()=>{
@@ -102,7 +135,7 @@ try{
  const saved=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='question.answer'&&response.ok());
  releaseAnswer();await saved;await page.unroute('**/api/actions');
  await expect(page.locator('.a-question-history')).toHaveCount(0);
- await history();
+ await history({stableUsage:true,usageCalls:6,label:'desktop'});
  await expect(card(ready.required).getByText('Answer saved and delivered to Amplifier.')).toBeVisible();
  await close();
  await expect(composer()).toHaveDraft('Keep this unsent message');
@@ -120,10 +153,11 @@ try{
  await history();await expect(card(voice.id).getByText('Answer saved and delivered to Amplifier.')).toBeVisible();await close();
  state=await check();assert.equal(state.sent.length,3);assert.equal(new Set(state.sent.map(row=>row.inputId)).size,3);
  await page.reload();await expect(composer()).toHaveDraft('Keep this unsent message');
- await history();await expect(card(voice.id).getByText('Your answer: Plain language',{exact:true})).toBeVisible();
  await page.setViewportSize({width:390,height:844});
+ await history({stableUsage:true,usageCalls:12,label:'narrow'});await expect(card(voice.id).getByText('Your answer: Plain language',{exact:true})).toBeVisible();
  await expect(card(voice.id)).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await card(voice.id).scrollIntoViewIfNeeded();await expect(card(voice.id)).toBeInViewport();
  await page.screenshot({path:'/tmp/amplifier-durable-questions-mobile.png'});
  assert.deepEqual(errors,[]);
  console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout.');
-}finally{await browser?.close();fixture.kill()}
+}finally{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}await browser?.close();fixture.kill()}
