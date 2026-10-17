@@ -21,6 +21,7 @@ The user interface and agents call the same host actions:
 | `workspace.environments.start` | Approved profile plus stable `requestId`; immutable source snapshot and one owned environment. |
 | `workspace.environments.execute` | Resource identity, exact revision, stable request identity and command; bounded stdout, stderr, exit code and truncation flags. |
 | `workspace.environments.stop` | Resource identity, exact revision and stable request identity; observed stopping outcome with data retained. |
+| `workspace.environments.exportArtifacts` | The same ownership and revision checks; a bounded verified `/artifacts` archive from a stopped environment, without executing commands, restarting or deleting it. |
 | `workspace.environments.remove` | The same ownership and revision checks; source and artifact archives retained before observed teardown. |
 
 The resource ledger owns allocation identity and lifetime. The existing operation
@@ -79,6 +80,17 @@ successful bounded exports of both `/workspace` and `/artifacts`; failed export
 blocks destruction. Archives are retained without extraction on the host. Local
 snapshots and receipts remain after removal. Owned dependency images and builders
 must also be confirmed removed before their resource owner is retired.
+
+If working-folder preservation fails, **Save artifact evidence** can retain
+`/artifacts` independently for diagnosis. Recovery uses the original approved
+backend, exact owner, stopped-state checks and immutable request receipts.
+It does not mark the working folder preserved, retire ownership, retry the
+failed check, or satisfy removal's two-root/full-retention requirement.
+Archive bytes, members, logical selected size, safe links and complete tar
+termination remain bounded and verified. Incus still streams a bounded full
+backup while selecting artifacts only; its input-size, free-space and deadline
+limits remain in force. An oversized full backup can therefore still block
+Incus artifact recovery. Uncertain exports are retained, never auto-replayed.
 
 ## Operator setup and upgrade retention
 
