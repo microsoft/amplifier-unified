@@ -56,7 +56,8 @@
         "tests/test_bundle_selection.py::test_real_bundle_switch_isolates_module_revisions_and_preserves_history",
         "tests/test_search_read_policy.py",
         "tests/test_default_capability_policy.py",
-        "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip"
+        "tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip",
+        "tests/fixtures/provider_isolation_native.py"
       ],
       "paths": [
         "tests/fixtures/computation_runtime.py",
@@ -103,7 +104,12 @@
         "amplifier_web/desktop_policy.py",
         "tests/test_search_read_policy.py",
         "tests/test_default_capability_policy.py",
-        "tests/test_default_export_literals.py"
+        "tests/test_default_export_literals.py",
+        "amplifier_web/provider_isolation.py",
+        "amplifier_web/provider_environment.py",
+        "amplifier_web/image_defaults.py",
+        "tests/test_provider_isolation.py",
+        "tests/fixtures/provider_isolation_native.py"
       ]
     },
     "release-runtime": {
