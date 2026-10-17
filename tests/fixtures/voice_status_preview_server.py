@@ -12,7 +12,7 @@ import sys
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT))
 from aiohttp import web
 from voice_status_worker_probe import fixture
-from voice_status_review import review
+from voice_status_review import review, review_html
 
 
 async def serve(root,port):
@@ -26,7 +26,14 @@ async def serve(root,port):
     await service.schedules.close()  # No outbound schedules in this review fixture.
     if not service._state['sessions']:
         await service.dispatch('session.create',{'title':'Voice development review · synthetic provider','bundle':str(bundle)})
-    latest={};lock=asyncio.Lock()
+    latest={provider:await review(provider) for provider in ('live','realtime')};lock=asyncio.Lock()
+    (Path(root)/'review-results.json').write_text(json.dumps(latest,indent=2)+'\n')
+    (Path(root)/'voice-review.html').write_text(review_html(latest))
+    async def page(request):
+        # Existing app authentication applies, including ordinary owner cookies;
+        # restricted companion credentials remain denied by their route policy.
+        return web.Response(text=review_html(latest),content_type='text/html',headers={'Cache-Control':'no-store'})
+    app.router.add_get('/voice-review',page)
     async def report(request):
         if not hmac.compare_digest(request.headers.get('Authorization',''), 'Bearer '+app['control_token']):
             raise web.HTTPForbidden(text='The preview owner credential is required.')

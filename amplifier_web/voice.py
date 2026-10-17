@@ -252,8 +252,13 @@ class VoiceCall:
         session['activity'] = raw('activity', {}) or {}
         session.update(messages=list(reversed(recent)), workers=raw('workers', [])[:32],
                        generations=raw('generations', [])[-200:])
+        clients = getattr(self.service, 'clients', None)
+        # Presentation belongs to the originating browser, never the ambient
+        # request context or another client's shared default view.
+        view = (clients.records.get(self.client_id, {}).get('view', {})
+                if clients is not None else state.get('view', {}))
         return {'sessions': [session], 'voice': state.get('voice', {}),
-                'view': {key: state.get('view', {}).get(key) for key in
+                'view': {key: view.get(key) for key in
                          ('mode', 'panel', 'scheme', 'layout', 'selectedWorkerId', 'contextVisible')}}
 
     async def progress_tick(self):
@@ -279,9 +284,13 @@ class VoiceCall:
             notice, version, epoch = pending
             current, _ = self.progress.observe(resident_facts(self.resident_session()), self.clock())
             if (not self.status_scope() or version != self.user_version or epoch != self.progress_epoch or
-                    current != notice):
+                    current is None or current.key != notice.key or current.revision != notice.revision):
                 self.pending_progress = None
                 return
+            # Playback may span several elapsed boundaries. Keep one current
+            # notice rather than discarding it or replaying overdue thresholds.
+            notice = current
+            self.pending_progress = (notice, version, epoch)
             if self.realtime_pending_response or self.realtime_responding or self.realtime_speaking or self.realtime_playing or self.realtime_awaiting_vad_response:
                 return
             self.pending_progress = None
@@ -327,7 +336,7 @@ class VoiceCall:
     async def create(self, sdp: str, provider: str) -> dict:
         await self.require_admission()
         self.provider = provider
-        config = {"model": MODELS[provider], "instructions": INSTRUCTIONS + "\nCurrent context: " + self.context(self.service.state), "audio": {"output": {"voice": getattr(self,"voice_name","marin")}}}
+        config = {"model": MODELS[provider], "instructions": INSTRUCTIONS + "\nCurrent context: " + self.context(self.observation()), "audio": {"output": {"voice": getattr(self,"voice_name","marin")}}}
         if provider == "live":
             config.update(delegation={"type": "client"}, store=False)
             data, _, _ = await self.manager.request("POST", "/live/sessions", json={"session": config, "transport": {"type": "webrtc", "sdp": sdp}})
@@ -422,6 +431,12 @@ class VoiceCall:
 
     async def handle(self, event: dict) -> None:
         kind = event.get("type", "")
+        if self.manager.call is not self and (hasattr(self.service, '_state') or self.manager.call is not None):
+            # A provider can deliver its final/error event after replacement.
+            # Retire the old transport without changing the new call's state.
+            if kind == 'session.closed':
+                self.final.set()
+            return
         if self.closing and kind in {"session.delegation.created", "response.function_call_arguments.done"}:
             return
         if "audio.delta" in kind or kind == "session.input_audio.append":
@@ -930,7 +945,6 @@ def setup_routes(app: web.Application) -> VoiceService:
         try:
             data = await request.json()
             result = await manager.connect(data.get("sdp"), data.get("provider", "auto"), data.get("sessionId"))
-            manager.call.client_id = manager.service.clients.current.get()
             return web.json_response(result)
         except VoiceError as exc:
             return web.json_response({"error": str(exc), "code": exc.code}, status=exc.status if 400 <= exc.status <= 599 else 502)

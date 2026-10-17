@@ -72,3 +72,11 @@ Every sideband result/chunk and continuation request rechecks the active media
 owner. A transfer can occur after an item was handed to a provider; that item
 cannot be recalled, but no later item or speech request is authorized by the
 old call. Physical audibility of an already-sent item remains provider-specific.
+
+
+The development status preview pins its six passive presentation fields to the
+originating client before provider instructions are created. Missing origin
+records produce unavailable fields rather than another browser's view. Late
+provider close/error events from a replaced call cannot update the replacement's
+status. Playback spanning several elapsed boundaries coalesces them to the latest
+applicable observation; it does not replay a backlog of waiting notices.

@@ -118,6 +118,11 @@ class PacingPolicy:
             return None, None
         if now < deadline:
             return None, deadline
+        if threshold >= 0:
+            # Coalesce elapsed boundaries missed during playback: one current
+            # observation, never a burst of overdue twenty/sixty-second notices.
+            threshold = max(index for index, seconds in enumerate(self.intervals)
+                            if index >= self.stage and self.since + seconds <= now)
         if threshold > 0:
             text = 'This call has observed ongoing activity for at least ' + self.elapsed[threshold] + '. ' + text
         return ProgressNotice(key, text, self.revision, threshold), None

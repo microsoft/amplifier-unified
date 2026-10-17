@@ -4,6 +4,7 @@ This module is a development fixture, never a shipping route or audio simulation
 """
 import asyncio
 import json
+from html import escape
 from types import SimpleNamespace
 from amplifier_web.voice import VoiceCall, VoiceService
 
@@ -95,6 +96,31 @@ async def review(provider='live'):
             'policy':{'graceSeconds':5,'phaseCooldownSeconds':5,'elapsedThresholdSeconds':[20,60,120],
                       'unchangedAfterFinalThreshold':'quiet','pendingProgressSlots':1},
             'scenarios':[await scenario(provider,name) for name in ('short','long','phases','status','interruption','completion','hangup')]}
+
+
+def review_html(results):
+    """Inert owner review artifact: escaped text, no scripts or network actions."""
+    sections=[]
+    titles={'short':'Quick work stays quiet','long':'Long work gets finite updates',
+            'phases':'Phase changes keep the original grace','status':'A direct status question',
+            'interruption':'Your voice takes priority','completion':'A verified result wins',
+            'hangup':'Work continues after hangup'}
+    for provider, result in results.items():
+        cards=[]
+        for scenario in result['scenarios']:
+            steps=''.join('<li><b>'+escape(str(step['at']))+'s</b> '+escape(step['description'])+'</li>' for step in scenario['steps'])
+            notices=[]
+            for event in scenario['events']:
+                text=event.get('text')
+                item=event.get('item',{})
+                if not text and item.get('type')=='function_call_output':text=item.get('output')
+                if not text and item.get('content'):text=' '.join(part.get('text','') for part in item['content'])
+                if text:notices.append('<li><b>'+escape(str(event['observedSeconds']))+'s</b> '+escape(text)+'</li>')
+            cards.append('<article><h3>'+escape(titles[scenario['id']])+'</h3><p class="pass">Passed · '+str(scenario['acceptedInputs'])+' accepted work inputs</p><ol>'+steps+'</ol><h4>Captured notices</h4>'+
+                         ('<ul>'+''.join(notices)+'</ul>' if notices else '<p>No notice sent.</p>')+
+                         '<details><summary>Transport events</summary><pre>'+escape(json.dumps(scenario['events'],indent=2))+'</pre></details></article>')
+        sections.append('<section id="'+escape(provider)+'"><h2>'+escape(provider.title())+'</h2>'+''.join(cards)+'</section>')
+    return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voice pacing review</title><style>body{font:17px/1.55 system-ui;background:#f4f5fa;color:#18233b;margin:0}main{max-width:980px;margin:40px auto;padding:0 24px}header,article{background:white;border:1px solid #dce1ee;border-radius:16px;padding:24px;margin:20px 0}h1,h2,h3{line-height:1.2}.note{background:#fff3d7;padding:16px;border-radius:10px}.pass{color:#286443}a{color:#4a38bb}li{margin:8px 0}pre{overflow:auto;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}nav{display:flex;gap:24px}b{font-variant-numeric:tabular-nums}</style><main><header><h1>Voice pacing review</h1><p>Development preview · unmerged #36</p><p class="note"><strong>Controlled clock, captured messages.</strong> These scenarios exercise the actual call and pacing code. They do not use a microphone, speakers or a provider connection, and do not demonstrate audible timing.</p><p>Five seconds of grace; a five-second cooldown for phase changes; distinct observations at twenty seconds, one minute and two minutes, then quiet. Deferred updates coalesce. Your speech and verified results take priority.</p><nav><a href="#live">Live scenarios</a><a href="#realtime">Realtime scenarios</a><a href="/">Open the test app</a></nav></header>'+''.join(sections)+'</main></html>'
 
 
 if __name__=='__main__':

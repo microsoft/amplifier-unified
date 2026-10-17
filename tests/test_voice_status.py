@@ -316,3 +316,86 @@ async def test_scripted_review_runs_actual_policy_and_transport_classes(provider
     result=await module.review(provider)
     assert len(result['scenarios'])==7 and all(row['passed'] for row in result['scenarios'])
     assert result['scenarios'][3]['acceptedInputs']==0
+
+
+def test_elapsed_backlog_coalesces_to_latest_observation():
+    policy = PacingPolicy()
+    policy.observe(ActivityFacts(status='working'), 0)
+    notice, _ = policy.observe(ActivityFacts(status='working'), 150)
+    assert notice.threshold == 3 and 'two minutes' in notice.text
+    policy.delivered(notice, 150)
+    assert policy.observe(ActivityFacts(status='working'), 155) == (None, None)
+
+
+async def test_origin_client_context_is_pinned_before_provider_create():
+    from contextvars import ContextVar
+    service = Service()
+    current = ContextVar('voice-origin', default='origin')
+    origin = {'mode':'canvas', 'panel':'session-details', 'scheme':'dark',
+              'layout':'wide', 'selectedWorkerId':'origin-worker', 'contextVisible':True}
+    service.clients = SimpleNamespace(current=current, records={'origin':{'view':origin},
+        'other':{'view':{'mode':'chat', 'panel':'settings'}}})
+    socket = Socket()
+    manager = VoiceService(service, http=SimpleNamespace(ws_connect=AsyncMock(return_value=socket)))
+    manager.request = AsyncMock(return_value=({'session':{'id':'created'},'transport':{'sdp':'answer'}},'',{}))
+    call = VoiceCall(manager, 'main')
+    assert call.client_id == 'origin'
+    current.set('other')
+    assert call.observation()['view'] == origin
+    actual_context = call.context
+    def context(snapshot):
+        assert snapshot is not service.state
+        assert snapshot['view'] == origin
+        assert len(snapshot['sessions'][0]['messages']) <= 4
+        return actual_context(snapshot)
+    call.context = context
+    service.state['sessions'][0]['messages'] = [{'role':'user','text':'large'*10000}]*100
+    await call.create('v=0', 'live')
+    assert len(manager.request.call_args.kwargs['json']['session']['instructions']) < 10000
+    service.clients.records.pop('origin')
+    assert set(call.observation()['view'].values()) == {None}
+    call.final.set()
+    await call.close()
+
+
+@pytest.mark.parametrize('kind', ['session.closed', 'error'])
+async def test_old_provider_terminal_event_cannot_end_replacement_call(kind):
+    service, old, _ = setup()
+    new = VoiceCall(old.manager, 'main')
+    new.id, new.socket = 'replacement', Socket()
+    old.manager.call = new
+    service.state['voice'] = {'id':new.id, 'sessionId':'main', 'status':'connected'}
+    before = list(service.statuses)
+    await old.handle({'type':kind, 'error':{'code':'late_failure'}})
+    assert service.statuses == before
+    assert new.media_scope()
+    assert not old.tasks
+    if kind == 'session.closed': assert old.final.is_set()
+
+
+async def test_review_html_is_readable_inert_and_escapes_captured_content():
+    from fixtures.voice_status_review import review, review_html
+    results={provider:await review(provider) for provider in ('live','realtime')}
+    results['live']['scenarios'][0]['steps'][0]['description']='<script>bad()</script>'
+    page=review_html(results)
+    assert page.count('<article>') == 14
+    assert '<script>' not in page and '&lt;script&gt;bad()&lt;/script&gt;' in page
+    assert 'Controlled clock' in page and 'accepted work inputs' in page
+
+
+async def test_playback_spanning_all_thresholds_emits_only_current_elapsed_notice():
+    _, call, now = setup('realtime')
+    await call.progress_tick()
+    call.realtime_playing = True
+    now[0] = 5
+    await call.progress_tick()
+    assert call.pending_progress and not call.socket.sent
+    now[0] = 150
+    call.realtime_playing = False
+    await call.handle({'type':'output_audio_buffer.stopped'})
+    wire=json.dumps(call.socket.sent)
+    assert wire.count('two minutes') == 1 and 'twenty seconds' not in wire
+    call.realtime_responding = False
+    now[0] = 155
+    assert await call.progress_tick() is None
+    assert len([row for row in call.socket.sent if row['type']=='response.create']) == 1

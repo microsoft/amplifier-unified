@@ -22,8 +22,11 @@ read-only exception, pacing, media fencing and generation-tail limits.
 | Rapid generation-tail gap | Observer tracking grows with call | Passed: bounded tail/anchor, no historical replay, explicit incomplete unsolicited coverage; exact accepted result still delivered |
 | Real Live/Realtime acoustics and timing | Not measured here | Not run; requires separately authorized real provider/audio/device acceptance |
 
-The focused candidate run currently has **148 passed, zero skips** across voice,
-status projection, real-worker and integration-owner tests. The local provider is
+The corrected focused candidate run has **154 passed, zero skips** across voice,
+status projection, real-worker and integration-owner tests. An expanded run also
+passed all 63 neighboring transfer, visual, input, usage and settings checks.
+Its two failures were older protocol stubs missing the newly used client-view
+record; their records were corrected without weakening their original assertions. The local provider is
 synthetic and credential-free, but Core/Foundation, loop-live, the subprocess,
 accepted input and generation boundary are real. Initial implementation failures
 and the fixed additive-owner oracle remain in the task evidence; they are not
@@ -54,7 +57,11 @@ reported separately when completed.
 `tests/fixtures/voice_status_preview_server.py ROOT PORT` is a development-only
 fixture. It runs the ordinary app with a real worker and a local synthetic
 provider, disables background updates and schedules, and uses private state.
-No account credentials are needed. Its extra `GET/POST /api/voice-preview` route
+No account credentials are needed for the synthetic worker. The authenticated
+`/voice-review` page shows both transports as escaped inert HTML; it needs the
+normal app login and introduces no alternate authentication. An identical
+standalone HTML report and JSON are saved to the private preview root for direct
+review without a browser login. Its extra `GET/POST /api/voice-preview` route
 requires the instance's owner bearer credential, rejects other input fields,
 and accepts only `{"provider":"live"}` or `{"provider":"realtime"}`. Each
 result contains policy, seven scenarios, controlled timestamps and captured
@@ -62,5 +69,10 @@ transport events. It has no microphone or speaker side effects and is absent
 from the shipping server routes.
 
 The retained preview's exact source, environment, listener and evidence ownership
-are recorded in the workspace manifest fragment. Review and eventual adoption
+are recorded in the workspace manifest fragment. The current call view is captured before provider creation and remains bound to
+that originating browser even when another browser becomes active. A replaced
+call's late close/error event cannot change its replacement's status. Elapsed
+thresholds missed during playback coalesce to one current notice.
+
+Review and eventual adoption
 are separate decisions; this branch must not be merged or released by its owner.

@@ -475,7 +475,8 @@ def test_voice_context_uses_only_its_browser_conversation_source():
 async def test_already_shared_source_is_in_initial_provider_instructions(provider):
     import json
     service, socket = Service(), Socket()
-    service.clients = SimpleNamespace(current=SimpleNamespace(get=lambda: 'origin-browser'))
+    service.clients = SimpleNamespace(current=SimpleNamespace(get=lambda: 'origin-browser'),
+                                      records={'origin-browser': {'view': {'mode': 'chat'}}})
     seen = []
     def project(client):
         seen.append(client)
