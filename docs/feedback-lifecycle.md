@@ -11,6 +11,67 @@ Every mutation requires its own stable request ID. Exact retries are deduplicate
 
 The Feedback panel exposes delivery checking, correction drafts and close/reopen. Correction drafts persist per browser. Publishing a correction or changing report state is explicit; editing a draft does not post anything. The product still does not edit third-party comments or silently add post-submission attachments. Reviewed excerpt attachments are a separate follow-up.
 
+## Review proposed changes (#294, partial delivery)
+
+`feedback.edits.review` is a read-only, durable comparison. It requires an
+attached client, the original local feedback ID, a completed `feedback.get`
+read request for that report, and the proposed title/body. It re-verifies the
+current GitHub account, canonical issue and original submission marker, then
+records four distinct versions: originally submitted text, the previously
+viewed GitHub text, the latest GitHub text, and the proposed correction.
+A revision difference is visible even when the change is only issue state or
+other revision metadata. Previously shortened previews are labelled; the latest
+comparison text is complete. Repository text is rendered as text, never commands.
+
+The review is private to its canonical client, not authority conveyed by a
+writable draft pointer. A copied browser draft may be reviewed afresh against
+its completed baseline read, but does not inherit the previous client's review
+or consent. Same-client exact review retries return the stored snapshot without
+remote effects; interrupted reads fail and can be explicitly refreshed. Drafts,
+reviews and correction receipts persist; confirmation is reset when the browser
+reloads, the proposal changes, or a new review is requested.
+
+The browser requires a comparison and a separate confirmation before publishing.
+Its `feedback.update` carries `reviewRequestId`; the server binds the exact
+client, feedback ID, proposed title/body and latest revision. Acceptance consumes
+that review once in the same local transaction that saves the immutable mutation
+request. Exact accepted retries return the saved receipt; a new mutation ID
+cannot reuse the consumed review, even after failure or an unknown outcome.
+The existing direct `feedback.update` correction-comment contract remains
+available to agents; this new optional review does not turn it into original
+text replacement. Every correction still verifies current owner/revision before
+posting and uses the existing sending/unknown receipt fence.
+
+**Publishing is explicitly a correction comment.** A late maintainer change
+between the last read and POST survives because the issue body/title are never
+PATCHed. An earlier change rejects publication and requires a fresh review.
+The browser provides **Open on GitHub** for a user who wants to edit the original;
+that handoff does not claim to protect concurrent edits in GitHub's UI.
+New files continue through the already-shipped #558 attachment review below,
+with their own complete manifest and visibility consent. A text review or
+correction neither selects nor uploads those files.
+
+Protected automatic original title/body replacement remains unresolved and #294
+must remain open. GitHub's [conditional request documentation](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)
+excludes unsafe methods unless an endpoint explicitly supports them; the
+[issue update endpoint](https://docs.github.com/en/rest/issues/issues#update-an-issue)
+offers no conditional replacement contract. A GET/compare/PATCH sequence, an
+owner-marked block inside the same issue body, or a local lock cannot protect a
+concurrent remote writer. This implementation makes no such guarantee.
+
+A future decision must choose between keeping the manual-edit handoff, explicitly
+accepting a possible remote lost update, or changing the publishing model so
+proposed revisions are reviewed as separate immutable content. The second choice
+would weaken the accepted no-clobber requirement and is not implemented here.
+
+Routine coverage: `tests/test_feedback_edits.py`, frontend Node
+`tests/feedback-edits.test.mjs`, and the existing registered `feedback-followup`
+browser scenario. The browser uses real AppService HTTP/SSE and React UI with
+GitHub intercepted; it proves changed-report comparison, explicit confirmation,
+draft reload, append-only publication and original text preservation. It is not
+a live GitHub concurrency or native device proof. The two existing attachment
+acceptance paths remain independent; #558 is not being redelivered as new work.
+
 ## Explicit ordinary-file additions (source candidate)
 
 Host action routing is present in this source candidate. Fresh installed-package

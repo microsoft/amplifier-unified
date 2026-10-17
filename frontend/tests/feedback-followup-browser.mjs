@@ -1,6 +1,7 @@
 // Isolated real UI and service, with all GitHub operations intercepted.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {writeFileSync} from 'node:fs';
 import {once} from 'node:events';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
@@ -43,7 +44,11 @@ async def main():
   for n in range(3):
    await service.on_runtime_event('execution.event',{'id':str(n),'sessionId':sid,'rootSessionId':sid,'kind':'llm','phase':'completed','provider':'fixture','model':'model','producerId':'fixture-worker','liveObservation':True,'revision':1,'startedAt':1,'endedAt':2,'usage':{'inputTokens':8,'outputTokens':2,'totalTokens':10,'costUsd':.01,'costType':'reported'}})
   assert usage_snapshot(service._session(sid))['calls']==3
-  async def inspect(request):return web.json_response({'posts':posts})
+  async def inspect(request):return web.json_response({'posts':posts,'issue':issue})
+  async def maintainer(request):
+   issue['body']+='\\nMaintainer addition after the earlier read';issue['updated_at']='fixture-maintainer'
+   return web.json_response({'ok':True})
+  app.router.add_post('/api/fixture/maintainer',maintainer)
   app.router.add_get('/api/fixture/followup',inspect)
   runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
   port=site._server.sockets[0].getsockname()[1]
@@ -55,13 +60,14 @@ asyncio.run(main())
 `],{stdio:['ignore','pipe','pipe']});
 let fixtureLog='';fixture.stderr.on('data',chunk=>fixtureLog+=chunk);
 const ready=new Promise((resolve,reject)=>{let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});fixture.once('exit',code=>reject(new Error(`Fixture exited ${code}: ${fixtureLog}`)))});
-let vite,browser;
+let vite,browser,diagnosticPage;
 try{
  const port=await Promise.race([ready,new Promise((_,reject)=>setTimeout(()=>reject(Error('Fixture timeout')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
- vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
- browser=await chromium.launch({headless:true});
- const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];let pending;
+ vite=await createServer({configFile:false,root,cacheDir:fileURLToPath(new URL('../.vite-feedback-followup',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
+ browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});
+ const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const page=await context.newPage(),errors=[];diagnosticPage=page;let pending;
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const command=request.postDataJSON();if(command?.action==='feedback.comment')pending=command.args}});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
@@ -80,9 +86,10 @@ try{
  await page.getByText('Feedback report loaded.',{exact:true}).waitFor();
  await page.getByText('Maintainer response',{exact:true}).waitFor();
  // Each browser owns its selected report page and unsent follow-up draft.
- const other=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const other=process.env.CHROMIUM_SINGLE_PROCESS==='1'?await page.context().newPage():await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  other.on('pageerror',error=>errors.push(error.message));
  await other.goto(vite.resolvedUrls.local[0]);await other.waitForSelector('#amp-one');
+ assert.notEqual(await other.evaluate(()=>window.amplifier.getState().client.id),await page.evaluate(()=>window.amplifier.getState().client.id));
  await other.getByRole('button',{name:'Open navigation',exact:true}).click();
  await other.getByRole('button',{name:'App options',exact:true}).click();
  await other.getByRole('button',{name:'Send feedback',exact:true}).click();
@@ -108,12 +115,33 @@ try{
  await page.waitForFunction(()=>window.amplifier.getState().view.feedbackCorrectionDraft?.body==='A corrected reproduction without overwriting the maintainer.');
  await page.reload();await page.getByLabel('Corrected description',{exact:true}).waitFor();
  assert.equal(await page.getByLabel('Corrected description',{exact:true}).inputValue(),'A corrected reproduction without overwriting the maintainer.');
+ assert.equal(await page.getByRole('button',{name:'Publish correction comment',exact:true}).isEnabled(),false);
+ await page.evaluate(()=>fetch('/api/fixture/maintainer',{method:'POST'}));
+ const reviewStarted=Date.now();
+ await page.getByRole('button',{name:'Review changes',exact:true}).click();
+ await page.getByRole('region',{name:'Change comparison',exact:true}).waitFor();
+ const reviewMs=Date.now()-reviewStarted;
+ await page.getByText('The report changed since you opened it. Review the latest version before publishing a correction.',{exact:true}).waitFor();
+ await page.getByText('Latest on GitHub',{exact:true}).click();
+ await page.getByText(/Maintainer addition after the earlier read/).waitFor();
+ const reviewed=await page.evaluate(()=>window.amplifier.getState().feedback.editReview);
+ assert.equal(reviewed.review.original.body,'Original details');
+ assert.equal(reviewed.review.previous.body,'Original details\n<!-- amplifier-feedback:original-feedback -->');
+ assert.match(reviewed.review.latest.body,/Maintainer addition/);
+ if(process.env.FEEDBACK_REVIEW_SCREENSHOT)await page.screenshot({path:process.env.FEEDBACK_REVIEW_SCREENSHOT});
+ if(process.env.FEEDBACK_REVIEW_RESULT)writeFileSync(process.env.FEEDBACK_REVIEW_RESULT,JSON.stringify({reviewMs,review:reviewed,githubWritesBeforeReview:1,transport:'real AppService HTTP/SSE; GitHub intercepted',chromiumSingleProcess:process.env.CHROMIUM_SINGLE_PROCESS==='1'},null,2));
+ assert.equal(await page.getByRole('link',{name:'Open on GitHub',exact:true}).getAttribute('href'),'https://github.com/microsoft/amplifier-unified/issues/42');
+ assert.equal((await page.evaluate(()=>fetch('/api/fixture/followup').then(r=>r.json()))).posts.length,1);
+ await page.getByLabel('I reviewed the latest report and want to publish this correction comment.',{exact:true}).check();
  await page.getByRole('button',{name:'Publish correction comment',exact:true}).click();
  await page.getByText('Correction version added; original report retained.',{exact:true}).waitFor();
  const correction=await page.evaluate(()=>window.amplifier.getState().view.feedbackCorrectionDraft.pending);
  await page.evaluate(args=>window.amplifier.dispatch('feedback.update',args),correction);
  assert.equal((await page.evaluate(()=>fetch('/api/fixture/followup').then(r=>r.json()))).posts.length,2);
  assert.match(await page.locator('.a-feedback-report').innerText(),/Original details/);
+ assert.match((await page.evaluate(()=>fetch('/api/fixture/followup').then(r=>r.json()))).issue.body,/Maintainer addition after the earlier read/);
+ await page.getByRole('button',{name:'Refresh report',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().feedback.report?.updatedAt==='fixture-maintainer');
  await page.getByRole('button',{name:'Close my report',exact:true}).click();
  await page.getByText(/Feedback report closed/).waitFor();
  await page.getByRole('button',{name:'Refresh report',exact:true}).click();
@@ -137,7 +165,13 @@ try{
  await page.getByText('Usage data',{exact:true}).click();
  const exported=JSON.parse(await usage.locator('pre').innerText());assert.equal(exported.calls,3);assert.equal(exported.metrics.totalTokens.value,30);
  assert.deepEqual(errors,[]);
- console.log('Feedback lifecycle browser passed: report/comments, unknown delivery reconciliation without reposting, persistent correction drafts, exact agent retry, close/reopen without body changes, independent browser drafts, narrow layout, and complete conversation usage totals; no live GitHub writes.');
+ console.log('Feedback lifecycle browser passed: report/comments, unknown delivery reconciliation without reposting, persistent correction drafts, explicit original/previous/latest/proposed review and confirmation, maintainer text preservation, exact agent retry, close/reopen without body changes, independent client drafts, narrow layout, and complete conversation usage totals; no live GitHub writes.');
+}catch(error){
+ if(process.env.FEEDBACK_REVIEW_RESULT&&diagnosticPage&&!diagnosticPage.isClosed()){
+  const diagnostics=await diagnosticPage.evaluate(()=>({view:window.amplifier?.getState()?.view,feedback:window.amplifier?.getState()?.feedback,text:document.body.innerText}));
+  writeFileSync(process.env.FEEDBACK_REVIEW_RESULT+'.failure.json',JSON.stringify({error:String(error),...diagnostics},null,2));
+ }
+ throw error;
 }finally{
  await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }
