@@ -510,3 +510,15 @@ the host. These are synthetic no-model proofs, not live-provider latency or
 native-device acceptance. The earlier hosted failure recorded one unexpected
 view request without its payload, so the reproduced defect is not a claim to
 have recovered that exact request's contents.
+
+### Activity inbox baseline (October 16)
+
+The existing `attention-inbox` readiness owner now establishes an empty inbox
+before seeding its exact completion/question/approval counts. A fresh host may
+already be caught up: its visible **Mark all reviewed** button is disabled, so
+setup must only click it when enabled, then require both **All caught up** and
+the disabled action. Isolated diagnostic runs exercised an already empty inbox
+and a known update notice, preserving all later retry, cross-client, badge,
+pending-action and mobile assertions. The original fixture fails on the empty
+baseline; the corrected fixture passes both. This is a harness correction, not
+a change to the app's attention behavior or a new duplicate test lane.

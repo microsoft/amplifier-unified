@@ -22,7 +22,9 @@ try{
  // A fresh install can have release notices. Review those through the real UI
  // before seeding the scenario's completion/question/approval counts.
  const initialReview=inbox.getByRole('button',{name:'Mark all reviewed',exact:true});
- if(await initialReview.count()){await initialReview.click();await expect(inbox.getByText('All caught up.',{exact:true})).toBeVisible()}
+ if(await initialReview.isEnabled())await initialReview.click();
+ await expect(inbox.getByText('All caught up.',{exact:true})).toBeVisible();
+ await expect(initialReview).toBeDisabled();
  const sessions=Object.fromEntries(initial.state.sessions.filter(s=>s.id.startsWith('library-')).map((s,i)=>[s.id,{completion:{id:'g1',at:100+i}}]));
  await control({op:'patch',sessions});
  await page.waitForFunction(()=>window.amplifier?.getState()?.attention?.badgeUnread===0);
