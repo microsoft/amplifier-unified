@@ -594,3 +594,11 @@ replacement. The existing `execution-inspection` extended browser scenario remai
 the sole browser owner for a current recent-events receipt, live/terminal Work,
 retry, copy and reload. See [qualification and limits](work-receipt832.md).
 No frozen inventory or 65-scenario migration hash changes.
+
+**INTERIM-832** strengthens the existing extended `interim-replies` owner. Before
+testing long-scrollback completion and the explicit Jump to latest transition,
+require this generation's rendered message and exact completed-response binding.
+A delayed real terminal frame must not be mistaken for settled browser layout.
+Keep the existing zero-folded-group while reading and one-group after the user's
+return-to-latest assertions. [The diagnostic](interim-browser-terminal832.md)
+preserves the forced failing ordering separately; no folding behavior changed.
