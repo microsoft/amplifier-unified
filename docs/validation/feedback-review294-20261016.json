@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "issue": 294,
+  "status": "qualified partial scope; protected original replacement remains unresolved",
+  "source": "9a32727ae86a60867cedb5d23f35a3f6b3cd09c8",
+  "base": "02401f06446e09b52435b284a7748819c731604e",
+  "environment": {
+    "host": "spark-2",
+    "dtu": "dtu-unified-codex-dev-20261014",
+    "source": "/opt/unified-dev/checks/feedback294",
+    "python": "existing project-owned .venv; candidate via PYTHONPATH",
+    "frontend": "candidate React through Vite; private cache",
+    "browser": "Chromium headless1243; CHROMIUM_SINGLE_PROCESS=1 ARM workaround; two tabs with distinct attached client IDs",
+    "data": "synthetic; all GitHub API calls intercepted"
+  },
+  "checks": [
+    {
+      "command": "python -m pytest -q tests/test_feedback_edits.py tests/test_feedback_followup.py tests/test_feedback_lifecycle.py",
+      "result": "37 passed",
+      "evidence": "output/feedback294-20261016/python.log"
+    },
+    {
+      "command": "node --test tests/feedback-edits.test.mjs tests/feedback.test.mjs",
+      "result": "17 passed",
+      "evidence": "output/feedback294-20261016/frontend.log"
+    },
+    {
+      "command": "node --test tests/feedback-followup.test.mjs",
+      "result": "3 passed",
+      "evidence": "output/feedback294-20261016/frontend-followup.log"
+    },
+    {
+      "command": "node tests/feedback-followup-browser.mjs",
+      "result": "passed",
+      "evidence": "output/feedback294-20261016/browser.log"
+    }
+  ],
+  "coverage": [
+    "original/previous/latest/proposed comparison after a maintainer edit",
+    "review read makes zero GitHub writes",
+    "owner/client mismatch and changed proposal rejection",
+    "separate confirmation and complete-intent save acknowledgement",
+    "copy/reload cannot inherit review consent",
+    "reviewed correction does not replace original text, including concurrent edit at POST",
+    "unknown and successful receipts survive restart without replay; consumed review cannot authorize a second mutation ID",
+    "independent client follow-up drafts and original chat preserved",
+    "close/reopen after fresh revision and narrow layout retain existing assertions"
+  ],
+  "performance": {
+    "observedReviewMs": 237,
+    "measurement": "one click-to-comparison observation with synthetic local GitHub transport",
+    "regressionThresholdMs": 1000,
+    "desiredLocalMs": 500,
+    "liveGitHubTarget": "show immediate busy state; no artificial wall-time pass claim"
+  },
+  "routineOwners": {
+    "python": "ordinary pytest discovery",
+    "frontend": "ordinary node tests/*.test.mjs",
+    "browser": "existing feedback-followup scenario in frontend/tests/browser-checks.json"
+  },
+  "limitations": [
+    "No original title/body replacement; issue294 remains open.",
+    "No live GitHub mutation, native-device or installed-package/static-build acceptance; root integration owns built assets.",
+    "Review body rendering and exact intent are verified; browser-specific external GitHub editing is a manual handoff, not concurrency protection.",
+    "Later attachment implementation unchanged; existing separate manifest/visibility consent is reused, not redelivered.",
+    "Initial launch/context setup failures, first-draft rendering defect caught and fixed, and correct stale-close rejection are preserved as historical evidence."
+  ],
+  "sourceSha256": {
+    "amplifier_web/feedback_edits.py": "794fd9f9248ce8badaecf5651b816daaff9ec415784eccd01e5c8d39bbd34308",
+    "amplifier_web/feedback_followup.py": "7cec81b03bd2e606ef5ebefd0d04a52334b805b973c9527f6d037f79c31b0cd5",
+    "amplifier_web/service.py": "dbe5dca1d64758f1f5d569f2fa33f8680c8325ea534a8c869f6fb185c5d216ba",
+    "frontend/src/feedback-edits.jsx": "0613088199038dd8ea579924ab0324a52e61870324890d5a41ac2cd6f02cf88e",
+    "frontend/src/feedback-lifecycle.jsx": "753f232f723aee0999d88b6447f03f78bef81123cdfb6c854610c435300c7813",
+    "frontend/src/feedback-followup.jsx": "63acc78162003bc0d2132ae6d25b84b728f43ed4825a2fec26c8de40cf2f9546",
+    "frontend/tests/feedback-edits.test.mjs": "e95528aa4d595e1113867a60dcaedb23ea9d09f552596a1fd114be23339374e7",
+    "frontend/tests/feedback-followup-browser.mjs": "fb15c392572da90397756d7f9b2de358796415a37f2b61d5aaa6cec2c54f6e8e",
+    "tests/test_feedback_edits.py": "8f4ce95d22e1101fcc6b77bedb34c985fcb55a115331bb9f69d94baf67886425"
+  }
+}
