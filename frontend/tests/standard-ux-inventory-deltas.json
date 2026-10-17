@@ -1162,6 +1162,79 @@
         "frontend/tests/standard-ux-queued-checks-browser.mjs": "3216406530c60eef67622701cc0a7f7ef92d339cfbbfb605fe120b22e1defab4",
         "tests/fixtures/test_environments_ui_server.py": "f9f87421437eba772e1a2b7ba1c20b304ce6e5604071b8a63f1bdfb505125ae5"
       }
+    },
+    {
+      "id": "delta.294-review",
+      "sourceCommit": "9a32727ae86a60867cedb5d23f35a3f6b3cd09c8",
+      "reason": "Add explicit owner-bound feedback change comparison; original replacement remains unresolved. Earlier later-file attachment delivery is retained, not counted as new.",
+      "workflowsAdded": [
+        {
+          "id": "support.review-changes",
+          "family": "support",
+          "title": "Review proposed feedback changes before explicit correction or GitHub handoff",
+          "scope": "standard-path",
+          "entryPath": [
+            "App options",
+            "Send feedback",
+            "Submitted report",
+            "Refresh report",
+            "Draft a correction"
+          ],
+          "prerequisites": [
+            "Synthetic owner-verified submitted report; intercepted GitHub API",
+            "Independent attached clients and a simulated maintainer edit"
+          ],
+          "steps": [
+            "Save a proposed title/description and reload",
+            "Review changes against original, earlier read, latest report and proposal",
+            "Inspect changed-report notice and canonical Open on GitHub destination",
+            "Confirm correction explicitly, publish once and retry same request",
+            "Verify original maintainer text and unrelated draft remain unchanged",
+            "Use separate existing file review for any later attachments"
+          ],
+          "expectedResults": [
+            "No write during draft or review; review is private to its canonical client.",
+            "Changed proposed text requires fresh review and confirmation.",
+            "A correction is a comment, never original title/body replacement.",
+            "Failed/unknown receipt survives restart; same request never repeats a write.",
+            "New files retain separate manifest and visibility consent."
+          ],
+          "variants": [
+            "desktop-pointer",
+            "narrow-layout"
+          ],
+          "sourceRefs": [
+            {
+              "path": "frontend/src/feedback-edits.jsx",
+              "line": 1
+            },
+            {
+              "path": "amplifier_web/feedback_edits.py",
+              "line": 1
+            }
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/feedback-followup-browser.mjs",
+              "relation": "real HTTP/SSE comparison and correction, intercepted GitHub"
+            },
+            {
+              "path": "tests/test_feedback_edits.py",
+              "relation": "scope, exact intent, conflict, restart and no-replay"
+            },
+            {
+              "path": "frontend/tests/feedback-edits.test.mjs",
+              "relation": "confirmation and durable-intent acknowledgement fences"
+            }
+          ],
+          "limits": [
+            "Does not complete issue294 protected original replacement.",
+            "No live GitHub write or native device claim.",
+            "Separate attachment review remains covered by existing attachment tests."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/feedback-review294-20261016.json"
     }
   ]
 }
