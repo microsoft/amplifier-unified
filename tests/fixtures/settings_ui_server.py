@@ -1,5 +1,5 @@
 """Isolated settings UI fixture: synthetic providers and runtime, no account calls."""
-import asyncio,copy,json,os,sys,tempfile
+import asyncio,copy,json,os,signal,sys,tempfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from aiohttp import web
@@ -87,12 +87,19 @@ async def main(home):
 async def serve():
  with tempfile.TemporaryDirectory(prefix='amplifier-settings-ui-') as tmp:
   app=await main(Path(tmp));runner=web.AppRunner(app);await runner.setup()
+  stopped=asyncio.Event();loop=asyncio.get_running_loop()
+  # POSIX browser qualification must unwind app cleanup before the child exits.
+  shutdown_signals=(signal.SIGTERM,signal.SIGINT) if os.name=='posix' else ()
+  for signum in shutdown_signals:loop.add_signal_handler(signum,stopped.set)
   try:
    site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
    port=site._server.sockets[0].getsockname()[1]
    base=f'http://127.0.0.1:{port}'
    app['allowed_origins']=app['allowed_origins']|{base}
    print(json.dumps({'fixture':'settings-ui','pid':os.getpid(),'base':base}),flush=True)
-   await asyncio.Event().wait()
-  finally:await runner.cleanup()
+   await stopped.wait()
+  finally:
+   try:await runner.cleanup()
+   finally:
+    for signum in shutdown_signals:loop.remove_signal_handler(signum)
 if __name__=='__main__':asyncio.run(serve())

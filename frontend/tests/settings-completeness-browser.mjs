@@ -1,10 +1,11 @@
+import {finishFixture} from './fixture-lifecycle.mjs';
 import {openSettingsPage,openPhoneNotificationSettings,settingsToolObservations} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
 import {startSettingsFixture} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const {fixture,base}=await startSettingsFixture();
-let browser,page;const errors=[];
+const {base,stop}=await startSettingsFixture();
+let browser,page,failure;const errors=[];
 try{
  browser=await chromium.launch({headless:true});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
@@ -155,8 +156,9 @@ try{
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({destinations:settingsSections.reduce((count,section)=>count+section.pages.length,0),layouts,notificationPersistence:true,privateDrafts:true,voicePersistence:true,skinPersistence:true,catalogToConnection:true,browserErrors:0}));
 }catch(error){
+ failure=error;
  console.error(error);
  try{if(page)await page.screenshot({animations:'disabled',path:'/tmp/settings-completeness-failure.png'})}catch(captureError){console.error('Failure screenshot unavailable:',captureError.message)}
  throw error;
 }
-finally{await browser?.close();fixture.kill('SIGTERM')}
+finally{await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}

@@ -1,3 +1,4 @@
+import {ownFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
@@ -6,6 +7,7 @@ export async function startSettingsFixture(env={}) {
  const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),
   ['-u',fileURLToPath(new URL('../../tests/fixtures/settings_ui_server.py',import.meta.url))],
   {stdio:['ignore','pipe','pipe'],env:{...process.env,...env}});
+ const stop=ownFixture(fixture,{label:"Settings fixture"});
  let stderr='';
  fixture.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-8000)});
  try {
@@ -30,6 +32,9 @@ export async function startSettingsFixture(env={}) {
    const timer=setTimeout(()=>failed(new Error(`Settings fixture did not become ready: ${stderr}`)),30000);
    fixture.stdout.on('data',data);fixture.once('exit',exited);fixture.once('error',failed);
   });
-  return {fixture,base};
- } catch(error) {fixture.kill('SIGTERM');throw error}
+  return {fixture,base,stop};
+ } catch(error) {
+  try{await stop()}catch(cleanupError){console.error('Settings startup cleanup failed:',cleanupError)}
+  throw error;
+ }
 }

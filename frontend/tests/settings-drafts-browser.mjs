@@ -1,9 +1,10 @@
+import {finishFixture} from './fixture-lifecycle.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {startSettingsFixture} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const {fixture,base}=await startSettingsFixture();
-let browser,page;const errors=[];
+const {base,stop}=await startSettingsFixture();
+let browser,page,failure;const errors=[];
 const secret='fixture-unsaved-key-keep-local';
 const open=async()=>{await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings'}}));await openSettingsPage(page,'providers');await page.locator('[data-part=provider-settings] [data-collection-id=one] button').click();await page.evaluate(async()=>{for(const accessOpen of [false,true])await window.amplifier.dispatch('view.update',{patch:{providerEditor:{...window.amplifier.getState().view.providerEditor,accessOpen}}})});await page.locator('#provider-key-source').selectOption('private');await page.locator('#provider-key').fill(secret)};
 const agentPanel=async panel=>{const result=await page.evaluate(async panel=>{const response=await fetch('/fixture/agent-view',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId:window.amplifier.shellClientId,patch:{panel}})});return {ok:response.ok,body:await response.json()}},panel);assert.equal(result.ok,true,JSON.stringify(result.body))};
@@ -49,7 +50,8 @@ try{
  await expect(page.locator('[data-part=ai-connections]')).toBeVisible();
  assert.deepEqual(errors,[]);console.log('PASS: dirty close, agent dismissal guard, review, save, private state, mobile Back/cancel/discard, and picker management');
 }catch(error){
+ failure=error;
  console.error(error);
  try{await page.screenshot({path:'/tmp/charlie-settings-drafts-failure.png'})}catch(captureError){console.error('Failure screenshot unavailable:',captureError.message)}
  throw error;
-}finally{await browser?.close();fixture.kill();}
+}finally{await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}

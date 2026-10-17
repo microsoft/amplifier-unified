@@ -1,10 +1,11 @@
+import {finishFixture} from './fixture-lifecycle.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {startSettingsFixture} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const {fixture,base}=await startSettingsFixture({SETTINGS_RELEASE_FIXTURE:'1'});
-let browser,page;const errors=[];
+const {base,stop}=await startSettingsFixture({SETTINGS_RELEASE_FIXTURE:'1'});
+let browser,page,failure;const errors=[];
 const state=()=>page.request.get(base+'/api/state').then(r=>r.json());
 try{
  browser=await chromium.launch({headless:true});
@@ -168,8 +169,9 @@ try{
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({attentionTrail:true,reviewClearsBadges:true,compactGroupedUpdates:true,narrowerModalBreakpoint:true,typedFolderPath:true,registeredBundlePicker:true,actionSpacing:true,focusedPages:true,wildcardFilters:true,filterRetainsSelection:true,inlineBundleRadio:true,inlineAddModule:true,singleModelSelector:true,providerResult:true,providerDragOrder:true,activeRoutingEdit:true,inlineCheckbox:true,mobileFullscreen:true,noHorizontalOverflow:true,liveModuleConfig:true,liveModuleToggle:true,folderBrowser:true,fileDrop:true,browserErrors:errors.length}));
 }catch(error){
+ failure=error;
  console.error(error);
  try{await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-failure.png'})}catch(captureError){console.error('Failure screenshot unavailable:',captureError.message)}
  try{const view=await page.evaluate(()=>window.amplifier?.getState?.());console.error(JSON.stringify({pageErrors:errors,locationListing:view?.locationListing,locationPicker:view?.view?.locationPicker}))}catch(diagnosticError){console.error('Settings diagnostics unavailable:',diagnosticError.message)}
  throw error;
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+}finally{await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}
