@@ -11,7 +11,7 @@ export function ChatShortcutScope({navigation,enabled,scope,children}){
  const [targets,setTargets]=useState([]),cancelRef=useRef(()=>{});
  useEffect(()=>{cancelRef.current()},[scope]);
  useEffect(()=>{
-  if(!enabled)return;
+  if(!enabled||typeof window==='undefined'||typeof document==='undefined')return;
   let timer=null,held=false,armed=false,frozen=[];
   const cancel=()=>{clearTimeout(timer);timer=null;held=false;armed=false;frozen=[];setTargets([])};
   cancelRef.current=cancel;
