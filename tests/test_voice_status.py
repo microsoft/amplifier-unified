@@ -381,6 +381,9 @@ async def test_review_html_is_readable_inert_and_escapes_captured_content():
     assert page.count('<article>') == 14
     assert '<script>' not in page and '&lt;script&gt;bad()&lt;/script&gt;' in page
     assert 'Controlled clock' in page and 'accepted work inputs' in page
+    live=page.split('<section id="realtime">')[0]
+    assert '5s</b> Amplifier is still working.' in live
+    assert '120s</b> This call has observed ongoing activity for at least two minutes.' in live
 
 
 async def test_playback_spanning_all_thresholds_emits_only_current_elapsed_notice():

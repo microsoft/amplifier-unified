@@ -111,7 +111,7 @@ def review_html(results):
             steps=''.join('<li><b>'+escape(str(step['at']))+'s</b> '+escape(step['description'])+'</li>' for step in scenario['steps'])
             notices=[]
             for event in scenario['events']:
-                text=event.get('text')
+                text=event.get('text') or event.get('content')
                 item=event.get('item',{})
                 if not text and item.get('type')=='function_call_output':text=item.get('output')
                 if not text and item.get('content'):text=' '.join(part.get('text','') for part in item['content'])
