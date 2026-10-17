@@ -9,9 +9,11 @@ explicit retries and cleanup while avoiding redundant completed-result assembly.
 The [bounded encoding checks](batched-projection633-qualification.md) verify exact
 bytes and limits, stop/failure cleanup and concurrent spool reservations. Their
 fixed-input microbenchmark measures encoding only; it is not an app latency claim.
-Both test groups belong to full Python coverage. Integrated copied-scale browser
-measurements retain separate source/runtime identities and current versus desired
-timings; deterministic local workers do not qualify live-provider performance.
+Both test groups belong to full Python coverage. [Integrated copied-scale browser
+measurements](copied-scale-176.md) retain separate source/runtime identities and
+current versus desired timings; deterministic local workers do not qualify
+live-provider performance. All functional flows passed; warm-send and 12-worker
+streaming targets remain unresolved and #633 stays open.
 
 ## Current follow-up smoke coverage (October 16)
 

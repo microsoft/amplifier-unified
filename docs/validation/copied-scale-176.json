@@ -1,0 +1,528 @@
+{
+  "schemaVersion": 1,
+  "candidate": "a3eb8360e96010ee3cf8f89ff015dbf9401099df",
+  "baseline": "bce890d3412713b25818c3c17bd66cab1304fa45",
+  "build": "7b1e0195b4c909f8",
+  "scope": {
+    "catalogSessions": 27508,
+    "projects": 5272,
+    "capturedFiles": 40403,
+    "capturedBytes": 776931427576,
+    "eventShards": 32,
+    "readOnlyNativeMounts": 4532,
+    "effectiveCpuCount": 4,
+    "memoryBytes": 8589934592,
+    "core": "2.0.2",
+    "provider": "deterministic local 250ms",
+    "runtimeQualificationBypassed": true,
+    "globalAtomicCapture": false,
+    "fullEventFidelity": false,
+    "normalColdWorkQualified": false,
+    "liveProviderQualified": false,
+    "browser": "Chromium153.0.8010.12; no-sandbox,no-zygote,disable-gpu; no single-process"
+  },
+  "desiredMs": {
+    "warmAckP95": 300,
+    "workspaceFirstPage": 1000,
+    "workspacePage": 1000,
+    "exactFilter": 500,
+    "streamLagP95": 250,
+    "navigationMedian": 500,
+    "navigationP95": 1000
+  },
+  "workspace": {
+    "before": [
+      {
+        "workers": 1,
+        "ack": {
+          "count": 3,
+          "p50": 674.496545,
+          "p95": 757.0470360000008,
+          "max": 757.0470360000008
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 494.0003979999983,
+            "rows": 40
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 297.5694279999989,
+            "rows": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 306.5855869999996,
+            "rows": 40
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 326.9269660000009,
+            "rows": 40
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 374.4507229999999,
+            "rows": 40
+          }
+        ]
+      },
+      {
+        "workers": 6,
+        "ack": {
+          "count": 3,
+          "p50": 770.170725,
+          "p95": 805.3864979999998,
+          "max": 805.3864979999998
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 542.6758320000008,
+            "rows": 40
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 275.3084290000006,
+            "rows": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 415.33258900000146,
+            "rows": 40
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 441.27106600000116,
+            "rows": 40
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 512.0963620000002,
+            "rows": 40
+          }
+        ]
+      },
+      {
+        "workers": 12,
+        "ack": {
+          "count": 3,
+          "p50": 933.9591629999995,
+          "p95": 1164.0289460000022,
+          "max": 1164.0289460000022
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 866.2594349999999,
+            "rows": 40
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 526.4683349999978,
+            "rows": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 531.0306870000022,
+            "rows": 40
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 459.9508449999994,
+            "rows": 40
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 445.06604900000093,
+            "rows": 40
+          }
+        ]
+      }
+    ],
+    "final": [
+      {
+        "workers": 1,
+        "ack": {
+          "count": 3,
+          "p50": 593.0942379999997,
+          "p95": 672.437265999999,
+          "max": 672.437265999999
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 374.38946899999974,
+            "rows": 40
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 257.60060499999963,
+            "rows": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 230.0335009999999,
+            "rows": 40
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 351.28829399999995,
+            "rows": 40
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 422.6712779999998,
+            "rows": 40
+          }
+        ]
+      },
+      {
+        "workers": 6,
+        "ack": {
+          "count": 3,
+          "p50": 786.4860670000016,
+          "p95": 801.2744410000014,
+          "max": 801.2744410000014
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 472.97053700000106,
+            "rows": 40
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 375.99467300000106,
+            "rows": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 316.633719999998,
+            "rows": 40
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 406.41490899999917,
+            "rows": 40
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 427.60270599999785,
+            "rows": 40
+          }
+        ]
+      },
+      {
+        "workers": 12,
+        "ack": {
+          "count": 3,
+          "p50": 1024.9753300000011,
+          "p95": 1095.1023219999988,
+          "max": 1095.1023219999988
+        },
+        "workspace": [
+          {
+            "name": "first workspace demand",
+            "visibleMs": 986.3431020000025,
+            "rows": 40
+          },
+          {
+            "name": "exact chat filter",
+            "visibleMs": 460.373053000003,
+            "rows": 1
+          },
+          {
+            "name": "clear filter",
+            "visibleMs": 548.043952,
+            "rows": 40
+          },
+          {
+            "name": "explicit next page",
+            "visibleMs": 476.89954299999954,
+            "rows": 40
+          },
+          {
+            "name": "explicit previous page",
+            "visibleMs": 678.6186290000005,
+            "rows": 40
+          }
+        ]
+      }
+    ]
+  },
+  "streaming": {
+    "before": [
+      {
+        "workers": 1,
+        "lag": {
+          "count": 23,
+          "p50": 116,
+          "p95": 146,
+          "max": 171
+        },
+        "health": {
+          "count": 8,
+          "p50": 1.2394050000002608,
+          "p95": 2.239111999999295,
+          "max": 2.239111999999295
+        },
+        "navigation": {
+          "count": 3,
+          "p50": 201.30833200000006,
+          "p95": 229.88493299999982,
+          "max": 229.88493299999982
+        },
+        "copiedNavigation": {
+          "count": 3,
+          "p50": 334.6259420000001,
+          "p95": 345.4173659999997,
+          "max": 345.4173659999997
+        }
+      },
+      {
+        "workers": 6,
+        "lag": {
+          "count": 23,
+          "p50": 162,
+          "p95": 191,
+          "max": 201
+        },
+        "health": {
+          "count": 8,
+          "p50": 1.6022620000003371,
+          "p95": 35.99997799999983,
+          "max": 35.99997799999983
+        },
+        "navigation": {
+          "count": 3,
+          "p50": 204.94038600000204,
+          "p95": 216.97902299999987,
+          "max": 216.97902299999987
+        },
+        "copiedNavigation": {
+          "count": 3,
+          "p50": 258.3026690000006,
+          "p95": 323.7114930000025,
+          "max": 323.7114930000025
+        }
+      },
+      {
+        "workers": 12,
+        "lag": {
+          "count": 23,
+          "p50": 213,
+          "p95": 239,
+          "max": 240
+        },
+        "health": {
+          "count": 8,
+          "p50": 1.2073810000001686,
+          "p95": 1.6437339999974938,
+          "max": 1.6437339999974938
+        },
+        "navigation": {
+          "count": 3,
+          "p50": 252.03456500000175,
+          "p95": 350.9761820000058,
+          "max": 350.9761820000058
+        },
+        "copiedNavigation": {
+          "count": 3,
+          "p50": 324.60645599999407,
+          "p95": 429.3690090000018,
+          "max": 429.3690090000018
+        }
+      }
+    ],
+    "final": [
+      {
+        "workers": 1,
+        "lag": {
+          "count": 24,
+          "p50": 121,
+          "p95": 152,
+          "max": 237
+        },
+        "health": {
+          "count": 8,
+          "p50": 1.216972000000169,
+          "p95": 2.6500399999986257,
+          "max": 2.6500399999986257
+        },
+        "navigation": {
+          "count": 3,
+          "p50": 235.32069600000023,
+          "p95": 329.24619800000073,
+          "max": 329.24619800000073
+        },
+        "copiedNavigation": {
+          "count": 3,
+          "p50": 359.2688470000003,
+          "p95": 383.67517099999986,
+          "max": 383.67517099999986
+        }
+      },
+      {
+        "workers": 6,
+        "lag": {
+          "count": 23,
+          "p50": 168,
+          "p95": 216,
+          "max": 219
+        },
+        "health": {
+          "count": 8,
+          "p50": 1.3190210000029765,
+          "p95": 2.464790999998513,
+          "max": 2.464790999998513
+        },
+        "navigation": {
+          "count": 3,
+          "p50": 281.01075800000035,
+          "p95": 315.28922299999977,
+          "max": 315.28922299999977
+        },
+        "copiedNavigation": {
+          "count": 3,
+          "p50": 306.4292999999998,
+          "p95": 330.6531430000032,
+          "max": 330.6531430000032
+        }
+      },
+      {
+        "workers": 12,
+        "lag": {
+          "count": 23,
+          "p50": 228,
+          "p95": 364,
+          "max": 417
+        },
+        "health": {
+          "count": 8,
+          "p50": 1.866321000001335,
+          "p95": 66.88699500000075,
+          "max": 66.88699500000075
+        },
+        "navigation": {
+          "count": 3,
+          "p50": 385.7120639999994,
+          "p95": 491.013595000004,
+          "max": 491.013595000004
+        },
+        "copiedNavigation": {
+          "count": 3,
+          "p50": 248.21231100000296,
+          "p95": 392.9019709999993,
+          "max": 392.9019709999993
+        }
+      }
+    ]
+  },
+  "evidence": {
+    "afk176-before-nozygote-0.json": "3ba2eb9d33ae20fd8ee4cde86aeecbee6531d7bf006613ed53cca8e80088c7ae",
+    "afk176-before-nozygote-6.json": "400b082b52349d75eb7a6e61dd708ae3f03bcd0106ac9dca8c8f1663fa5d286c",
+    "afk176-before-nozygote-12.json": "e68ee71b3bef04730f4089232903ba6fa672add07dc1d820be883f54298a1f17",
+    "afk176-stream-before-nozygote.json": "1f3a6cffa9fb56a78ac02007cc93c00e6790bdbf176127807bff3beed4f753c9",
+    "afk176-final-nozygote-0.json": "7f8057ff679a31b3cc9152c9ff0bf8a9585ba7d07374d4998466d8e7907e0f65",
+    "afk176-final-nozygote-6.json": "51841cd51fd8f34ff6526243784f51235336291940f19f0c29f3ee1181bb6eee",
+    "afk176-final-nozygote-12.json": "791a7286130bb863a284ae8b836169020c5553cf615dd4ef65a63caa618c5e9d",
+    "afk176-stream-final.json": "efc9d9ffec647228f1c1f0fa0100c3c12b8d35a0411d6cddcc64315ce4b0aae0",
+    "afk176-final-confirm12-12.json": "ceace136a980a6d9c554e68f67ce1b30b2daa59b704b0bc2eb3d84da1aa3622c",
+    "afk176-stream-final-confirm12.json": "604cf8980d2ab1c46bde532050c9fa9bbe0b629b2db5149b0281f35f12dcb2a6"
+  },
+  "warnings": [
+    {
+      "workers": 6,
+      "metric": "exact chat filter",
+      "before": 275.3084290000006,
+      "final": 375.99467300000106
+    },
+    {
+      "workers": 12,
+      "metric": "explicit previous page",
+      "before": 445.06604900000093,
+      "final": 678.6186290000005
+    },
+    {
+      "workers": 12,
+      "metric": "streamLagP95",
+      "before": 239,
+      "final": 364
+    }
+  ],
+  "limits": [
+    "Three warm sends per stage; reported p95 is sample maximum, not a stable percentile.",
+    "Sequential synthetic histories grow; samples are not randomized, so end-to-end causal speedup is not established.",
+    "Private copied histories cannot execute; only14 synthetic owners can run. All schedules/outbound automation disabled.",
+    "Original launch/setup and overlapping-harness failures remain retained and excluded; no retries were relabeled as original passes."
+  ],
+  "confirmation12": {
+    "reason": "One explicit independent confirmation for12worker page/stream warnings; no repeat-until-green policy",
+    "workspace": {
+      "ack": {
+        "count": 3,
+        "p50": 1042.8491510000022,
+        "p95": 1059.7577779999992,
+        "max": 1059.7577779999992
+      },
+      "rows": [
+        {
+          "name": "first workspace demand",
+          "visibleMs": 1051.015378,
+          "rows": 40
+        },
+        {
+          "name": "exact chat filter",
+          "visibleMs": 426.4474850000006,
+          "rows": 1
+        },
+        {
+          "name": "clear filter",
+          "visibleMs": 447.94995899999776,
+          "rows": 40
+        },
+        {
+          "name": "explicit next page",
+          "visibleMs": 660.9834029999984,
+          "rows": 40
+        },
+        {
+          "name": "explicit previous page",
+          "visibleMs": 493.57389299999704,
+          "rows": 40
+        }
+      ]
+    },
+    "stream": {
+      "lag": {
+        "count": 23,
+        "p50": 233,
+        "p95": 284,
+        "max": 338
+      },
+      "health": {
+        "count": 8,
+        "p50": 1.5206700000017008,
+        "p95": 55.49146699999983,
+        "max": 55.49146699999983
+      },
+      "navigation": {
+        "count": 3,
+        "p50": 431.33142399999997,
+        "p95": 463.36319699999876,
+        "max": 463.36319699999876
+      },
+      "copiedNavigation": {
+        "count": 3,
+        "p50": 357.16891699999906,
+        "p95": 722.3157650000012,
+        "max": 722.3157650000012
+      }
+    },
+    "passed": true,
+    "workersStopped": true
+  },
+  "conclusion": "All functional browser flows and owned-worker cleanup passed. Warm acknowledgement target remains unmet.12-worker streaming p95 exceeds250ms in final and confirmation; no stable claim of causal end-to-end improvement or fully met performance targets. Retain #633 open."
+}
