@@ -409,6 +409,7 @@ def test_real_bundle_switch_isolates_module_revisions_and_preserves_history(tmp_
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '"fresh_worker_per_revision": true' in result.stdout
+    assert '"failed_mount_diagnostic": "provider_mount_failed"' in result.stdout
     assert '"model_calls": 0' in result.stdout
 
 
