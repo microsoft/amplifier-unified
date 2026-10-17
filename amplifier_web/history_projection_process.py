@@ -25,6 +25,7 @@ from .history_projection_failure import sanitize_failure
 
 REASONS = frozenset({'queue_full', 'input_limit', 'output_limit', 'spool_limit',
     'memory_limit', 'timeout', 'worker_stopped', 'source_changed', 'closed', 'worker_failed'})
+_ENCODE_BATCH_BYTES = 64 * 1024
 
 
 async def _blocking(call, *args, **kwargs):
@@ -91,9 +92,24 @@ class ProcessProjector:
         return self._root
 
     def _encode(self, path, inputs):
-        size, digest = 0, hashlib.sha256()
+        size, charged, digest = 0, 0, hashlib.sha256()
         try:
             with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as stream:
+                def write(data):
+                    nonlocal charged
+                    if self._stop.is_set():
+                        raise _Limit('closed')
+                    with self._bytes_lock:
+                        if self._input_bytes + len(data) > self._input_budget:
+                            raise _Limit('spool_limit')
+                        self._input_bytes += len(data)
+                        charged += len(data)
+                    stream.write(data)
+                    digest.update(data)
+
+                # iterencode emits many tiny punctuation/scalar fragments. Keep
+                # only one bounded batch; reserve spool bytes before each write.
+                pending = bytearray()
                 encoder = json.JSONEncoder(ensure_ascii=False, allow_nan=False,
                     sort_keys=True, separators=(',', ':'))
                 for chunk in encoder.iterencode(inputs):
@@ -102,16 +118,23 @@ class ProcessProjector:
                     data = chunk.encode('utf-8')
                     if size + len(data) > self._input_limit:
                         raise _Limit('input_limit')
-                    with self._bytes_lock:
-                        if self._input_bytes + len(data) > self._input_budget:
-                            raise _Limit('spool_limit')
-                        self._input_bytes += len(data)
                     size += len(data)
-                    stream.write(data); digest.update(data)
+                    if len(pending) + len(data) > _ENCODE_BATCH_BYTES and pending:
+                        write(pending)
+                        pending.clear()
+                    if len(data) >= _ENCODE_BATCH_BYTES:
+                        view = memoryview(data)
+                        for offset in range(0, len(data), _ENCODE_BATCH_BYTES):
+                            write(view[offset:offset + _ENCODE_BATCH_BYTES])
+                    else:
+                        pending.extend(data)
+                if pending:
+                    write(pending)
             return size, digest.hexdigest()
         except BaseException:
             path.unlink(missing_ok=True)
-            self._release(size)
+            # Pending bytes were never reserved; partial writes were reserved.
+            self._release(charged)
             raise
 
     def _release(self, size):

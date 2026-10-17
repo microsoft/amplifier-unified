@@ -102,6 +102,13 @@ explicit standalone refresh API retains its exact reference-reader comparison
 under the service lock, including unpublished aliases; production callers use the
 passive path. An extra off-loop digest rejects changes observed during computation.
 
+Transport JSON encoding groups small fragments into at most 64 KiB writes.
+Each write reserves aggregate spool bytes before touching the file; input limits
+and stop checks still apply per fragment, with extra stop checks between slices
+of a large string fragment. Failure deletes the partial artifact and releases
+only that encoder's reserved bytes. This bounds additional batching storage,
+not the existing Python input or a JSON encoder's whole-string allocation.
+
 The worker returns a complete tree for a cold generation, a small changed-node
 patch for a proven local update, or an unchanged receipt. The host rechecks source
 identity and its exact input before accepting any result. A superseded result is
