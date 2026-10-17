@@ -234,6 +234,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'pin-retention': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/pin-retention'},
         'workspace-shortcuts': {'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/workspace-shortcuts'},
         'mcp-recovery': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-recovery.png'},
+        'mcp-clients': {'MCP_RECOVERY_SCREENSHOT': '{root}/output/browser-checks/mcp-clients.png'},
         'inline-media-transition': {'EVIDENCE_DIR': '{root}/output/browser-checks/inline-media-transition'},
         'execution-observability': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/execution-observability'},
     }
@@ -243,7 +244,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row.get('env', {}) == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 83
+    assert len(original) == 65 and len(rows) == 84
     # The same bundle scenario now writes screenshots into its owned evidence.
     bundle = next(row for row in original if row['id'] == 'bundle')
     assert bundle['env'] == {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'}

@@ -296,5 +296,10 @@ replay the launch tool. Reconnect remains an explicit user/agent action.
 
 `frontend/tests/mcp-clients-browser.mjs` exercises independent desktop and mobile-
 sized clients, stale status replies, foreground return and cross-client reconnect.
+The extended browser runner owns it as `mcp-clients`, alongside `mcp-recovery`.
+Its empty-account fixture waits for completed connection discovery and dismisses
+the ordinary setup dialog before testing the saved tool; it does not hide the
+dialog or suppress discovery. Launch completion is read from its exact durable
+operation receipt because the compact client state omits operation collections.
 It uses a synthetic counter server and proves no replay; mobile emulation does
 not substitute for acceptance on a physical phone/browser.
