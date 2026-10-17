@@ -17,7 +17,7 @@ UPSTREAM = 'https://github.com/microsoft/amplifier-core'
 def test_all_app_dependency_projects_use_released_core_without_a_standing_pin():
     for relative in ['pyproject.toml', 'amplifier_web/runtime_deps/pyproject.toml', 'scripts/work_profile/pyproject.toml']:
         project = tomllib.loads((ROOT / relative).read_text())
-        assert 'amplifier-core>=2.0.1' in project['project']['dependencies']
+        assert 'amplifier-core>=2.0.2' in project['project']['dependencies']
         policy = project['tool']['uv']
         assert 'amplifier-core' not in policy.get('sources', {})
         assert policy['no-build-package'] == ['amplifier-core']

@@ -33,11 +33,15 @@ already exist. The final routing package was independently installed from
 `edf3603295c03fbe4cc06dc9d818fa84d9405d33`; availability is checked before exact
 or glob resolution, with only explicitly declared candidate fallback.
 
-Shipping requires the canonical published Core wheel containing all three fixes.
-The parent release owner updates Unified's host/worker dependency minimum and
-lock after canonical publication. A local built wheel is evidence, not publication;
-Unified retains its prohibition on compiling Core during installation. Unsupported
-Core versions retain the former strict preflight policy.
+Core 2.0.2 was published from that merge on October 17, after all 27 publication
+jobs passed, including six platform builds and 18 installed-wheel Python cells.
+Unified's host, worker and Work acceptance projects now require at least 2.0.2;
+both committed locks resolve its published registry wheels. The final Foundation
+lock is `8d26eceb9b7cafe6e93346f8f4294596bd45dcd1`, whose difference from the
+privately qualified `85532ee` is documentation only. Unified retains its prohibition
+on compiling Core during installation. Explicit older runtime overrides retain
+the former strict preflight policy. Final integrated qualification uses the
+published wheel, independently of the earlier private-wheel evidence below.
 
 ## Reviewed provider boundaries
 
