@@ -253,3 +253,135 @@ async def test_unpin_preserves_output_budget_and_restores_automatic_provider(tmp
     with pytest.raises(ValueError,match='No provider'):
         await restored.perform('budget.set',{'maxOutputTokens':432,'maxIterations':123})
     assert loop.max_iterations == 10
+
+
+@pytest.mark.parametrize('identity_field', ['instance_id', 'id'])
+def test_team_pulse_redaction_restores_reordered_instances_without_hiding_benign_keys(
+        identity_field):
+    import copy
+    from amplifier_web.runtime_controls import REDACTED
+
+    original = {'tools': [
+        {'module': 'tool-team-pulse', identity_field: 'first', 'config': {
+            'key': 'SYNTHETIC_PULSE_FIRST', 'url': 'https://first.example.invalid'}},
+        {'module': 'tool-team-pulse', identity_field: 'second', 'config': {
+            'key': 'SYNTHETIC_PULSE_SECOND', 'url': 'https://second.example.invalid'}},
+        {'module': 'tool-keymap-fixture', 'config': {'key': 'F6', 'read_only': True}},
+    ]}
+    before = copy.deepcopy(original)
+    visible = public_config(original)
+    visible['tools'][:2] = reversed(visible['tools'][:2])
+    edited = copy.deepcopy(visible)
+    restored = restore_redactions(visible, original)
+    assert restored['tools'] == [original['tools'][1], original['tools'][0], original['tools'][2]]
+    assert original == before and visible == edited
+    assert [row['config']['key'] for row in visible['tools']] == [REDACTED, REDACTED, 'F6']
+    assert [row['config']['url'] for row in visible['tools'][:2]] == [
+        'https://second.example.invalid', 'https://first.example.invalid']
+
+
+@pytest.mark.parametrize('orphan', ['instance', 'field'])
+def test_redacted_team_pulse_placeholder_requires_an_exact_prior_value(orphan):
+    import copy
+    from amplifier_web.runtime_controls import REDACTED
+
+    original = {'tools': [{'module': 'tool-team-pulse', 'instance_id': 'known',
+                          'config': {'key': 'SYNTHETIC_PRIOR_KEY'}}]}
+    before = copy.deepcopy(original)
+    edited = {'tools': [{'module': 'tool-team-pulse', 'instance_id': 'known',
+                        'config': {'key': REDACTED}}]}
+    if orphan == 'instance':
+        edited['tools'][0]['instance_id'] = 'unknown'
+    else:
+        edited['tools'][0]['config'] = {'new_credential': REDACTED}
+    with pytest.raises(ValueError, match='A redacted value cannot be used for a new setting'):
+        restore_redactions(edited, original)
+    assert original == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('surface', ['info', 'configSchema'])
+async def test_configuration_providers_preserves_metadata_but_omits_declared_secret_values(
+        tmp_path, monkeypatch, surface):
+    """Exercise the public runtime control with offline, serialization-real metadata."""
+    import copy
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.provider_probe import public as public_provider_metadata
+    from amplifier_web.runtime_controls import RuntimeControls
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'unified'))
+    fields = [
+        {'id': 'connection', 'display_name': 'Connection', 'field_type': 'secret',
+         'required': True, 'value': 'SYNTHETIC_METADATA_VALUE',
+         'default': 'SYNTHETIC_METADATA_DEFAULT'},
+        {'id': 'region', 'display_name': 'Region', 'field_type': 'text',
+         'required': False, 'value': 'west', 'default': 'west'},
+    ]
+    info = {'id': 'fixture', 'display_name': 'Offline fixture',
+            'defaults': {'model': 'fixture-model', 'reasoning_effort': 'low'},
+            'config_fields': copy.deepcopy(fields)}
+    schema = {'fields': copy.deepcopy(fields)}
+    before = copy.deepcopy((info, schema))
+    calls = []
+
+    class Provider:
+        def get_info(self):
+            calls.append('get_info')
+            return copy.deepcopy(info)
+
+        def get_config_schema(self):
+            calls.append('get_config_schema')
+            return copy.deepcopy(schema)
+
+        async def list_models(self):
+            pytest.fail('Metadata inspection must not query models')
+
+        async def complete(self, *args, **kwargs):
+            pytest.fail('Metadata inspection must not invoke inference')
+
+    provider = Provider()
+    providers = {'fixture-instance': provider}
+    selections = []
+
+    def select(mounted):
+        selections.append(mounted)
+        assert mounted is providers
+        return provider
+
+    loop = SimpleNamespace(root_provider=None, config={}, _select_provider=select)
+    plan = {'providers': [{'module': 'provider-fixture', 'instance_id': 'fixture-instance',
+                           'config': {'model': 'fixture-model'}}]}
+    capabilities = {}
+    coordinator = SimpleNamespace(
+        config=plan, session_state={},
+        get=lambda name: {'providers': providers, 'orchestrator': loop}.get(name),
+        get_capability=capabilities.get,
+        register_capability=capabilities.__setitem__)
+    controls = RuntimeControls(
+        SimpleNamespace(session_id='synthetic-provider-metadata', coordinator=coordinator, config=plan),
+        SimpleNamespace(generation=None, queued_inputs=0))
+    try:
+        result = await controls.perform('configuration.providers')
+        assert calls == ['get_info', 'get_config_schema', 'get_info']
+        assert selections == [providers]
+        assert (info, schema) == before
+        assert result['effective'] == {
+            'instance': 'fixture-instance', 'model': 'fixture-model', 'effort': 'low'}
+        assert result['delegationRouting'] == {
+            'modelInheritance': 'bundle', 'crossProviderRestriction': 'not_enforced',
+            'resolverActive': False}
+        assert len(result['providers']) == 1
+        row = result['providers'][0]
+        assert row['id'] == 'fixture-instance' and row['module'] == 'provider-fixture'
+        expected = copy.deepcopy(info if surface == 'info' else schema)
+        field_key = 'config_fields' if surface == 'info' else 'fields'
+        del expected[field_key][0]['value']
+        del expected[field_key][0]['default']
+        # Match the existing semantic secret-metadata rule, independently
+        # spelling out the expected safe record rather than only using an oracle.
+        assert public_provider_metadata(info if surface == 'info' else schema) == expected
+        assert row[surface] == expected
+        assert 'SYNTHETIC_METADATA_' not in json.dumps(row[surface])
+    finally:
+        await controls.close()
