@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.172",
+      "title": "Keep conversations concise and make work easier to inspect",
+      "changes": [
+        "Incoming messages from other chats appear as compact expandable exchanges. Exact copying, source attribution and links to the message remain available.",
+        "Amplifier can acknowledge a human message with a clearly attributed reaction. Your reactions remain separate and can be changed independently.",
+        "Execution metrics have independent step, work-summary and conversation controls, selected-field copy and download, and an optional usage snapshot that refreshes only when requested. Unavailable telemetry stays explicitly unavailable.",
+        "Feedback corrections offer a private comparison of the original report, the previous read, the latest GitHub text and your proposed correction before confirmation. Corrections preserve original issue text and maintainer edits; original-text editing remains a GitHub handoff.",
+        "Isolated workspace checks can prepare locked Python and browser dependencies and keep durable job receipts through reconnects. Workspace controls verify available Docker or Incus setup and retain cancellation, recovery and cleanup evidence.",
+        "Expanded smoke coverage exercises compact peer messages, independent reactions, execution preferences and reviewed feedback. Post-release fixture fixes improve selectors, storage timing and handling of legitimate release notices."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.171",
       "title": "Recover conversations and clarify setup",
       "changes": [

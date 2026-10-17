@@ -18,7 +18,7 @@ Read only the user-named spark-1 Readiness Manager conversation. Nine recorded c
 
 - [x] Focused source/authority tests for peer/reaction behavior in owned DTU.
 - [x] Real built-client peer/reaction desktop and narrow viewport checks with durable reload and negative cases.
-- [ ] Update reusable smoke inventory, current outcomes, and acceptance limits.
-- [ ] Independent review, integrate all accepted work, qualify combined assets.
+- [x] Update reusable smoke inventory, current outcomes, and acceptance limits.
+- [x] Independent review, integrate all accepted work, qualify combined assets. See release172-qualification.md.
 - [ ] Create reviewable PR(s), report exact publication status and unresolved decisions.
 - [ ] Retain evidence and active preview; clean obsolete owned resources and record manifest.
