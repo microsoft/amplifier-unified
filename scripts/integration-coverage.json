@@ -28,6 +28,11 @@
         "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload",
         "tests/test_context_source.py::test_real_boundary_import_and_core_loader_remount",
         "tests/test_history_edit_worker.py::test_current_edit_parks_and_resumes_without_replaying",
+        "tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[False]",
+        "tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[True]",
+        "tests/test_runtime.py::test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged",
+        "tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input",
+        "tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay",
         "tests/test_integration_validation.py::test_real_native_shell_command_and_postapproval_stop",
         "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity",
         "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset",
@@ -82,6 +87,10 @@
         "tests/test_compaction_failure_contract.py",
         "tests/test_context_source.py",
         "tests/test_history_edit_worker.py",
+        "tests/test_host_components.py",
+        "tests/test_runtime.py",
+        "tests/test_session_handoff.py",
+        "tests/test_worktrees.py",
         "tests/test_integration_validation.py",
         "tests/test_kernels.py",
         "tests/test_live_terminal_runtime.py",
@@ -836,6 +845,41 @@
     }
   ],
   "additionalRecords": [
+    {
+      "node": "tests/test_runtime.py::test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Foundation shared-session ownership, loop-live and short private temporary socket root",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Foundation shared-session handoff, loop-live and short private temporary socket root",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Foundation shared-session handoff and short private temporary socket root",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[False]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Core/Foundation and loop-live imports; deterministic child-plan preparation without model calls",
+      "introducedBy": "#832 full-census follow-up"
+    },
+    {
+      "node": "tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[True]",
+      "kind": "test_case",
+      "owner": "native",
+      "prerequisite": "Core/Foundation and loop-live imports; deterministic resumed child-plan preparation without model calls",
+      "introducedBy": "#832 full-census follow-up"
+    },
     {
       "node": "tests/test_search_read_policy.py",
       "kind": "module_collection",

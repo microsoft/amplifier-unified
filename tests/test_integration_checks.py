@@ -157,6 +157,11 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
     assert hashlib.sha256(frozen).hexdigest() == '8356817d31275554bf00c526c4f76b467646d2146f06907cd0ed564ac455b9f0'
     records = coverage['additionalRecords']
     expected = {
+        'tests/test_runtime.py::test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged': 'native',
+        'tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input': 'native',
+        'tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay': 'native',
+        **{f'tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[{resumed}]': 'native'
+           for resumed in ('False', 'True')},
         'tests/test_search_read_policy.py': 'native',
         'tests/test_default_capability_policy.py': 'native',
         'tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip': 'native',

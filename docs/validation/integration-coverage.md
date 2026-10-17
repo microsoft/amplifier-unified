@@ -53,6 +53,34 @@ The initial [GitHub matrix](https://github.com/microsoft/amplifier-unified/actio
 passed all six automated lanes: 88 tests, zero skips, including the macOS cases.
 Each lane recorded unchanged source throughout execution.
 
+### Child host-component and ownership coverage, October 17
+
+The native owner now explicitly requires both dynamic and resumed variants of
+`test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances`.
+These optional loop-live cases were missing from the ownership manifest. Their
+two additive records leave the frozen 87-record baseline unchanged, and each
+parameterized selector must appear in the owner result without skips.
+
+The same native owner explicitly requires the real shared-handle parking,
+failed-save handoff and cooperative worktree-release cases. Their three additive
+records require Foundation's actual same-user socket and ownership mechanisms.
+Use a short private `TMPDIR`: Foundation appends its handoff directory/socket and
+rejects endpoint paths longer than 103 bytes. A deeply nested qualification
+temporary root caused nine original census failures before those affected
+boundaries could be qualified. Keep those failed receipts; corrected temporary
+storage and fresh execution establish separate results, without changing the
+product, removing assertions, or treating setup failure as a pass.
+
+The check preserves the host's qualified loop/source choices, named hook
+instances, merged child configuration and original overlay. Its fake parent
+advertises only the intended `session.working_dir` capability; absent provider
+isolation is `None`, as on a real coordinator, rather than a working-directory
+string masquerading as every capability. The real provider-isolation contract
+and all child-plan assertions are unchanged. This preparation check deliberately
+stops before creating a session or calling a model; it is not provider-execution
+acceptance. Current execution receipts are retained separately from the failed
+full census at `af08e2d56f9197df37a32c79ffe94b829be4c855`.
+
 Times in the table are test execution observations on spark-2, not CI provisioning targets.
 These native/provider tests use deterministic offline providers; they do not
 prove paid-provider latency, real Microsoft 365 authorization, or live Office
