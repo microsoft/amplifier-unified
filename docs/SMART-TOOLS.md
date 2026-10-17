@@ -199,7 +199,24 @@ them, the user or authorized agent can supply that exact `review.fingerprint` as
 `reviewedContract`. The binding is checked again before committing. This does not
 grant newly discovered tools or infer a missing historical account identity.
 Legacy views with an attested but unrecorded account require a newly reviewed view.
-This recovery path does not introduce artifact revision history or merge tabs by title.
+This reconnect path does not replace document history or merge tabs by title.
+
+For changed definitions, the human-only **Review tool changes** flow shows a
+bounded comparison with the saved definitions. Older bindings explicitly say
+when the previous definitions are unavailable. Description changes require
+review; added actions remain ungranted. Configuration/account changes and a
+changed app resource identity remain separate blocked cases. An exact review is
+bound to the reviewing client and its selection generation.
+
+**Approve existing actions** keeps the mounted document and unfinished inputs.
+**Open updated live view** additionally requires an explicit input-reset
+acknowledgement, saves current resource HTML as a new version of the same artifact,
+and retains its launch arguments/result and board identity without calling the
+launcher. Other mounted clients preserve their actual old iframe and local input,
+become read-only immediately, and choose **Open live view** when ready. Historical
+selection also exposes that action directly. See the
+[saved MCP contract review contract](clients/mcp-contract-review.md) and
+[October17 qualification](validation/mcp-contract-review-20261017.md).
 
 Local acceptance: `npm --prefix frontend run test:mcp-recovery-browser` uses an
 actual MCP SDK fixture and restarts the host over isolated synthetic state. It

@@ -184,7 +184,7 @@ test('shared connection recovery notifies an initialized app once without a relo
  }finally{await act(async()=>component.unmount())}
 });
 
-test('historical and denied tool views explain disabled recovery and send no availability notification',async()=>{
+test('historical views omit reconnection and denied views explain disabled recovery without notifications',async()=>{
  for(const status of ['saved_version','contract_changed','account_review_required','configuration_changed']){
   globalThis.fetch=async()=>response({...available,status,canReconnect:false,message:'Review the saved view before using live features.'});
   let component;
@@ -192,9 +192,33 @@ test('historical and denied tool views explain disabled recovery and send no ava
   const bridge=mcpTestBridges.at(-1);
   try{
    await act(async()=>bridge.oninitialized());
-   const button=component.root.findByProps({'aria-label':'Reconnect tool view'});
-   assert.equal(button.props.disabled,true);assert.equal(button.props.title,'Review the saved view before using live features.');
+   if(status==='saved_version'){
+    assert.equal(component.root.findAllByProps({'aria-label':'Reconnect tool view'}).length,0);
+   }else{
+    const button=component.root.findByProps({'aria-label':'Reconnect tool view'});
+    assert.equal(button.props.disabled,true);assert.equal(button.props.title,'Review the saved view before using live features.');
+   }
    assert.equal(bridge.toolListChanges,undefined);assert.equal(bridge.resourceListChanges,undefined);
   }finally{await act(async()=>component.unmount())}
  }
+});
+
+
+test('automatic saved-version pin preserves DOM but changes authority and denies old app calls',async()=>{
+ const frame={contentWindow:{},draft:'unfinished'},initial={id:'pin',open:true,revision:1,resourceRevision:'live',generation:1,renderIdentity:'mounted-live'};
+ let component,canvas=initial;const calls=[];
+ globalThis.fetch=async path=>{calls.push(path);assert.ok(path.includes('/status'));return response({...available,status:canvas.readOnlyVersion?'saved_version':'ready'})};
+ const render=()=>React.createElement(McpAppViewer,{canvas,act:async()=>({})});
+ await act(async()=>{component=create(render(),{createNodeMock:node=>node.type==='iframe'?frame:null})});
+ const bridge=mcpTestBridges.at(-1),count=mcpTestBridges.length,src=frame.src;
+ try{
+  await act(async()=>bridge.oninitialized());
+  canvas={...initial,readOnlyVersion:true,selectedVersion:1,resourceRevision:'historical',generation:2};
+  await act(async()=>component.update(render()));
+  assert.equal(frame.src,src);assert.equal(frame.draft,'unfinished');assert.equal(mcpTestBridges.length,count);
+  assert.ok(calls.at(-1).includes('resourceRevision=historical'));
+  await assert.rejects(bridge.oncalltool({name:'write',arguments:{}}),/read-only/);
+  assert.deepEqual(await bridge.onlisttools(),{tools:[]});
+  assert.equal(bridge.closed,undefined);assert.equal(bridge.toolListChanges,undefined);
+ }finally{await act(async()=>component.unmount())}
 });

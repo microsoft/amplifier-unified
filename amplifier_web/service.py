@@ -2047,15 +2047,17 @@ class AppService:
                 from .automatic_history import read_transcript
                 window = await asyncio.to_thread(read_transcript, copy.deepcopy(session), limit=None)
                 reveal_message = next((row for row in window["messages"] if row["id"] == args["messageId"]), None)
-        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'smartTools.reviewView', 'smartTools.updateView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
-        if action == 'smartTools.reconnectView' and origin == 'agent' and (
+        if action in {'smartTools.reconnectView', 'smartTools.reviewView'} and origin == 'agent' and (
                 not caller_session_id or self.state.get('selectedSessionId') != caller_session_id):
             raise AppError('Choose a client displaying the calling conversation before recovering its tool view.', 409)
+        if action == 'smartTools.updateView' and origin not in {'ui', 'user'}:
+            raise AppError('A person must review and approve changed tool contracts in their own view.', 403)
         if action == 'smartTools.viewStatus':
             from .mcp_view_recovery import inspect, inspect_for_session
             if not self.smart_tools:
@@ -3184,6 +3186,9 @@ class AppService:
                         scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
                     if action == 'smartTools.appCall':
                         self.smart_canvas.admit_call(args)
+                    if action in {'smartTools.reviewView', 'smartTools.updateView'}:
+                        from .mcp_contract_review import _guard
+                        _guard(self, args)
                     if action == 'smartTools.reconnectView':
                         from .mcp_view_recovery import admit
                         admit(self, args)
@@ -4625,7 +4630,7 @@ class AppService:
             elif args['action'] == 'smartTools.viewStatus':
                 result = await self.dispatch(args['action'], action_args, origin='agent', caller_session_id=session_id)
                 canvas_client = result['result'].get('clientId')
-            elif args['action'] in {'canvas.select', 'smartTools.reconnectView'}:
+            elif args['action'] in {'canvas.select', 'smartTools.reconnectView', 'smartTools.reviewView'}:
                 from .agent_canvas import selection_target
                 canvas_client = selection_target(self, session_id, {**action_args, 'id': action_args.get('canvasId', action_args.get('id'))})
                 if canvas_client is not None:
