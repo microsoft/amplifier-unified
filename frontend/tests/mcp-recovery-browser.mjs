@@ -16,12 +16,22 @@ const htmlPath=join(directory,'app.html'),callsPath=join(directory,'calls.jsonl'
 const source=`import {App} from '@modelcontextprotocol/ext-apps';
 const app=new App({name:'Saved recovery fixture',version:'1.0.0'},{});
 const draw=result=>document.querySelector('#count').textContent=String(result.structuredContent.count);
-app.ontoolresult=draw;
+let inputs=0,results=0,notifications=0;
+app.ontoolinput=()=>document.body.dataset.inputs=String(++inputs);
+app.ontoolresult=result=>{document.body.dataset.results=String(++results);draw(result)};
+app.setNotificationHandler('notifications/tools/list_changed',async()=>{
+ try{
+  const result=await app.callServerTool({name:'counter_read',arguments:{}});
+  document.querySelector('#recovered').textContent=String(result.structuredContent.count);
+  document.body.dataset.recoveries=String(++notifications);
+ }catch(error){document.querySelector('#error').textContent=error.message}
+});
 document.querySelector('#add').onclick=async()=>{try{draw(await app.callServerTool({name:'counter_add',arguments:{amount:1}}))}catch(error){document.querySelector('#error').textContent=error.message}};
+window.fixtureCall=name=>app.callServerTool({name,arguments:{}});
 await app.connect();document.body.dataset.booted='true';`;
 const built=await build({stdin:{contents:source,resolveDir:process.cwd(),sourcefile:'recovery.js'},bundle:true,write:false,format:'esm'});
-await writeFile(htmlPath,`<!doctype html><h1>Original saved document</h1><output id="count"></output><button id="add">Add one</button><input aria-label="Unfinished tool input"><p id="error"></p><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script>`);
-let fixture,browser;
+await writeFile(htmlPath,`<!doctype html><h1>Original saved document</h1><output id="count"></output><output id="recovered"></output><button id="add">Add one</button><input aria-label="Unfinished tool input"><p id="error"></p><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script>`);
+let fixture,browser,secondBrowser;
 async function start(port=0){
  fixture=spawn(python,[root+'tests/fixtures/canvas_restart_ui_server.py',directory,String(port)],{stdio:['ignore','pipe','inherit'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
  return new Promise((resolve,reject)=>{
@@ -77,20 +87,41 @@ try{
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(frame.getByRole('textbox',{name:'Unfinished tool input'})).toHaveValue('Keep me through reconnect');
  await expect(frame.locator('body')).toHaveAttribute('data-retained','yes');
+ await expect(frame.locator('#recovered')).toHaveText('7');
+ await expect(frame.locator('body')).toHaveAttribute('data-recoveries','1');
+ await expect(frame.locator('body')).toHaveAttribute('data-inputs','1');
+ await expect(frame.locator('body')).toHaveAttribute('data-results','1');
  assert.equal(await mutations(),1);
  assert.deepEqual(await snapshot(),before);
+ // Ordinary Latest reopen and deliberately selected history are distinct.
+ await page.getByRole('button',{name:'Canvas options',exact:true}).click();
+ await page.getByLabel('Artifact version',{exact:true}).selectOption('1');
+ await expect(page.getByRole('status').filter({hasText:'Saved version · Read only'})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Open live view',exact:true})).toBeVisible();
+ await frame.getByRole('button',{name:'Add one'}).click();
+ await expect(frame.locator('#error')).toContainText('read-only');
+ assert.equal(await mutations(),1);
+ await page.getByRole('button',{name:'Open live view',exact:true}).click();
+ await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
+ await expect(frame.locator('body')).toHaveAttribute('data-inputs','1');
+ assert.equal(await mutations(),1);
  await frame.getByRole('button',{name:'Add one'}).click();
  await expect(frame.locator('#count')).toHaveText('8');
  assert.equal(await mutations(),2);
  // Replace only the server's current resource, then restart the real host.
  // Recovery must use the immutable saved source, not read today's resource.
- await writeFile(htmlPath,'<!doctype html><h1>Changed live resource</h1>');
+ const savedHtml=await readFile(htmlPath,'utf8');
+ await writeFile(htmlPath,savedHtml.replace('Original saved document','Updated saved document'));
  await stop();await start(Number(new URL(url).port));await page.reload();
  await expect(frame.getByRole('heading',{name:'Original saved document'})).toBeVisible();
  await expect(frame.locator('#count')).toHaveText('7');
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep the unsent message');
  await page.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
+ await expect(frame.locator('#recovered')).toHaveText('8');
+ await expect(frame.locator('body')).toHaveAttribute('data-recoveries','1');
+ await expect(frame.locator('body')).toHaveAttribute('data-inputs','1');
+ await expect(frame.locator('body')).toHaveAttribute('data-results','1');
  assert.deepEqual(await snapshot(),before);
  assert.equal(await mutations(),2);
  // An actual changed MCP schema must stay rejected after discovery.
@@ -100,11 +131,66 @@ try{
  await page.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(page.locator('.a-mcp-status')).toContainText('action schemas changed');
  assert.equal(await mutations(),2);
+ assert.equal(await frame.locator('body').getAttribute('data-recoveries'),null,'Denied schema changes do not notify the app to retry');
  assert.deepEqual(await snapshot(),before);
  await frame.getByRole('button',{name:'Add one'}).click();
  await expect(frame.locator('#error')).toContainText('action schemas changed');
  assert.equal(await mutations(),2);
+ // Required review remains visible even when optional Canvas controls are closed.
+ const options=page.getByRole('button',{name:'Canvas options',exact:true});
+ if(await options.getAttribute('aria-expanded')==='true')await options.click();
+ await expect(page.getByRole('button',{name:'Review tool changes',exact:true})).toBeVisible();
+ await expect(page.locator('#canvas-options .a-mcp-contract-review')).toHaveCount(0);
+ // A second independently attached client holds the original saved document.
+ secondBrowser=await chromium.launch({headless:true});
+ const secondContext=await secondBrowser.newContext({viewport:{width:1100,height:850},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const second=await secondContext.newPage();await second.goto(url);
+ await second.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await second.evaluate(async before=>{await window.amplifier.dispatch('session.select',{id:before.session});await window.amplifier.dispatch('canvas.select',{id:before.id});},before);
+ const other=second.frameLocator('.a-mcp-app-viewer iframe');
+ await expect(other.getByRole('heading',{name:'Original saved document'})).toBeVisible();
+ await other.getByRole('textbox',{name:'Unfinished tool input'}).fill('Other client keeps this');
+ await other.locator('body').evaluate(body=>body.dataset.preserved='original-node');
+ await frame.getByRole('textbox',{name:'Unfinished tool input'}).fill('Current client keeps this on contract-only approval');
+ await page.getByRole('button',{name:'Review tool changes',exact:true}).click();
+ const review=page.getByRole('region',{name:'Review tool changes'});
+ await expect(review).toContainText('counter_extra');
+ await expect(review).toContainText('counter_add (inputs)');
+ await expect(review).toContainText('Added actions — not granted');
+ if(process.env.MCP_RECOVERY_SCREENSHOT)await page.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT.replace(/\.png$/,'-review.png')});
+ await review.getByRole('button',{name:'Approve existing actions',exact:true}).click();
+ // Successful approval moves the optional review into the closed Canvas options.
+ // Read the visible connection state without waiting on that now-hidden region.
+ await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
+ await expect(frame.getByRole('textbox',{name:'Unfinished tool input'})).toHaveValue('Current client keeps this on contract-only approval');
+ assert.equal(await mutations(),2);
+ const ungranted=await frame.locator('body').evaluate(async()=>{try{await window.fixtureCall('counter_extra');return 'unexpected success'}catch(error){return error.message}});
+ assert.match(ungranted,/not granted/);
+ // A healthy tool keeps optional review in Canvas options, leaving its view clear.
+ await expect(page.getByRole('button',{name:'Review tool changes',exact:true})).toBeHidden();
+ await options.click();
+ await expect(page.locator('#canvas-options .a-mcp-contract-review')).toBeVisible();
+ await page.getByRole('button',{name:'Review tool changes',exact:true}).click();
+ await review.getByRole('checkbox',{name:/Open updated live view/}).check();
+ await expect(review.getByRole('button',{name:'Approve and open updated live view',exact:true})).toBeDisabled();
+ await review.getByRole('checkbox',{name:/I understand/}).check();
+ await review.getByRole('button',{name:'Approve and open updated live view',exact:true}).click();
+ await expect(frame.getByRole('heading',{name:'Updated saved document'})).toBeVisible();
+ await expect(frame.locator('#count')).toHaveText('7');
+ await expect(other.getByRole('heading',{name:'Original saved document'})).toBeVisible();
+ await expect(other.locator('body')).toHaveAttribute('data-preserved','original-node');
+ await expect(other.getByRole('textbox',{name:'Unfinished tool input'})).toHaveValue('Other client keeps this');
+ await expect(second.getByRole('button',{name:'Open live view',exact:true})).toBeVisible();
+ await other.getByRole('button',{name:'Add one'}).click();
+ await expect(other.locator('#error')).toContainText('read-only');
+ const hostDenied=await second.evaluate(async id=>{try{await window.amplifier.dispatch('smartTools.appCall',{canvasId:id,expectedRevision:1,name:'counter_add',arguments:{amount:'1'}});return 'unexpected success'}catch(error){return error.message}},before.id);
+ assert.match(hostDenied,/read-only/,'Server authority also denies calls from the preserved historical frame');
+ if(process.env.MCP_RECOVERY_SCREENSHOT)await second.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT.replace(/\.png$/,'-other-client.png')});
+ const after=await snapshot();assert.equal(after.id,before.id);assert.equal(after.launch,before.launch);
+ assert.deepEqual(after.arguments,before.arguments);assert.deepEqual([...after.grants].sort(),[...before.grants].sort());
+ assert.equal(after.artifacts,before.artifacts);assert.notDeepEqual(after.body,before.body);assert.equal(await mutations(),2);
+ await secondContext.close();
  await page.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT||join(directory,'mcp-recovery.png')});
  assert.deepEqual(errors,[]);
- console.log('MCP recovery browser passed: actual MCP SDK, disconnect and host restart, same artifact/source hash, historical launch receipt, explicit unchanged-contract rebind without frame/input replacement, no replayed mutations, changed schema denied, composer preserved.');
-}finally{await browser?.close();await stop();await rm(directory,{recursive:true,force:true})}
+ console.log('MCP recovery browser passed: actual MCP SDK, disconnect and host restart, same artifact/source hash, historical launch receipt, explicit unchanged-contract rebind without frame/input replacement, single SDK recovery notification and safe read, explicit history/Latest selection, no replayed mutations, changed schema denied until exact review, current-HTML adoption with no launch replay, new tools ungranted, second-client saved iframe/input preserved and read-only, composer preserved.');
+}finally{await secondBrowser?.close();await browser?.close();await stop();await rm(directory,{recursive:true,force:true})}

@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
 from amplifier_web.host.config import HostConfig, prepare_registry
 from amplifier_web.service import AppService
 from amplifier_web.updates import UpdateManager, active_release, cache_changes, foundation_home
@@ -181,7 +182,8 @@ async def test_staging_uses_shared_settings_without_cli_registry_or_cache(reposi
     local.parent.mkdir()
     local.write_text('bundle:\n  name: example\n')
     (shared / 'settings.yaml').write_text(yaml.safe_dump({'bundle': {
-        'active': 'example', 'added': {'example': local.as_uri()}}}))
+        'active': 'example', 'added': {'example': local.as_uri()}},
+        'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
     original = (shared / 'registry.json').read_bytes()
     service.state['settings']['bundle'] = 'example'
 

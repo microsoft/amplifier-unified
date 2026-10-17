@@ -31,7 +31,19 @@ try{
  await expect(initialEditor.getByLabel('Initialize local workspace Git',{exact:true})).toBeDisabled();
  await starters.locator('[data-collection-id=\"development\"] button').click();
  const editor=settings.getByRole('form',{name:'Starter editor'});
+ // A click starts duplication; the old built-in editor remains until its
+ // receipt arrives. Exercise that boundary before opening the new disclosure.
+ let releaseDuplicate,duplicateStarted=false;
+ const duplicateGate=new Promise(resolve=>releaseDuplicate=resolve);
+ const holdDuplicate=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action==='workspace.starters.duplicate'){duplicateStarted=true;await duplicateGate}await route.continue()};
+ await page.route('**/api/actions',holdDuplicate);
  await editor.getByRole('button',{name:'Duplicate',exact:true}).click();
+ await expect.poll(()=>duplicateStarted).toBe(true);
+ await expect(editor.getByLabel('Starter name',{exact:true})).toBeDisabled();
+ releaseDuplicate();
+ await expect(editor.getByText('Copy created. Customize it below.',{exact:true})).toBeVisible();
+ await expect(editor.getByLabel('Starter name',{exact:true})).toBeEnabled();
+ await page.unroute('**/api/actions',holdDuplicate);
  await editor.locator('summary').filter({hasText:'Local workspace Git'}).click();
  await expect(editor.getByLabel('Initialize local workspace Git',{exact:true})).not.toBeChecked();
  await editor.getByLabel('Initialize local workspace Git',{exact:true}).check();

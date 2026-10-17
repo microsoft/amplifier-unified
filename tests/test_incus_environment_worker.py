@@ -291,12 +291,14 @@ def test_package_digest_changes_and_rejects_symlink(tmp_path):
 
 
 @pytest.mark.parametrize('version', ['0.4.0', '0.4.1'])
-def test_configuration_binds_exact_code_and_preserves_operator_total(tmp_path, monkeypatch, version):
+@pytest.mark.parametrize('wrapper', [False, True])
+def test_configuration_binds_exact_code_and_preserves_operator_total(tmp_path, monkeypatch, version, wrapper):
     package = tmp_path / 'installed'
     package.mkdir()
     (package / '__init__.py').write_text('# qualified source')
     launcher = tmp_path / 'legacy'
-    launcher.write_text('#!' + sys.executable + '\n# entry point\n')
+    launcher.write_text(("#!/bin/sh\n'''exec' '" + sys.executable + "' \"$0\" \"$@\"\n' '''\n")
+                       if wrapper else '#!' + sys.executable + '\n# entry point\n')
     launcher.chmod(0o700)
     incus = tmp_path / 'incus'
     incus.write_text('#!/bin/sh\nexit 0\n')

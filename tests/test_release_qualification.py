@@ -123,14 +123,14 @@ def runtime_build(tmp_path, monkeypatch):
     return tmp_path, runtime
 
 
-@pytest.mark.parametrize('change', ['resolved-source', 'loop-live', 'python-abi', 'architecture', 'rustc', 'maturin', 'build-flags'])
+@pytest.mark.parametrize('change', ['resolved-source', 'loop-live', 'recipes', 'python-abi', 'architecture', 'rustc', 'maturin', 'build-flags'])
 def test_cache_identity_changes_with_every_build_input(runtime_build, monkeypatch, change):
     root, runtime = runtime_build
     before = qualification.digest(qualification.build_identity(root, runtime))
     if change == 'resolved-source':
         (runtime / 'uv.lock').write_text('same main declaration, new resolved commit')
-    elif change == 'loop-live':
-        monkeypatch.setattr(qualification, 'checkout_identity', lambda path: 'b' * 40)
+    elif change in {'loop-live', 'recipes'}:
+        monkeypatch.setattr(qualification, 'checkout_identity', lambda path: ('b' if path.name == change else 'a') * 40)
     elif change == 'python-abi':
         monkeypatch.setattr(qualification.sysconfig, 'get_config_var', lambda name: 'different-abi')
     elif change == 'architecture':
@@ -321,3 +321,16 @@ def test_native_core_qualification_is_manual_and_cannot_publish():
     assert 'tests/test_runtime_module_cache.py' in commands
     assert 'runtime-snapshot' in commands and 'cmp ' in commands
     assert 'publish' not in commands
+
+
+@pytest.mark.parametrize('workflow', ['release.yml', 'core-wheels.yml'])
+def test_recipe_probe_installs_its_declared_module_before_freezing_runtime(workflow):
+    jobs = yaml.load((ROOT / '.github/workflows' / workflow).read_text(), Loader=yaml.BaseLoader)['jobs']
+    commands = '\n'.join(step.get('run', '') for step in jobs['runtime']['steps'])
+    recipe = next(line for line in commands.splitlines()
+                  if 'uv add ' in line and '.ci/recipes/modules/tool-recipes' in line)
+    assert '--frozen --editable' in recipe
+    assert commands.index(recipe) < commands.index('uv lock ') < commands.index(' cache-key ')
+    assert commands.index('uv sync --project') < commands.index('WARM_RECIPES_PATH=')
+    # Dependencies stay owned by the checked-out module, not a stale hand list.
+    assert 'tree-sitter' not in commands

@@ -42,7 +42,7 @@ def mounted_host(tmp_path, monkeypatch):
     session = SimpleNamespace(coordinator=coordinator, config={}, cleanup=AsyncMock(), execute=AsyncMock())
     prepared = SimpleNamespace(mount_plan={"session": {"orchestrator": {"module": "loop-live"}}},
                                create_session=AsyncMock(return_value=session))
-    loaded = SimpleNamespace(to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
+    loaded = SimpleNamespace(hooks=[], to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
                              prepare=AsyncMock(return_value=prepared))
     registry = SimpleNamespace(list_registered=lambda: {}, find=lambda _: None, register=Mock(), save=Mock(),
                                load=AsyncMock(return_value=loaded))
@@ -86,6 +86,7 @@ async def test_host_binds_instruction_paths_after_overrides_except_frozen_snapsh
     observed = []
     class Root:
         instruction = 'Original root.'
+        hooks = []
         def to_mount_plan(self):
             return {**copy.deepcopy(h.prepared.mount_plan), 'instruction': self.instruction}
         async def prepare(self, **kwargs):
@@ -169,6 +170,7 @@ async def test_app_recording_policy_reaches_root_preparation_and_installs_redact
     h.prepared.mount_plan['agents'] = {'private': {'providers':[
         {'module':'provider-anthropic','config':{'raw':False}}]}}
     class Root:
+        hooks = []
         def to_mount_plan(self):
             return copy.deepcopy({**h.prepared.mount_plan,
                 'providers': getattr(self, 'providers', h.prepared.mount_plan['providers']),

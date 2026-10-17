@@ -1078,9 +1078,9 @@ class Worker:
                     from amplifier_module_loop_live.runtime import Input
                     await self.runtime.submit(Input('user', text, id=arguments['operationId'],
                         attachments=tuple(arguments.get('attachments', [])), activation=self.activation))
-                elif data["operation"] == "bundle.switch":
-                    from amplifier_web.bundle_selection import switch
-                    result = await switch(self, arguments)
+                elif data["operation"] == "bundle.prepare":
+                    from amplifier_web.bundle_selection import prepare_switch
+                    result = await prepare_switch(self, arguments)
                 else:
                     result = await self.controls.perform(data["operation"], arguments)
             elif op in {"worker.steer", "worker.stop", "worker.message"}:

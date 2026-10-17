@@ -149,8 +149,12 @@ def ca_fingerprint(data_dir: Path) -> str | None:
 
 
 def tls_ready(data_dir: Path, config: dict) -> bool:
-    """Return whether the configured local CA and leaf/key can start HTTPS."""
-    if config["tls"]["method"] == "none" or ca_bytes(data_dir) is None:
+    """Return whether the configured certificate/key can start HTTPS.
+
+    A supplied pair need not have an app-owned CA. This is a listener check,
+    not a claim that any client trusts the certificate or its hostname.
+    """
+    if config["tls"]["method"] == "none" or not config['tls'].get('cert') or not config['tls'].get('key'):
         return False
     try:
         ssl_context(data_dir, config)

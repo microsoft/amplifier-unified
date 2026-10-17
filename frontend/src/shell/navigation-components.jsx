@@ -24,6 +24,7 @@ import {hasNavigationResource} from './navigation-demand';
 import {NavigationResourceStatus} from './navigation-resource-status';
 import {usePinOrderSettlement} from './pin-order-settlement';
 import {sidebarReadingSnapshot} from './resources';
+import {ChatShortcutBadge} from '../chat-shortcuts';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
@@ -163,7 +164,7 @@ function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
  const className='a-nav-chat '+(chat.id===state.selectedSessionId?'is-selected':'');
  // The drag preview uses the exact same contents without interactive flyouts.
  if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
- return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-session-id={chat.id} label={title} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>{content}</NavigationRow>;
+ return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-session-id={chat.id} label={title} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>{content}<ChatShortcutBadge id={chat.id}/></NavigationRow>;
 }
 function ChatPagination({page,onChange,label='conversations'}){
  if(page.pages<2)return null;

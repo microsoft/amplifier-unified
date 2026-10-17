@@ -5,6 +5,7 @@ import sys
 
 from mcp.server import MCPServer
 from mcp.server.apps import Apps
+from mcp.types import ToolAnnotations
 
 html, calls, mode = map(Path, sys.argv[1:4])
 apps = Apps()
@@ -28,6 +29,21 @@ else:
     def counter_add(amount: int = 1) -> dict[str, int]:
         """Add to the retained synthetic counter."""
         return add(amount)
+
+@apps.tool(resource_uri='ui://recovery/app', structured_output=True,
+           annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False))
+def counter_read() -> dict[str, int]:
+    """Read the retained synthetic counter without changing it."""
+    prior = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+    return {'count': prior[-1]['count'] if prior else 0}
+
+
+if mode.exists() and mode.read_text() == 'changed':
+    @apps.tool(resource_uri='ui://recovery/app', structured_output=True,
+               annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False))
+    def counter_extra() -> dict[str, int]:
+        """A newly added read-only action; never implicitly granted to old views."""
+        return {'extra': 1}
 
 apps.add_html_resource('ui://recovery/app', html.read_text())
 MCPServer('Recovery fixture', extensions=[apps]).run()

@@ -2,6 +2,9 @@
 #amp-one .a-chat-menu-trigger svg:last-child{width:14px}
 #amp-one .a-work-menu-items hr{border:0;border-top:1px solid var(--a-line);margin:5px 0}
 #amp-one .a-chat-pages{min-width:0}
+/* Late usage reads grow below Chat info controls without recentering the dialog. */
+#amp-one .a-overlay.a-chat-info-overlay{align-items:flex-start}
+#amp-one .a-chat-info-overlay .a-dialog{max-height:calc(100dvh - 48px);scrollbar-gutter:stable}
 #amp-one .a-chat-pages [hidden]{display:none!important}
 #amp-one .a-chat-back{margin-bottom:12px}
 #amp-one .a-chat-destinations{display:grid;gap:4px}

@@ -27,14 +27,18 @@ def scope(app):
 def backend(monkeypatch):
     config = {'python': '/managed/python', 'dockerHost': 'unix:///owned/docker.sock', 'image': owner.APPROVED_IMAGE}
     monkeypatch.setattr(owner, 'configuration', lambda app: (config, 'ready', 'Qualified test backend'))
+    monkeypatch.setattr(owner.setup, 'read', AsyncMock(return_value={'status': 'ready', 'backends': [], 'operation': None}))
     calls = []
     def invoke(config, home, row, action, args):
         calls.append((action, dict(args)))
-        return {'ok': True, 'universeId': 'owned-universe',
+        value = {'ok': True, 'universeId': 'owned-universe',
                 'backendIdentity': {'backend': 'docker', 'daemon': 'owned-daemon'},
                 'snapshot': {'snapshot_commit': 'snapshot', 'archive_sha256': 'archive'},
                 'status': {'start': 'running', 'read': row.get('environmentState', 'running'), 'stop': 'stopped', 'remove': 'removed'}.get(action, 'running'),
                 'result': {'stdout': 'check passed\n', 'stderr': '', 'exit_code': 0}}
+        if args.get('durableJob') or action in {'job_read', 'job_cancel'}:
+            value['job'] = {'version': 1, 'id': args['requestId'], 'state': 'passed', 'terminal': True}
+        return value
     monkeypatch.setattr(owner, 'invoke', invoke)
     return calls
 

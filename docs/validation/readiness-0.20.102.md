@@ -79,6 +79,12 @@ remains open rather than shipping an unproven failure-isolation policy.
 
 ### #294 — replacement of original GitHub title/body
 
+**October 17 scope update:** the owner accepted correction comments and separately
+reviewed later attachments instead of original replacement. The reviewed
+correction UI subsequently shipped in 0.20.172. This resolves the remaining
+product decision; the release-0.20.102 checkpoint below is preserved as history.
+See the [current feedback contract](../feedback-lifecycle.md#accepted-scope-for-294--october-17-2026).
+
 Reviewed later attachments are delivered. True original title/body replacement
 remains open: GitHub issue edits provide no atomic conditional revision update,
 so read/check/PATCH can overwrite an intervening maintainer edit. The existing

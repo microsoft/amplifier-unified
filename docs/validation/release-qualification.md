@@ -65,6 +65,88 @@ runtime checks require their declared runtime dependencies; report host-only
 skips accurately. Keep source, state, services and ports isolated and clean up
 owned temporary resources after evidence is retained.
 
+### Real filesystem-permission browser checks
+
+`native-history-error-browser.mjs` and `standard-ux-storage-denial-browser.mjs`
+require actual OS read/write refusal. Run their existing assertions as an
+unprivileged fixture owner. On Linux, a root-owned disposable environment may
+instead launch only the test process and descendants with `setpriv
+--bounding-set=-dac_override,-dac_read_search
+--inh-caps=-dac_override,-dac_read_search
+--ambient-caps=-dac_override,-dac_read_search --no-new-privs --`.
+Do not change the container's or shared service's privileges.
+
+Before execution, prove that the exact child identity cannot read an owned
+mode-000 file, then can restore its mode and read the unchanged bytes. Record
+UID/GID, effective/permitted/bounding/ambient capabilities and `NoNewPrivs`.
+Also prove that this identity can traverse and import the exact interpreter,
+installed dependencies, browser binaries and evidence adapters. If a shared
+dependency lives behind a private home, use task-owned byte-verified copies;
+never broaden shared permissions. Keep source/package identities unchanged and
+disable bytecode writes when reusing dependency directories.
+
+A privileged read succeeding, a missing prerequisite or a startup error is not
+permission-denial acceptance. Preserve those failed attempts separately. Retain
+the ordinary browser assertions and strict process-owner cleanup result: both
+cases must pass without residual-process retirement. This prerequisite applies
+to local and CI owners; it does not add a universal release gate or establish
+Windows/macOS permission behavior.
+
+### Focused default-capability qualification
+
+For changes to default composition, forwarding, desktop permissions or routing,
+select these opt-in checks in an **owned isolated environment**. This is the
+affected-feature check under the policy above, not a new universal CI/merge gate.
+The ordinary broad workflow does not currently provision these prerequisites;
+a skipped opt-in probe is not acceptance.
+
+Prepare a noneditable candidate wheel and its pinned Python 3.13/Core/Foundation
+runtime before testing. Record the wheel hash and dependency commits. Under
+`UNIFIED_BEHAVIOR_REPOS`, retain checkouts named exactly as their repositories:
+Foundation; bundles `context-intelligence`, `computer-use`, `routing-matrix`,
+`imagegen`, `skills`, `modes`; modules `hooks-approval`, `loop-live`,
+`loop-streaming`, `context-simple`, `tool-filesystem`, `tool-search`,
+`tool-bash`, `tool-todo`. Install the packages declared by those manifests from
+matching sources. The probe preflight lists missing agent-only declarations
+rather than dropping agents or downloading dependencies.
+
+Copy the candidate's `tests/` tree outside the application source checkout, then
+run from another directory, with no provider credentials or host display:
+
+```sh
+export UNIFIED_RUNTIME_PYTHON=/opt/qualification/venv/bin/python
+export UNIFIED_BEHAVIOR_REPOS=/opt/qualification/repos
+export WARM_FOUNDATION_PATH="$UNIFIED_BEHAVIOR_REPOS/amplifier-foundation"
+export WARM_ROUTING_PATH="$UNIFIED_BEHAVIOR_REPOS/amplifier-bundle-routing-matrix"
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+"$UNIFIED_RUNTIME_PYTHON" -I -m pytest --import-mode=prepend \
+  -p pytest_asyncio.plugin -p pytest_aiohttp.plugin -rA \
+  /opt/qualification/tests/test_builtin_behaviors.py \
+  /opt/qualification/tests/test_default_capability_policy.py \
+  /opt/qualification/tests/test_default_behaviors_integration.py \
+  /opt/qualification/tests/test_default_runtime_safety.py \
+  /opt/qualification/tests/test_default_mount_runtime.py \
+  /opt/qualification/tests/test_default_routing_runtime.py \
+  /opt/qualification/tests/test_default_export_literals.py
+```
+
+The finite routing probe loads the installed upstream hook, so stage the
+unchanged `routing/` resource directory at
+`Path(hooks_module.__file__).parents[3] / "routing"` **inside that isolated
+runtime only**, recording and verifying its source hashes. This fixture layout
+is not production packaging evidence. The separate full-mount probe uses actual
+Foundation source activation and `ComponentResolver`, retains every agent,
+substitutes exact existing skill directories for offline Git transport, and
+checks shipped matrix discovery and real export without a bundle-root override.
+
+Retain named results, skips, package/source identities and the negative-control
+failure evidence. The suite checks actual CI target selection, real ComputerTool
+write denial with a fake backend, nested/resumed desktop ceilings, real
+Core/DelegateTool routing with finite providers, and preparation/mount/export.
+It does not qualify live accounts, provider transport, real host desktop input,
+browser consent or all desktop platforms. Do not substitute this suite for those
+boundaries when a change affects them.
+
 GitHub's required **Fast release checks** runs on every PR. It checks release
 identity/reporting contracts, frontend unit tests, the build and committed assets.
 Path-scoped contract workflows remain available for affected components. The
@@ -272,7 +354,7 @@ prebuilt wheels remains a separate proposal.
 ## Published Core binaries
 
 The app host, worker project and Work acceptance project require
-`amplifier-core>=2.0.1` from PyPI. This is a minimum supported release, not a
+`amplifier-core>=2.0.2` from PyPI. This is a minimum supported release, not a
 standing exact-version pin. Core's Git source override is removed. The uv
 `no-build-package` policy forbids compiling Core; other source dependencies can
 still build. The worker uses the same explicit public index as the host so an

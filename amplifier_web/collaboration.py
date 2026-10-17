@@ -85,7 +85,7 @@ def definitions(schema, string):
             **sid, "proposalId": string(200), "decision": {"enum": ["allow", "deny"]},
         }, ["sessionId", "proposalId", "decision"])),
         "coordination.send": ("Commit attributed same-workspace task input and return its receipt promptly. Notify never wakes; queue preparation continues under service ownership. Read results, never replay uncertain input. For explicit human repair of existing schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
-        "coordination.create": ("Commission a durable task chat with captured configuration, actual execution placement and a saved return notification before its brief can run. Inspect this operation's requestId for its initial result. Returns before preparation and does not select the peer. Set returnNotification:false only when no automatic return is wanted.", schema({
+        "coordination.create": ("Commission an authorized durable task chat inheriting the caller's configuration, workspace and actual execution placement, with a saved return notification before its brief can run. This does not create an independent user chat in a different folder. Inspect this operation's requestId for its initial result. Returns before preparation and does not select the peer. Set returnNotification:false only when no automatic return is wanted.", schema({
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
             "returnNotification": {"type": "boolean", "default": True},
@@ -1183,7 +1183,7 @@ class Collaboration:
             if authorized and authorized[:2] == (caller, fingerprint(args)):
                 self.source({}, origin, caller)
                 return None
-            self.error("Use coordination.create for host-owned task inheritance; raw agent session.create is not authorized.")
+            self.error("Use coordination.create for a task inheriting this conversation's workspace and configuration; raw agent session.create is not authorized. For an independent chat in another folder that the user explicitly requested, use session.handoff.start directly. Use session.handoff.propose for an unapproved suggestion, or session.draft for editable setup. No conversation was created or work started.")
         from .service import SESSION_ID_ACTIONS, ACTION_POLICIES
         policy = ACTION_POLICIES.get(action, {})
         access = policy.get("access")

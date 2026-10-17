@@ -1,15 +1,17 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {writeFileSync} from 'node:fs';
+import {mkdirSync,writeFileSync} from 'node:fs';
+import {dirname,join} from 'node:path';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
+if(process.env.DIAGRAM_EVIDENCE)mkdirSync(dirname(process.env.DIAGRAM_EVIDENCE),{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;const results=[],errors=[];
 try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  const page=await browser.newPage({viewport:{width:1400,height:1100},hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
  const commands=[];page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const body=request.postDataJSON();commands.push(body)}});
@@ -68,8 +70,45 @@ try{
   await abort.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});await abort.detach();
   await expect.poll(async()=>Math.round((await img.boundingBox()).x-cancelledStart.x)).toBe(0);
   record(kind,'cancelled touch restores saved view without committing partial pan',(await saved()).panX===40&&commands.length===cancelCommands);
-  await page.setViewportSize({width:1400,height:1100});await act('view.update',{patch:{canvasFocused:false}});
+ await page.setViewportSize({width:1400,height:1100});await act('view.update',{patch:{canvasFocused:false}});
  }
+ // Viewer controls stay available without opening the general Canvas options.
+ await act('view.update',{patch:{canvasControlsPinned:false,canvasControlsExpanded:false}});
+ const authored='digraph { rankdir=LR; a [label="Authored node",shape=diamond,style=filled,fillcolor="#ffcc88",color="#713600"]; a -> b [color="#07802a"]; }';
+ await act('canvas.show',{kind:'dot',content:authored,title:'Diagram presentation'});
+ const graph=page.locator('.a-diagram-stage img');await expect(graph).toBeVisible();
+ await expect(page.getByRole('group',{name:'Diagram view'})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Zoom in',exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Fit',exact:true})).toBeVisible();
+ const svg=await graph.evaluate(img=>decodeURIComponent(img.src.split(',').slice(1).join(',')));
+ assert.match(svg,/#ffcc88/);assert.match(svg,/#713600/);assert.match(svg,/#07802a/);
+ await expect(page.getByRole('combobox',{name:'Inspect graph node'})).toBeHidden();
+ await page.getByText(/^Node details ·/).click();
+ await page.getByRole('combobox',{name:'Inspect graph node'}).selectOption('a');
+ await expect(page.locator('.a-node-inspector dl')).toContainText('Authored node');
+ const flowSource=await graph.getAttribute('src');
+ await page.getByRole('combobox',{name:'Graph layout'}).selectOption('neato');
+ await expect.poll(async()=>(await saved()).engine).toBe('neato');
+ await expect(graph).toBeVisible();
+ await expect(graph).not.toHaveAttribute('src',flowSource);
+ const separated=await graph.evaluate(img=>{
+  const svg=new DOMParser().parseFromString(decodeURIComponent(img.src.split(',').slice(1).join(',')),'image/svg+xml').documentElement;
+  svg.style.cssText='position:fixed;visibility:hidden;pointer-events:none';document.body.append(svg);
+  try{const [a,b]=[...svg.querySelectorAll('g.node')].map(node=>node.getBBox());return a.x+a.width<=b.x||b.x+b.width<=a.x||a.y+a.height<=b.y||b.y+b.height<=a.y}finally{svg.remove()}
+ });
+ assert.ok(separated,'Network layout should separate default node bounds');
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.content),authored);
+ record('dot','visible controls, authored styling/source and node inspection preserved',true);
+ if(process.env.DIAGRAM_EVIDENCE)await page.screenshot({path:join(dirname(process.env.DIAGRAM_EVIDENCE),'diagram-viewer-desktop.png')});
+ await page.setViewportSize({width:390,height:844});await act('view.update',{patch:{canvasFocused:true}});
+ const controls=await page.getByRole('group',{name:'Diagram view'}).boundingBox();assert.ok(controls.x>=0&&controls.x+controls.width<=390);
+ record('dot','narrow toolbar stays within viewport',true);
+ if(process.env.DIAGRAM_EVIDENCE)await page.screenshot({path:join(dirname(process.env.DIAGRAM_EVIDENCE),'diagram-viewer-narrow.png')});
+ const mermaid='flowchart LR\n A[Authored Mermaid] --> B[Output]\n style A fill:#ffcc88,stroke:#713600';
+ await act('canvas.show',{kind:'mermaid',content:mermaid,title:'Authored Mermaid'});await expect(graph).toBeVisible();
+ const msvg=await graph.evaluate(img=>decodeURIComponent(img.src.split(',').slice(1).join(',')));assert.match(msvg,/#ffcc88/);assert.match(msvg,/#713600/);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.content),mermaid);
+ record('mermaid','authored styling and source preserved',true);
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({results,errors}));
  assert.ok(results.every(row=>row.passed),JSON.stringify(results.filter(row=>!row.passed)));

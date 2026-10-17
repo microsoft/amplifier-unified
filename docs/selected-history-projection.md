@@ -71,6 +71,13 @@ shutdown and bounded worker retirement release disposable interest without
 canceling accepted commands. Status-only notifications use the existing selected
 client stream and do not write canonical history.
 
+A published invalidation or owner/source replacement supersedes a pending read;
+it does not count as a failed worker or introduce a failure backoff. The existing
+interest loop may request the current owner again. Genuine read failures retain
+their visible retry state and backoff. A quiet, exact-source cache reuse restores
+the retained page's accepted receipt as well as its current status; it cannot
+claim readiness without that receipt or publish an obsolete owner's result.
+
 The browser's version-2 DOM receipt has `scope: recent-events`, a `windowKey`,
 `itemCount`, `sourceCount`, `scannedBytes` and `scannedEvents`, with
 `historyComplete: false`. It certifies acceptance of that root event window only.
@@ -101,6 +108,13 @@ passive path requires host writers to publish or invalidate their mutations. The
 explicit standalone refresh API retains its exact reference-reader comparison
 under the service lock, including unpublished aliases; production callers use the
 passive path. An extra off-loop digest rejects changes observed during computation.
+
+Transport JSON encoding groups small fragments into at most 64 KiB writes.
+Each write reserves aggregate spool bytes before touching the file; input limits
+and stop checks still apply per fragment, with extra stop checks between slices
+of a large string fragment. Failure deletes the partial artifact and releases
+only that encoder's reserved bytes. This bounds additional batching storage,
+not the existing Python input or a JSON encoder's whole-string allocation.
 
 The worker returns a complete tree for a cold generation, a small changed-node
 patch for a proven local update, or an unchanged receipt. The host rechecks source

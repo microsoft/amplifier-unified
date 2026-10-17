@@ -85,3 +85,39 @@ Workspace plan summaries read root todo receipts through the incremental event
 index. They do not hydrate the saved execution graph, traverse child logs, or
 associate the conversation transcript. A changing chat's read failure retires
 only the indexes touched by that read, not every other chat's parsed history.
+
+## Independent metric visibility
+
+Settings → Appearance → Execution metrics controls individual steps, Work
+summaries and conversation totals independently. Each can hide its accounting
+without hiding work status, failure, pending decisions or cancellation. Until a
+scope has an explicit choice, Focused keeps inline step/Work metrics quiet;
+explicit choices then survive changes to the overall detail level. Selected
+fields apply to token, cache, reasoning-token, cost, elapsed-time and model-call
+count displays and metric exports. An empty selection is valid.
+
+These preferences use the persisted shell presentation contract and the same
+revision-bound actions exposed to agents. They do not alter accounting,
+execution, child attribution or provider requests. A theme change does not
+rewrite the choices. The optional compact conversation status is off by default.
+It shows current conversation status; cumulative usage is read only when the
+person chooses **Read usage**, then remains a timestamped snapshot until refresh.
+It has no polling interval and does not request usage on each navigation update.
+
+**Copy selected metrics** and **Download selected metrics** project the existing
+step/Work usage or `capacity.read` aggregate. JSON includes scope, available call
+identity, observation time, coverage and selected metric values/statuses. It
+never includes provider request/response payloads, credential fields or private
+reasoning text. Reasoning tokens are a reported count. Child identity is retained;
+worker aggregates are never added to their constituent calls a second time.
+Cancelled/failed calls retain their recorded usage. Live elapsed time is marked
+live; settled duration requires a recorded end. Partial and estimated values,
+reported zero, missing values and pending reports remain distinct.
+
+The current telemetry supplies tokens, cache reads/writes, reasoning-token
+counts, attributed cost and lifecycle timing. The host does **not** have a
+normalized current context-window token measurement, queue duration or
+provider-internal retry count. The status details explicitly report those limits.
+Cumulative input, context character counts and a configured budget are not
+substituted for current context-window health. No new telemetry collector,
+provider price table or historical scan is introduced by this presentation.

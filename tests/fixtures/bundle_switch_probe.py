@@ -1,115 +1,158 @@
-"""Actual Worker, Foundation and loop-live transitions; local synthetic provider only."""
+"""Real host, worker processes, Core/Foundation and saved history; no model calls.
+
+Two local revisions expose the same package and cached child names. Each package
+is a real Core context module delegating storage to installed context-simple.
+Only the provider is synthetic; it rejects every model call. No network sources,
+existing home, credentials or user transcript are used.
+"""
+from __future__ import annotations
 import asyncio
 import json
 import os
 from pathlib import Path
 import sys
-ROOT=Path(__file__).resolve().parents[2]
-sys.path.insert(0,str(ROOT))
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+
+def saved_history(store, session_id):
+    """Inspect one native checkpoint while the idle worker may park/save.
+
+    history.snapshot awaits its own checkpoint, not the independently scheduled
+    idle checkpoint. Use the writer's existing cross-process lock for assertions;
+    never retry a rejected read or bypass SessionStore's integrity checks.
+    """
+    from amplifier_foundation.session.metadata import metadata_lock
+    with metadata_lock(store.directory(session_id)):
+        return store.load(session_id)
+
 
 async def main():
-    root=Path(sys.argv[1]).resolve();workspace=root/'workspace';workspace.mkdir(parents=True)
-    provider=root/'provider/amplifier_module_provider_fixture';provider.mkdir(parents=True)
-    provider.joinpath('__init__.py').write_text('''from amplifier_core import ProviderInfo
-from amplifier_core.message_models import ChatResponse, TextBlock
+    root = Path(sys.argv[1]).resolve()
+    workspace = root/'workspace'; workspace.mkdir(parents=True)
+    home = root/'app'
+    os.environ.update(AMPLIFIER_HOME=str(root/'shared'), AMPLIFIER_WEB_HOME=str(home),
+        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'))
+    from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
+    settings = root/'shared/settings.yaml'; settings.parent.mkdir()
+    # Exercise revision isolation using only the local modules defined below.
+    # Ordinary defaults have their own installed-runtime acceptance coverage.
+    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
+    provider = root/'provider/amplifier_module_provider_fixture'; provider.mkdir(parents=True)
+    calls = root/'model-calls'
+    provider.joinpath('__init__.py').write_text('''from pathlib import Path
+from amplifier_core import ProviderInfo
+__amplifier_module_type__='provider'
 class Provider:
     name='fixture'
     def get_info(self): return ProviderInfo(id='fixture',display_name='Fixture',defaults={'model':'fixture'})
     async def list_models(self): return []
-    async def complete(self,request,**kw): return ChatResponse(content=[TextBlock(text='Local fixture response')])
+    async def complete(self,request,**kw):
+        Path('''+repr(str(calls))+''').touch()
+        raise AssertionError('Bundle switching must not call a model')
     def parse_tool_calls(self,response): return []
 async def mount(coordinator,config=None):
     if (config or {}).get('fail'): raise ValueError('Intentional candidate mount failure')
     await coordinator.mount('providers',Provider(),name='fixture')
 ''')
-    from amplifier_module_context_simple import __file__ as context_module
-    import yaml
-    bundles={}
-    for name,budget,fail in [('first',10000,False),('second',20000,False),('bad',30000,True)]:
-        plan={'bundle':{'name':name},'session':{'orchestrator':{'module':'loop-live'},'context':{'module':'context-simple','source':str(Path(context_module).parent.parent),'config':{'max_tokens':budget}}},'providers':[{'module':'provider-fixture','source':str(provider.parent),'config':{'fail':fail}}]}
-        path=root/(name+'.md');path.write_text('---\n'+yaml.safe_dump(plan)+'---\n'+name+' root instructions.\n');bundles[name]=str(path)
-    os.environ.update(AMPLIFIER_HOME=str(root/'shared'),AMPLIFIER_WEB_HOME=str(root/'app'),AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'),AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'))
-    from amplifier_web.runtime_worker import Worker
-    import amplifier_web.runtime_worker as module
+    bundles = {}
+    for name, budget in [('first',1000000),('second',2000000),('bad',3000000)]:
+        package = root/name/'amplifier_module_context_switchfixture'; package.mkdir(parents=True)
+        (package/'_text_estimate.py').write_text('REVISION='+repr(name)+'\n')
+        (package/'__init__.py').write_text('''import json, os
+from pathlib import Path
+from ._text_estimate import REVISION
+from amplifier_module_context_simple import mount as simple_mount
+__amplifier_module_type__='context'
+async def mount(coordinator, config=None):
+    result=await simple_mount(coordinator, config)
+    with Path('''+repr(str(root/'mounts.jsonl'))+''').open('a') as stream:
+        stream.write(json.dumps({'revision':REVISION,'pid':os.getpid(),'origin':__file__})+'\\n')
+    return result
+''')
+        plan = {'bundle': {'name': name}, 'session': {'orchestrator': {'module': 'loop-live'},
+            'context': {'module': 'context-switchfixture', 'source': str(package.parent), 'config': {'max_tokens': budget}}},
+            'providers': [{'module': 'provider-fixture', 'source': str(provider.parent), 'config': {'fail': name=='bad'}}]}
+        bundle = root/(name+'.yaml'); bundle.write_text(json.dumps(plan)); bundles[name] = str(bundle)
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.module_failures import ConfiguredModuleError, REMEDIATION
+    from amplifier_web.service import AppService
+    from amplifier_web.management import Management
     from amplifier_web.host.storage import SessionStore
-    events=[];admissions=[];unexpected=[];replies=set();worker=Worker()
-    async def reply(event):
-        operation=event['operation']
-        if operation=='context.manifest':
-            result={'surfaces':[],'inputIds':event['args'].get('_contextInputs',[])}
-        elif operation=='capacity.admit' and not worker.controls.capacity.policy['enabled']:
-            admissions.append(event['args']['call']['id'])
-            result={'allowed':True,'budgetRevision':worker.controls.capacity.policy['revision']}
-        else:
-            unexpected.append(operation)
-            await worker.command({'op':'bridge.result','id':event['id'],'error':'Unexpected fixture bridge operation'})
-            return
-        await worker.command({'op':'bridge.result','id':event['id'],'result':result})
-    def publish(event):
-        events.append(event)
-        if event.get('op')=='bridge':
-            task=asyncio.create_task(reply(event));replies.add(task);task.add_done_callback(replies.discard)
-    module.publish=publish
-    import amplifier_web.host.session as host
-    original_load=host.load_root_bundle
-    resolutions=[]
-    async def counted_load(config,bundle,**kwargs):
-        resolutions.append(bundle)
-        return await original_load(config,bundle,**kwargs)
-    host.load_root_bundle=counted_load
-    async def control(operation,args=None):
-        identity='request-'+str(len(events))
-        await worker.command({'op':'control','id':identity,'operation':operation,'arguments':args or {}})
-        reply=next(event for event in reversed(events) if event.get('op')=='reply' and event.get('id')==identity)
-        if reply.get('error'): raise RuntimeError(reply['error'])
-        return reply['result']
-    async def settled():
-        for _ in range(300):
-            if worker.parked:return
-            await asyncio.sleep(.02)
-        raise AssertionError('worker did not park: '+json.dumps([{key:value for key,value in event.items()
-            if key in {'type','op','operation','error'}} for event in events[-15:]]))
+    from amplifier_web.bundle_actions import perform
+    runtime = RuntimeManager(command=[os.environ['UNIFIED_RUNTIME_PYTHON'], str(ROOT/'amplifier_web/runtime_worker.py')], startup_timeout=45)
+    app = AppService(home, runtime=runtime, workspace=workspace)
+    app.management = Management(app); runtime.app_bridge = app.app_bridge; runtime.home = home
+    source = app._new_session({'bundle': bundles['first']}); app.state['sessions'].append(source)
+    sid = source['id']; store = SessionStore.for_app(home, workspace)
+    history = [{'role':'user','content':'Keep this saved conversation'}, {'role':'assistant','content':'Saved reply'}]
+    store.save(sid, history, {'bundle_name': bundles['first']})
+    states = home/'sessions'/sid; states.mkdir(parents=True, exist_ok=True)
+    states.joinpath('control-state.json').write_text(json.dumps({'selection': {'instance':'fixture','model':'fixture','effort':'high'}, 'budget': {'contextTokens':1234567}}))
+    processes = []
+    spawn = asyncio.create_subprocess_exec
+    async def observed_spawn(*args, **kwargs):
+        assert all(process.returncode is not None for process in processes), 'Previous worker not reaped before replacement spawn'
+        process = await spawn(*args, **kwargs)
+        processes.append(process)
+        return process
+    asyncio.create_subprocess_exec = observed_spawn
     try:
-        await worker.start({'id':'switch-fixture','workspace':str(workspace),'bundle':bundles['first']},raise_errors=True)
-        await worker.command({'op':'send','id':'send','input_id':'original-input','text':'Remember the fixture history.'})
-        await settled()
-        await control('provider.select',{'instance':'fixture','model':'fixture','effort':'high'})
-        await control('budget.set',{'contextTokens':12345})
-        store=SessionStore.for_app(root/'app',workspace)
-        original=store.load('switch-fixture')[0]
-        checked=await control('bundle.preview',{'bundle':bundles['second']})
-        assert checked['modelCompatible']
-        resolutions.clear()
-        result=await control('bundle.switch',{'bundle':bundles['second'],'previewId':checked['previewId']})
-        assert resolutions==[bundles['second']]
-        assert result['providers']['effective']['model']=='fixture'
-        assert result['providers']['effective']['effort']=='high'
-        assert worker.session.coordinator.get('context').max_tokens==20000
-        assert store.load('switch-fixture')[0]==original
-        assert store.load('switch-fixture')[1]['bundle_name']==bundles['second']
-        assert 'second root instructions' in worker.controls.prepared.bundle.instruction
-        assert any(event.get('type')=='runtime.ready' and event['report'].get('root_bundle')==bundles['second'] for event in events)
-        resolutions.clear()
-        await control('bundle.switch',{'bundle':bundles['first']})
-        assert resolutions==[bundles['first']]
-        assert store.load('switch-fixture')[0]==original
-        assert worker.session.coordinator.get('context').max_tokens==10000
-        before=store.load('switch-fixture')
+        await app.management.ensure_runtime(source)
+        await runtime.control(sid, 'history.snapshot', {})
+        history = saved_history(store, sid)[0]
+        first_pid = runtime.workers[sid]['process'].pid
+        await perform(app.management, 'bundle.preview', {'sessionId':sid, 'bundle':bundles['second']})
+        assert runtime.workers[sid]['process'].pid == first_pid
+        preview = source['bundlePreview']
+        await perform(app.management, 'bundle.switch', {'sessionId':sid,'bundle':bundles['second'],'previewId':preview['previewId']})
+        second_pid = runtime.workers[sid]['process'].pid
+        assert second_pid != first_pid
+        saved, metadata = saved_history(store, sid)
+        assert saved == history
+        assert metadata['bundle_name'] == bundles['second']
+        controls = await runtime.control(sid,'configuration.providers',{})
+        assert controls['effective']['model']=='fixture' and controls['effective']['effort']=='high'
+        assert json.loads(states.joinpath('control-state.json').read_text())['budget']['contextTokens']==2000000
+        await perform(app.management, 'bundle.switch', {'sessionId':sid,'bundle':bundles['first']})
+        third_pid = runtime.workers[sid]['process'].pid
+        assert len({first_pid,second_pid,third_pid})==3
+        before = saved_history(store, sid)
         try:
-            await control('bundle.switch',{'bundle':bundles['bad']})
-            raise AssertionError('broken candidate accepted')
-        except RuntimeError as exc: assert 'mount' in str(exc).lower() or 'provider' in str(exc).lower()
-        assert store.load('switch-fixture')[0]==before[0]
-        assert store.load('switch-fixture')[1]['bundle_name']==bundles['first']
-        assert worker.session.coordinator.get('context').max_tokens==10000
-        assert not worker.shutdown.is_set()
-        await worker.command({'op':'send','id':'after','input_id':'after-switch','text':'Continue after the failed switch.'})
-        await settled()
-        assert sum(event.get('type')=='assistant.message' for event in events)==2
-        assert not unexpected and len(admissions)==len(set(admissions))==2
-        print(json.dumps({'reviewed_and_direct_switch':True,'one_resolution_per_apply':True,'history_preserved':True,'model_effort_preserved':True,'old_budget_reset':True,'failed_mount_rolled_back':True,'continued_after_failure':True,'host_admissions':len(admissions),'replayed_work':False}))
+            await perform(app.management, 'bundle.switch', {'sessionId':sid,'bundle':bundles['bad']})
+        except ConfiguredModuleError as exc:
+            assert exc.failures == [{'module': 'provider-fixture', 'type': 'provider',
+                'instance_id': 'fixture', 'reason_code': 'provider_mount_failed',
+                'guidance': REMEDIATION['provider_mount_failed']}], exc.failures
+        else:
+            raise AssertionError('Broken replacement was accepted')
+        saved, metadata = saved_history(store, sid)
+        assert saved == before[0]
+        assert metadata['bundle_name'] == bundles['first']
+        assert source['bundle']==bundles['first'] and source['bundleChange']['phase']=='error'
+        restored_pid = runtime.workers[sid]['process'].pid
+        assert restored_pid not in {first_pid,second_pid,third_pid}
+        assert not (states/'bundle-transition.json').exists()
+        assert not calls.exists()
+        mounts = [json.loads(line) for line in (root/'mounts.jsonl').read_text().splitlines()]
+        by_pid = {}
+        for row in mounts:
+            if row['pid'] in by_pid: assert by_pid[row['pid']] == row['revision'], mounts
+            by_pid[row['pid']] = row['revision']
+        assert list(by_pid.values())==['first','second','first','bad','first'], mounts
+        await runtime.control(sid,'configuration.inspect',{})
+        print(json.dumps({'reviewed_and_direct_switch':True,'fresh_worker_per_revision':True,
+            'previous_worker_reaped_before_spawn':True,
+            'same_name_cached_child':True,'history_preserved':True,'model_effort_preserved':True,
+            'old_budget_reset':True,'failed_mount_diagnostic':'provider_mount_failed',
+            'failed_mount_rolled_back':True,'restored_worker_usable':True,
+            'model_calls':0,'replayed_work':False,'mounts':mounts}))
     finally:
-        worker.shutdown.set();await worker.run()
-        if replies:await asyncio.gather(*replies)
+        await app.close()
+        asyncio.create_subprocess_exec = spawn
+        assert all(process.returncode is not None for process in processes)
 
-asyncio.run(main())
+
+if __name__ == '__main__':
+    asyncio.run(main())

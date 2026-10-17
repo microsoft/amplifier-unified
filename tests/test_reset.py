@@ -314,7 +314,7 @@ def test_failed_post_repair_check_keeps_fresh_install_but_never_claims_ready(rep
         reset.repair(home, 'uv', tool, bins, 'trusted.whl', {}, (['stop'], ['start'], None), False)
     assert (tool / 'amplifier-unified/fresh').exists()
     assert not (tool / 'amplifier-unified/old').exists()
-    assert 'Unified is ready.' not in capsys.readouterr().out
+    assert 'Unified is ready' not in capsys.readouterr().out
 
 
 def test_no_start_runs_both_checks_without_claiming_ready(repair_tree, monkeypatch, capsys):
@@ -329,7 +329,7 @@ def test_no_start_runs_both_checks_without_claiming_ready(repair_tree, monkeypat
     reset.repair(home, 'uv', tool, bins, 'trusted.whl', {}, (['stop'], ['start'], None), True)
     assert waits == [0] and ('start',) not in calls
     output = capsys.readouterr().out
-    assert 'left stopped' in output and 'Unified is ready.' not in output
+    assert 'left stopped' in output and 'Unified is ready' not in output
 
 
 def test_repair_installs_missing_service_and_checks_readiness(repair_tree, monkeypatch, capsys):
@@ -344,7 +344,24 @@ def test_repair_installs_missing_service_and_checks_readiness(repair_tree, monke
     reset.repair(home, 'uv', tool, bins, 'trusted.whl', {}, None, False)
     assert any(args[-2:] == ('service', 'install') for args in calls)
     assert waits == [60]
-    assert 'Unified is ready.' in capsys.readouterr().out
+    assert 'Unified is ready on this computer.' in capsys.readouterr().out
+
+
+def test_repair_distinguishes_local_readiness_from_public_address(repair_tree, monkeypatch, capsys):
+    home, tool, bins = repair_tree
+    monkeypatch.setenv('TEST_RESET_TOOLS', str(tool))
+    fake_install(monkeypatch)
+    monkeypatch.setattr(reset, 'post_checks', lambda *a, **kw: {
+        'doctor': {'ok': True},
+        'service status': {'ok': True, 'url': 'https://127.0.0.1:8941',
+                           'publicUrls': ['https://unreachable-onboarding.invalid'],
+                           'publicUrlsVerified': False}})
+    reset.repair(home, 'uv', tool, bins, 'trusted.whl', {}, None, False)
+    output = capsys.readouterr().out
+    assert 'Unified is ready on this computer.' in output
+    assert 'Host listener: https://127.0.0.1:8941' in output
+    assert 'Configured public address (not checked): https://unreachable-onboarding.invalid' in output
+    assert 'Open:' not in output
 
 
 @pytest.mark.parametrize('code', [403, 429, 503])

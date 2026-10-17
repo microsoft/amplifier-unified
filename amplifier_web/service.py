@@ -96,8 +96,8 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.draft": ("Open a configurable new chat without creating a session or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
-    "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.draft": ("Open configurable new-chat setup without creating a conversation or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. The user must submit the first message to create this chat; an agent cannot finish this through raw session.create. For an authorized task in the caller's inherited workspace, use coordination.create instead. For an explicitly user-requested independent chat and opening brief in another existing folder, use session.handoff.start without a second confirmation; use session.handoff.propose for suggestions.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
+    "session.create": ("Create a conversation through the human UI or host-managed creation flow. Direct agent calls are refused, including after session.draft; coordination.create commissions a task in the caller's inherited workspace, not an independent chat in another folder. session.handoff.start creates and delivers an explicitly user-requested independent chat directly; session.handoff.propose reserves human review for suggestions; session.handoff.read inspects its durable outcome without replay. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Reviewed inheritance does not copy history, tasks or running work; select:false preserves the view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.plans": ("Read current plan progress and recorded trajectory for up to 50 chats without selecting them. Include items for at most one chat to inspect its todo list.", schema({"ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":True,"items":string(200)},"includeItems":{"type":"boolean"}},["ids"])),
     "session.select": ("Select a conversation without preparing a runtime", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
@@ -296,6 +296,8 @@ from .publishing import definitions as publishing_definitions
 ACTION_DEFINITIONS.update(publishing_definitions(schema, string))
 from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
+from .new_chat_handoffs import definitions as handoff_definitions
+ACTION_DEFINITIONS.update(handoff_definitions(schema, string))
 
 
 from .shell_modules import ShellModules, definitions as shell_definitions
@@ -397,7 +399,7 @@ for _access, _actions in {
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
         "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
-        "schedule.list", "schedule.read", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
+        "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
         "worktree.inspect", "worktree.list", "worktree.status",
         "coordination.awareness", "coordination.intent.read",
     },
@@ -416,6 +418,7 @@ for _access, _actions in {
         *environment_definitions(schema, string),
         *test_queue_definitions(schema, string),
         *assignment_definitions(schema, string),
+        *handoff_definitions(schema, string),
     },
 }.items():
     for _action in _actions:
@@ -644,6 +647,8 @@ class AppService:
                 logging.getLogger(__name__).warning("Could not read a saved session name; original metadata retained.")
         from .feedback import Feedback
         self.feedback = Feedback(self)
+        from .new_chat_handoffs import NewChatHandoffs
+        self.handoffs = NewChatHandoffs(self)
         from .diagnostics import Diagnostics
         self.diagnostics = Diagnostics(self)
         for session in self.state['sessions']:
@@ -729,6 +734,8 @@ class AppService:
                     self.cold_display.recent.pop(identity, None)
             self.projections.invalidate(state=self._state)
         self.cold_display.track_restored()
+        from .status_emitter import create as create_status_emitter
+        self.status_emitter = create_status_emitter(self)
 
     def default_theme(self):
         for name in ("unified.amplifier.css", "default-theme.css"):
@@ -927,6 +934,9 @@ class AppService:
     def _save(self, *, session_ids=None, record_only=False):
         if session_ids is None:
             session_ids = getattr(self, '_publish_save_scope', None)
+        worktrees = getattr(self, 'worktrees', None)
+        if worktrees is not None:
+            worktrees.resolve_placements(session_ids)
         if getattr(self, 'event_log_view', None) is not None:
             self.event_log_view.invalidate(session_ids)
         if session_ids is None:
@@ -1154,6 +1164,12 @@ class AppService:
 
     @measured('state.publish')
     def _publish(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
+        # Exact input receipts can change an independent-chat review displayed
+        # in its source conversation. Join that projection scope to this same
+        # canonical commit; do not publish from inside the delivery transaction.
+        handoff_sources = set(getattr(getattr(self, 'handoffs', None), 'changed_sources', ()))
+        if session_ids is not None:
+            session_ids = set(session_ids) | handoff_sources
         if getattr(self, 'event_log_view', None) is not None:
             self.event_log_view.invalidate(session_ids)
         # A mixed publication commits the union, never just the newer writer's
@@ -1200,6 +1216,10 @@ class AppService:
             self._publish_global_keys = set()
         # The save guard compares all shared navigation facts. A requested
         # detail publication must broaden when status/attention actually changed.
+        if handoff_sources:
+            self.handoffs.changed_sources.difference_update(handoff_sources)
+        if getattr(self, 'status_emitter', None):
+            self.status_emitter.publish(session_ids)
         if record_only:
             detail_only = self._publish_client_narrow
         published = {}
@@ -1831,6 +1851,9 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action.startswith("session.handoff."):
+            return await self.handoffs.dispatch(action, args, origin, caller_session_id,
+                include_state=include_state, admission_check=admission_check)
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
@@ -2028,21 +2051,25 @@ class AppService:
                 from .automatic_history import read_transcript
                 window = await asyncio.to_thread(read_transcript, copy.deepcopy(session), limit=None)
                 reveal_message = next((row for row in window["messages"] if row["id"] == args["messageId"]), None)
-        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'smartTools.reviewView', 'smartTools.updateView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
-        if action in {'smartTools.viewStatus', 'smartTools.reconnectView'} and origin == 'agent' and (
+        if action in {'smartTools.reconnectView', 'smartTools.reviewView'} and origin == 'agent' and (
                 not caller_session_id or self.state.get('selectedSessionId') != caller_session_id):
             raise AppError('Choose a client displaying the calling conversation before recovering its tool view.', 409)
+        if action == 'smartTools.updateView' and origin not in {'ui', 'user'}:
+            raise AppError('A person must review and approve changed tool contracts in their own view.', 403)
         if action == 'smartTools.viewStatus':
-            from .mcp_view_recovery import inspect
+            from .mcp_view_recovery import inspect, inspect_for_session
             if not self.smart_tools:
                 raise AppError('Smart Tools service is unavailable.')
             async with self.lock:
-                return {'accepted': True, 'result': inspect(self, args['canvasId']), 'effects': []}
+                result = (inspect_for_session(self, args['canvasId'], caller_session_id, args.get('clientId'))
+                          if origin == 'agent' else inspect(self, args['canvasId']))
+                return {'accepted': True, 'result': result, 'effects': []}
         if action.startswith("kernels."):
             from .computation import dispatch
             return await dispatch(self, action, args, origin)
@@ -2759,7 +2786,7 @@ class AppService:
                     from .message_interactions import reconcile_native_reveal
                     reconcile_native_reveal(session, reveal_message)
                 from .message_interactions import command
-                diagnostic_result = command(self, action, args)
+                diagnostic_result = command(self, action, args, origin=origin)
             elif action == 'message.copy':
                 source = self._session(args['sessionId'])
                 message = next((m for m in source['messages'] if m['id']==args['messageId']), None)
@@ -3149,7 +3176,7 @@ class AppService:
                 view=self.state['view']
                 if view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
                     view['panel']=None
-            elif action in {"feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
+            elif action in {"feedback.edits.review", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                             "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
                 if self.feedback.followups.accept(action, args, origin):
                     pending.append((self.feedback.followups.run, (args['requestId'],)))
@@ -3163,6 +3190,9 @@ class AppService:
                         scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
                     if action == 'smartTools.appCall':
                         self.smart_canvas.admit_call(args)
+                    if action in {'smartTools.reviewView', 'smartTools.updateView'}:
+                        from .mcp_contract_review import _guard
+                        _guard(self, args)
                     if action == 'smartTools.reconnectView':
                         from .mcp_view_recovery import admit
                         admit(self, args)
@@ -3690,6 +3720,8 @@ class AppService:
                 for key in ('error', 'status', 'code', 'receipt'):
                     receipt.pop(key, None)
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps({**receipt, 'delivery':status}), input_id))
+            if handoffs := getattr(self, "handoffs", None):
+                handoffs.observe_delivery(input_id)
 
     def _post_disposition(self, session, message, disposition):
         from .chat_navigation import finish_human_post
@@ -3923,6 +3955,8 @@ class AppService:
     def _ingest_runtime_execution(self, session, payload):
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
+        if getattr(self, 'status_emitter', None):
+            self.status_emitter.execution(session, payload)
         if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
             # Auxiliary preparation failures stay on their call. The
             # manager's terminal generation.failed event owns whether
@@ -4486,8 +4520,8 @@ class AppService:
                     raise AppError(str(exc), 409) from None
                 if row:
                     action_args[key] = row['id']
-            schedule_read = args['action'] in {'schedule.list', 'schedule.read'}
-            if schedule_read:
+            schedule_read = args['action'] in {'schedule.list', 'schedule.read', 'schedule.overview'}
+            if schedule_read and args['action'] != 'schedule.overview':
                 # The app instance is the authenticated user's library. Reads
                 # may inspect another registered chat; mutations stay caller-owned.
                 action_args.setdefault('sessionId', session_id)
@@ -4556,10 +4590,11 @@ class AppService:
                     raise AppError('References must target the calling conversation.', 409)
             if schedule_read:
                 result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), include_state=False, caller_session_id=session_id)
-                result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
+                if args['action'] != 'schedule.overview':
+                    result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -4598,7 +4633,10 @@ class AppService:
                 canvas_client = target(self, session_id, action_args.get('clientId'), required=True, connected_only=args['action'] in MESSAGE_INTERACTIONS)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
-            elif args['action'] in {'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}:
+            elif args['action'] == 'smartTools.viewStatus':
+                result = await self.dispatch(args['action'], action_args, origin='agent', caller_session_id=session_id)
+                canvas_client = result['result'].get('clientId')
+            elif args['action'] in {'canvas.select', 'smartTools.reconnectView', 'smartTools.reviewView'}:
                 from .agent_canvas import selection_target
                 canvas_client = selection_target(self, session_id, {**action_args, 'id': action_args.get('canvasId', action_args.get('id'))})
                 if canvas_client is not None:
@@ -4773,6 +4811,8 @@ class AppService:
         await self.shell.resources.close()
         self.collaboration.close()
         await self.test_queue.close()
+        from .test_environment_setup import close as close_test_setup
+        await close_test_setup(self)
         await self.performance_diagnostics.close()
         if getattr(self, "profiling_host", None):
             await self.profiling_host.close()
@@ -4822,4 +4862,6 @@ class AppService:
         self.schedules.store.close()
         self.observations.store.close()
         await self.recall.close()
+        if getattr(self, 'status_emitter', None):
+            await self.status_emitter.close()
         self.db.close()

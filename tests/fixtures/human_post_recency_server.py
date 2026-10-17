@@ -96,7 +96,9 @@ async def main():
                 await service.on_runtime_event('runtime.tool', {**payload, 'tool': 'read_file',
                                                                 'callId': 'fixture-tool', 'phase': 'post'})
                 await service.on_runtime_event('session.naming.progress', {**payload, 'completedInputs': []})
-                await asyncio.sleep(.2)
+                # Gaps exceed the view-report debounce: fast continuous events can
+                # hide redundant reports by postponing that timer indefinitely.
+                await asyncio.sleep(.6)
 
         async def control(request):
             nonlocal progress

@@ -156,6 +156,17 @@ class CanvasViews:
             preference.pop('activation', None)
         return row, preference
 
+    def render_identity(self, view_id, row, preference):
+        # Automatic MCP pinning changes authority immediately, while retaining
+        # the same immutable document's mounted DOM and unfinished local input.
+        # Manual selection reloads canvas state and drops this private marker.
+        retained = self.service.state.get('canvas', {}).get('_retainedMcpRender', {}) if view_id == 'primary' else {}
+        if (row.get('kind') == 'mcp-app' and row.get('readOnlyVersion')
+                and retained.get('version') == row.get('selectedVersion')
+                and retained.get('body') == row.get('body')):
+            return retained['identity']
+        return self.revision(row) + ':' + str(preference['generation'])
+
     def target(self, args):
         row, preference = self.resolve(args['viewId'])
         if row['id'] != args['resourceId'] or self.revision(row) != args['resourceRevision'] or preference['generation'] != args['generation']:
@@ -204,6 +215,7 @@ class CanvasViews:
             except Exception:
                 pass
         return {'viewId': view_id, 'resourceId': row['id'], 'resourceRevision': self.revision(row),
+                'renderIdentity': self.render_identity(view_id, row, preference),
                 'generation': preference['generation'], 'renderer': preference['renderer'], 'dirty': preference['dirty'],
                 'resource': {k: row[k] for k in ('id', 'title', 'kind', 'sessionId', 'workspaceId', 'path') if k in row},
                 'choices': choices, 'available': renderer is not None,
@@ -278,7 +290,8 @@ class CanvasViews:
         indirect = row.get('contentResource') and row['kind'] in {'html', 'babylon', 'canvas-app', 'pdf'}
         body = {} if indirect else resource(self.service.db, row['body']['$resource'])
         canvas = {**copy.deepcopy(row), **body, 'open': True, 'viewId': view_id,
-                  'resourceRevision': self.revision(row), 'generation': preference['generation']}
+                  'resourceRevision': self.revision(row), 'generation': preference['generation'],
+                  'renderIdentity': self.render_identity(view_id, row, preference)}
         canvas.pop('body', None)
         if view_id == 'primary':
             live = self.service.state['canvas']

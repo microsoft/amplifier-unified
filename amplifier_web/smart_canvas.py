@@ -74,8 +74,10 @@ def definitions(schema, string):
         'smartTools.resources': ('List a connected MCP server’s resources or resource templates, one page at a time. Resource reads are bounded to 2 MB; use the tool’s chunk resources for media.', schema({**identity,'kind':{'enum':['list','templates']},'cursor':string(4000)}, ['id'])),
         'smartTools.readResource': ('Read a resource URI through this connected MCP server. The host never fetches the URI directly. Use tool-provided bounded chunks for large media.', schema({**identity,'uri':string(4000)}, ['id','uri'])),
         'smartTools.open': ('Open a discovered MCP App in a durable canvas tab. Supply operationId to send that call’s arguments and result to the view. Closing a tab does not cancel tool work.', schema({**identity,'tool':string(200),'operationId':string(100),'sessionId':string(200)}, ['id','tool'])),
-        'smartTools.viewStatus': ('Inspect saved source and live connection availability for the active tool view in the calling chat. Does not connect or replay calls.', schema({'canvasId':string(100),'clientId':string(100)}, ['canvasId'])),
+        'smartTools.viewStatus': ('Inspect caller-owned saved tool source and connection availability without selecting a view. Reports zero or multiple connected clients explicitly; optional clientId selects only a connected browser displaying this chat. Does not connect or replay calls.', schema({'canvasId':string(100),'clientId':string(100)}, ['canvasId'])),
         'smartTools.reconnectView': ('Reconnect the same saved tool view without replacing its document or replaying calls. Inspect first; older views return a contract review. Supply that exact reviewedContract fingerprint only after reviewing the existing grants.', schema({'canvasId':string(100),'clientId':string(100),'expectedBindingRevision':string(64),'reviewedContract':string(64)}, ['canvasId','expectedBindingRevision'])),
+        'smartTools.reviewView': ('Read a bounded comparison of this saved MCP App and its current existing action grants. Does not call tools, connect, replace source or grant new actions.', schema({'canvasId':string(100),'clientId':string(100),'expectedBindingRevision':string(64)}, ['canvasId','expectedBindingRevision'])),
+        'smartTools.updateView': ('Apply an exact human-reviewed MCP contract to the same document. New tools are never granted. Optional replaceDocument saves current HTML as a new version and requires discardLocalInput acknowledgement; launch calls are never replayed.', schema({'canvasId':string(100),'clientId':string(100),'expectedBindingRevision':string(64),'reviewedContract':string(64),'replaceDocument':{'type':'boolean'},'discardLocalInput':{'type':'boolean'}}, ['canvasId','expectedBindingRevision','reviewedContract'])),
         'smartTools.appCall': ('Call an app-visible tool through the current canvas binding. Cannot select a different server. Results also appear in shared smartTools.operations.', schema({'canvasId':string(100),'expectedRevision':{'type':'integer','minimum':1},'name':string(200),'arguments':{'type':'object'}}, ['canvasId','name'])),
         'smartTools.context': ('Record the current MCP App view context as untrusted display data, visible to the agent on its next state read. Does not start a model turn.', schema({'canvasId':string(100),'expectedRevision':{'type':'integer','minimum':1},'context':{'type':'object'}}, ['canvasId','context'])),
     }
@@ -137,7 +139,7 @@ class SmartCanvas:
 
     async def command(self, action, args, operation_id, origin, *, defer_publish=False):
         manager = self.service.smart_tools
-        if action in {'smartTools.open', 'smartTools.reconnectView'}:
+        if action in {'smartTools.open', 'smartTools.reconnectView', 'smartTools.reviewView', 'smartTools.updateView'}:
             record = {'id':operation_id,'action':action,'origin':origin,'target':copy.deepcopy(args),
                       'status':'running','createdAt':time.time(),'updatedAt':time.time()}
             async with self.service.lock:
@@ -150,6 +152,9 @@ class SmartCanvas:
                 if action == 'smartTools.reconnectView':
                     from .mcp_view_recovery import reconnect
                     result = await reconnect(self.service, args)
+                elif action in {'smartTools.reviewView', 'smartTools.updateView'}:
+                    from .mcp_contract_review import review, apply
+                    result = await (review if action == 'smartTools.reviewView' else apply)(self.service, args)
                 else:
                     result = await self.open(args)
                 record.update(status='completed',result=result)
@@ -257,7 +262,8 @@ class SmartCanvas:
             from .mcp_view_recovery import account, contract
             captured = contract(self.service, canvas['mcp'])
             if captured:
-                canvas['mcp'].update(contractFingerprint=captured['fingerprint'], accountIdentity=account(latest))
+                from .mcp_contract_review import capture
+                canvas['mcp'].update(contractFingerprint=captured['fingerprint'], accountIdentity=account(latest), contractSnapshot=capture(self.service, canvas['mcp']))
             old_binding = {}
             if operation:
                 from .resource_files import put
