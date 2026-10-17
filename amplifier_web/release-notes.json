@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.173",
+      "title": "Review and start a chat in another workspace",
+      "changes": [
+        "Ask Amplifier to prepare an independent chat in an existing folder, review its destination and exact opening message, then choose Create and start. Your current chat and draft remain in place until you choose Open chat.",
+        "Reviewed chat handoffs preserve one saved creation and message identity across retries. Changed destinations or settings require a fresh review, and interrupted or uncertain work is inspected without automatic replay.",
+        "Visible Work timers no longer send redundant view reports to the host. Smoke coverage now includes the complete handoff journey, narrow screens, two independent clients and lost acknowledgements, plus Activity checks with both empty and populated inboxes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.172",
       "title": "Keep conversations concise and make work easier to inspect",
       "changes": [
