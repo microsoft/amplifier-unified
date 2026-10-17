@@ -11,7 +11,8 @@
         "Diagrams expose fit, zoom and layout controls directly, improve default readability and keep authored source and styling intact.",
         "A failed provider account no longer blocks an explicitly selected healthy account. Unavailable selections remain visible and are never silently replaced with another account.",
         "An optional local status interface lets other tools observe active conversations, tools and plan progress without reading transcripts. Unified and an optional CLI hook share the same redacted, read-only format.",
-        "Navigation reuses unchanged, completed sidebar results during unrelated activity. Background history queries also encode their inputs in bounded batches, reducing repeated bookkeeping without changing saved content."
+        "Navigation reuses unchanged, completed sidebar results during unrelated activity. Background history queries also encode their inputs in bounded batches, reducing repeated bookkeeping without changing saved content.",
+        "Recent Work details recover correctly when a refresh is superseded or a temporary source error clears, while preserving the receipt that identifies the displayed history."
       ],
       "notices": []
     },
