@@ -17,6 +17,9 @@ def definitions(schema, string):
     destination = {'destination': {'enum': ['same_task', 'new_task']}, 'newTaskTitle': string(200), 'newTaskMaxTurns': {'type': 'integer', 'minimum': 1, 'maximum': 100}}
     authorization = {'previewHash': string(100), 'sourceMessageId': string(200)}
     return {
+        'schedule.overview': ('Read a bounded page of chat-owned schedules without histories or worker starts.', schema({'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100}, 'status': {'enum': ['current', 'all']}}, [])),
+        'schedule.repairPreview': ('Human-only preview of future new-task recovery using saved configuration, without waking the owner.', schema({**identity, **revision})),
+        'schedule.repairResume': ('Human-only confirm of reviewed future new-task recovery. Never replays uncertain prior work or resumes the old owner generation.', schema({**identity, **revision, 'previewHash': string(100), 'acknowledgeStop': {'type': 'boolean'}}, [*identity, *revision, 'previewHash'])),
         'schedule.list': ('List saved schedules in any registered conversation in this user’s library, without starting work. Cross-conversation mutations remain unavailable.', schema(sid)),
         'schedule.read': ('Read a schedule and its bounded durable run history from any registered conversation in this user’s library. Unknown is never replayed.', schema(identity)),
         'schedule.preview': ('Preview concrete timezone occurrences for an explicit user-requested schedule. destination defaults to same_task; new_task explicitly creates a fresh user-owned task for every run using the reviewed source configuration. Does not save or submit work.', schema({**sid, **fields, **destination}, [*sid, *fields])),
@@ -90,11 +93,20 @@ class Schedules:
     def operation_shape(row):
         return {'id': row['id'], 'sessionId': row['sessionId'], 'source': 'schedule', 'kind': 'scheduled-run', 'state': {'creating':'queued','claimed':'queued','submitting':'queued','accepted':'queued','unknown':'outcome_unknown','skipped':'cancelled','abandoned':'cancelled'}.get(row['phase'], row['phase']), 'revision': row['revision'], 'controlAvailable': False, 'evidence': copy.deepcopy(row), 'createdAt': row['createdAt'], 'updatedAt': row['updatedAt']}
 
-    async def task(self, sid, config=None):
+    async def task(self, sid, config=None, *, prepare=False):
+        if config and config.get('destination') == 'new_task':
+            from .session_creation import template
+            owner = self.app._session(sid, hydrate=False)
+            directory = self.app.data_dir / 'sessions' / (owner.get('runtimeSessionId') or sid)
+            if prepare and not any((directory / name).exists() for name in ('effective-configuration.json', 'configuration.json')):
+                if owner.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}:
+                    raise ValueError('The owner has no saved configuration. Review it in its chat before scheduling new work.')
+                await self.app.management.ensure_runtime(owner)
+            template(self.app, owner)
+            return None
         if not self.app.management or not self.app.runtime: raise ValueError('The runtime is unavailable')
         await self.app.history.ensure_loaded(sid)
         await self.app.management.ensure_runtime(self.app._session(sid))
-        if config and config.get('destination') == 'new_task': return None
         value = await self.app.runtime.control(sid, 'task.get', {})
         if not value.get('task'): raise ValueError('Save an explicit task before scheduling its continuation')
         return value['task']
@@ -106,10 +118,11 @@ class Schedules:
         return result
 
     def reviewed(self, sid, config, task):
-        binding = {'sessionId': sid, 'taskId': task['id'] if task else None, 'taskRevision': task['revision'] if task else None, 'interruptionRevision': self.app._session(sid).get('interruptionRevision', 0), 'executionRevision': self.app._session(sid).get('executionRevision', 0), **config}
+        owner = self.app._session(sid, hydrate=False)
+        binding = {'sessionId': sid, 'taskId': task['id'] if task else None, 'taskRevision': task['revision'] if task else None, 'interruptionRevision': owner.get('interruptionRevision', 0), 'executionRevision': owner.get('executionRevision', 0), **config}
         if config.get('destination') == 'new_task':
             from .session_creation import template
-            binding['newTaskConfiguration'] = template(self.app, self.app._session(sid))[1]
+            binding['newTaskConfiguration'] = {key: value for key, value in template(self.app, owner)[1].items() if key != 'legacyConfigurationHash'}
         return {'previewHash': fingerprint(binding), 'binding': binding, 'occurrences': preview(config['spec'], self.clock(), 5), 'daylightSaving': 'Nonexistent local times are skipped; repeated local times run once at the first occurrence.', 'missedRunPolicy': config['missedRunPolicy'], 'notificationPolicy': config['notificationPolicy']}
 
     def authorization(self, sid, args, origin, *, previous=None, action=None):
@@ -128,6 +141,12 @@ class Schedules:
         return {**({'handoff': handoff} if handoff else {}), 'origin': origin, 'messageId': source['id'], 'text': source.get('text', ''), 'inputOrigin': source['inputOrigin'], 'messageCreatedAt': source.get('createdAt', 0), 'textDigest': fingerprint(source.get('text', '')), 'voiceId': source.get('voiceId'), 'voiceItemId': source.get('voiceItemId'), 'at': self.clock()}
 
     async def dispatch(self, action, args, origin, command_id):
+        if action == 'schedule.overview':
+            from .automation_overview import overview
+            return overview(self, args)
+        if action in {'schedule.repairPreview', 'schedule.repairResume'}:
+            from .automation_overview import repair
+            return await repair(self, action, args, origin, command_id or str(uuid.uuid4()))
         sid = args['sessionId']
         self.app._session(sid)
         if action in {'schedule.list', 'schedule.read'}:
@@ -143,7 +162,7 @@ class Schedules:
         if action in {'schedule.report', 'schedule.reconcile'}: return await self.run_command(action, args, origin, command_id or str(uuid.uuid4()))
         config = self.configuration(args) if action in {'schedule.preview', 'schedule.create', 'schedule.update'} else None
         if action == 'schedule.resume': config = self.configuration(self.store.get(sid, args['id']))
-        task = await self.task(sid, config) if action in {'schedule.preview', 'schedule.create', 'schedule.update', 'schedule.resume'} else None
+        task = await self.task(sid, config, prepare=True) if action in {'schedule.preview', 'schedule.create', 'schedule.update', 'schedule.resume'} else None
         if action == 'schedule.preview': return self.reviewed(sid, config, task)
         if args.get('handoffRequestId'):
             receipt = self.app.collaboration.receipt(args['handoffRequestId'])
@@ -235,8 +254,10 @@ class Schedules:
             from .session_creation import template
             try: current_configuration = template(self.app, session)[1]
             except (ValueError, OSError): return 'The saved configuration is unavailable. Review it before creating another task.'
-            if current_configuration != schedule['newTaskConfiguration']:
-                return 'The configuration for new tasks changed. Review the schedule before creating another task.'
+            from .session_creation import configuration_matches, configuration_changes
+            if not configuration_matches(schedule['newTaskConfiguration'], current_configuration):
+                fields = configuration_changes(schedule['newTaskConfiguration'], current_configuration)
+                return 'The configuration for new tasks changed' + (': ' + ', '.join(fields) if fields else '') + '. Review the schedule before creating another task.'
             return None
         if task['id'] != schedule['taskId'] or task['revision'] != schedule['taskRevision']:
             return 'The saved task has a newer objective, correction, or lifecycle revision. Review the schedule against it.'
