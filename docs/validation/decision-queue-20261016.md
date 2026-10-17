@@ -12,7 +12,7 @@ User approved #293, #294 and #745, and clarified #676 as incoming messages from 
 
 ## #786 evidence reconciliation
 
-Read only the user-named spark-1 Readiness Manager conversation. Nine recorded coordination.create calls have accepted receipts. All nine return the parent workspace, including the voice intake and spark-2 readiness chats. Creation within the current workspace already works; the unresolved #786 request is an independently targeted different workspace/folder. No live commands or changes were made. Build on the canonical creation path rather than duplicate this feature. Cross-workspace confirmation behavior remains a separate pending product decision.
+Read only the user-named spark-1 Readiness Manager conversation. Nine recorded coordination.create calls have accepted receipts. All nine return the parent workspace, including the voice intake and spark-2 readiness chats. Creation within the current workspace already works; the unresolved #786 request is an independently targeted different workspace/folder. No live commands or changes were made. Build on the canonical creation path rather than duplicate this feature. The subsequent user approval selects compact human review before independent creation and initial delivery. Its accepted contract is in [new-chat-handoff.md](../clients/new-chat-handoff.md); qualification follows separately from the historical nine receipts.
 
 ## Completion checklist
 
@@ -20,5 +20,5 @@ Read only the user-named spark-1 Readiness Manager conversation. Nine recorded c
 - [x] Real built-client peer/reaction desktop and narrow viewport checks with durable reload and negative cases.
 - [x] Update reusable smoke inventory, current outcomes, and acceptance limits.
 - [x] Independent review, integrate all accepted work, qualify combined assets. See release172-qualification.md.
-- [ ] Create reviewable PR(s), report exact publication status and unresolved decisions.
-- [ ] Retain evidence and active preview; clean obsolete owned resources and record manifest.
+- [x] Publish the approved first group as 0.20.172 through #822. Original GitHub title/body replacement in #294 remains unresolved; reviewed corrections shipped. Independent-chat creation in #786 is the approved follow-up.
+- [x] Retain first-group evidence and the active preview; clean obsolete owned resources and record the workspace manifest. Continue that cleanup for the follow-up.

@@ -96,8 +96,8 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.draft": ("Open configurable new-chat setup without creating a conversation or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. The user must submit the first message to create this chat; an agent cannot finish this through raw session.create. For an authorized task in the caller's inherited workspace, use coordination.create instead.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
-    "session.create": ("Create a conversation through the human UI or host-managed creation flow. Direct agent calls are refused, including after session.draft; coordination.create commissions a task in the caller's inherited workspace, not an independent chat in another folder. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Reviewed inheritance does not copy history, tasks or running work; select:false preserves the view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.draft": ("Open configurable new-chat setup without creating a conversation or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. The user must submit the first message to create this chat; an agent cannot finish this through raw session.create. For an authorized task in the caller's inherited workspace, use coordination.create instead. For a human-reviewed independent chat and opening brief in another existing folder, use session.handoff.propose.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
+    "session.create": ("Create a conversation through the human UI or host-managed creation flow. Direct agent calls are refused, including after session.draft; coordination.create commissions a task in the caller's inherited workspace, not an independent chat in another folder. session.handoff.propose requests human review before independent creation and initial delivery; session.handoff.read inspects its durable outcome without replay. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Reviewed inheritance does not copy history, tasks or running work; select:false preserves the view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.plans": ("Read current plan progress and recorded trajectory for up to 50 chats without selecting them. Include items for at most one chat to inspect its todo list.", schema({"ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":True,"items":string(200)},"includeItems":{"type":"boolean"}},["ids"])),
     "session.select": ("Select a conversation without preparing a runtime", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
@@ -296,6 +296,8 @@ from .publishing import definitions as publishing_definitions
 ACTION_DEFINITIONS.update(publishing_definitions(schema, string))
 from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
+from .new_chat_handoffs import definitions as handoff_definitions
+ACTION_DEFINITIONS.update(handoff_definitions(schema, string))
 
 
 from .shell_modules import ShellModules, definitions as shell_definitions
@@ -416,6 +418,7 @@ for _access, _actions in {
         *environment_definitions(schema, string),
         *test_queue_definitions(schema, string),
         *assignment_definitions(schema, string),
+        *handoff_definitions(schema, string),
     },
 }.items():
     for _action in _actions:
@@ -644,6 +647,8 @@ class AppService:
                 logging.getLogger(__name__).warning("Could not read a saved session name; original metadata retained.")
         from .feedback import Feedback
         self.feedback = Feedback(self)
+        from .new_chat_handoffs import NewChatHandoffs
+        self.handoffs = NewChatHandoffs(self)
         from .diagnostics import Diagnostics
         self.diagnostics = Diagnostics(self)
         for session in self.state['sessions']:
@@ -1157,6 +1162,12 @@ class AppService:
 
     @measured('state.publish')
     def _publish(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
+        # Exact input receipts can change an independent-chat review displayed
+        # in its source conversation. Join that projection scope to this same
+        # canonical commit; do not publish from inside the delivery transaction.
+        handoff_sources = set(getattr(getattr(self, 'handoffs', None), 'changed_sources', ()))
+        if session_ids is not None:
+            session_ids = set(session_ids) | handoff_sources
         if getattr(self, 'event_log_view', None) is not None:
             self.event_log_view.invalidate(session_ids)
         # A mixed publication commits the union, never just the newer writer's
@@ -1203,6 +1214,8 @@ class AppService:
             self._publish_global_keys = set()
         # The save guard compares all shared navigation facts. A requested
         # detail publication must broaden when status/attention actually changed.
+        if handoff_sources:
+            self.handoffs.changed_sources.difference_update(handoff_sources)
         if record_only:
             detail_only = self._publish_client_narrow
         published = {}
@@ -1834,6 +1847,9 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action.startswith("session.handoff."):
+            return await self.handoffs.dispatch(action, args, origin, caller_session_id,
+                include_state=include_state, admission_check=admission_check)
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
@@ -3695,6 +3711,8 @@ class AppService:
                 for key in ('error', 'status', 'code', 'receipt'):
                     receipt.pop(key, None)
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps({**receipt, 'delivery':status}), input_id))
+            if handoffs := getattr(self, "handoffs", None):
+                handoffs.observe_delivery(input_id)
 
     def _post_disposition(self, session, message, disposition):
         from .chat_navigation import finish_human_post
@@ -4564,7 +4582,7 @@ class AppService:
                 result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'].startswith(('capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.

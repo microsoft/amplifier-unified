@@ -16,6 +16,11 @@ behavior changes. Issue 786 remains open for the larger workflow.
 
 ## Canonical ownership and decision
 
+The October 16 follow-up approved a compact human review before creation. See
+[the accepted handoff behavior](../clients/new-chat-handoff.md). The proposal and
+35-test result below describe the earlier discovery-only correction, not proof
+of the subsequent end-to-end implementation.
+
 The [shared client vision](../clients/VISION.md) calls for meaningful public
 operations and authority that survives interface changes. The
 [collaborative-workspaces decision](../workspaces/contracts/collaborative-workspaces-decision.md)
@@ -25,7 +30,7 @@ relationships. The existing host session-creation and collaboration owners
 should compose any new handoff; a second session store or client-only creation
 path is unnecessary.
 
-Proposed interaction, pending a product decision:
+Original proposed interaction (decision subsequently recorded above):
 
 1. A user says “Start a chat in project B, read these files, then wait for me.”
 2. The host binds the requesting user input, canonical target folder, exact
@@ -73,7 +78,7 @@ missing end-to-end user workflow.
 The user named their spark-1 Readiness Manager conversation as a working example.
 Read-only inspection found nine accepted `coordination.create` receipts, including
 the voice issue-intake chat and a spark-2 test-host investigation. Every receipt
-kept the parent's `the parent workspace` workspace. That
+kept the parent workspace. That
 confirms the existing same-workspace creation path works. It does not cover the
 issue's independently targeted different workspace/folder. No new creation path
 or live host change was needed to reproduce the named example.
