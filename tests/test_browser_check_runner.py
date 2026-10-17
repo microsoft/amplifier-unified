@@ -298,8 +298,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # All 108 original scripts, three navigation regressions, confirmed restart,
     # Smart Tool recovery, archive feedback and appearance preview navigation
     # and sequential keyboard reflow, saved MCP recovery, device pairing, and media transition
-    # each retain an explicit owning lane; unsaved settings now has an owner too.
-    assert len(readiness_scripts | extended_scripts) == 126
+    # each retain an explicit owning lane; unsaved settings and independent MCP clients now have owners too.
+    assert len(readiness_scripts | extended_scripts) == 127
     assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/device-pairing-browser.mjs' in extended_scripts - readiness_scripts
 

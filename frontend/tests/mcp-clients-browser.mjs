@@ -35,6 +35,7 @@ const unwrap=raw=>raw?.action==='shell.command'?(raw.args.command||raw.args):raw
 async function dismissFixtureSetup(page){
  // This credential-free fixture discovers an empty provider catalog. Finish
  // that real discovery before dismissing its ordinary setup UI, once per client.
+ await page.evaluate(()=>window.amplifier.dispatch('providers.list',{sessionId:window.amplifier.getState().selectedSessionId}));
  await expect.poll(()=>page.evaluate(()=>{
   const state=window.amplifier.getState(),setup=state.setup||{};
   const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
@@ -47,7 +48,7 @@ async function dismissFixtureSetup(page){
   if(!response.url().endsWith('/api/actions')||response.request().method()!=='POST')return false;
   const body=unwrap(response.request().postDataJSON());return body?.action==='view.update'&&body.args?.patch?.panel===null;
  });
- await setup.getByRole('button',{name:'Close settings',exact:true}).click();
+ await page.locator('.a-settings-overlay').getByRole('button',{name:/^Close (?:settings|panel)$/}).click();
  const response=await saved;assert.ok(response.ok());const receipt=await response.json();assert.equal(receipt.accepted,true,JSON.stringify(receipt));
  await expect(setup).toHaveCount(0);
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.panel)).toBe(null);
