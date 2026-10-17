@@ -68,8 +68,12 @@ Integration review found that a held contract read could finish after the view's
 binding changed, displaying obsolete definitions or an old error in the new view.
 The host already refused stale approval. The client now discards responses from
 superseded or closed reviews, including a late approval receipt's refresh callback.
-Both read-outcome cases failed on the unchanged candidate. All four new lifecycle
-checks and the ten existing MCP viewer checks pass in the owned DTU (14 total).
+Both read-outcome cases failed on the unchanged candidate. A second held-response regression exposed an approval status refresh overwriting
+a newer contract refusal. Approval now uses the existing generation-checked
+connection refresh. That regression also failed on the unchanged implementation.
+All five new lifecycle checks and the ten existing MCP viewer checks pass in the
+owned DTU (15 total).
 The full frontend suite owns these checks automatically through its existing glob;
 no extra browser lane was introduced. Evidence: `late-review-before.json` and
-`late-review-final.json` under the task's MCP evidence directory.
+`late-review-final.json`, plus `late-status-before.json` and
+`late-status-after.json`, under the task's MCP evidence directory.
