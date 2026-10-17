@@ -1,5 +1,18 @@
 # Standard UX inventory and execution plan
 
+## Scale follow-up coverage (October 17)
+
+The original inventory and frozen outcome counts remain unchanged. The additive
+[settled navigation checks](settled-shell633-qualification.md) verify fresh
+filters, independent client drafts, canonical directory changes, pending reads,
+explicit retries and cleanup while avoiding redundant completed-result assembly.
+The [bounded encoding checks](batched-projection633-qualification.md) verify exact
+bytes and limits, stop/failure cleanup and concurrent spool reservations. Their
+fixed-input microbenchmark measures encoding only; it is not an app latency claim.
+Both test groups belong to full Python coverage. Integrated copied-scale browser
+measurements retain separate source/runtime identities and current versus desired
+timings; deterministic local workers do not qualify live-provider performance.
+
 ## Current follow-up smoke coverage (October 16)
 
 | Case / owner | Current evidence | Desired result and limits |

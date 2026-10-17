@@ -10,7 +10,8 @@
         "Hold Alt+Shift to reveal numbered shortcuts for the first nine displayed chats, then press a number to switch through the existing draft and unsaved-view safeguards.",
         "Diagrams expose fit, zoom and layout controls directly, improve default readability and keep authored source and styling intact.",
         "A failed provider account no longer blocks an explicitly selected healthy account. Unavailable selections remain visible and are never silently replaced with another account.",
-        "An optional local status interface lets other tools observe active conversations, tools and plan progress without reading transcripts. Unified and an optional CLI hook share the same redacted, read-only format."
+        "An optional local status interface lets other tools observe active conversations, tools and plan progress without reading transcripts. Unified and an optional CLI hook share the same redacted, read-only format.",
+        "Navigation reuses unchanged, completed sidebar results during unrelated activity. Background history queries also encode their inputs in bounded batches, reducing repeated bookkeeping without changing saved content."
       ],
       "notices": []
     },
