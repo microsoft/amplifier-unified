@@ -12,7 +12,23 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  const card=id=>page.locator(`[data-question-id="${id}"]`),composer=()=>page.getByRole('textbox',{name:'Message Amplifier',exact:true});
- const history=async()=>{await page.getByRole('button',{name:'Chat',exact:true}).click();await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Chat info',exact:true}).click();await page.getByText('Questions & answers',{exact:true}).click();await page.locator('.a-question-history summary').click()};
+ let historyVisits=0;
+ const history=async()=>{
+  // The first usage snapshot expands content above the history disclosures.
+  // Hold it once to cover pending UI, then exercise history after it settles.
+  const holdInitial=historyVisits++===0;let releaseUsage,usageStarted=false;
+  const usageGate=new Promise(resolve=>releaseUsage=resolve);
+  const holdUsage=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action==='capacity.read'){usageStarted=true;await usageGate}await route.continue()};
+  if(holdInitial)await page.route('**/api/actions',holdUsage);
+  await page.getByRole('button',{name:'Chat',exact:true}).click();
+  await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Chat info',exact:true}).click();
+  if(holdInitial){await expect.poll(()=>usageStarted).toBe(true);await expect(page.getByRole('button',{name:'Reading usage…',exact:true})).toBeDisabled();releaseUsage()}
+  await expect(page.getByRole('button',{name:'Refresh usage',exact:true})).toBeEnabled();
+  if(holdInitial)await page.unroute('**/api/actions',holdUsage);
+  const questions=page.getByText('Questions & answers',{exact:true});
+  await questions.click();await expect(questions.locator('..')).toHaveAttribute('open','');
+  await page.locator('.a-question-history summary').click();
+ };
  const close=async()=>{
   // Closing is optimistic; do not reload until the closed panel is saved.
   const saved=page.waitForResponse(response=>{
