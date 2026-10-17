@@ -33,6 +33,11 @@ Executed focused suite: `tests/test_status_emitter.py` and
 source hashes and resource ownership are retained outside Git under
 `output/afk-approved-20261017/status-emitter`.
 
+Future execution belongs to the explicit `status-installed` affected-change lane.
+Its [prerequisites and reusable invocation](integration-coverage.md#installed-local-status-owner-october-17)
+use `scripts/qualify_status_emitter.py`; ordinary unit tests cannot substitute for
+the real CLI/worker boundary or independent installed-wheel ownership checks.
+
 Failures during development remain in evidence: CLI bundle resolver correctly
 rejected implicit source composition; module validation initially created an
 unwanted phantom observation; initial overflow rotation did not advance fast

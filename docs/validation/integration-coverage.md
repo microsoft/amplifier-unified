@@ -170,3 +170,48 @@ log and JUnit alongside the check result. Missing prerequisites, module skips,
 per-test skips or absent selectors mean **unqualified**, even if ordinary pytest
 exits zero. The isolated installed probes reject checkout/editable imports;
 keep their original guards rather than bypassing them to fit the native lane.
+
+### Installed local status owner, October 17
+
+The `status-installed` manual lane owns both executable status probes. The
+release/runtime maintainer must run it on changes to the emitter/protocol,
+execution-event boundary, relevant worker lifecycle, wheel packaging or the
+qualified CLI/Core/Foundation dependency set. It is affected-feature acceptance,
+not a generic pytest lane or an automatic hosted job. Focused emitter unit tests
+remain in ordinary CI. Missing prerequisites fail this owner rather than skip.
+`integration_checks.py plan --include-manual --changed /owned/changed-paths.txt`
+lists this owner when relevant; omitting `--include-manual` preserves CI planning.
+
+Prepare an independent installed CLI interpreter with canonical Core/Foundation,
+loop-live/context-simple and the **candidate standalone status wheel**. It must
+not import Unified. Prepare the normal Unified native integration interpreter
+separately, without the CLI. Keep both read-only during qualification. Supply the
+candidate Unified/standalone wheels and the published native Core wheel required
+by the candidate. Core's filename/hash is checked against PyPI publication
+metadata, and installed host/CLI Core package bytes must match it. The runner
+records actual CLI/module import paths and distribution provenance; changing the
+CLI or dependencies creates a new qualification, not an extension of an old one.
+
+Inside the owned DTU, from the candidate checkout:
+
+```sh
+python scripts/qualify_status_emitter.py \
+  --owned-dtu dtu-unified-codex-dev-20261014 \
+  --python /owned/native-env/bin/python \
+  --cli-python /owned/cli-env/bin/python \
+  --unified-wheel /owned/wheels/amplifier_unified-CANDIDATE-py3-none-any.whl \
+  --status-wheel /owned/wheels/amplifier_status_emitter-0.1.0-py3-none-any.whl \
+  --core-wheel /owned/wheels/EXACT_PUBLISHED_CORE_PLATFORM_WHEEL.whl \
+  --work /owned/status-acceptance-new-directory
+```
+
+The hostname must match `--owned-dtu`; work must be new and outside source.
+No current serving environment is installed into or uninstalled from. The runner
+creates fresh standalone-consumer and package-ownership environments, runs the
+real installed CLI plus Unified worker with local synthetic work, and then runs
+the copied package probe outside source. Only the disposable package environment
+uninstalls the standalone wheel. Both wheels must match the reviewed source;
+the source digest must remain unchanged during execution. `result.json` is true
+only after both probes pass. Retain that receipt, command logs, wheel hashes and
+dependency identities, then audit/remove the work directory. No live model,
+native Windows, TUI, recipe-specific or ACP acceptance is claimed.
