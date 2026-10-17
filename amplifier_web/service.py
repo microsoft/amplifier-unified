@@ -734,6 +734,8 @@ class AppService:
                     self.cold_display.recent.pop(identity, None)
             self.projections.invalidate(state=self._state)
         self.cold_display.track_restored()
+        from .status_emitter import create as create_status_emitter
+        self.status_emitter = create_status_emitter(self)
 
     def default_theme(self):
         for name in ("unified.amplifier.css", "default-theme.css"):
@@ -1216,6 +1218,8 @@ class AppService:
         # detail publication must broaden when status/attention actually changed.
         if handoff_sources:
             self.handoffs.changed_sources.difference_update(handoff_sources)
+        if getattr(self, 'status_emitter', None):
+            self.status_emitter.publish(session_ids)
         if record_only:
             detail_only = self._publish_client_narrow
         published = {}
@@ -3951,6 +3955,8 @@ class AppService:
     def _ingest_runtime_execution(self, session, payload):
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
+        if getattr(self, 'status_emitter', None):
+            self.status_emitter.execution(session, payload)
         if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
             # Auxiliary preparation failures stay on their call. The
             # manager's terminal generation.failed event owns whether
@@ -4856,4 +4862,6 @@ class AppService:
         self.schedules.store.close()
         self.observations.store.close()
         await self.recall.close()
+        if getattr(self, 'status_emitter', None):
+            await self.status_emitter.close()
         self.db.close()
