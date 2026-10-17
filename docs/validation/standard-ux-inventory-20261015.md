@@ -487,3 +487,26 @@ public readiness, supplied certificates, real occupied ports, bind-error guidanc
 and browser opening only after successful binds. See
 [listener readiness qualification](onboarding-listener-readiness.md).
 These do not establish native client trust or remote DNS reachability.
+
+### Live Work timer reporting (October 16)
+
+**VIEW-LIVE-TIMER** strengthens the existing `sidebar-activity` browser owner in
+Public readiness; it adds no duplicate lane or frozen-inventory count. Emit
+synthetic progress every 600 ms, slower than the 300 ms automatic view-report
+debounce, while the user watches a running chat. Require its visible elapsed
+time to advance, stable sidebar order and catalog identity, and zero repeated
+shell/view requests during the 2.2-second steady observation window. Preserve
+the other client's draft and reference, held-input identity and once-only
+acknowledgement behavior.
+
+In the isolated DTU, the unchanged packaged 0.20.172 client emitted three view
+reports in that interval; their only changing control field was the Work
+button's elapsed label. The corrected single-turn browser path emits zero
+reports while the timer advances. A renderer regression covers both single and
+grouped Work labels across advancing time and an interrupted terminal outcome.
+It preserves readable elapsed time, expand/collapse state and real outcome
+changes; automatic observations omit redundant live timing already owned by
+the host. These are synthetic no-model proofs, not live-provider latency or
+native-device acceptance. The earlier hosted failure recorded one unexpected
+view request without its payload, so the reproduced defect is not a claim to
+have recovered that exact request's contents.
