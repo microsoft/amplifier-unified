@@ -1,5 +1,5 @@
 """Isolated settings UI fixture: synthetic providers and runtime, no account calls."""
-import asyncio,copy,os,sys,tempfile
+import asyncio,copy,json,os,sys,tempfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from aiohttp import web
@@ -84,6 +84,15 @@ async def main(home):
    {'version':'0.21.0','title':'Fixture release','changes':['Settings are simpler.'],'notices':[{'id':key,'title':title,'detail':'Fixture change details.','action':'Review your preferences.'} for key,title in [('settings','Settings scope updated'),('permissions','File access updated')]]},
    {'version':'0.11.0','title':'Earlier fixture release','changes':['Earlier settings release.'],'notices':[{'id':'old-settings','title':'Settings now apply across Amplifier apps','detail':'Earlier change details.','action':'Review earlier guidance.'}]}]}
  return app
-if __name__=='__main__':
+async def serve():
  with tempfile.TemporaryDirectory(prefix='amplifier-settings-ui-') as tmp:
-  web.run_app(main(Path(tmp)),host='127.0.0.1',port=8957,print=None)
+  app=await main(Path(tmp));runner=web.AppRunner(app);await runner.setup()
+  try:
+   site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+   port=site._server.sockets[0].getsockname()[1]
+   base=f'http://127.0.0.1:{port}'
+   app['allowed_origins']=app['allowed_origins']|{base}
+   print(json.dumps({'fixture':'settings-ui','pid':os.getpid(),'base':base}),flush=True)
+   await asyncio.Event().wait()
+  finally:await runner.cleanup()
+if __name__=='__main__':asyncio.run(serve())

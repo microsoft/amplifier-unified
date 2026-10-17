@@ -36,6 +36,7 @@
     {"id": "portability", "command": ["node", "tests/portability-browser.mjs"]},
     {"id": "settings", "command": ["node", "tests/settings-browser.mjs"]},
     {"id": "settings-completeness", "command": ["node", "tests/settings-completeness-browser.mjs"]},
+    {"id": "settings-drafts", "command": ["node", "tests/settings-drafts-browser.mjs"]},
     {"id": "settings-collections", "command": ["node", "tests/settings-collections-browser.mjs"]},
     {"id": "settings-mobile", "command": ["node", "tests/settings-mobile-browser.mjs"]},
     {"id": "workspace-starters", "command": ["node", "tests/workspace-starters-browser.mjs"]},

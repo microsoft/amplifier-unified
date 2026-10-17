@@ -1,18 +1,17 @@
 import {openSettingsPage} from './browser-settings.mjs';
-import {spawn} from 'node:child_process';
-import {fileURLToPath} from 'node:url';
+import {startSettingsFixture} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_ui_server.py',import.meta.url))],{stdio:'ignore'});
-for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8957/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
-const browser=await chromium.launch({headless:true});
-const page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
-const errors=[];page.on('pageerror',error=>errors.push(error.message));
+const {fixture,base}=await startSettingsFixture();
+let browser,page;const errors=[];
 const secret='fixture-unsaved-key-keep-local';
 const open=async()=>{await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings'}}));await openSettingsPage(page,'providers');await page.locator('[data-part=provider-settings] [data-collection-id=one] button').click();await page.evaluate(async()=>{for(const accessOpen of [false,true])await window.amplifier.dispatch('view.update',{patch:{providerEditor:{...window.amplifier.getState().view.providerEditor,accessOpen}}})});await page.locator('#provider-key-source').selectOption('private');await page.locator('#provider-key').fill(secret)};
 const agentPanel=async panel=>{const result=await page.evaluate(async panel=>{const response=await fetch('/fixture/agent-view',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId:window.amplifier.shellClientId,patch:{panel}})});return {ok:response.ok,body:await response.json()}},panel);assert.equal(result.ok,true,JSON.stringify(result.body))};
 try{
- await page.goto('http://127.0.0.1:8957/');await page.waitForSelector('#amp-one');
+ browser=await chromium.launch({headless:true});
+ page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ page.on('pageerror',error=>errors.push(error.message));
+ await page.goto(base+'/');await page.waitForSelector('#amp-one');
  await open();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(page.getByRole('alertdialog')).toBeVisible();
@@ -49,4 +48,8 @@ try{
  await page.getByRole('button',{name:'Manage connections',exact:true}).click();
  await expect(page.locator('[data-part=ai-connections]')).toBeVisible();
  assert.deepEqual(errors,[]);console.log('PASS: dirty close, agent dismissal guard, review, save, private state, mobile Back/cancel/discard, and picker management');
-}catch(error){await page.screenshot({path:'/tmp/charlie-settings-drafts-failure.png'});throw error}finally{await browser.close();fixture.kill();}
+}catch(error){
+ console.error(error);
+ try{await page.screenshot({path:'/tmp/charlie-settings-drafts-failure.png'})}catch(captureError){console.error('Failure screenshot unavailable:',captureError.message)}
+ throw error;
+}finally{await browser?.close();fixture.kill();}
