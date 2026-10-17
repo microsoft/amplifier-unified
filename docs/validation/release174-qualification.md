@@ -47,6 +47,24 @@ tests; the corrected final command is the 167-test result above. Private browser
 scratch-path setup failures and the 173 negative control are retained as evidence,
 not counted as passes or hidden by weaker assertions.
 
+## Native fixture correction
+
+The first PR native integration run passed 200 tests and failed the unchanged
+bundle-switch probe: an idle worker's independent park/checkpoint could replace
+saved history while the fixture read it after `history.snapshot`. That control
+waits for its own checkpoint, not every independently scheduled save. The failed
+hosted log remains retained.
+
+The fixture now holds Foundation's existing cross-process metadata lock around
+each full saved-history assertion. Production history validation and all switch,
+rollback, process-isolation and no-model-call assertions remain unchanged. The
+actual probe and deterministic concurrent-save controls passed (3 tests, 6.21s).
+The negative control reproduces the integrity exception; the locked control
+reads once, blocks the writer and then observes the completed save. This proves
+serialization with cooperating native checkpoint writers, not arbitrary legacy
+writes. The regression's receipt transport is portable; no platform skip or
+retry was added. Its final focused result is retained with the native evidence.
+
 ## Limits and ownership
 
 Agent grounding in the explicit user's request is a behavioral obligation, not
