@@ -249,10 +249,15 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row.get('env', {}) == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
     assert len(original) == 65 and len(rows) == 88
-    # The same bundle scenario now writes screenshots into its owned evidence.
-    bundle = next(row for row in original if row['id'] == 'bundle')
-    assert bundle['env'] == {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'}
-    original = [{key: value for key, value in row.items() if key != 'env'} if row['id'] == 'bundle' else row for row in original]
+    # Existing scenarios retain their commands; only evidence ownership changes.
+    evidence = {
+        'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
+        'canonical-work': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canonical-work'},
+        'canvas-media': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canvas-media'},
+    }
+    for identity, expected in evidence.items():
+        assert next(row for row in original if row['id'] == identity)['env'] == expected
+    original = [{key: value for key, value in row.items() if key != 'env'} if row['id'] in evidence else row for row in original]
     assert hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest() == '115d865e2934f442582f89f77bde590ebc6101cb535c841efbba8f3e2511807f'
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
@@ -324,6 +329,17 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
                and step.get('with', {}).get('path') == '${{ runner.temp }}/test-environments'
                for step in coordination['jobs']['contracts']['steps'])
+
+
+def test_reload_failure_diagnostics_have_retained_scenario_owners():
+    rows = {row['id']: row for row in json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())['scenarios']}
+    for identity in ('canonical-work', 'canvas-media'):
+        assert rows[identity]['env']['AMPLIFIER_TEST_ARTIFACTS'] == '{root}/output/browser-checks/' + identity
+    canvas = (ROOT / 'frontend/tests/canvas-media-browser.mjs').read_text()
+    assert "process.env.AMPLIFIER_TEST_ARTIFACTS" in canvas
+    assert "outputDir+'/failure.json'" in canvas
+    canonical = (ROOT / 'frontend/tests/canonical-work-browser.mjs').read_text()
+    assert "join(outputDir,'failure-groups.json')" in canonical
 
 
 def test_performance_reports_are_distinct_and_uploaded():
