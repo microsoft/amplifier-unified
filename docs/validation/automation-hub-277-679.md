@@ -66,3 +66,11 @@ No final assertion was removed to obtain a pass. Historical #679 exact differing
 fingerprint/account state and original worker exit remain unproven; qualified
 repairs cover equivalent saved controls, stopped/exited-owner review and actual
 future admission without replay.
+# Integrated review follow-up
+
+The overview must show **Needs review** even when an older uncertain run is
+followed by newer completed runs. Its bounded page now uses an indexed existence
+check instead of inferring uncertainty from only the latest result. The existing
+105-run recovery regression also checks this visible status. All 19 overview
+tests pass in the owned DTU after this correction; no historical runs are loaded
+or replayed.

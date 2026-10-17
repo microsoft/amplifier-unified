@@ -214,6 +214,9 @@ async def test_recovery_finds_uncertain_run_behind_newer_completed_history(tmp_p
         args = {'sessionId': sid, 'id': record['id'], 'expectedRevision': record['revision']}
         # No JSON history read or page can accidentally omit the older unknown.
         app.schedules.store.runs = lambda *args: (_ for _ in ()).throw(AssertionError('Unbounded history read'))
+        overview = (await app.dispatch('schedule.overview', {}))['result']
+        assert overview['items'][0]['lastRun']['phase'] == 'completed'
+        assert overview['items'][0]['displayState'] == 'needs_review'
         with pytest.raises(AppError, match='uncertain'):
             await app.dispatch('schedule.repairPreview', args)
         assert not runtime.inputs

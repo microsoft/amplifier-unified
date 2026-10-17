@@ -14,17 +14,18 @@ def overview(schedules, args):
     where = " WHERE json_extract(s.value,'$.status')!='cancelled'" if status == 'current' else ''
     total = schedules.store.db.execute('SELECT count(*) FROM schedules s' + where).fetchone()[0]
     rows = schedules.store.db.execute('''SELECT s.value, (SELECT value FROM schedule_runs
-        WHERE schedule_id=s.id AND session_id=s.session_id ORDER BY due DESC LIMIT 1)
+        WHERE schedule_id=s.id AND session_id=s.session_id ORDER BY due DESC LIMIT 1),
+        EXISTS(SELECT 1 FROM schedule_runs WHERE schedule_id=s.id AND session_id=s.session_id AND phase='unknown')
         FROM schedules s''' + where + ''' ORDER BY
         CASE json_extract(s.value,'$.status') WHEN 'needs_review' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
         coalesce(json_extract(s.value,'$.nextDue'), 1e30), s.id LIMIT ? OFFSET ?''', (limit, offset)).fetchall()
-    records = [(json.loads(value), json.loads(run) if run else None) for value, run in rows]
-    identities = {record['sessionId'] for record, _ in records}
+    records = [(json.loads(value), json.loads(run) if run else None, uncertain) for value, run, uncertain in rows]
+    identities = {record['sessionId'] for record, _, _ in records}
     # Catalog summaries never hydrate or admit dormant chats into the live overlay.
     owners = {row['id']: row for row in app.directory.summary_ids(identities)}
     owners.update((row['id'], row) for row in app.state['sessions'] if row['id'] in identities)
     items = []
-    for record, run in records:
+    for record, run, uncertain in records:
         owner = owners.get(record['sessionId'])
         phase = record['status']
         reason = record.get('reviewReason')
@@ -35,7 +36,7 @@ def overview(schedules, args):
             if blocked: phase, reason = 'blocked', blocked
             elif owner.get('configurationBusy') or owner.get('fileAccessPending'):
                 phase, reason = 'blocked', 'Waiting for the owning chat configuration change.'
-            elif run and run['phase'] == 'unknown': phase, reason = 'needs_review', 'A prior run has an uncertain outcome.'
+            elif uncertain: phase, reason = 'needs_review', 'A prior run has an uncertain outcome.'
             elif owner.get('interruptionRevision', 0) != record.get('interruptionRevision', 0):
                 phase, reason = 'owner_stopped', 'Stop changed after this schedule was reviewed.'
             elif record['destination'] != 'new_task' and owner.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}:
