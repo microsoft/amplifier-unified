@@ -6,6 +6,10 @@ import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+const cacheDir=await mkdtemp(join(tmpdir(),'unified-feedback-vite-'));
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
@@ -55,11 +59,11 @@ asyncio.run(main())
 `],{stdio:['ignore','pipe','pipe']});
 let fixtureLog='';fixture.stderr.on('data',chunk=>fixtureLog+=chunk);
 const ready=new Promise((resolve,reject)=>{let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});fixture.once('exit',code=>reject(new Error(`Fixture exited ${code}: ${fixtureLog}`)))});
-let vite,browser;
+let vite,browser,otherBrowser;
 try{
  const port=await Promise.race([ready,new Promise((_,reject)=>setTimeout(()=>reject(Error('Fixture timeout')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
- vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
+ vite=await createServer({configFile:false,root,cacheDir,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];let pending;
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const command=request.postDataJSON();if(command?.action==='feedback.comment')pending=command.args}});
@@ -80,7 +84,8 @@ try{
  await page.getByText('Feedback report loaded.',{exact:true}).waitFor();
  await page.getByText('Maintainer response',{exact:true}).waitFor();
  // Each browser owns its selected report page and unsent follow-up draft.
- const other=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ otherBrowser=await chromium.launch({headless:true});
+ const other=await otherBrowser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  other.on('pageerror',error=>errors.push(error.message));
  await other.goto(vite.resolvedUrls.local[0]);await other.waitForSelector('#amp-one');
  await other.getByRole('button',{name:'Open navigation',exact:true}).click();
@@ -135,9 +140,9 @@ try{
  await usage.getByText(/3 recorded model calls/).waitFor();
  assert.match(await usage.innerText(),/30/);assert.match(await usage.innerText(),/\$0.03/);
  await page.getByText('Usage data',{exact:true}).click();
- const exported=JSON.parse(await usage.locator('pre').innerText());assert.equal(exported.calls,3);assert.equal(exported.metrics.totalTokens.value,30);
+ const exported=JSON.parse(await usage.locator('pre').innerText());assert.equal(exported.metrics.calls.value,3);assert.equal(exported.metrics.grossTotalTokens.value,30);
  assert.deepEqual(errors,[]);
  console.log('Feedback lifecycle browser passed: report/comments, unknown delivery reconciliation without reposting, persistent correction drafts, exact agent retry, close/reopen without body changes, independent browser drafts, narrow layout, and complete conversation usage totals; no live GitHub writes.');
 }finally{
- await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
+ await otherBrowser?.close();await browser?.close();await vite?.close();await rm(cacheDir,{recursive:true,force:true});if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }
