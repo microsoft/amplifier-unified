@@ -26,6 +26,7 @@
     {"id": "empty-host-lost-create", "command": ["node", "tests/empty-host-browser.mjs", "--lost-create"]},
     {"id": "new-chat", "command": ["node", "tests/new-chat-browser.mjs"]},
     {"id": "cross-workspace-handoff", "command": ["node", "tests/cross-workspace-handoff-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/cross-workspace-handoff"}},
+    {"id": "chat-reference", "command": ["node", "tests/chat-reference-browser.mjs"], "env": {"CHAT_REFERENCE_EVIDENCE_DIR": "{root}/output/browser-checks/chat-reference"}},
     {"id": "draft-provider-refresh", "command": ["node", "tests/draft-provider-refresh-browser.mjs"]},
     {"id": "draft-discovery-recovery", "command": ["node", "tests/draft-discovery-recovery-browser.mjs"]},
     {"id": "new-chat-recovery", "command": ["node", "tests/new-chat-recovery-browser.mjs"]},

@@ -86,7 +86,7 @@ try{
   assert.deepEqual(after.effects,[]);
   assert.deepEqual(after.messages,boot.messages);
   assert.deepEqual(after.approvals,boot.approvals);
-  const forbidden=/^(conversation\.(send|stop)|worker\.|approval\.respond|session\.(warm|restore)|coordination\.(send|followup)|smartTools\.call)/;
+  const forbidden=/^(conversation\.(send|stop)|worker\.|approval\.respond|session\.(create|warm|restore|handoff\.(start|propose|confirm))|coordination\.(send|followup)|smartTools\.call)/;
   assert.deepEqual(posts.filter(row=>forbidden.test(row.action)),[]);
  }
  // Ordinary guarded selection and the card must retain the same draft/attachment.

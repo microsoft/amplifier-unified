@@ -222,6 +222,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'chat-shortcuts': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/chat-shortcuts'},
         'automation-hub': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/automation-hub'},
         'cross-workspace-handoff': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/cross-workspace-handoff'},
+        'chat-reference': {'CHAT_REFERENCE_EVIDENCE_DIR': '{root}/output/browser-checks/chat-reference'},
         'peer-attribution': {'AMPLIFIER_TEST_BUILT_STATIC': '1'},
         'device-pairing': {},
         'settings-drafts': {},
@@ -248,7 +249,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row.get('env', {}) == additions[row['id']]
     original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 88
+    assert len(original) == 65 and len(rows) == 89
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -291,7 +292,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
         'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
-        'cross-workspace-handoff', 'automation-hub', 'settings-drafts')}
+        'cross-workspace-handoff', 'chat-reference', 'automation-hub', 'settings-drafts')}
     assert source_only <= extended_scripts
     assert not source_only & readiness_scripts
     installed_overlap = {f'tests/{name}-browser.mjs' for name in (
@@ -308,7 +309,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # Smart Tool recovery, archive feedback and appearance preview navigation
     # and sequential keyboard reflow, saved MCP recovery, device pairing, and media transition
     # each retain an explicit owning lane; unsaved settings and independent MCP clients now have owners too.
-    assert len(readiness_scripts | extended_scripts) == 131
+    assert len(readiness_scripts | extended_scripts) == 132
     assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/device-pairing-browser.mjs' in extended_scripts - readiness_scripts
 
