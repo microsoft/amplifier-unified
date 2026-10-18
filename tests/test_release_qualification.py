@@ -267,7 +267,7 @@ def test_installed_media_diagnostic_is_explicit_full_scenario_and_cannot_replace
     job = workflow['jobs']['installed-media-diagnostic']
     assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.installed_media_diagnostic }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '30'
-    assert job['env']['INLINE_MEDIA_MODE'] == 'installed'
+    assert job['env'] == {'INLINE_MEDIA_MODE': 'installed'}
     assert 'INLINE_MEDIA_PHASES' not in job['env']
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'}
@@ -275,6 +275,17 @@ def test_installed_media_diagnostic_is_explicit_full_scenario_and_cannot_replace
     assert "'a5d1ab2397a00f76495c591835b5c9194e09f5a8', 'HEAD'" in steps[1]['run']
     assert 'assert changed <= allowed' in steps[1]['run']
     assert "'git', 'status', '--porcelain'" in steps[1]['run']
+    # runner context is unavailable in job-level env. Use the runner's shell
+    # variables in an ordinary step, before any path consumer executes.
+    initialize = next(i for i, step in enumerate(steps)
+                      if step.get('name') == 'Initialize owned diagnostic paths')
+    assert initialize == 2 and steps[initialize]['shell'] == 'bash'
+    assert steps[initialize]['run'].splitlines() == [
+        "printf '%s\\n' \\",
+        '  "INLINE_MEDIA_EVIDENCE_DIR=$RUNNER_TEMP/inline-media-diagnostic" \\',
+        '  "INLINE_MEDIA_MP4=$RUNNER_TEMP/inline-media-diagnostic/synthetic.mp4" >> "$GITHUB_ENV"',
+    ]
+    assert '${{' not in steps[initialize]['run']
     commands = '\n'.join(step.get('run', '') for step in steps)
     assert 'uv sync --locked --group dev --group artifacts' in commands
     assert 'npm run build --prefix frontend' in commands

@@ -259,8 +259,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      INLINE_MEDIA_EVIDENCE_DIR: ${{ runner.temp }}/inline-media-diagnostic
-      INLINE_MEDIA_MP4: ${{ runner.temp }}/inline-media-diagnostic/synthetic.mp4
       INLINE_MEDIA_MODE: installed
     steps:
       - uses: actions/checkout@v4
@@ -281,6 +279,12 @@ jobs:
           assert changed <= allowed, sorted(changed - allowed)
           assert not subprocess.check_output(['git', 'status', '--porcelain'], text=True)
           PY
+      - name: Initialize owned diagnostic paths
+        shell: bash
+        run: |
+          printf '%s\n' \
+            "INLINE_MEDIA_EVIDENCE_DIR=$RUNNER_TEMP/inline-media-diagnostic" \
+            "INLINE_MEDIA_MP4=$RUNNER_TEMP/inline-media-diagnostic/synthetic.mp4" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
