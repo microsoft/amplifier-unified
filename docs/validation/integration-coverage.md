@@ -199,6 +199,51 @@ per-test skips or absent selectors mean **unqualified**, even if ordinary pytest
 exits zero. The isolated installed probes reject checkout/editable imports;
 keep their original guards rather than bypassing them to fit the native lane.
 
+### Installed desktop safety continuation
+
+The `default-desktop-safety` manual owner covers the whole
+`tests/test_default_desktop_safety.py` module, including its optional collection
+prerequisites. It uses the existing installed-default adapter with
+`--desktop-safety`, **not** the `default-installed` IC-13 command or a generic
+pytest lane. Manual planning includes this owner for affected paths; automatic
+planning does not launch it.
+
+On the exact reviewed candidate ref, dispatch the existing integration bridge:
+
+```sh
+gh workflow run integration-checks.yml --repo microsoft/amplifier-unified \
+  --ref REVIEWED_CANDIDATE_REF \
+  -f default_installed=true -f desktop_safety=true
+```
+
+The reusable/direct `default-installed.yml` workflow accepts the same
+`desktop_safety=true` input. Its hosted invocation supplies the adapter's required
+arguments:
+
+```sh
+python scripts/qualify_default_installed.py run --desktop-safety \
+  --loop-source "$GITHUB_WORKSPACE/.ci/default-loop" \
+  --work "$RUNNER_TEMP/default-installed-inputs" \
+  --output "$RUNNER_TEMP/default-installed-evidence"
+```
+
+The private loop checkout must match the committed pin and must not carry
+credentials into the guest. The adapter requires a GitHub-hosted Linux runner;
+this command does not authorize using a live installation or a borrowed runtime.
+
+Require separate `desktop-preserved-22.xml` and `desktop-remote-defaults.xml`
+results: all **22 preserved cases plus 3 remote-default cases** must execute
+without failures, errors, skips or missing/duplicate identities. The adapter
+checks those fixed counts in `desktop-safety-result.json`; generic module
+presence in JUnit is insufficient. Adapter helpers are reported separately.
+Retain installed wheel/source/dependency identities, unchanged before/after
+attestations, both group receipts and confirmed owned-resource cleanup.
+
+This stage reports `baselineExecuted: false`. It neither runs nor inflates the
+separate IC-13 baseline's four modules and 12 cases. Registration is not
+acceptance, physical-desktop or SSH-transport qualification, or permission to
+enable desktop writes.
+
 ### Installed local status owner, October 17
 
 The `status-installed` manual lane owns both executable status probes. The
