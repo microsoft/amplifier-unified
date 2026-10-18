@@ -321,7 +321,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
 @pytest.mark.parametrize(('suite', 'targets'), [
     ('full', []),
     ('inline-chat-card', ['tests/test_chat_references.py']),
-    ('queued-configuration', ['tests/test_queued_configuration_boundary.py']),
+    ('queued-configuration', ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py']),
     ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
