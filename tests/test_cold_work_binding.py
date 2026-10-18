@@ -558,6 +558,9 @@ class _ColdReadTrace:
     def __init__(self, windows, identity):
         self.windows, self.identity = windows, identity
         self.evidence = {'records': [], 'dropped': 0, 'observationFailures': 0}
+        self._publication = None
+        self._publication_sequence = 0
+        self._full_reason = 'not-full'
 
     def _append(self, record):
         records = self.evidence['records']
@@ -602,6 +605,37 @@ class _ColdReadTrace:
                     for client in service.queue_clients.values())}
 
     def install(self, patch):
+        service = self.windows.service
+        full = getattr(service, '_publish_full', None)
+        if callable(full):
+            def full_observed(*args, **kwargs):
+                previous = self._full_reason
+                self._full_reason = 'unknown'
+                try:
+                    self._full_reason = self._reason(kwargs.get('reason'))
+                except Exception:
+                    self.evidence['observationFailures'] += 1
+                try:
+                    return full(*args, **kwargs)
+                finally:
+                    self._full_reason = previous
+            patch.setattr(service, '_publish_full', full_observed)
+        publish = getattr(service, '_publish', None)
+        if callable(publish):
+            def publish_observed(*args, **kwargs):
+                previous = self._publication
+                self._publication_sequence += 1
+                self._publication = {'publication': self._publication_sequence,
+                                     'publisher': 'unknown', 'fullReason': self._full_reason}
+                try:
+                    self._publication['publisher'] = self._publisher()
+                except Exception:
+                    self.evidence['observationFailures'] += 1
+                try:
+                    return publish(*args, **kwargs)
+                finally:
+                    self._publication = previous
+            patch.setattr(service, '_publish', publish_observed)
         original = self.windows._check_current
         def checked(identity, owner, source, fence):
             try:
@@ -624,8 +658,58 @@ class _ColdReadTrace:
                     if before != self.windows.epochs.get(self.identity):
                         self._record(lambda: {'stage': _name, 'beforeEpoch': before,
                             'afterEpoch': self.windows.epochs.get(self.identity),
-                            'caller': self._caller()})
+                            'caller': self._caller(),
+                            'effectiveScope': self._scope(args[0] if args else kwargs.get('identities')),
+                            **(self._publication or {'publication': None, 'publisher': 'unknown',
+                                                    'fullReason': 'not-full'})})
             patch.setattr(self.windows, name, observed)
+
+    def _scope(self, identities):
+        # Describe only the effective argument at the real invalidation call.
+        # Never consume an iterator or stringify unknown caller-owned objects.
+        if identities is None:
+            return 'all'
+        if type(identities) not in (set, frozenset, list, tuple) or len(identities) > 64:
+            return 'unknown'
+        if not all(type(item) is str for item in identities):
+            return 'unknown'
+        return 'root' if self.identity in identities else 'excludes-root'
+
+    @staticmethod
+    def _reason(reason):
+        if type(reason) is not str:
+            return 'unknown'
+        return {
+            'Native catalog membership and ownership reconciliation': 'native-catalog-membership',
+            'Startup reconciles persisted stores and interrupted operations': 'startup-reconciliation',
+            'Shutdown reconciliation of durable controller stores': 'shutdown-reconciliation',
+        }.get(reason, 'unknown')
+
+    @staticmethod
+    def _origin_name(module, qualname):
+        return {
+            ('amplifier_web.automatic_history', 'AutomaticHistory.refresh'): 'automatic-history-refresh',
+            ('amplifier_web.automatic_history', 'AutomaticHistory.load'): 'automatic-history-load',
+            ('amplifier_web.automatic_history', 'AutomaticHistory.loop'): 'automatic-history-loop',
+            ('amplifier_web.automatic_naming', 'AutomaticNaming.schedule'): 'automatic-naming-schedule',
+        }.get((module, qualname), 'unknown')
+
+    @classmethod
+    def _publisher(cls):
+        # Bounded code-identity walk above service wrappers: no frame locals,
+        # paths, raw stack or caller-provided strings enter the observation.
+        frame = sys._getframe(1)
+        try:
+            for _ in range(16):
+                if frame is None:
+                    break
+                origin = cls._origin_name(frame.f_globals.get('__name__'), frame.f_code.co_qualname)
+                if origin != 'unknown':
+                    return origin
+                frame = frame.f_back
+            return 'unknown'
+        finally:
+            del frame
 
     @staticmethod
     def _caller():
@@ -707,6 +791,83 @@ def test_cold_read_trace_preserves_original_once_and_bounds_evidence(monkeypatch
     failures = trace.evidence['observationFailures']
     trace.emit(write=lambda *args: (_ for _ in ()).throw(OSError('not-exported')))
     assert trace.evidence['observationFailures'] == failures + 1
+
+
+@pytest.mark.parametrize('scope,expected', [
+    (None, 'all'), ({'root'}, 'root'), ({'other'}, 'excludes-root'),
+    ('private-scope', 'unknown'), ({1}, 'unknown'),
+])
+def test_publisher_scope_and_unknown_origin_do_not_expose_inputs(scope, expected):
+    trace = _ColdReadTrace(SimpleNamespace(), 'root')
+    assert trace._scope(scope) == expected
+    assert trace._scope({str(i) for i in range(65)}) == 'unknown'
+    assert trace._publisher() == 'unknown'  # This test is not a production origin.
+    assert trace._reason('private-reason') == trace._reason(object()) == 'unknown'
+    assert trace._origin_name('untrusted.module', 'AutomaticHistory.refresh') == 'unknown'
+    assert trace._origin_name('amplifier_web.automatic_history', 'unknown') == 'unknown'
+    assert trace._origin_name('amplifier_web.automatic_history', 'AutomaticHistory.refresh') == 'automatic-history-refresh'
+
+
+@pytest.mark.parametrize('mode', ['returned', 'raised', 'observer-failed'])
+def test_one_publication_correlates_two_epoch_changes_without_changing_calls(monkeypatch, mode):
+    service = SimpleNamespace()
+    calls, failure, result = [], ValueError('private-exception'), object()
+    windows = SimpleNamespace(service=service, epochs={'root': 1},
+        _check_current=lambda *args: None, retain_interest=lambda *args: None)
+    def invalidate(identities=None):
+        calls.append(('invalidate', identities))
+        if identities is None or 'root' in identities:
+            windows.epochs['root'] += 1
+    windows.invalidate = invalidate
+    scope = {'root'}
+    def publish(*, session_ids=None):
+        calls.append(('publish', session_ids))
+        windows.invalidate(session_ids)  # Original _publish invalidation.
+        windows.invalidate(session_ids)  # Its synchronous _save invalidation.
+        if mode != 'returned':
+            raise failure
+        return result
+    def full(*, reason):
+        calls.append(('full', reason))
+        return service._publish(session_ids=scope)
+    service._publish, service._publish_full = publish, full
+    trace = _ColdReadTrace(windows, 'root')
+    if mode == 'observer-failed':
+        def broken():
+            raise OSError('private-observer')
+        monkeypatch.setattr(trace, '_publisher', broken)
+    trace.install(monkeypatch)
+    reason = 'Native catalog membership and ownership reconciliation'
+    if mode == 'returned':
+        assert service._publish_full(reason=reason) is result
+    else:
+        with pytest.raises(ValueError) as error:
+            service._publish_full(reason=reason)
+        assert error.value is failure
+    assert calls == [('full', reason), ('publish', scope), ('invalidate', scope), ('invalidate', scope)]
+    assert calls[1][1] is scope and calls[2][1] is scope and calls[3][1] is scope
+    assert windows.epochs['root'] == 3
+    assert trace._publication is None and trace._full_reason == 'not-full'
+    records = trace.evidence['records']
+    assert [(row['beforeEpoch'], row['afterEpoch']) for row in records] == [(1, 2), (2, 3)]
+    assert all(row['publication'] == 1 and row['fullReason'] == 'native-catalog-membership'
+               and row['effectiveScope'] == 'root' and row['publisher'] == 'unknown' for row in records)
+    assert trace.evidence['observationFailures'] == int(mode == 'observer-failed')
+    assert trace.evidence['dropped'] == 0
+    # A later scoped/direct call must not inherit the previous full reason.
+    if mode == 'returned':
+        assert service._publish(session_ids=None) is result
+    else:
+        with pytest.raises(ValueError) as error:
+            service._publish(session_ids=None)
+        assert error.value is failure
+    assert calls[-3:] == [('publish', None), ('invalidate', None), ('invalidate', None)]
+    assert windows.epochs['root'] == 5 and trace._publication is None
+    assert all(row['publication'] == 2 and row['fullReason'] == 'not-full'
+               and row['effectiveScope'] == 'all' for row in records[-2:])
+    assert trace.evidence['observationFailures'] == 2 * int(mode == 'observer-failed')
+    encoded = json.dumps(trace.evidence)
+    assert 'private-' not in encoded and reason not in encoded
 
 
 @pytest.mark.asyncio
