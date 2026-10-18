@@ -5,11 +5,13 @@ import {resolve} from 'node:path';
 import {startSettingsFixture} from './settings-fixture.mjs';
 import {finishFixture} from './fixture-lifecycle.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
+import {recoveryRequestObserver} from './configuration-recovery-observer.mjs';
 
 const output=resolve(process.env.AMPLIFIER_TEST_ARTIFACTS||'../output/configuration-recovery');
 await mkdir(output,{recursive:true});
 const {base,stop}=await startSettingsFixture({SETTINGS_RECOVERY_FIXTURE:'1'});
 let browser,failure;const pages=[],errors=[],actions=[];
+const requestObserver=recoveryRequestObserver(base,actions);
 const observe=async page=>{const response=await page.request.get(base+'/fixture/recovery-observations');assert.equal(response.status(),200);return response.json()};
 const panel=page=>page.getByRole('region',{name:'Configuration recovery',exact:true});
 async function open(page){
@@ -29,8 +31,9 @@ try{
   assert.equal(auth.status(),200);
   const page=await context.newPage();pages.push(page);
   page.on('pageerror',error=>errors.push(error.message));
-  page.on('request',request=>{if(request.url().endsWith('/api/actions')){const body=request.postDataJSON();actions.push({browser:index,action:body.action,args:body.args,id:body.id})}});
+  page.on('request',request=>requestObserver.record(request,index));
   await page.goto(base+'/');await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
+  requestObserver.assertHealthy();
  }
  const [owner,other]=pages,initial=await observe(owner),sid=initial.sessions['Recoverable owner'].sessionId;
  const draft='{"uncommitted_recovery_draft":"keep this exact editor text"}';
@@ -94,6 +97,19 @@ try{
   await page.screenshot({animations:'disabled',path:resolve(output,index?'recovery-held-mobile.png':'recovery-mounted-desktop.png')});
  }
  assert.deepEqual(errors,[]);
+ requestObserver.assertHealthy();
  await writeFile(resolve(output,'report.json'),JSON.stringify({cookieUi:true,genuineButtons:true,keyboardCheck:true,coldNoInspect:true,explicitOriginalResume:true,lostAckNoReplay:true,acceptedNotMounted:true,loadedReadbackRequired:true,draftPreserved:true,twoBrowserIsolation:true,heldUnknownSavedLegacy:true,requestUnchanged:true,resumeCount:1,nativeRuntimeSimulated:true,priorRealNativeProofRequired:true,observations:final,actions,errors},null,2));
-}catch(error){failure=error;throw error}
-finally{await finishFixture({label:'Configuration recovery UI fixture',close:[['Recovery browsers',()=>browser?.close()]],stop,originalError:failure})}
+}catch(error){
+ failure=error;console.error('Recovery request observer:',JSON.stringify(requestObserver.snapshot()));throw error;
+}finally{
+ let closingFailure=failure;
+ try{await finishFixture({label:'Configuration recovery UI fixture',close:[['Recovery browsers',()=>browser?.close()]],stop,originalError:failure})}
+ catch(error){closingFailure??=error;throw error}
+ finally{
+  // Always retain observer outcomes, including malformed submissions and late
+  // events during close. Retention failure must not prevent owned cleanup.
+  try{await writeFile(resolve(output,'request-observer.json'),JSON.stringify(requestObserver.snapshot(),null,2))}
+  catch(error){if(closingFailure)console.error('Request observer evidence could not be retained:',error);else throw error}
+  if(!closingFailure)requestObserver.assertHealthy();
+ }
+}
