@@ -249,8 +249,17 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     for row in added:
         assert row['command'] == ['node', f"tests/{row['id']}-browser.mjs"]
         assert row.get('env', {}) == additions[row['id']]
-    original = [row for row in rows if row['id'] not in additions]
-    assert len(original) == 65 and len(rows) == 89
+    recovery_additions = [
+        {'id': 'configuration-recovery-components',
+         'command': ['node', '--test', 'tests/configuration-recovery.test.mjs']},
+        {'id': 'configuration-recovery',
+         'command': ['node', 'tests/configuration-recovery-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/configuration-recovery'}},
+    ]
+    recovery_ids = {row['id'] for row in recovery_additions}
+    assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
+    original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
+    assert len(original) == 65 and len(rows) == 91
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -264,7 +273,8 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     commands = [row['command'] for row in rows]
     assert ['node', 'tests/session-health-browser.mjs', '--context-limit', '--active-worker'] in commands
     assert ['node', 'tests/empty-host-browser.mjs', '--lost-create'] in commands
-    assert all((ROOT / 'frontend' / command[1]).is_file() for command in commands)
+    assert all((ROOT / 'frontend' / command[2 if command[1] == '--test' else 1]).is_file()
+               for command in commands)
 
 
 def assert_readiness_python_coverage(workflow, *, targets, run_blocks_sha256):
@@ -354,7 +364,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     readiness_scripts = {match.group(1) for _, line in commands
                          if (match := re.search(r'node (tests/[^ ]+-browser\.mjs)', line))}
     plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
-    extended_scripts = {row['command'][1] for row in plan['scenarios']}
+    extended_scripts = {row['command'][2 if row['command'][1] == '--test' else 1]
+                        for row in plan['scenarios']}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
         'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
@@ -375,8 +386,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # Smart Tool recovery, archive feedback and appearance preview navigation
     # and sequential keyboard reflow, saved MCP recovery, device pairing, and media transition
     # each retain an explicit owning lane; unsaved settings, independent MCP clients
-    # and the approval reading-column regression now have owners too.
-    assert len(readiness_scripts | extended_scripts) == 132
+    # and the approval reading-column regression now have owners too. The two
+    # recovery additions retain distinct component and full-journey commands.
+    assert len(readiness_scripts | extended_scripts) == 134
+    assert {'tests/configuration-recovery.test.mjs',
+            'tests/configuration-recovery-browser.mjs'} <= extended_scripts - readiness_scripts
     assert 'tests/mcp-recovery-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/device-pairing-browser.mjs' in extended_scripts - readiness_scripts
 
