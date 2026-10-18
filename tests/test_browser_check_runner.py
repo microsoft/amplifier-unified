@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import signal
 import sys
 import subprocess
@@ -266,6 +267,49 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     assert all((ROOT / 'frontend' / command[1]).is_file() for command in commands)
 
 
+def assert_readiness_python_coverage(workflow, *, targets, run_blocks_sha256):
+    """Count real normal-lane arguments; retain order and duplicates as evidence."""
+    runs = [step['run'] for step in workflow['jobs']['critical']['steps'] if 'run' in step]
+    files = []
+    for run in runs:
+        for line in run.splitlines():
+            if line.strip().startswith('uv run --no-sync pytest '):
+                argv = shlex.split(line, comments=True)
+                files.extend(arg for arg in argv[4:] if re.fullmatch(r'tests/test_\w+\.py', arg))
+    assert len(files) == len(set(files)) == targets, 'Normal readiness target count or duplicate changed'
+    # A fixed pre-diagnostic oracle also detects altered ordering or a duplicate
+    # command written in an unrecognized shell form. Do not sort/deduplicate it.
+    assert hashlib.sha256(json.dumps(runs).encode()).hexdigest() == run_blocks_sha256, 'Normal readiness commands changed'
+    return files
+
+
+@pytest.mark.parametrize('change', ['diagnostic-noise', 'duplicate-step', 'duplicate-argument',
+                                  'alternate-duplicate', 'reorder'])
+def test_readiness_inventory_distinguishes_diagnostic_mentions_from_real_commands(change):
+    runs = ['uv run --no-sync pytest -q tests/test_first.py',
+            'uv run --no-sync pytest -q tests/test_second.py']
+    expected = hashlib.sha256(json.dumps(runs).encode()).hexdigest()
+    steps = [{'run': run} for run in runs]
+    workflow = {'jobs': {'critical': {'steps': steps}, 'diagnostic': {'steps': [
+        {'run': "allowed = {'tests/test_first.py'}"},
+        {'run': 'uv run --no-sync pytest -q tests/test_first.py'},
+    ]}}}
+    if change == 'duplicate-step':
+        steps.append(steps[0].copy())
+    elif change == 'duplicate-argument':
+        steps[0]['run'] += ' tests/test_first.py'
+    elif change == 'alternate-duplicate':
+        steps.append({'run': 'python -m pytest tests/test_first.py'})
+    elif change == 'reorder':
+        steps.reverse()
+    if change == 'diagnostic-noise':
+        assert assert_readiness_python_coverage(workflow, targets=2, run_blocks_sha256=expected) == [
+            'tests/test_first.py', 'tests/test_second.py']
+    else:
+        with pytest.raises(AssertionError, match='Normal readiness'):
+            assert_readiness_python_coverage(workflow, targets=2, run_blocks_sha256=expected)
+
+
 def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_coverage():
     workflows = ROOT / '.github/workflows'
     browser = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
@@ -292,9 +336,13 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     assert set(diagnostics['with']['path'].splitlines()).isdisjoint({static['with']['path']})
     # Never replace failed-run diagnostics with a successful-build-only upload.
     # Exact names, count and paths also reject additional or overlapping uploads.
-    readiness = (workflows / 'public-readiness.yml').read_text()
-    files = re.findall(r'tests/test_\w+\.py', readiness)
-    assert len(files) == len(set(files)) == 98
+    readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
+    # Ordered normal critical run blocks from reviewed a99ab643, before the
+    # independent diagnostic job was merged. Eight pytest calls / 98 targets.
+    assert_readiness_python_coverage(
+        readiness, targets=98,
+        run_blocks_sha256='6ef8aeac76d06c287441679f17ee8ffe95d1dbf1cef0dbafd2fadc898c7e91e6',
+    )
 
 
 def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
