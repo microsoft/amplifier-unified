@@ -251,12 +251,21 @@ async def test_bound_field_revalidates_source_and_epoch_after_await(source, chan
         async def close(self):
             pass
     owner.projector = Direct()
+    read = barrier = None
     try:
         page = await owner.read('root')
         group = next(g for g in page['items'] if g.get('bindingProvenance'))
         ref = owner.nodes('root', group['id'])['items'][0]['inputDetail']
         read = asyncio.create_task(owner.read_text('root', ref))
-        await entered.wait()
+        barrier = asyncio.create_task(entered.wait())
+        done, _ = await asyncio.wait(
+            {read, barrier}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+        if read in done:
+            # Preserve an early failure instead of hiding it behind a timeout
+            # or accepting it as the expected post-invalidation rejection.
+            await read
+            pytest.fail('Field read completed before the release barrier')
+        assert barrier in done, 'Field read did not reach the barrier within 5 seconds'
         if change == 'append-conflict':
             append_event(source.workspace, 'root', 'tool:post', {'timestamp': time.time(),
                 'session_id': 'root', 'tool_call_id': 'one', 'result': 'conflict'})
@@ -266,9 +275,14 @@ async def test_bound_field_revalidates_source_and_epoch_after_await(source, chan
                 await owner.read('root', _initial=True)
         release.set()
         with pytest.raises(ValueError, match='expired'):
-            await read
+            await asyncio.wait_for(read, timeout=5)
     finally:
         release.set()
+        tasks = [task for task in (read, barrier) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await owner.close()
 
 

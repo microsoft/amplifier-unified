@@ -164,14 +164,19 @@ async def main():
                 observer = ExecutionEvents(sid, emitted.append)
                 observer.lifecycle({'type': 'input.delivered', 'input_id': input_id})
                 for index in (1, 2):
+                    # Independent JS oracle builds this whole value. Each body
+                    # exceeds both the preview and a 16-KiB field page, while the
+                    # complete synthetic source stays within the 4-MiB window.
+                    body = (f'COLD-BODY-{index}-START\n' + (f'row-{index}:漢字é𝄞\n' * 5000)
+                            + f'COLD-BODY-{index}-END')
                     await service.on_runtime_event('assistant.message', {'sessionId': sid,
                         'inputId': input_id, 'generationId': generation, 'text': f'Cold progress {index}',
                         'runtimeMessage': {'sequence': index}, 'createdAt': time.time(), 'timestampKnown': True})
                     for name, data in (
                         ('tool:pre', {'tool_input': {'file_path': f'cold-{index}.txt'}}),
-                        ('tool:post', {'result': {'success': True, 'output': f'COLD-BODY-{index}-END'}}),
-                        ('llm:request', {'provider': 'fixture', 'model': 'cold-model'}),
-                        ('llm:response', {'provider': 'fixture', 'model': 'cold-model',
+                        ('tool:post', {'result': {'success': True, 'output': body}}),
+                        ('llm:request', {'provider': f'cold-provider-{index}', 'model': f'cold-model-{index}'}),
+                        ('llm:response', {'provider': f'cold-provider-{index}', 'model': f'cold-model-{index}',
                                           'usage': {'input_tokens': 1, 'output_tokens': 1}}),
                     ):
                         fields = {'session_id': sid, 'timestamp': time.time(), **data}

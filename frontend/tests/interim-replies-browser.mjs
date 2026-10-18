@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import {assertColdOrder,assertColdBody} from './interim-cold-oracle.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  ['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','pipe']});
@@ -140,17 +141,55 @@ try{
  if(await coldHeader.getAttribute('aria-expanded')!=='true')await coldHeader.click();
  await expect(coldGroup.locator('[data-kind="tool"]')).toHaveCount(2);
  await expect(coldGroup.locator('[data-kind="llm"]')).toHaveCount(2);
- const coldOrder=await coldGroup.locator('[data-message-id],[data-kind="tool"],[data-kind="llm"]')
-  .evaluateAll(nodes=>nodes.map(node=>node.dataset.kind||node.querySelector('p')?.textContent));
- assert.deepEqual(coldOrder,['Cold progress 1','tool','llm','Cold progress 2','tool','llm']);
- assert.equal(await coldGroup.getByText('Cold final answer',{exact:true}).count(),0);
+ // Open each original node; identity checks below do not accept a kind-only
+ // sequence or a body/marker found elsewhere in the collapsed turn.
+ for(const node of await coldGroup.locator('[data-kind="tool"],[data-kind="llm"]').all()){
+  const line=node.locator('button.a-execution-action-line');
+  if(await line.getAttribute('aria-expanded')!=='true')await line.click();
+ }
  for(const tool of await coldGroup.locator('[data-kind="tool"]').all())
-  await tool.locator('button.a-execution-action-line').click();
- await expect(coldGroup).toContainText('COLD-BODY-1-END');
- await expect(coldGroup).toContainText('COLD-BODY-2-END');
- assert.equal(cold.runtimeSends,0);
+  await expect(tool.getByRole('button',{name:'Copy file content',exact:true})).toBeEnabled();
+ await expect(coldGroup.locator('[role="alert"]')).toHaveCount(0);
+ const coldOrder=await coldGroup.locator('[data-message-id],[data-kind="tool"],[data-kind="llm"]')
+  .evaluateAll(nodes=>nodes.map(node=>{
+   if(!node.dataset.kind)return {kind:'message',text:node.querySelector('p')?.textContent};
+   if(node.dataset.kind==='tool')return {kind:'tool',
+    callId:node.querySelector('.a-execution-phase')?.title.match(/^Call: ([^ ]+)/)?.[1],
+    path:node.querySelector('.a-execution-action-line code')?.textContent};
+   const facts=Object.fromEntries([...node.querySelectorAll('.a-execution-model-facts dt')]
+    .map(dt=>[dt.textContent,dt.nextElementSibling?.textContent]));
+   return {kind:'llm',provider:facts.Provider,model:facts.Model};
+  }));
+ assertColdOrder(coldOrder);
+ const nodeIds=await coldGroup.locator('[data-node-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.nodeId));
+ assert.equal(new Set(nodeIds).size,4,'four distinct original work nodes');
+ assert.equal(await coldGroup.getByText('Cold final answer',{exact:true}).count(),0);
+ for(const index of [1,2]){
+  const tool=coldGroup.locator('[data-kind="tool"]').filter({
+   has:page.locator(`.a-execution-phase[title^="Call: cold-call-${index} ·"]`)});
+  await expect(tool).toHaveCount(1);
+  await expect(tool.locator('.a-execution-action-line code')).toHaveText(`cold-${index}.txt`);
+  const content=tool.locator('.a-execution-payload').filter({
+   has:page.getByRole('button',{name:'Copy file content',exact:true})});
+  await expect(content).toHaveCount(1);
+  const show=content.getByRole('button',{name:/^Show all /});
+  await expect(show).toBeVisible();await show.click();
+  assertColdBody(await content.locator('pre code').textContent(),index,'display');
+  // Clear the clipboard so a missing copy cannot reuse a preceding success.
+  await page.evaluate(()=>navigator.clipboard.writeText('UNREAD-COLD-BODY'));
+  await content.getByRole('button',{name:'Copy file content',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).not.toBe('UNREAD-COLD-BODY');
+  assertColdBody(await page.evaluate(()=>navigator.clipboard.readText()),index,'clipboard');
+  await expect(tool.locator('[role="alert"]')).toHaveCount(0);
+ }
+ await expect(page.getByText('Cold final answer',{exact:true})).toBeVisible();
+ assert.equal((await control({op:'inspect-work-source'})).runtimeSends,0);
+ const coldEvidence=process.env.EVIDENCE_DIR||root+'output/browser-checks/interim-cold';
+ await mkdir(coldEvidence,{recursive:true});
+ await coldHeader.scrollIntoViewIfNeeded();
+ await page.screenshot({path:coldEvidence+'/interim-cold-expanded.png'});
  assert.deepEqual(errors,[]);
- console.log('PASS: off/on/rejected save, final-only, expand/copy/reveal, export equality, reload/Everything, two-client isolation, active/error, focus/scroll deferral, media once/in order, mobile, zero model sends.');
+ console.log('PASS: off/on/rejected save, final-only, expand/copy/reveal, export equality, reload/Everything, two-client isolation, active/error, focus/scroll deferral, media once/in order, mobile, exact cold call/model/gap order and complete Unicode display/copy for both calls, zero model sends.');
 }catch(error){
  console.error('Browser errors:',debugErrors,'Visible:',await debugPage?.locator('body').innerText().catch(()=>'<page unavailable>'));
  console.error('Fixture:',log);throw error;
