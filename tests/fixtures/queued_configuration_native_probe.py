@@ -90,29 +90,57 @@ async def writer_available(workspace, native_id):
     return await asyncio.wait_for(asyncio.to_thread(acquire_release), 3)
 
 
-async def confirm_process_exit(process):
+async def confirm_process_exit(process, fallback_signals):
     """Fallback only for this probe's owned handles after ordinary close fails."""
     if process.returncode is not None:
         return
     for signum in (signal.SIGTERM, signal.SIGKILL):
         if process.returncode is not None:
             return
+        if os.name == "posix":
+            assert os.getpgid(process.pid) == process.pid
+        event = {"pid": process.pid, "signal": signum.name, "outcome": "attempted"}
+        fallback_signals.append(event)
         try:
             if os.name == "posix":
-                assert os.getpgid(process.pid) == process.pid
                 os.killpg(process.pid, signum)
             elif signum == signal.SIGTERM:
                 process.terminate()
             else:
                 process.kill()
+            event["outcome"] = "sent"
         except ProcessLookupError:
-            pass
+            event["outcome"] = "already_absent"
         try:
             await asyncio.wait_for(process.wait(), 5)
+            event["returncode"] = process.returncode
             return
         except TimeoutError:
+            event["wait"] = "timed_out"
             continue
     raise AssertionError(f"Owned worker exit unconfirmed: {process.pid}")
+
+
+def finish_cleanup_evidence(root, report, primary_failure):
+    """Retain partial evidence even when a worker's identity record is corrupt."""
+    errors, sources = report["cleanupErrors"], []
+    for path in sorted(root.glob("worker-source-*.json")):
+        try:
+            sources.append(json.loads(path.read_text()))
+        except (OSError, ValueError, TypeError) as exc:
+            errors.append("worker-source " + path.name + ": " + type(exc).__name__ + ": " + str(exc))
+    report["workerSources"] = sources
+    try:
+        (root / "evidence.json").write_text(json.dumps(report, indent=2) + "\n")
+    except OSError as exc:
+        errors.append("evidence-write: " + type(exc).__name__ + ": " + str(exc))
+    if errors or report["cleanupFallbackSignals"]:
+        detail = "Native cleanup did not complete normally: " + json.dumps({
+            "errors": errors, "fallbackSignals": report["cleanupFallbackSignals"]})
+        if primary_failure is not None:
+            primary_failure.add_note(detail)
+        else:
+            raise AssertionError(detail)
 
 
 async def worker(root, mutant):
@@ -225,6 +253,7 @@ async def probe(root, mutant):
     client = TestClient(TestServer(web_app))
     processes, sid, report = [], None, {"mutant": mutant, "versions": versions, "paths": paths}
     calls = root / "provider-calls.jsonl"
+    primary_failure = None
     try:
         await client.start_server()
         headers = {"Cookie": SESSION_COOKIE + "=" + new_session(web_app["session_secret"]),
@@ -329,12 +358,16 @@ async def probe(root, mutant):
         assert await writer_available(workspace, attempt["nativeSessionId"])
         report.update(mountedPlanVerified=True, nextInputUsable=True, originalInputCount=1,
             originalToolResultCount=1, duplicateResumePassive=True, writerReleasedWhileParked=True)
+    except BaseException as exc:
+        primary_failure = exc
+        report["primaryFailure"] = {"type": type(exc).__name__, "message": str(exc)}
+        raise
     finally:
         # Always unblock the provider if a prior assertion failed.
         (root / "release-final").touch()
         if sid in runtime.workers and runtime.workers[sid]["process"] not in processes:
             processes.append(runtime.workers[sid]["process"])
-        cleanup_errors = []
+        cleanup_errors, fallback_signals = [], []
         close = asyncio.create_task(client.close())
         try:
             await asyncio.wait_for(asyncio.shield(close), 45)
@@ -349,7 +382,7 @@ async def probe(root, mutant):
                         processes.append(row["process"])
                 for process in processes:
                     try:
-                        await confirm_process_exit(process)
+                        await confirm_process_exit(process, fallback_signals)
                     except BaseException as exc:
                         cleanup_errors.append(type(exc).__name__ + ": " + str(exc))
                 if not close.done():
@@ -362,16 +395,20 @@ async def probe(root, mutant):
                     cleanup_errors.append("close: " + str(close.exception()))
                 if sid is not None:
                     native_id = report.get("nativeId", owner.get("runtimeSessionId") or sid)
-                    report["writerAvailableAfterClose"] = await writer_available(workspace, native_id)
+                    try:
+                        report["writerAvailableAfterClose"] = await writer_available(workspace, native_id)
+                    except BaseException as exc:
+                        cleanup_errors.append("writer: " + type(exc).__name__ + ": " + str(exc))
             finally:
+                if any(p.returncode is None for p in processes) or runtime.workers:
+                    cleanup_errors.append("Owned worker exit or runtime removal unconfirmed.")
+                if sid is not None and report.get("writerAvailableAfterClose") is not True:
+                    cleanup_errors.append("Writer release unconfirmed.")
                 report.update(cleanupErrors=cleanup_errors,
+                    cleanupFallbackSignals=fallback_signals,
                     processes=[{"pid": p.pid, "returncode": p.returncode} for p in processes],
-                    runtimeRowsAfterClose=len(runtime.workers),
-                    workerSources=[json.loads(path.read_text()) for path in sorted(root.glob("worker-source-*.json"))])
-                (root / "evidence.json").write_text(json.dumps(report, indent=2) + "\n")
-        assert not cleanup_errors, cleanup_errors
-        assert all(p.returncode is not None for p in processes) and not runtime.workers
-        assert sid is None or report.get("writerAvailableAfterClose") is True
+                    runtimeRowsAfterClose=len(runtime.workers))
+                finish_cleanup_evidence(root, report, primary_failure)
 
 
 async def bounded_probe(root, mutant):
