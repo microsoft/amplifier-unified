@@ -3,6 +3,13 @@ name: Full Python checks
 on:
   workflow_dispatch:
     inputs:
+      checks:
+        description: Select the complete suite or the fixed cold-binding diagnostic
+        type: choice
+        default: full
+        options:
+          - full
+          - cold-binding-diagnostic
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -64,10 +71,24 @@ jobs:
                   raise RuntimeError('Native module entry point is not its canonical mount: ' + name)
           PY
       - name: Run the complete Python suite
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.checks != 'cold-binding-diagnostic' }}
         run: |
           mkdir -p output/python-checks
           set -o pipefail
           uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml 2>&1 | tee output/python-checks/pytest.log
+      - name: Run the fixed cold-binding diagnostic
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.checks == 'cold-binding-diagnostic' }}
+        env:
+          UNIFIED_COLD_BINDING_DIAGNOSTIC_DIR: output/python-checks/cold-binding-diagnostic
+        run: |
+          mkdir -p output/python-checks
+          set -o pipefail
+          uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml \
+            tests/test_cold_binding_sqlite_lifecycle.py \
+            tests/test_cold_binding_diagnostic_workflow.py \
+            tests/test_cold_work_binding.py \
+            tests/test_work_windows.py \
+            tests/test_regular_work_details.py 2>&1 | tee output/python-checks/pytest.log
       - name: Retain complete and partial Python results
         if: always()
         uses: actions/upload-artifact@v4
