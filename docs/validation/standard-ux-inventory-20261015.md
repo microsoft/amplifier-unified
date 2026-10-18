@@ -1,5 +1,22 @@
 # Standard UX inventory and execution plan
 
+## Completion-hook response follow-up (October 18)
+
+**RESPONSE-833** covers two ordinary answers with an internal completion check
+after each. Keep exactly the two user-facing answers, with no verification JSON
+or false interrupted response. Record all four model calls and their usage.
+Normal streaming must resume after the hook; error/cancellation restores prior
+context, and a background check cannot become another chat's public response.
+
+The six cases in `tests/test_prompt_completion_scope.py` belong to Full Python
+checks. The optional `tests/fixtures/prompt_completion_runtime_probe.py` exercises
+actual Core, loop-live and the canonical shell hook with a deterministic local
+provider. Both controls fail on unchanged main and pass with the scoped fix;
+[the qualification receipt](prompt-completion-scope833-20261018.json) records
+46 focused passes, dependency identities and limits. This adds a regression
+witness without changing the frozen inventory counts or claiming the original
+reporter's Mac configuration, live provider, or browser acceptance.
+
 ## Scale follow-up coverage (October 17)
 
 The original inventory and frozen outcome counts remain unchanged. The additive
