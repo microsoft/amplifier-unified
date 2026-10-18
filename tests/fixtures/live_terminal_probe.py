@@ -834,7 +834,11 @@ def _producer_spawn_evidence(root, executable, argv, cwd, environment):
     """Retain exact safe paths/literals and redacted shapes, never raw env."""
     allowed_words = {"-m", "-u", "-I", "-E", "-S", "-c", "-Es", "--guard-child",
                      "--spool", "--cache-home", "--memory-limit", "805306368",
-                     "amplifier_web.event_window_worker", "amplifier_web.history_projection_worker"}
+                     "amplifier_web.event_window_worker", "amplifier_web.history_projection_worker",
+                     # Evidence only: this fixed catalog module is still NOT
+                     # admitted by _producer_spawn_spec. Never infer its identity
+                     # from an older redacted record's string length.
+                     "amplifier_web.shell_query_worker"}
 
     def safe(value):
         if isinstance(value, os.PathLike):

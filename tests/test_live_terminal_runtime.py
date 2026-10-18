@@ -671,6 +671,55 @@ def _check_worker_schema_diagnostic_contract(tmp_path):
         passed.append("capture-public-presence-suppression-current-contract-characterized")
 
     capture_controls()
+
+    def reader_evidence_controls():
+        import sys
+
+        owned = root.resolve()
+        python = str(Path(sys.executable).absolute())
+        module = "amplifier_web.shell_query_worker"
+        environment = {
+            "PYTHONPATH": os.pathsep.join((str(owned / "bootstrap"),
+                                          str(source.parent), str(fixture.ROOT))),
+            "UNIFIED_PRODUCER_ROOT": str(owned),
+            "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
+            "PRIVATE_CONTROL": secret,
+        }
+        command = [python, "-m", module,
+                   "--spool", str(owned / "app/projection-spool-control" / ("1" * 32)),
+                   "--cache-home", str(owned / "app"), "--memory-limit", "805306368"]
+        original = json.dumps([command, environment])
+        evidence = fixture._producer_spawn_evidence(
+            owned, python, command, str(fixture.ROOT), environment)
+        assert evidence["argvShape"][2] == module
+        assert evidence["argc"] == 9 and secret not in json.dumps(evidence)
+        # Rendering one known literal grants no process authority. These are
+        # pure classifier calls, not Popen attempts or simulated execution.
+        for cold in (False, True):
+            assert fixture._producer_spawn_spec(
+                owned, python, command, str(fixture.ROOT), environment, cold=cold) is None
+            for supported in ("amplifier_web.event_window_worker",
+                              "amplifier_web.history_projection_worker"):
+                reader = [python, "-m", supported, *command[3:]]
+                assert fixture._producer_spawn_spec(
+                    owned, python, reader, str(fixture.ROOT), environment,
+                    cold=cold) == "history-reader"
+        assert json.dumps([command, environment]) == original
+        passed.append("catalog-module-evidence-does-not-grant-spawn-authority")
+
+        for unknown in ("x" * len(module), module + ".other", secret):
+            altered = [python, "-m", unknown, *command[3:]]
+            evidence = fixture._producer_spawn_evidence(
+                owned, python, altered, str(fixture.ROOT), environment)
+            assert evidence["argvShape"][2] == {
+                "redacted": True, "type": "str", "length": len(unknown)}
+            assert unknown not in json.dumps(evidence)
+            for cold in (False, True):
+                assert fixture._producer_spawn_spec(
+                    owned, python, altered, str(fixture.ROOT), environment, cold=cold) is None
+        passed.append("unknown-and-lookalike-reader-modules-remain-redacted-and-refused")
+
+    reader_evidence_controls()
     return {"status": "passed", "cases": passed,
             "scope": "Authored helper controls only; actual worker evidence is separate"}
 
