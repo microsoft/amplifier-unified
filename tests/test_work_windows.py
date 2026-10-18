@@ -781,3 +781,173 @@ async def test_same_root_proof_waiters_join_and_owner_epoch_change_rejects_late_
         await asyncio.gather(*(task for task in (first, second) if task is not None), return_exceptions=True)
         await owner.close()
         await diagnostics.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mutation', ['source', 'index', 'owner', 'epoch', 'eviction'])
+async def test_cumulative_proof_rechecks_dependencies_after_each_real_page_await(tmp_path, monkeypatch, mutation):
+    owner, session, path, service = fixture(tmp_path, monkeypatch, count=140)
+    from amplifier_web.diagnostics import Diagnostics
+    service.state = {'sessions': [session]}
+    service.default_workspace = '/fixture'
+    diagnostics = Diagnostics(service)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = owner.projector.project
+    async def held(*args, **kwargs):
+        value = await original(*args, **kwargs)
+        if len(owner.pages) == 1:
+            entered.set()
+            await release.wait()
+        return value
+    monkeypatch.setattr(owner.projector, 'project', held)
+    task = asyncio.create_task(owner.prove('s'))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert len(owner.pages) == 1 and len(owner.projector.inputs) == 2
+        if mutation == 'source':
+            with path.open('a') as stream:
+                stream.write('{}\n')
+        elif mutation == 'index':
+            with diagnostics._db() as db:
+                db.execute("INSERT INTO records(id,at,stream,session,workspace,event,data) VALUES('late',0,'tools','s','/fixture','tool:post','{}')")
+        elif mutation == 'owner':
+            replacement = dict(session)
+            service._session = lambda identity, hydrate=False: replacement
+        elif mutation == 'epoch':
+            owner.invalidate({'s'})
+        else:
+            owner.pages.pop(next(iter(owner.pages)))
+        release.set()
+        result = await asyncio.wait_for(asyncio.shield(task), 2)
+        assert result['status'] == 'stale'
+        assert len(owner.projector.inputs) == 2  # No third scan to recover a newer generation.
+        with pytest.raises(ValueError, match='proof'):
+            owner.proof_nodes('s', result['id'])
+        assert not any(page.get('_rootProofBound') for page in owner.pages.values())
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_proof_entry_point_and_existing_jobs_share_one_four_job_ceiling(tmp_path, monkeypatch):
+    owner, session, _, _ = fixture(tmp_path, monkeypatch, count=1)
+    # Pending slots stand for already admitted work, not a separate proof pool.
+    placeholders = [asyncio.get_running_loop().create_future() for _ in range(4)]
+    owner.pending.update((str(i), value) for i, value in enumerate(placeholders))
+    try:
+        with pytest.raises(ValueError, match='busy'):
+            await owner.read('s', proof=True)
+        assert not owner._root_proofs and not owner.projector.inputs
+        with pytest.raises(ValueError, match='explicit latest'):
+            await owner.read('s', before='older', proof=True)
+        with pytest.raises(ValueError, match='explicit latest'):
+            await owner.read('s', _initial=True, proof=True)
+        assert owner.project(session)['workProjection'].get('rootProof') is None
+    finally:
+        owner.pending.clear()
+        for future in placeholders:
+            future.cancel()
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_raw_cached_read_refuses_page_replaced_by_explicit_root_proof(tmp_path, monkeypatch):
+    from amplifier_web.diagnostics import Diagnostics
+    from amplifier_web.work_windows import _SupersededRead
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=140)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostics = Diagnostics(service)
+    entered, release = asyncio.Event(), asyncio.Event()
+    task = None
+    try:
+        await owner.read('s')
+        group = owner.current['s']
+        cached = owner.pages[group]
+        original = asyncio.to_thread
+        async def held(function, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original(function, *args, **kwargs)
+        monkeypatch.setattr(asyncio, 'to_thread', held)
+        task = asyncio.create_task(owner.read('s', _initial=True))
+        await asyncio.wait_for(entered.wait(), 2)
+        result = await owner.prove('s')
+        assert result['status'] == 'complete' and owner.pages[group] is not cached
+        release.set()
+        with pytest.raises(_SupersededRead):
+            await asyncio.wait_for(asyncio.shield(task), 2)
+        assert owner.status['s']['status'] != 'retrying'
+    finally:
+        release.set()
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mutation', ['epoch', 'eviction'])
+async def test_proof_waiter_revalidates_after_task_completion(tmp_path, monkeypatch, mutation):
+    from amplifier_web.diagnostics import Diagnostics
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=140)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostics = Diagnostics(service)
+    original = owner._prove
+    completed = []
+    async def complete_then_supersede(*args):
+        result = await original(*args)
+        assert result['status'] == 'complete'
+        completed.append(result)
+        def supersede():
+            if mutation == 'epoch':
+                owner.invalidate({'s'})
+            else:
+                owner.pages.pop(next(iter(owner.pages)))
+        asyncio.get_running_loop().call_soon(supersede)
+        return result
+    monkeypatch.setattr(owner, '_prove', complete_then_supersede)
+    try:
+        result = await owner.prove('s')
+        assert completed and result['id'] == completed[0]['id']
+        assert result['status'] == 'stale' and result['boundCount'] == 0
+    finally:
+        await owner.close()
+        await diagnostics.close()
+
+
+@pytest.mark.asyncio
+async def test_proof_deadline_checked_after_final_dependency_validation(tmp_path, monkeypatch):
+    from amplifier_web.diagnostics import Diagnostics
+    from amplifier_web import event_window
+    owner, session, _, service = fixture(tmp_path, monkeypatch, count=140)
+    service.state, service.default_workspace = {'sessions': [session]}, '/fixture'
+    diagnostics = Diagnostics(service)
+    validated = []
+    original_validate, original_current = event_window.validate_root_proof, owner._binding_current
+    def validate(*args, **kwargs):
+        result = original_validate(*args, **kwargs)
+        assert result['status'] == 'complete'
+        validated.append(True)
+        return result
+    def current(page):
+        result = original_current(page)
+        if validated:
+            owner._root_proofs['s']['deadline'] = 0  # Expire only at final publication boundary.
+        return result
+    monkeypatch.setattr(event_window, 'validate_root_proof', validate)
+    monkeypatch.setattr(owner, '_binding_current', current)
+    try:
+        result = await owner.prove('s')
+        assert validated == [True]
+        assert result['status'] == 'incomplete' and result['reason'] == 'deadline'
+        assert not any(page.get('_rootProofBound') for page in owner.pages.values())
+    finally:
+        await owner.close()
+        await diagnostics.close()

@@ -1169,3 +1169,472 @@ async def test_attested_native_root_and_public_detail_routing_stay_distinct(sour
         assert json.loads(''.join(chunks)) == source.calls[0][2]
     finally:
         await owner.close()
+
+
+def _compact_proof_call(source, identity):
+    """Small canonical bodies, still real observer -> Diagnostics ownership."""
+    if not source.session['execution']['turns']:
+        source.turn('turn')
+    for event, fields in [('tool:pre', {'tool_input': {'text': identity}}),
+                          ('tool:post', {'result': {'text': identity + ':done'}})]:
+        data = {'session_id': 'root', 'tool_call_id': identity, 'tool_name': 'read_file',
+                'timestamp': time.time(), **fields}
+        append_event(source.workspace, 'root', event, data)
+        source.observer.hook('root', event, data)
+        row = source.emitted.pop()
+        assert not {'input', 'output', '_eventFields'}.intersection(row)
+        source.diagnostics.runtime_event('execution.event', row, source.session)
+
+
+async def _proof_pages(source, *, limit=100):
+    await source.diagnostics.flush()
+    pages, before, stamp, index = [], None, None, None
+    for _ in range(8):
+        page = event_window.read_proof_step(source.session, window_key='proof-window',
+            cursor_key=b'k' * 32, cache_home=source.service.data_dir, before=before,
+            limit=limit, expected_source=stamp, expected_index=index)
+        pages.append(page)
+        stamp, index = page['_proof']['sourceStamp'], page['_proof']['indexRevision']
+        before = page['before']
+        if before is None:
+            return pages
+    raise AssertionError('Synthetic proof exceeded eight pages')
+
+
+def _validate_proof(source, pages):
+    return event_window.validate_root_proof(source.session, pages, cursor_key=b'k' * 32)
+
+
+def _reseal_proof(page):
+    # Deliberately exercise structural checks independently of receipt integrity.
+    page['_proof']['receiptDigest'] = event_window._proof_receipt(page, b'k' * 32)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('calls', [1, 144])
+async def test_cumulative_proof_real_receipts_bind_recent_and_many_small_calls(source, calls, monkeypatch):
+    source.call('one')  # Retain a >16k Unicode body alongside compact later rows.
+    for number in range(calls - 1):
+        _compact_proof_call(source, f'later-{number}')
+    pages = await _proof_pages(source)
+    assert len(pages) == (1 if calls == 1 else 6)
+    assert sum(len(p['_proof']['records']) for p in pages) == calls * 4
+    assert sum(len(p['_proof']['facts']) for p in pages) == calls * 4
+    assert all(len(p['items']) <= 100 and len(p['_proof']['facts']) <= 512 for p in pages)
+    assert all(p['coverage']['scannedBytes'] <= event_window.MAX_BYTES for p in pages)
+    if calls > 1:
+        assert all(not p['_boundWork'] for p in pages)
+    snapshot = copy.deepcopy(pages)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('The root proof validator must not read or resolve any source')
+    with monkeypatch.context() as pure:
+        pure.setattr(event_window, '_source', forbidden)
+        pure.setattr(event_window, 'binding_revision', forbidden)
+        pure.setattr(event_window, '_host_receipts', forbidden)
+        pure.setattr(event_window.Path, 'resolve', forbidden)
+        pure.setattr(event_window.Path, 'stat', forbidden)
+        pure.setattr(event_window.os, 'open', forbidden)
+        result = _validate_proof(source, pages)
+    assert pages == snapshot
+    assert result['status'] == 'complete' and result['reason'] == 'complete_root'
+    assert len(result['bound']) == calls
+    assert result['pageReceipts'] == [p['_proof']['receiptDigest'] for p in pages]
+    assert result['sourceStamp'] == pages[0]['_proof']['sourceStamp']
+    assert result['indexRevision'] == event_window.binding_revision(source.service.data_dir)
+    one = next(row for row in result['bound'] if row['toolCallId'] == 'one')
+    text, offset = [], 0
+    while True:
+        part = event_window.read_field(source.session, one['_eventFields']['output'],
+                                      offset=offset, limit=4096)
+        text.append(part['text'])
+        offset = part['nextOffset']
+        if offset is None:
+            break
+    assert json.loads(''.join(text)) == source.calls[0][3]
+
+
+@pytest.mark.asyncio
+async def test_cumulative_proof_counts_hidden_fifth_occurrence_on_another_page(source):
+    _compact_proof_call(source, 'one')
+    for number in range(143):
+        _compact_proof_call(source, f'later-{number}')
+    await source.diagnostics.flush()
+    # Not a display event. It must nevertheless enter the collision multiset.
+    append_event(source.workspace, 'root', 'session:metadata', {
+        'timestamp': time.time(), 'session_id': 'root', 'tool_call_id': 'one'})
+    pages = await _proof_pages(source)
+    assert pages[0]['_proof']['facts'][0]['event'] == 'session:metadata'
+    assert all(row['event'] != 'session:metadata' for page in pages for row in page['items'])
+    result = _validate_proof(source, pages)
+    assert result['status'] == 'complete'
+    assert len(result['bound']) == 143
+    assert not any(row['toolCallId'] == 'one' for row in result['bound'])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', [
+    'missing-first', 'missing-middle', 'missing-last', 'reverse', 'overlap',
+    'conflicting-duplicate', 'cursor', 'owner', 'window', 'source', 'index',
+    'record-hash', 'record-gap', 'uncovered-hidden', 'attestation', 'item', 'fact',
+    'invalid', 'partial', 'blocked', 'shape', 'gap',
+])
+async def test_cumulative_proof_refuses_incomplete_or_mutated_evidence(source, change):
+    _compact_proof_call(source, 'one')
+    _compact_proof_call(source, 'two')
+    pages = await _proof_pages(source, limit=3)
+    assert len(pages) == 3
+    altered = copy.deepcopy(pages)
+    if change == 'missing-first':
+        altered.pop(0)
+    elif change == 'missing-middle':
+        altered.pop(1)
+    elif change == 'missing-last':
+        altered.pop()
+    elif change == 'reverse':
+        altered.reverse()
+    elif change == 'conflicting-duplicate':
+        duplicate = copy.deepcopy(altered[0])
+        duplicate['_proof']['invalid'] += 1
+        _reseal_proof(duplicate)
+        altered.insert(1, duplicate)
+    elif change == 'overlap':
+        altered[1]['_proof']['consumedEnd'] += 1
+        _reseal_proof(altered[1])
+    elif change == 'record-gap':
+        altered[0]['_proof']['records'][0]['bytes'] -= 1
+        _reseal_proof(altered[0])
+    elif change == 'uncovered-hidden':
+        altered[0]['_proof']['facts'].pop()
+        _reseal_proof(altered[0])
+    elif change in {'invalid', 'partial', 'blocked', 'shape', 'gap'}:
+        key = {'shape': 'shapeInvalid', 'gap': 'gaps'}.get(change, change)
+        altered[0]['_proof'][key] = [{'start': 0, 'end': 1}] if change == 'gap' else 1
+        _reseal_proof(altered[0])
+    else:
+        proof = altered[0]['_proof']
+        if change == 'cursor':
+            proof['nextBefore'] = proof['nextBefore'][:-3] + 'xyz'
+        elif change == 'owner':
+            proof['owner'] = '0' * 64
+        elif change == 'window':
+            proof['windowKey'] = 'another-window'
+        elif change == 'source':
+            proof['sourceStamp'][4] += 1
+        elif change == 'index':
+            proof['indexRevision'][0][4] += 1
+        elif change == 'record-hash':
+            proof['records'][0]['sha256'] = '0' * 64
+        elif change == 'attestation':
+            proof['attestedIds'].append('invented-host-receipt')
+        elif change == 'item':
+            altered[0]['items'][0]['_eventFields'] = {'input': {'path': 'another-owner'}}
+        elif change == 'fact':
+            proof['facts'][0]['data']['turnId'] = 'another-turn'
+        # No reseal: even plausible metadata changes must break authentication.
+    result = _validate_proof(source, altered)
+    assert result['status'] == 'incomplete' and result['bound'] == []
+    assert result['reason'] != 'complete_root'
+
+
+@pytest.mark.asyncio
+async def test_cumulative_proof_identical_step_is_idempotent_but_aggregate_is_bounded(source):
+    for number in range(4):
+        _compact_proof_call(source, f'call-{number}')
+    pages = await _proof_pages(source, limit=2)
+    assert len(pages) == 8
+    result = _validate_proof(source, [pages[0], copy.deepcopy(pages[0]), *pages[1:]])
+    assert result == _validate_proof(source, pages)
+    assert result['status'] == 'complete' and len(result['bound']) == 4
+    # One actual extra page, not a duplicate or deliberately broken cursor.
+    _compact_proof_call(source, 'fifth')
+    await source.diagnostics.flush()
+    more, before, stamp, index = [], None, None, None
+    for _ in range(10):
+        page = event_window.read_proof_step(source.session, window_key='proof-window',
+            cursor_key=b'k' * 32, cache_home=source.service.data_dir, before=before,
+            limit=2, expected_source=stamp, expected_index=index)
+        more.append(page)
+        before = page['before']
+        stamp, index = page['_proof']['sourceStamp'], page['_proof']['indexRevision']
+    assert before is None
+    result = _validate_proof(source, more)
+    assert result['status'] == 'incomplete' and result['reason'] == 'page_limit' and not result['bound']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('damage', ['missing', 'malformed', 'partial', 'badshape', 'missing-index'])
+async def test_proof_step_never_certifies_missing_or_invalid_source(source, damage, tmp_path):
+    if damage != 'missing':
+        _compact_proof_call(source, 'one')
+        await source.diagnostics.flush()
+        path, _, _ = event_window._source(source.session)
+        if damage in {'malformed', 'partial', 'badshape'}:
+            with path.open('ab') as stream:
+                stream.write({'malformed': b'{bad}\n', 'partial': b'{',
+                              'badshape': b'[]\n'}[damage])
+    page = event_window.read_proof_step(source.session, window_key='proof-window',
+        cursor_key=b'k' * 32,
+        cache_home=tmp_path / 'no-index' if damage == 'missing-index' else source.service.data_dir)
+    assert '_proof' in page
+    result = _validate_proof(source, [page])
+    assert result['status'] == 'incomplete' and not result['bound']
+    if damage == 'missing':
+        assert page['_proof']['missing'] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['source', 'index', 'owner'])
+async def test_proof_step_checks_expected_generation_before_read(source, change, monkeypatch):
+    _compact_proof_call(source, 'one')
+    pages = await _proof_pages(source, limit=2)
+    first = pages[0]['_proof']
+    if change == 'source':
+        append_event(source.workspace, 'root', 'session:metadata', {'timestamp': time.time()})
+    elif change == 'index':
+        with source.diagnostics._db() as db:
+            db.execute('DELETE FROM records')
+    else:
+        source.session['id'] = 'another-public-owner'
+    with pytest.raises(event_window.StaleWindow):
+        event_window.read_proof_step(source.session, window_key='proof-window',
+            cursor_key=b'k' * 32, cache_home=source.service.data_dir,
+            before=pages[0]['before'], expected_source=first['sourceStamp'],
+            expected_index=first['indexRevision'])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('boundary', ['initialization', 'authority-query', 'teardown'])
+async def test_proof_step_rejects_index_shift_after_first_page(source, boundary, monkeypatch):
+    _compact_proof_call(source, 'one')
+    pages = await _proof_pages(source, limit=2)
+    first = pages[0]['_proof']
+    connect, committed = event_window.sqlite3.connect, []
+    def commit():
+        with source.diagnostics._db() as writer:
+            writer.execute('DELETE FROM records')
+        committed.append(True)
+    class Observed:
+        def __init__(self, db):
+            self.db = db
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+        def execute(self, sql, *args):
+            result = self.db.execute(sql, *args)
+            if boundary == 'authority-query' and sql.startswith('SELECT event,stream') and not committed:
+                commit()
+            return result
+        def rollback(self):
+            self.db.rollback()
+            if boundary == 'initialization' and not committed:
+                commit()
+        def close(self):
+            self.db.close()
+            if boundary == 'teardown' and not committed:
+                commit()
+    monkeypatch.setattr(event_window.sqlite3, 'connect',
+        lambda database, *args, **kwargs: Observed(connect(database, *args, **kwargs))
+        if str(database).endswith('?mode=ro') else connect(database, *args, **kwargs))
+    with pytest.raises(event_window.StaleWindow):
+        # Repeat the latest step: it includes real attested rows on this fixture.
+        event_window.read_proof_step(source.session, window_key='proof-window',
+            cursor_key=b'k' * 32, cache_home=source.service.data_dir, limit=2,
+            expected_source=first['sourceStamp'], expected_index=first['indexRevision'])
+    assert committed == [True]
+
+
+@pytest.mark.asyncio
+async def test_proof_validator_rejects_other_public_owner_without_path_resolution(source):
+    _compact_proof_call(source, 'one')
+    pages = await _proof_pages(source)
+    source.session.update(id='different-public-root', nativeIdentity='root')
+    result = _validate_proof(source, pages)
+    assert result['status'] == 'incomplete' and result['reason'] == 'owner_changed'
+
+
+@pytest.mark.parametrize('expired', [False, True])
+def test_proof_worker_one_step_honors_absolute_deadline_without_retry(monkeypatch, expired):
+    calls, checks = [], []
+    def read(session, **kwargs):
+        calls.append(kwargs)
+        kwargs['check_budget']()
+        return {'_proof': {}, 'items': []}
+    monkeypatch.setattr(event_window, 'read_proof_step', read)
+    inputs = {'operation': 'proof-step', 'session': {'id': 'root'},
+              'windowKey': 'test', 'cursorKey': (b'k' * 32).hex(),
+              'deadline': time.monotonic() + (-1 if expired else 20),
+              'expectedSource': [1, 2, 3, 4, 5], 'expectedIndex': [[1, 2, 3, 4, 5], None]}
+    result = WindowModel(None).project(inputs, check_budget=lambda: checks.append(True))
+    if expired:
+        assert result == {'status': 'retry', 'reason': 'timeout'}
+        assert not calls
+    else:
+        assert result['status'] == 'complete' and len(calls) == 1
+        assert calls[0]['expected_source'] == inputs['expectedSource']
+        assert calls[0]['expected_index'] == inputs['expectedIndex']
+        assert checks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['source', 'index', 'cursor'])
+async def test_proof_validator_checks_signed_generation_chain_not_only_receipt(source, change):
+    _compact_proof_call(source, 'one')
+    pages = await _proof_pages(source, limit=2)
+    second = pages[1]
+    if change == 'source':
+        second['_proof']['sourceStamp'][4] += 1
+    elif change == 'index':
+        second['_proof']['indexRevision'][0][4] += 1
+    else:
+        bad = pages[0]['before'][:-3] + 'xyz'
+        pages[0]['before'] = pages[0]['_proof']['nextBefore'] = bad
+        second['_proof']['requestBefore'] = bad
+        _reseal_proof(pages[0])
+    _reseal_proof(second)
+    result = _validate_proof(source, pages)
+    assert result['status'] == 'incomplete' and not result['bound']
+    assert result['reason'] == {'source': 'source_changed', 'index': 'index_changed',
+                                'cursor': 'invalid_proof'}[change]
+
+
+@pytest.mark.asyncio
+async def test_proof_consumed_span_is_not_read_ahead_or_oversized_continuation(source):
+    _compact_proof_call(source, 'one')
+    pages = await _proof_pages(source, limit=2)
+    proof = pages[0]['_proof']
+    assert proof['consumedStart'] > 0
+    assert proof['consumedEnd'] - proof['consumedStart'] == sum(r['bytes'] for r in proof['records'])
+    assert pages[0]['coverage']['scannedBytes'] > proof['consumedEnd'] - proof['consumedStart']
+    append_event(source.workspace, 'root', 'session:metadata',
+        {'timestamp': time.time(), 'text': 'x' * (event_window.MAX_BYTES + 8192)})
+    page = event_window.read_proof_step(source.session, window_key='proof-window',
+        cursor_key=b'k' * 32, cache_home=source.service.data_dir)
+    proof = page['_proof']
+    assert not proof['records'] and proof['blocked'] and proof['gaps']
+    assert proof['consumedStart'] == proof['consumedEnd'] == proof['sourceStamp'][2]
+    assert page['coverage']['rangeStart'] < proof['consumedStart']
+    assert _validate_proof(source, [page])['status'] == 'incomplete'
+
+
+@pytest.mark.asyncio
+async def test_proof_all_scalar_fact_cap_includes_non_display_records(source):
+    _compact_proof_call(source, 'one')
+    await source.diagnostics.flush()
+    for number in range(520):
+        append_event(source.workspace, 'root', 'session:metadata',
+            {'timestamp': time.time(), 'sequence': number})
+    pages = await _proof_pages(source)
+    assert len(pages) == 2
+    assert len(pages[0]['_proof']['facts']) == len(pages[0]['_proof']['records']) == 512
+    assert not pages[0]['items'] and pages[0]['before']
+    result = _validate_proof(source, pages)
+    assert result['status'] == 'complete' and len(result['bound']) == 1
+
+
+@pytest.mark.asyncio
+async def test_proof_source_shift_during_index_attestation_refuses_publication(source, monkeypatch):
+    _compact_proof_call(source, 'one')
+    await source.diagnostics.flush()
+    original, writes = event_window._host_receipts, []
+    def shifted(*args, **kwargs):
+        result = original(*args, **kwargs)
+        append_event(source.workspace, 'root', 'session:metadata', {'timestamp': time.time()})
+        writes.append(True)
+        return result
+    monkeypatch.setattr(event_window, '_host_receipts', shifted)
+    with pytest.raises(event_window.StaleWindow):
+        event_window.read_proof_step(source.session, window_key='proof-window',
+            cursor_key=b'k' * 32, cache_home=source.service.data_dir)
+    assert writes == [True]
+
+
+@pytest.mark.parametrize('boundary', ['during', 'after'])
+def test_proof_worker_expiry_during_or_after_step_does_not_return_page(monkeypatch, boundary):
+    from amplifier_web import event_window_worker
+    now, calls = [10.0], []
+    monkeypatch.setattr(event_window_worker.time, 'monotonic', lambda: now[0])
+    def read(session, **kwargs):
+        calls.append(True)
+        now[0] = 21.0
+        if boundary == 'during':
+            kwargs['check_budget']()
+        return {'items': [], '_proof': {}}
+    monkeypatch.setattr(event_window, 'read_proof_step', read)
+    result = WindowModel(None).project({'operation': 'proof-step', 'session': {'id': 'root'},
+        'windowKey': 'test', 'cursorKey': (b'k' * 32).hex(), 'deadline': 20.0},
+        check_budget=lambda: None)
+    assert result == {'status': 'retry', 'reason': 'timeout'} and calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_proof_validator_honors_budget_without_issuing_io(source):
+    _compact_proof_call(source, 'one')
+    pages = await _proof_pages(source)
+    calls = []
+    def expired():
+        calls.append(True)
+        raise TimeoutError('synthetic shared deadline')
+    with pytest.raises(TimeoutError):
+        event_window.validate_root_proof(source.session, pages, cursor_key=b'k' * 32,
+                                        check_budget=expired)
+    assert calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_proof_receipt_survives_host_decoration_but_not_raw_field_mutation(source):
+    _compact_proof_call(source, 'one')
+    pages = await _proof_pages(source)
+    pages[0].update(group='event-window:host', sessionId='root', source={'id': 'root'},
+                    _bindingFence=3, _boundGroups={}, _rootProofId='host-operation')
+    assert _validate_proof(source, pages)['status'] == 'complete'
+    pages[0]['items'][0]['label'] = 'changed original observation'
+    assert _validate_proof(source, pages)['reason'] == 'invalid_receipt'
+
+
+@pytest.mark.asyncio
+async def test_host_cumulative_proof_retains_many_bound_references_inside_existing_pages(source):
+    source.call('one')
+    for number in range(143):
+        _compact_proof_call(source, f'later-{number}')
+    await source.diagnostics.flush()
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    try:
+        result = await owner.read('root', proof=True)
+        assert result['status'] == 'complete' and result['boundCount'] == 144
+        assert result['steps'] == len(owner.pages) == 6
+        rows = owner.proof_nodes('root', result['id'])
+        assert len(rows) == len({row['toolCallId'] for row in rows}) == 144
+        assert all(not {'input', 'output', 'error', 'request', 'response'}.intersection(row) for row in rows)
+        assert all(row['turnId'] == 'turn' and row['rootSessionId'] == 'root' for row in rows)
+        retained = [page for page in owner.pages.values() if '_rootProofBound' in page]
+        assert len(retained) == 1
+        one = next(row for row in rows if row['toolCallId'] == 'one')
+        pieces, offset = [], 0
+        for _ in range(64):
+            field = event_window.read_field(source.session, one['_eventFields']['output'],
+                                            offset=offset, limit=4096)
+            assert len(field['text']) <= 4096
+            pieces.append(field['text'])
+            if field['nextOffset'] is None:
+                break
+            assert field['nextOffset'] > offset
+            offset = field['nextOffset']
+        else:
+            pytest.fail('Canonical reference pagination did not finish')
+        assert json.loads(''.join(pieces)) == source.calls[0][3]
+        owner.invalidate({'root'})
+        with pytest.raises(ValueError, match='proof'):
+            owner.proof_nodes('root', result['id'])
+        assert not any(page.get('_rootProofBound') for page in owner.pages.values())
+        # Raw accepted occurrences remain independently inspectable.
+        page = next(iter(owner.pages.values()))
+        raw = owner.observations('root', page['group'], page['generation'])
+        assert all(row['association'] == 'unverified' for row in raw['items'])
+    finally:
+        await owner.close()
