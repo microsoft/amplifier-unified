@@ -155,6 +155,119 @@ def _check_worker_schema_diagnostic_contract(tmp_path):
         readback = fixture._producer_schema_diagnostics(root)
         assert "unreadable-schema-1" in readback["gaps"] and secret not in json.dumps(readback)
     passed.append("missing-and-corrupt-observation-stays-gap")
+    for fault in ("extraction", "persistence"):
+        for callback_raises in (False, True):
+            report = {"sessionId": "owned-synthetic", "runtimeEvents": [],
+                      "startupDiagnostics": [], "status": "running"}
+            payload = {"sessionId": "owned-synthetic", "phase": "worker_startup",
+                       "diagnosticReceipt": name, "error": secret}
+            payload_before = json.dumps(payload)
+            callback_calls, save_calls, extract_calls = [], [], []
+            callback_error = ValueError("product callback failure")
+            returned = object()
+
+            def extract(*args):
+                extract_calls.append(args)
+                if fault == "extraction":
+                    raise OSError(secret)
+                return derivative
+
+            def persist():
+                save_calls.append(True)
+                raise OSError(secret)
+
+            async def callback(kind, original_payload):
+                callback_calls.append((kind, original_payload))
+                if callback_raises:
+                    raise callback_error
+                return returned
+
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(fixture, "_producer_startup_diagnostic", extract)
+                observer = fixture._producer_event_observer(root, report, persist, callback)
+                if callback_raises:
+                    with pytest.raises(ValueError) as caught:
+                        asyncio.run(observer("runtime.error", payload))
+                    assert caught.value is callback_error
+                else:
+                    assert asyncio.run(observer("runtime.error", payload)) is returned
+            assert len(callback_calls) == 1 and callback_calls[0][1] is payload
+            assert json.dumps(payload) == payload_before and len(extract_calls) == 1
+            assert len(save_calls) == (fault == "persistence")
+            assert report["status"] == "failed" and report["diagnosticIncomplete"] is True
+            assert report["diagnosticFailures"][0]["phase"] == (
+                "event-receipt-extraction" if fault == "extraction" else "event-receipt-save")
+            assert report["secondaryFailures"] and "primaryFailure" not in report
+            assert secret not in json.dumps(report)
+            passed.append(f"event-{fault}-callback-{'raises' if callback_raises else 'returns'}")
+
+    for fault in ("collection", "persistence"):
+        for has_primary in (False, True):
+            primary = {"phase": "producer-admission", "exceptionClass": "ValueError"}
+            report = {"status": "running", "startupDiagnostics": []}
+            if has_primary:
+                report["primaryFailure"] = primary
+            cleanup_calls, collect_calls, save_calls = [], [], []
+            primary_error = ValueError("product primary failure")
+            returned = object()
+
+            def collect(*args):
+                collect_calls.append(args)
+                if fault == "collection":
+                    raise OSError(secret)
+                return {"rows": [], "gaps": ["schema-outcome-not-observed"]}
+
+            def persist():
+                save_calls.append(True)
+                if fault == "persistence":
+                    raise OSError(secret)
+
+            async def cleanup():
+                cleanup_calls.append(True)
+                return returned
+
+            async def attempt():
+                try:
+                    if has_primary:
+                        raise primary_error
+                finally:
+                    result = await fixture._producer_cleanup_with_diagnostics(root, report, persist, cleanup)
+                    assert result is returned
+
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(fixture, "_producer_schema_diagnostics", collect)
+                if has_primary:
+                    with pytest.raises(ValueError) as caught:
+                        asyncio.run(attempt())
+                    assert caught.value is primary_error and report["primaryFailure"] is primary
+                else:
+                    asyncio.run(attempt())
+                    assert "primaryFailure" not in report
+            assert len(cleanup_calls) == len(collect_calls) == len(save_calls) == 1
+            assert report["status"] == "failed" and report["diagnosticIncomplete"] is True
+            assert report["diagnosticFailures"][0]["phase"] == (
+                "precleanup-collection" if fault == "collection" else "precleanup-save")
+            assert report["secondaryFailures"] and secret not in json.dumps(report)
+            passed.append(f"precleanup-{fault}-{'with' if has_primary else 'without'}-primary")
+
+    report = {"status": "observed", "secondaryFailures": [], "primaryFailure": primary}
+    secondary = report["secondaryFailures"]
+    assert fixture._producer_diagnostic_step(root, report, "final-cleanup-save", broken_writer) is False
+    assert report["primaryFailure"] is primary and report["secondaryFailures"] is secondary
+    assert secondary and report["status"] == "failed" and secret not in json.dumps(report)
+    passed.append("final-save-failure-marks-incomplete-without-replacing-primary")
+
+    async def cleanup_failure():
+        cleanup_calls.append(True)
+        raise primary_error
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(fixture, "_producer_schema_diagnostics", lambda root: {"rows": [], "gaps": []})
+        with pytest.raises(ValueError) as caught:
+            asyncio.run(fixture._producer_cleanup_with_diagnostics(root, report, lambda: None, cleanup_failure))
+        assert caught.value is primary_error
+    assert len(cleanup_calls) == 2
+    passed.append("cleanup-exception-not-swallowed")
     return {"status": "passed", "cases": passed,
             "scope": "Authored helper controls only; actual worker evidence is separate"}
 
@@ -215,6 +328,7 @@ def _check_regular_work_details_real_producer_and_service_reopen(tmp_path):
     assert evidence["providerSchemaPreflight"]["providerAttempts"] == 0
     assert evidence["providerSchemaPreflight"]["toolAttempts"] == 0
     assert evidence["workerSchemaDiagnostics"]["gaps"] == []
+    assert not evidence.get("diagnosticIncomplete", False)
     assert any(row["status"] == "returned" for row in evidence["workerSchemaDiagnostics"]["rows"])
     assert evidence["processGuardPreflight"]["status"] == "passed"
     assert evidence["processGuardPreflight"]["cases"][0]["actualPopenAndPosixSpawn"] is True

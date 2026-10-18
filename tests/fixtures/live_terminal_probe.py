@@ -1206,6 +1206,72 @@ async def _producer_observation(client, sid, calls, diagnostics, result):
     return result
 
 
+def _producer_diagnostic_step(root, report, phase, operation):
+    """Diagnostic failures are secondary, never replacements for product work."""
+    try:
+        operation()
+        return True
+    except BaseException as error:
+        report["status"] = "failed"
+        report["diagnosticIncomplete"] = True
+        failures = report.setdefault("diagnosticFailures", [])
+        if len(failures) < 8:
+            try:
+                shape = _producer_exception_shape(error, root)
+            except BaseException:
+                shape = {"exceptionClass": "other", "frames": []}
+            failures.append({"phase": phase, **shape})
+        secondary = report.setdefault("secondaryFailures", [])
+        marker = {"phase": "diagnostics", "reason": "Diagnostic collection or persistence failed"}
+        if marker not in secondary:
+            secondary.append(marker)
+        return False
+
+
+def _producer_event_observer(root, report, save, single):
+    async def observed_event(kind, payload):
+        def observe():
+            assert len(report["runtimeEvents"]) < 512, "Runtime event budget exceeded"
+            public = payload
+            if kind == "runtime.error":
+                public = {"phase": payload.get("phase") if payload.get("phase") in _STARTUP_PHASES else "other",
+                          "errorType": "RuntimeStartupError" if payload.get("errorType") == "RuntimeStartupError"
+                                       else "other"}
+                failures = payload.get("moduleFailures")
+                failures = failures if type(failures) is list else []
+                public["providerSchemaFailed"] = any(
+                    type(row) is dict and row.get("module") == "provider-regularproducer"
+                    and row.get("reason_code") == "provider_schema_failed"
+                    for row in failures[:16])
+                if payload.get("sessionId") == report.get("sessionId"):
+                    name = payload.get("diagnosticReceipt")
+                    if len(report["startupDiagnostics"]) < 2 and not any(
+                            row.get("name") == name for row in report["startupDiagnostics"]):
+                        report["startupDiagnostics"].append(_producer_startup_diagnostic(root, name))
+                        _producer_diagnostic_step(root, report, "event-receipt-save", save)
+            report["runtimeEvents"].append({"kind": kind, "payload": json.loads(json.dumps(public))})
+
+        _producer_diagnostic_step(root, report, "event-receipt-extraction", observe)
+        # Outside the diagnostic catch: exactly once, identical payload/result,
+        # and the original callback's exception remains the primary exception.
+        return await single(kind, payload)
+
+    return observed_event
+
+
+async def _producer_cleanup_with_diagnostics(root, report, save, cleanup):
+    def collect():
+        report["workerSchemaDiagnostics"] = _producer_schema_diagnostics(root)
+        report["startupDiagnosticGaps"] = [
+            row["status"] for row in report.get("startupDiagnostics", []) if row["status"] != "read"]
+
+    _producer_diagnostic_step(root, report, "precleanup-collection", collect)
+    _producer_diagnostic_step(root, report, "precleanup-save", save)
+    # The real socket/task/client/service cleanup runs even when either
+    # observational step failed. Do not catch its result or exception here.
+    return await cleanup()
+
+
 async def producer_main(root, report, save):
     _producer_environment(root)
     report["phase"] = "process-guard-preflight"
@@ -1345,31 +1411,7 @@ async def producer_main(root, report, save):
         report["startupDiagnostics"] = []
         single = service.on_runtime_event.single
 
-        async def observed_event(kind, payload):
-            assert len(report["runtimeEvents"]) < 512, "Runtime event budget exceeded"
-            public = payload
-            if kind == "runtime.error":
-                # Original callback still receives the original payload once.
-                # Do not copy raw error text/exception messages into artifacts.
-                public = {"phase": payload.get("phase") if payload.get("phase") in _STARTUP_PHASES else "other",
-                          "errorType": "RuntimeStartupError" if payload.get("errorType") == "RuntimeStartupError"
-                                       else "other"}
-                failures = payload.get("moduleFailures")
-                failures = failures if type(failures) is list else []
-                public["providerSchemaFailed"] = any(
-                    type(row) is dict and row.get("module") == "provider-regularproducer"
-                    and row.get("reason_code") == "provider_schema_failed"
-                    for row in failures[:16])
-                if payload.get("sessionId") == report.get("sessionId"):
-                    name = payload.get("diagnosticReceipt")
-                    if len(report["startupDiagnostics"]) < 2 and not any(
-                            row.get("name") == name for row in report["startupDiagnostics"]):
-                        report["startupDiagnostics"].append(_producer_startup_diagnostic(root, name))
-                        save()  # Derivative retained before any service cleanup.
-            report["runtimeEvents"].append({"kind": kind, "payload": json.loads(json.dumps(public))})
-            return await single(kind, payload)
-
-        service.on_runtime_event.single = observed_event
+        service.on_runtime_event.single = _producer_event_observer(root, report, save, single)
         async with SessionClient(url, app["control_token"], "producer-controller") as controller:
             created = await controller.create_session(
                 {"title": "Regular producer observation", "bundle": str(bundle),
@@ -1468,37 +1510,38 @@ async def producer_main(root, report, save):
     except BaseException as error:
         report["primaryFailure"] = {"phase": report["phase"],
                                     **_producer_exception_shape(error, root)}
-        save()
+        _producer_diagnostic_step(root, report, "primary-failure-save", save)
         raise
     finally:
         report["phaseBeforeCleanup"] = report["phase"]
-        report["workerSchemaDiagnostics"] = _producer_schema_diagnostics(root)
-        report["startupDiagnosticGaps"] = [
-            row["status"] for row in report.get("startupDiagnostics", []) if row["status"] != "read"]
-        save()
-        cleanup_errors = []
-        for ws in sockets:
-            try:
-                await asyncio.wait_for(ws.close(), 3)
-            except Exception as error:
-                cleanup_errors.append(_producer_exception_shape(error, root))
-        for task in tasks:
-            task.cancel()
-        try:
-            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 3)
-        except Exception as error:
-            cleanup_errors.append(_producer_exception_shape(error, root))
-        for client in reversed(clients):
-            try:
-                await asyncio.wait_for(client.close(), 15)
-            except Exception as error:
-                cleanup_errors.append(_producer_exception_shape(error, root))
-        for service in services:
-            if not service.closed:
+
+        async def cleanup():
+            cleanup_errors = []
+            for ws in sockets:
                 try:
-                    await asyncio.wait_for(service.close(), 10)
+                    await asyncio.wait_for(ws.close(), 3)
                 except Exception as error:
                     cleanup_errors.append(_producer_exception_shape(error, root))
+            for task in tasks:
+                task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 3)
+            except Exception as error:
+                cleanup_errors.append(_producer_exception_shape(error, root))
+            for client in reversed(clients):
+                try:
+                    await asyncio.wait_for(client.close(), 15)
+                except Exception as error:
+                    cleanup_errors.append(_producer_exception_shape(error, root))
+            for service in services:
+                if not service.closed:
+                    try:
+                        await asyncio.wait_for(service.close(), 10)
+                    except Exception as error:
+                        cleanup_errors.append(_producer_exception_shape(error, root))
+            return cleanup_errors
+
+        cleanup_errors = await _producer_cleanup_with_diagnostics(root, report, save, cleanup)
         session_files.append_event = original_append
         report["finalCounts"] = counts()
         report["finalCleanup"] = {"allServicesClosed": all(s.closed for s in services),
@@ -1506,8 +1549,8 @@ async def producer_main(root, report, save):
                                  "errors": cleanup_errors}
         report["guardObservations"] = [json.loads(path.read_text(encoding="utf-8"))
                                       for path in sorted((root / "guard").glob("*.json"))]
-        secondary = []
-        if report["workerSchemaDiagnostics"]["gaps"]:
+        secondary = report.setdefault("secondaryFailures", [])
+        if report.get("workerSchemaDiagnostics", {"gaps": ["unavailable"]})["gaps"]:
             secondary.append({"phase": "diagnostics", "reason": "Worker schema observation incomplete"})
         if cleanup_errors or not report["finalCleanup"]["allServicesClosed"]:
             secondary.append({"phase": "cleanup", "reason": "Services did not close cleanly"})
@@ -1516,7 +1559,7 @@ async def producer_main(root, report, save):
         if report["finalCounts"]["denials"] or report["finalCounts"]["overBudget"]:
             secondary.append({"phase": "audit", "reason": "Unplanned refusal or count budget exceeded"})
         report["secondaryFailures"] = secondary
-        save()
+        _producer_diagnostic_step(root, report, "final-cleanup-save", save)
         # Preserve the original admission/producer error. Cleanup/audit evidence
         # still fails an otherwise successful check, but never replaces it.
         if secondary and "primaryFailure" not in report:
@@ -1555,13 +1598,14 @@ def run_producer():
         report.update(status="failed", failure=report["primaryFailure"])
         report["guardObservations"] = [json.loads(path.read_text(encoding="utf-8"))
                                       for path in sorted((root / "guard").glob("*.json"))]
-        save()
+        _producer_diagnostic_step(root, report, "terminal-failure-save", save)
         print(json.dumps({"status": "failed", "phase": report["phase"], "evidence": str(evidence)}))
         # The exact exception was bare-rethrown at its worker observation site.
         # Do not leak its message/traceback via wrapper stdout/stderr/JUnit.
         raise SystemExit(1) from None
     report["phase"] = "complete"
-    save()
+    if not _producer_diagnostic_step(root, report, "terminal-complete-save", save):
+        raise SystemExit(1)
     print(json.dumps({"status": report["status"], "evidence": str(evidence),
                       "counts": report["finalCounts"], "noExtraColdExecution": True}))
 
