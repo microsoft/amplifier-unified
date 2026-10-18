@@ -1,5 +1,6 @@
 import pytest
 from test_work_windows import fixture
+from test_cold_work_binding import source as canonical_source  # noqa: F401 - shared pytest fixture
 
 
 def live_fixture(tmp_path, monkeypatch, count=126):
@@ -11,7 +12,8 @@ def live_fixture(tmp_path, monkeypatch, count=126):
     return owner, session, service
 
 
-def test_explicit_older_steps_and_live_sync_preserve_all_opened_rows_without_full_scan(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_explicit_older_steps_and_live_sync_preserve_all_opened_rows_without_full_scan(tmp_path, monkeypatch):
     owner, session, _ = live_fixture(tmp_path, monkeypatch)
     slices = []
     class BoundedRows(list):
@@ -31,7 +33,7 @@ def test_explicit_older_steps_and_live_sync_preserve_all_opened_rows_without_ful
     assert [row['id'] for row in older['items']] == [str(i) for i in range(26)]
     assert older['before'] is None
     field = older['items'][0]['outputDetail']
-    assert owner.live_pages.read_text(session, field)['value'] == 'body ' * 1000
+    assert (await owner.live_pages.read_text(session, field))['value'] == 'body ' * 1000
     rows = older['items'] + first['items']
     known = {row['id']: row['detailVersion'] for row in rows}
     session['execution']['nodes'][0]['label'] = 'Older changed'
@@ -46,7 +48,8 @@ def test_explicit_older_steps_and_live_sync_preserve_all_opened_rows_without_ful
     assert slices and all(end - start <= 100 for start, end in slices)
 
 
-def test_cursor_rejects_mutation_rebind_and_other_group_without_replaying(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_cursor_rejects_mutation_rebind_and_other_group_without_replaying(tmp_path, monkeypatch):
     owner, session, _ = live_fixture(tmp_path, monkeypatch)
     first = owner.live_pages.read(session, 't@user')
     with pytest.raises(ValueError):
@@ -61,7 +64,7 @@ def test_cursor_rejects_mutation_rebind_and_other_group_without_replaying(tmp_pa
     with pytest.raises(ValueError, match='expired'):
         owner.live_pages.read(session, 't@user', before=first['before'])
     with pytest.raises(ValueError, match='expired'):
-        owner.live_pages.read_text(session, first['items'][0]['outputDetail'])
+        await owner.live_pages.read_text(session, first['items'][0]['outputDetail'])
 
 
 def test_empty_filtered_ranges_progress_and_never_promote_native_rows(tmp_path, monkeypatch):
@@ -136,8 +139,21 @@ async def test_http_live_steps_offer_older_page_and_sync_preserves_126(authentic
     known = {row['id']: row['detailVersion'] for row in older['items'] + first['items']}
     session['execution']['nodes'][0]['label'] = 'Changed earlier'
     service.event_log_view.windows.invalidate({session['id']})
-    result = await (await client.post('/api/conversation/work-sync', json={
-        'sessionId': session['id'], 'group': 't@user', 'known': known})).json()
+    result = {'order': [], 'items': []}
+    revision = None
+    entries = list(known.items())
+    for start in range(0, len(entries), 100):
+        response = await client.post('/api/conversation/work-sync', json={
+            'sessionId': session['id'], 'group': 't@user', 'paged': True,
+            'known': dict(entries[start:start + 100]),
+            **({'revision': revision} if revision is not None else {})})
+        assert response.status == 200, await response.text()
+        chunk = await response.json()
+        if revision is None:
+            revision = chunk['revision']
+        assert chunk['revision'] == revision and len(chunk['order']) <= 100
+        result['order'].extend(chunk['order'])
+        result['items'].extend(chunk['items'])
     assert result['order'] == [str(i) for i in range(126)]
     assert [row['id'] for row in result['items']] == ['0']
     monkeypatch.setattr(service, '_session', original)
@@ -174,7 +190,8 @@ def test_small_live_appends_coalesce_receipts_instead_of_spending_one_per_revisi
 
 
 @pytest.mark.parametrize('change', ['completed-reconstruction', 'assistant-append'])
-def test_open_steps_follow_completion_and_message_append(tmp_path, monkeypatch, change):
+@pytest.mark.asyncio
+async def test_open_steps_follow_completion_and_message_append(tmp_path, monkeypatch, change):
     import copy
     owner, session, _ = live_fixture(tmp_path, monkeypatch, count=2)
     node = session['execution']['nodes'][-1]
@@ -194,7 +211,7 @@ def test_open_steps_follow_completion_and_message_append(tmp_path, monkeypatch, 
     assert synced['order'] == ['0', '1']
     assert synced['items'][-1]['phase'] == 'completed'
     assert synced['items'][-1]['usage']['totalTokens'] == 120
-    assert owner.live_pages.read_text(session, first['items'][0]['outputDetail'])['value'] == 'body ' * 1000
+    assert (await owner.live_pages.read_text(session, first['items'][0]['outputDetail']))['value'] == 'body ' * 1000
 
 
 @pytest.mark.parametrize('change', ['reorder', 'truncate', 'replace-id', 'reanchor', 'source-rebind', 'session-replaced'])
@@ -234,3 +251,387 @@ def test_reconciled_open_window_reissues_strict_older_cursor(tmp_path, monkeypat
         owner.live_pages.read(session, 't@user', before=first['before'])
     older = owner.live_pages.read(session, 't@user', before=synced['before'], revision=synced['revision'])
     assert [row['id'] for row in older['items']] == [str(i) for i in range(26)]
+
+
+def proven_live_fixture(tmp_path, monkeypatch):
+    """Consumer contract double, not evidence that the producer proves identity."""
+    import copy
+    from amplifier_web.browser_detail import digest
+    owner, session, service = live_fixture(tmp_path, monkeypatch, count=1)
+    node = session['execution']['nodes'][0]
+    node.pop('output')
+    node.update(rootSessionId='s', sessionId='s', revision=2, liveObservation=True)
+    original = copy.deepcopy(node)
+    text = 'canonical \u03bb\U0001f680\n' * 2000
+    state = {'id': 'proof-one', 'status': 'complete', 'generation': 'generation-one'}
+    bound = {**copy.deepcopy(node), 'id': 'raw-occurrence:17',
+             '_eventFields': {'output': {'offset': 17, 'length': 80, 'sha256': 'line-one'}},
+             'outputDetail': {'sessionId': 's', 'part': 'nodes', 'id': 'raw-occurrence:17',
+                              'field': 'output', 'digest': digest(text), 'length': len(text)}}
+    calls = []
+    def status(identity, session=None, **kwargs):
+        assert identity == 's'
+        return dict(state)
+    def binding(current, row, proof_id=None):
+        assert current is session
+        # The matcher receives the actual resident row, not a bound copy or a
+        # synthesized delegate row. The producer owns authenticating these facts.
+        assert row is session['execution']['nodes'][0]
+        calls.append(('binding', proof_id))
+        fields = ('rootSessionId', 'sessionId', 'id', 'kind', 'turnId', 'parentId',
+                  'revision', 'phase', 'startedAt', 'endedAt')
+        if (state['status'] != 'complete' or proof_id not in (None, state['id'])
+                or any(row.get(key) != original.get(key) for key in fields)):
+            return None, None
+        return state['id'], copy.deepcopy(bound)
+    async def field(identity, proof_id, bound_id, args):
+        calls.append(('field', identity, proof_id, bound_id, dict(args)))
+        assert identity == 's' and proof_id == state['id'] and state['status'] == 'complete'
+        assert bound_id == 'raw-occurrence:17'
+        assert args['digest'] == bound['outputDetail']['digest']
+        offset = int(args.get('offset', 0))
+        end = min(len(text), offset + 16000)
+        return {'value': text[offset:end], 'nextOffset': end if end < len(text) else None, 'total': len(text)}
+    def forbidden(*args, **kwargs):
+        raise AssertionError('A resident consumer must not start a proof or scan')
+    monkeypatch.setattr(owner, '_proof_state', status)
+    monkeypatch.setattr(owner, 'live_binding', binding, raising=False)
+    monkeypatch.setattr(owner, 'read_proven_field', field, raising=False)
+    monkeypatch.setattr(owner, 'prove', forbidden)
+    monkeypatch.setattr(owner, 'request', forbidden)
+    return owner, session, service, state, bound, calls, text
+
+
+@pytest.mark.asyncio
+async def test_proven_live_fields_are_ephemeral_and_route_raw_occurrence_without_body_cache(tmp_path, monkeypatch):
+    import copy
+    owner, session, _, _, _, calls, text = proven_live_fixture(tmp_path, monkeypatch)
+    original = copy.deepcopy(session)
+    page = owner.live_pages.read(session, 't@user')
+    row = page['items'][0]
+    assert row['id'] == '0' and 'output' not in row and '_eventFields' not in row
+    field = row['outputDetail']
+    assert field['id'] == '0' and field['windowKey'].startswith('resident-work:')
+    assert field['detailVersion'] == row['detailVersion']
+    pieces, offset = [], 0
+    while offset is not None:
+        result = await owner.live_pages.read_text(session, {**field, 'offset': offset})
+        pieces.append(result['value'])
+        assert result['total'] == len(text)
+        offset = result['nextOffset']
+    assert ''.join(pieces) == text
+    assert all(call[3] == 'raw-occurrence:17' for call in calls if call[0] == 'field')
+    assert session == original
+    retained = repr(owner.live_pages.groups)
+    assert text not in retained and 'canonical ' not in retained
+    assert len(owner.live_pages.groups[(None, 's', 't@user')]['ids']) == 1
+
+
+@pytest.mark.parametrize('key,value', [
+    ('rootSessionId', 'other'), ('sessionId', 'other'), ('id', 'other'),
+    ('kind', 'llm'), ('turnId', 'other'), ('parentId', 'other'), ('revision', 3),
+    ('phase', 'running'), ('startedAt', 0.5), ('endedAt', 3),
+])
+def test_live_consumer_does_not_bypass_full_identity_matcher(tmp_path, monkeypatch, key, value):
+    owner, session, _, _, _, calls, _ = proven_live_fixture(tmp_path, monkeypatch)
+    session['execution']['nodes'][0][key] = value
+    group = 'other@user' if key == 'turnId' else 't@user'
+    page = owner.live_pages.read(session, group)
+    assert calls and all(call[0] == 'binding' for call in calls)
+    assert 'outputDetail' not in page['items'][0]
+
+
+@pytest.mark.parametrize('change', ['proof-id', 'reference', 'digest', 'stale'])
+@pytest.mark.asyncio
+async def test_reference_only_sync_changes_versions_and_expires_old_fields(tmp_path, monkeypatch, change):
+    owner, session, _, state, bound, _, _ = proven_live_fixture(tmp_path, monkeypatch)
+    page = owner.live_pages.read(session, 't@user')
+    old = page['items'][0]
+    if change == 'proof-id':
+        state['id'] = 'proof-two'
+    elif change == 'reference':
+        bound['_eventFields']['output']['sha256'] = 'line-two'
+    elif change == 'digest':
+        bound['outputDetail']['digest'] = 'new-digest'
+    else:
+        state['status'] = 'stale'
+    synced = owner.live_pages.sync(session, 't@user', {'0': old['detailVersion']}, paged=True)
+    assert synced['order'] == ['0'] and len(synced['items']) == 1
+    assert synced['items'][0]['detailVersion'] != old['detailVersion']
+    if change == 'stale':
+        assert 'outputDetail' not in synced['items'][0]
+    else:
+        assert synced['items'][0]['outputDetail']['detailVersion'] == synced['items'][0]['detailVersion']
+    with pytest.raises(ValueError):
+        await owner.live_pages.read_text(session, old['outputDetail'])
+
+
+def test_revision_for_includes_proof_state_without_creating_proof_and_accepts_projection_revision(tmp_path, monkeypatch):
+    owner, session, _, state, _, _, _ = proven_live_fixture(tmp_path, monkeypatch)
+    from amplifier_web.browser_detail import page as detail_page
+    base = detail_page(owner.live_view(session), 'groups')['items'][0]['detailRevision']
+    revision = owner.live_pages.revision_for(session, 't@user', base)
+    result = owner.live_pages.read(session, 't@user', revision=revision)
+    assert result['revision'] == revision
+    state['status'] = 'stale'
+    stale = owner.live_pages.revision_for(session, 't@user', base)
+    assert stale != revision
+    with pytest.raises(ValueError):
+        owner.live_pages.read(session, 't@user', revision=revision)
+    assert owner.live_pages.read(session, 't@user', revision=stale)['revision'] == stale
+    monkeypatch.setattr(owner, '_proof_state', lambda identity, session=None, **kwargs: None)
+    assert owner.live_pages.revision_for(session, 't@user', base) == base
+    assert owner.live_pages.read(session, 't@user', revision=base)['revision'] == base
+
+
+def test_latest_preserve_and_paged_sync_keep_other_chunks_and_do_not_add_tail(tmp_path, monkeypatch):
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=226)
+    first = owner.live_pages.read(session, 't@user')
+    middle = owner.live_pages.read(session, 't@user', before=first['before'])
+    older = owner.live_pages.read(session, 't@user', before=middle['before'])
+    prior = owner.live_pages.groups[(None, 's', 't@user')]
+    key = prior['key']
+    session['execution']['nodes'].append({**session['execution']['nodes'][-1], 'id': '226'})
+    owner.invalidate({'s'})
+    known = {row['id']: row['detailVersion'] for row in older['items']}
+    result = owner.live_pages.sync(session, 't@user', known, paged=True)
+    assert result['order'] == [str(i) for i in range(26)] and not result['items']
+    assert len(prior['ids']) == 226 and '226' not in prior['ids']
+    latest = owner.live_pages.read(session, 't@user', preserve=True)
+    current = owner.live_pages.groups[(None, 's', 't@user')]
+    assert current['key'] == key and len(current['ids']) == 227
+    assert latest['before'] is None
+    assert set(known) <= current['ids'].keys()
+    with pytest.raises(ValueError):
+        owner.live_pages.sync(session, 't@user', {str(i): 'old' for i in range(101)}, paged=True)
+    with pytest.raises(ValueError):
+        owner.live_pages.sync(session, 't@user', known, paged=True, revision='wrong')
+
+
+@pytest.mark.parametrize('change', ['client', 'reopen', 'evict', 'owner', 'source', 'epoch',
+                                    'position', 'group', 'phase', 'revision', 'proof', 'reference'])
+@pytest.mark.asyncio
+async def test_live_field_rechecks_admission_after_await(tmp_path, monkeypatch, change):
+    import asyncio
+    owner, session, service, state, bound, calls, _ = proven_live_fixture(tmp_path, monkeypatch)
+    pages = owner.live_pages
+    page = pages.read(session, 't@user')
+    args = page['items'][0]['outputDetail']
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = owner.read_proven_field
+    async def delayed(*values):
+        result = await original(*values)
+        entered.set()
+        await release.wait()
+        return result
+    monkeypatch.setattr(owner, 'read_proven_field', delayed)
+    task = asyncio.create_task(pages.read_text(session, args))
+    await asyncio.wait_for(entered.wait(), 2)
+    if change == 'client':
+        monkeypatch.setattr(pages, '_client', lambda: 'other-browser')
+    elif change == 'reopen':
+        pages.read(session, 't@user')
+    elif change == 'evict':
+        pages.groups.clear()
+    elif change == 'owner':
+        service._session = lambda identity, hydrate=False: dict(session)
+    elif change == 'source':
+        session['nativeIdentity'] = 'replacement'
+    elif change == 'epoch':
+        owner.invalidate({'s'})
+    elif change == 'position':
+        session['execution']['nodes'].insert(0, {**session['execution']['nodes'][0], 'id': 'new'})
+    elif change == 'group':
+        session['execution']['nodes'][0]['anchorMessageId'] = 'other'
+    elif change == 'phase':
+        session['execution']['nodes'][0]['phase'] = 'running'
+    elif change == 'revision':
+        session['execution']['nodes'][0]['revision'] = 3
+    elif change == 'proof':
+        state['status'] = 'stale'
+    else:
+        bound['_eventFields']['output']['sha256'] = 'replaced'
+    release.set()
+    with pytest.raises(ValueError):
+        await task
+    assert len([call for call in calls if call[0] == 'field']) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_stamp_reopen_expires_receipt_and_cursor(tmp_path, monkeypatch):
+    owner, session, _ = live_fixture(tmp_path, monkeypatch)
+    first = owner.live_pages.read(session, 't@user')
+    second = owner.live_pages.read(session, 't@user')
+    assert first['items'][0]['outputDetail']['windowKey'] != second['items'][0]['outputDetail']['windowKey']
+    with pytest.raises(ValueError):
+        await owner.live_pages.read_text(session, first['items'][0]['outputDetail'])
+    with pytest.raises(ValueError):
+        owner.live_pages.read(session, 't@user', before=first['before'])
+
+
+@pytest.mark.parametrize('change', ['client', 'reopen', 'evict', 'owner', 'epoch', 'position', 'body'])
+@pytest.mark.asyncio
+async def test_inline_field_runs_off_loop_and_revalidates_after_await(tmp_path, monkeypatch, change):
+    import asyncio
+    from amplifier_web import resident_work_pages
+    owner, session, service = live_fixture(tmp_path, monkeypatch, count=2)
+    pages = owner.live_pages
+    args = pages.read(session, 't@user')['items'][0]['outputDetail']
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def delayed(function, *values, **kwargs):
+        result = function(*values, **kwargs)
+        entered.set()
+        await release.wait()
+        return result
+    monkeypatch.setattr(resident_work_pages.asyncio, 'to_thread', delayed)
+    task = asyncio.create_task(pages.read_text(session, args))
+    await asyncio.wait_for(entered.wait(), 2)
+    if change == 'client':
+        monkeypatch.setattr(pages, '_client', lambda: 'other')
+    elif change == 'reopen':
+        pages.read(session, 't@user')
+    elif change == 'evict':
+        pages.groups.clear()
+    elif change == 'owner':
+        service._session = lambda identity, hydrate=False: dict(session)
+    elif change == 'epoch':
+        owner.invalidate({'s'})
+    elif change == 'position':
+        session['execution']['nodes'].reverse()
+    else:
+        session['execution']['nodes'][0]['output'] = 'edit ' * 1000
+    release.set()
+    with pytest.raises(ValueError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_canonical_failure_never_falls_back_to_inline_field(tmp_path, monkeypatch):
+    owner, session, _, _, _, calls, _ = proven_live_fixture(tmp_path, monkeypatch)
+    session['execution']['nodes'][0]['output'] = 'inline fallback ' * 1000
+    args = owner.live_pages.read(session, 't@user')['items'][0]['outputDetail']
+    async def refused(*args):
+        raise ValueError('canonical proof expired')
+    monkeypatch.setattr(owner, 'read_proven_field', refused)
+    with pytest.raises(ValueError, match='canonical proof expired'):
+        await owner.live_pages.read_text(session, args)
+    assert all(call[0] != 'field' for call in calls)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('id', 'other'), ('digest', 'other'), ('detailVersion', 'other'),
+    ('sessionId', 'other'), ('part', 'messages'),
+])
+@pytest.mark.asyncio
+async def test_live_field_rejects_wrong_admission_before_reading(tmp_path, monkeypatch, field, value):
+    owner, session, _, _, _, calls, _ = proven_live_fixture(tmp_path, monkeypatch)
+    args = owner.live_pages.read(session, 't@user')['items'][0]['outputDetail']
+    with pytest.raises(ValueError):
+        await owner.live_pages.read_text(session, {**args, field: value})
+    assert all(call[0] != 'field' for call in calls)
+
+
+@pytest.mark.parametrize('canonical_duplicate', [False, True])
+def test_admitted_position_never_comes_from_a_duplicate_or_filtered_row(tmp_path, monkeypatch, canonical_duplicate):
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=2)
+    session['execution']['nodes'][1]['id'] = '0'
+    if canonical_duplicate:
+        session['execution']['nodes'][1]['canonicalHistory'] = True
+        result = owner.live_pages.read(session, 't@user')
+        assert [row['id'] for row in result['items']] == ['0']
+        assert owner.live_pages.groups[(None, 's', 't@user')]['positions'] == {'0': 0}
+    else:
+        with pytest.raises(ValueError):
+            owner.live_pages.read(session, 't@user')
+        assert not owner.live_pages.groups
+
+
+@pytest.mark.parametrize('change', ['none', 'source', 'index', 'support', 'proof'])
+@pytest.mark.parametrize('timing', ['before', 'during'])
+@pytest.mark.asyncio
+async def test_real_proof_live_refs_sync_and_fence_canonical_reads(canonical_source, monkeypatch, change, timing):
+    """Actual emitter/index + in-process worker; no native/runtime/browser claim."""
+    import asyncio
+    import copy
+    import json
+    from amplifier_web import event_window
+    from amplifier_web.browser_detail import page as detail_page
+    from amplifier_web.work_windows import WorkWindows
+    from test_work_windows import FakeProjector
+    source = canonical_source
+    source.call('one')
+    await source.diagnostics.flush()
+    session = source.session
+    session['execution']['nodes'] = [copy.deepcopy(source.observer.nodes['tool:root:one'])]
+    original = copy.deepcopy(session)
+    owner = WorkWindows(source.service)
+    owner.projector = FakeProjector(source.service.data_dir)
+    pages = owner.live_pages
+    group = detail_page(owner.live_view(session), 'groups')['items'][0]['id']
+    try:
+        before = pages.read(session, group)
+        row = before['items'][0]
+        assert 'inputDetail' not in row and 'outputDetail' not in row
+        proof = await owner.prove('root')
+        assert proof['status'] == 'complete'
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Resident read/sync/field must not initiate a proof')
+        monkeypatch.setattr(owner, 'prove', forbidden)
+        monkeypatch.setattr(owner, 'request', forbidden)
+        synced = pages.sync(session, group, {row['id']: row['detailVersion']}, paged=True)
+        assert len(synced['items']) == 1
+        row = synced['items'][0]
+        assert row['detailVersion'] != before['items'][0]['detailVersion']
+        assert 'inputDetail' in row and 'outputDetail' in row
+        assert session == original
+        args = {**row['outputDetail'], 'limit': 4096}
+        entered, release = asyncio.Event(), asyncio.Event()
+        project = owner.projector.project
+        async def delayed(inputs, *, key):
+            result = await project(inputs, key=key)
+            if inputs['operation'] == 'field':
+                entered.set()
+                await release.wait()
+            return result
+        def invalidate():
+            if change == 'source':
+                path, _, _ = event_window._source(session)
+                with path.open('ab') as handle:
+                    handle.write(b'\n')
+            elif change == 'index':
+                with source.diagnostics._db() as db:
+                    db.execute('DELETE FROM records')
+            elif change == 'support':
+                owner.pages.clear()
+            elif change == 'proof':
+                owner.invalidate({'root'})
+        if timing == 'during':
+            monkeypatch.setattr(owner.projector, 'project', delayed)
+            task = asyncio.create_task(pages.read_text(session, args))
+            await asyncio.wait_for(entered.wait(), 2)
+            invalidate()
+            release.set()
+        else:
+            invalidate()
+            task = asyncio.create_task(pages.read_text(session, args))
+        if change == 'none':
+            result = await task
+            pieces = [result['value']]
+            for _ in range(64):
+                if result['nextOffset'] is None:
+                    break
+                result = await pages.read_text(session, {**args, 'offset': result['nextOffset']})
+                pieces.append(result['value'])
+            else:
+                pytest.fail('Bounded canonical read did not finish')
+            assert json.loads(''.join(pieces)) == source.calls[0][3]
+        else:
+            with pytest.raises(ValueError):
+                await task
+            stale = pages.sync(session, group, {row['id']: row['detailVersion']}, paged=True)
+            assert stale['items'][0]['detailVersion'] != row['detailVersion']
+            assert 'outputDetail' not in stale['items'][0] and 'inputDetail' not in stale['items'][0]
+        assert session == original
+        assert not any('input' in value or 'output' in value for value in session['execution']['nodes'])
+    finally:
+        await owner.close()

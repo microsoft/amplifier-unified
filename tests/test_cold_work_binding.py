@@ -1700,7 +1700,7 @@ async def test_selected_work_consumer_pages_complete_proof_without_manual_raw_di
 async def test_live_binding_requires_whole_attested_invocation_not_call_id(source, changed):
     source.call('one')
     await source.diagnostics.flush()
-    row = copy.deepcopy(source.observer.calls[('root', 'one')])
+    row = copy.deepcopy(source.observer.nodes['tool:root:one'])
     source.session['execution']['nodes'] = [row]
     owner = WorkWindows(source.service)
     class Direct:

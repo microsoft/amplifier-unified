@@ -441,11 +441,7 @@ async def test_regular_work_details_observer_and_service_reopen(
             for field in ("input", "output"):
                 await _field(client, sid, row, field, call[field])
 
-        synced = await client.post("/api/conversation/work-sync", json={
-            "sessionId": sid, "group": group["id"],
-            "known": {row["id"]: row["detailVersion"] for row in rows}})
-        assert synced.status == 200, await synced.text()
-        result = await synced.json()
+        result = await _paged_sync(client, sid, group, rows)
         assert result["order"] == [row["id"] for row in rows]
         assert len(set(result["order"])) == len(calls)
         # Retained early-page field receipts must remain usable after sync.
@@ -667,4 +663,460 @@ async def test_cold_ordinary_calls_keep_original_evidence(authenticated_client, 
             await rejected.read()
         retained = await _all_nodes(client, sid, group, 4)
         assert [row["id"] for row in retained] == [row["id"] for row in ordinary]
+        assert not service.runtime.sent and not service.runtime.started
+
+
+async def _paged_sync(client, sid, group, rows):
+    """Sync only admitted IDs, pinning every later chunk to the first result."""
+    order, items, revision = [], [], None
+    assert rows and len({row["id"] for row in rows}) == len(rows)
+    async with asyncio.timeout(30):
+        for start in range(0, len(rows), 100):
+            chunk = rows[start:start + 100]
+            known = {row["id"]: row["detailVersion"] for row in chunk}
+            payload = {"sessionId": sid, "group": group["id"],
+                       "paged": True, "known": known}
+            if revision is not None:
+                payload["revision"] = revision
+            response = await client.post("/api/conversation/work-sync", json=payload)
+            assert response.status == 200, await response.text()
+            page = await response.json()
+            assert page["group"] == group["id"]
+            assert isinstance(page["revision"], str) and page["revision"]
+            if revision is None:
+                revision = page["revision"]
+            assert page["revision"] == revision
+            assert page["order"] == list(known), "Sync leaked, lost or reordered another admitted range"
+            assert len(page["items"]) <= len(known) <= 100
+            changed = [row["id"] for row in page["items"]]
+            assert len(changed) == len(set(changed)) and set(changed) <= known.keys()
+            assert changed == [identity for identity in known if identity in set(changed)]
+            order.extend(page["order"])
+            items.extend(page["items"])
+    assert order == [row["id"] for row in rows]
+    assert len(order) == len(set(order)) == len(rows)
+    return {"group": group["id"], "revision": revision, "order": order, "items": items}
+
+
+async def _selected_web_session(client, sid):
+    response = await client.get("/api/state")
+    assert response.status == 200, await response.text()
+    state = await response.json()
+    assert state["selectedSessionId"] == sid
+    return next(row for row in state["sessions"] if row["id"] == sid)
+
+
+async def _resident_group_without_detail_read(client, sid, interim_id):
+    """Discover through public metadata, without privately priming a proof."""
+    projected = await _selected_web_session(client, sid)
+    candidates = [row for row in projected["execution"]["segments"]
+                  if row.get("turnId") == INPUT_ID
+                  and row.get("anchorMessageId") == interim_id
+                  and not row.get("observationWindow")]
+    assert len(candidates) == 1, candidates
+    return candidates[0]
+
+
+async def _refused_field(client, reference):
+    async with asyncio.timeout(30):
+        response = await client.get(DETAIL_URL, params=reference)
+        body = await response.json()
+    assert response.status == 400, body
+    assert body.get("error") and "value" not in body and "nextOffset" not in body
+
+
+class _HeldWindowModel:
+    """Real WindowModel results; a one-shot gate AFTER computation, never a fake field.
+
+    This isolates the host's post-await checks. It does not qualify subprocess
+    transport. The outer HTTP route and all source/index readers remain real.
+    """
+
+    def __init__(self, home, operation):
+        from amplifier_web.event_window_worker import WindowModel
+        self.model = WindowModel(home)
+        self.operation = operation
+        self.operations = []
+        self.entered, self.release = asyncio.Event(), asyncio.Event()
+        self.result = None
+        self.used = False
+
+    async def project(self, inputs, *, key):
+        assert len(self.operations) < 64, "Consumer control exceeded its worker-call bound"
+        self.operations.append(inputs["operation"])
+        deadline = time.monotonic() + 20
+
+        def check_budget():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Consumer control exceeded its real-reader deadline")
+
+        result = await asyncio.to_thread(self.model.project, inputs, check_budget=check_budget)
+        if inputs["operation"] == self.operation and not self.used:
+            self.used = True
+            self.result = result
+            self.entered.set()
+            await asyncio.wait_for(self.release.wait(), 10)
+        return result
+
+
+@asynccontextmanager
+async def _hold_model_result(service, operation):
+    model = _HeldWindowModel(service.data_dir, operation)
+    patch = pytest.MonkeyPatch()
+    # Only the transport seam is replaced. No rows, references, proof facts or
+    # WindowModel result bodies are manufactured by this test.
+    patch.setattr(service.event_log_view.windows, "_worker", lambda: model)
+    try:
+        yield model
+    finally:
+        model.release.set()
+        patch.undo()
+
+
+@pytest.mark.parametrize("entry_route", ["groups", "nodes"])
+async def test_public_work_read_starts_proof_without_enriching_resident_metadata(
+        authenticated_client, tmp_path, entry_route):
+    from copy import deepcopy
+    async with _scenario(authenticated_client, tmp_path, 0, False) as fixture:
+        service, client, calls, sid, _, interim_id, _ = fixture
+        await service.diagnostics.flush()
+        resident = service._session(sid, hydrate=False)["execution"]["nodes"]
+        before = deepcopy(resident)
+        assert len(before) == 4 and all(not BODY_FIELDS.intersection(row) for row in before)
+        metadata = await _selected_web_session(client, sid)
+        assert metadata.get("workProjection", {}).get("rootProof") is None
+
+        if entry_route == "groups":
+            group = await _current_group(client, sid, interim_id)
+            rows = await _all_nodes(client, sid, group, 4)
+        else:
+            group = await _resident_group_without_detail_read(client, sid, interim_id)
+            page = await _get(client, {"sessionId": sid, "part": "nodes", "group": group["id"]})
+            assert page["group"] == group["id"] and page["before"] is None
+            rows = page["items"]
+            assert len(rows) == len({row["id"] for row in rows}) == 4
+        assert [row["toolCallId"] for row in rows] == [call["call"] for call in calls]
+        for row, call in zip(rows, calls):
+            for field in ("input", "output"):
+                assert isinstance(row.get(field + "Detail"), dict)
+                await _field(client, sid, row, field, call[field])
+        proof = (await _selected_web_session(client, sid))["workProjection"]["rootProof"]
+        assert proof["status"] == "complete" and proof["boundCount"] == 4
+        assert 1 <= proof["steps"] <= 8
+        assert service._session(sid, hydrate=False)["execution"]["nodes"] == before
+        assert all(not BODY_FIELDS.intersection(row) for row in resident)
+        assert not service.runtime.sent and not service.runtime.started
+
+
+async def test_field_sync_and_state_reads_do_not_start_missing_or_pending_proof(
+        authenticated_client, tmp_path):
+    async with _scenario(authenticated_client, tmp_path, 0, False) as fixture:
+        service, client, _, sid, _, interim_id, _ = fixture
+        await service.diagnostics.flush()
+        group = await _resident_group_without_detail_read(client, sid, interim_id)
+        node = service._session(sid, hydrate=False)["execution"]["nodes"][1]
+        missing = {"sessionId": sid, "part": "nodes", "id": node["id"],
+                   "field": "output", "digest": "not-admitted",
+                   "windowKey": "resident-work:not-admitted"}
+        windows = service.event_log_view.windows
+        async with _hold_model_result(service, "proof-step") as model:
+            async def passive_controls(expected_status):
+                proof_before = windows._root_proofs.get(sid)
+                steps_before = model.operations.count("proof-step")
+                await _refused_field(client, missing)
+                response = await client.post("/api/conversation/work-sync", json={
+                    "sessionId": sid, "group": group["id"], "paged": True, "known": {}})
+                assert response.status == 400, await response.text()
+                await response.read()
+                metadata = await _selected_web_session(client, sid)
+                proof = metadata.get("workProjection", {}).get("rootProof")
+                assert (proof.get("status") if proof else None) == expected_status
+                assert windows._root_proofs.get(sid) is proof_before
+                assert model.operations.count("proof-step") == steps_before
+                assert "field" not in model.operations
+
+            await passive_controls(None)
+            waiters, both_waiting = [], asyncio.Event()
+            await_proof = windows._await_proof
+
+            async def observe_waiter(identity, task, record):
+                # Observation only: both entry points still originate in HTTP.
+                waiters.append(task)
+                if len(waiters) == 2:
+                    both_waiting.set()
+                return await await_proof(identity, task, record)
+
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(windows, "_await_proof", observe_waiter)
+                opening = asyncio.create_task(_get(client, {"sessionId": sid, "part": "groups"}))
+                joining = None
+                try:
+                    await asyncio.wait_for(model.entered.wait(), 5)
+                    assert model.result["status"] == "complete"
+                    assert windows._root_proofs[sid]["status"] == "pending"
+                    await passive_controls("pending")
+                    joining = asyncio.create_task(_get(client, {
+                        "sessionId": sid, "part": "nodes", "group": group["id"]}))
+                    await asyncio.wait_for(both_waiting.wait(), 5)
+                    assert len(waiters) == 2 and waiters[0] is waiters[1]
+                    assert not waiters[0].done()
+                    model.release.set()
+                    await asyncio.wait_for(asyncio.gather(opening, joining), 15)
+                    assert model.operations.count("proof-step") == 1
+                    proof = (await _selected_web_session(client, sid))["workProjection"]["rootProof"]
+                    assert proof["status"] == "complete" and proof["boundCount"] == 4
+                finally:
+                    model.release.set()
+                    for task in (opening, joining):
+                        if task is not None and not task.done():
+                            task.cancel()
+                    await asyncio.gather(*(task for task in (opening, joining) if task is not None),
+                                         return_exceptions=True)
+        assert not service.runtime.sent and not service.runtime.started
+
+
+async def test_forged_resident_lifecycle_never_inherits_canonical_body_references(
+        authenticated_client, tmp_path):
+    from copy import deepcopy
+    async with _scenario(authenticated_client, tmp_path, 0, False) as fixture:
+        service, client, calls, sid, _, interim_id, _ = fixture
+        await service.diagnostics.flush()
+        group = await _current_group(client, sid, interim_id)
+        rows = await _all_nodes(client, sid, group, 4)
+        by_call = {row["toolCallId"]: row for row in rows}
+        await _field(client, sid, by_call["read"], "output", calls[1]["output"])
+        target = next(row for row in service._session(sid, hydrate=False)["execution"]["nodes"]
+                      if row["toolCallId"] == "read")
+        original = deepcopy(target)
+        mutations = {
+            "id": original["id"] + "-forged",
+            "turnId": INPUT_ID + "-forged",
+            "sessionId": sid + "-forged",
+            "rootSessionId": sid + "-forged",
+            "parentId": "forged-parent",
+            "phase": "failed",
+            "revision": original["revision"] + 1,
+            "startedAt": original["startedAt"] + 0.001,
+            "endedAt": original["endedAt"] + 0.001,
+        }
+        for name, value in mutations.items():
+            # Only this synthetic resident lifecycle is altered. Canonical
+            # records and the completed proof remain untouched.
+            target[name] = value
+            try:
+                changed = await _get(client, {
+                    "sessionId": sid, "part": "nodes", "group": group["id"]})
+                candidates = [row for row in changed["items"] if row.get("toolCallId") == "read"]
+                assert len(candidates) <= 1
+                assert all(not BODY_FIELDS.intersection(row) for row in candidates), name
+                await _refused_field(client, by_call["read"]["outputDetail"])
+                unaffected = {row["toolCallId"]: row for row in changed["items"]
+                              if row.get("toolCallId") != "read"}
+                assert set(unaffected) == {"state", "shell", "canvas"}, name
+                await _field(client, sid, unaffected["canvas"], "input", calls[3]["input"])
+            finally:
+                target.clear()
+                target.update(deepcopy(original))
+            restored = await _get(client, {
+                "sessionId": sid, "part": "nodes", "group": group["id"]})
+            by_call = {row["toolCallId"]: row for row in restored["items"]}
+            await _field(client, sid, by_call["read"], "output", calls[1]["output"])
+        assert target == original and not BODY_FIELDS.intersection(target)
+        assert not service.runtime.sent and not service.runtime.started
+
+
+@pytest.mark.parametrize("reopen", [False, True], ids=["resident", "cold"])
+async def test_public_ordinary_field_receipts_are_browser_owned(
+        authenticated_client, tmp_path, reopen):
+    async with _scenario(authenticated_client, tmp_path, 0, reopen) as fixture:
+        service, client, calls, sid, _, interim_id, _ = fixture
+        await service.diagnostics.flush()
+        group = await _current_group(client, sid, interim_id)
+        rows = await _all_nodes(client, sid, group, 4)
+        original = next(row for row in rows if row["toolCallId"] == "read")
+        await _field(client, sid, original, "output", calls[1]["output"])
+        other_id = "regular-details-other-browser"
+        service.clients.attach(other_id, kind="web")
+        assert service.clients.records[other_id]["selectedSessionId"] == sid
+        client.session.headers["X-Amplifier-Client"] = other_id
+        stream = None
+        try:
+            stream = await client.ws_connect("/api/events/ws?transport=delta-v1")
+            assert (await stream.receive_json(timeout=5))["event"] == "state"
+            await _refused_field(client, original["outputDetail"])
+            other = await _get(client, {
+                "sessionId": sid, "part": "nodes", "group": group["id"],
+                "revision": group["detailRevision"]})
+            own_row = next(row for row in other["items"] if row["toolCallId"] == "read")
+            await _field(client, sid, own_row, "output", calls[1]["output"])
+            # Admitting the same node to another browser cannot redeem the
+            # first browser's exact receipt.
+            await _refused_field(client, original["outputDetail"])
+        finally:
+            client.session.headers["X-Amplifier-Client"] = BROWSER_ID
+            if stream is not None:
+                await stream.close()
+        await _field(client, sid, original, "output", calls[1]["output"])
+        await _refused_field(client, own_row["outputDetail"])
+        assert not service.runtime.sent and not service.runtime.started
+
+
+@pytest.mark.parametrize("reopen", [False, True], ids=["resident", "cold"])
+async def test_public_144_node_pages_preserve_receipts_and_sync_exact_subsets(
+        authenticated_client, tmp_path, reopen):
+    async with _scenario(authenticated_client, tmp_path, 140, reopen) as fixture:
+        service, client, calls, sid, _, interim_id, _ = fixture
+        await service.diagnostics.flush()
+        group = await _current_group(client, sid, interim_id)
+        rows = await _all_nodes(client, sid, group, 144)
+        assert [row["toolCallId"] for row in rows] == [call["call"] for call in calls]
+        by_call = {row["toolCallId"]: row for row in rows}
+        latest_query = {"sessionId": sid, "part": "nodes", "group": group["id"],
+                        "revision": group["detailRevision"], "preserve": "true"}
+        latest = await _get(client, latest_query)
+        assert len(latest["items"]) == 100 and latest["before"] is None
+        assert [row["id"] for row in latest["items"]] == [row["id"] for row in rows[-100:]]
+        await _field(client, sid, by_call["read"], "output", calls[1]["output"])
+        await _field(client, sid, by_call["canvas"], "input", calls[3]["input"])
+        over_limit = await client.post("/api/conversation/work-sync", json={
+            "sessionId": sid, "group": group["id"], "paged": True,
+            "known": {row["id"]: row["detailVersion"] for row in rows}})
+        assert over_limit.status == 400, await over_limit.text()
+        await over_limit.read()
+        result = await _paged_sync(client, sid, group, rows)
+        assert result["order"] == [row["id"] for row in rows]
+        assert len(set(result["order"])) == 144
+        # A later chunk cannot silently discard earlier admitted IDs.
+        again = await _paged_sync(client, sid, group, rows[:44])
+        assert again["order"] == [row["id"] for row in rows[:44]]
+        await _field(client, sid, by_call["read"], "output", calls[1]["output"])
+        await _field(client, sid, by_call["canvas"], "input", calls[3]["input"])
+
+        # Acquire a fresh latest window for cursor refusal controls. preserve
+        # above correctly retained the exhausted oldest cursor of all144 calls.
+        fresh = await _get(client, {key: value for key, value in latest_query.items()
+                                   if key != "preserve"})
+        assert fresh["before"]
+        cursor_query = {**latest_query, "before": fresh["before"]}
+        cursor = fresh["before"]
+        forged_cursor = ("A" if cursor[0] != "A" else "B") + cursor[1:]
+        for invalid in ({**cursor_query, "before": forged_cursor},
+                        {**cursor_query, "group": group["id"] + "-other"},
+                        {**cursor_query, "revision": "obsolete"}):
+            response = await client.get(DETAIL_URL, params=invalid)
+            assert response.status == 400, await response.text()
+            await response.read()
+        service.clients.attach("regular-cursor-other-browser", kind="web")
+        client.session.headers["X-Amplifier-Client"] = "regular-cursor-other-browser"
+        try:
+            response = await client.get(DETAIL_URL, params=cursor_query)
+            assert response.status == 400, await response.text()
+            await response.read()
+        finally:
+            client.session.headers["X-Amplifier-Client"] = BROWSER_ID
+        retained = await _get(client, cursor_query)
+        assert [row["id"] for row in retained["items"]] == [row["id"] for row in rows[:44]]
+        assert retained["before"] is None
+        # A valid token cannot survive a different canonical source owner.
+        # Change only the synthetic owner descriptor, not its proof or cursor.
+        owner = service._session(sid, hydrate=False)
+        had_identity = "nativeIdentity" in owner
+        prior_identity = owner.get("nativeIdentity")
+        owner["nativeIdentity"] = "regular-rebound-owner"
+        try:
+            response = await client.get(DETAIL_URL, params=cursor_query)
+            assert response.status == 400, await response.text()
+            await response.read()
+        finally:
+            if had_identity:
+                owner["nativeIdentity"] = prior_identity
+            else:
+                owner.pop("nativeIdentity", None)
+        assert not service.runtime.sent and not service.runtime.started
+
+
+async def test_stale_proof_sync_removes_refs_with_new_versions_without_restarting_proof(
+        authenticated_client, tmp_path):
+    from copy import deepcopy
+    async with _scenario(authenticated_client, tmp_path, 0, False) as fixture:
+        service, client, calls, sid, _, interim_id, _ = fixture
+        await service.diagnostics.flush()
+        group = await _current_group(client, sid, interim_id)
+        rows = await _all_nodes(client, sid, group, 4)
+        original = next(row for row in rows if row["toolCallId"] == "read")
+        await _field(client, sid, original, "output", calls[1]["output"])
+        resident = deepcopy(service._session(sid, hydrate=False)["execution"]["nodes"])
+        windows = service.event_log_view.windows
+        proof_id = windows._root_proofs[sid]["id"]
+        windows.invalidate({sid})  # Negative dependency change, never proof creation.
+        async with _hold_model_result(service, None) as model:
+            await _refused_field(client, original["outputDetail"])
+            result = await _paged_sync(client, sid, group, rows)
+            assert result["order"] == [row["id"] for row in rows]
+            assert [row["id"] for row in result["items"]] == result["order"]
+            old = {row["id"]: row for row in rows}
+            for row in result["items"]:
+                assert not BODY_FIELDS.intersection(row)
+                assert row["detailVersion"] != old[row["id"]]["detailVersion"]
+            proof = (await _selected_web_session(client, sid))["workProjection"]["rootProof"]
+            assert proof["id"] == proof_id and proof["status"] == "stale"
+            assert "proof-step" not in model.operations and "field" not in model.operations
+        assert service._session(sid, hydrate=False)["execution"]["nodes"] == resident
+        assert not service.runtime.sent and not service.runtime.started
+
+
+@pytest.mark.parametrize("mutation", [
+    "source", "index", "epoch", "entry-eviction", "proof-eviction", "resident-identity",
+])
+async def test_public_field_refuses_dependency_changes_after_real_model_await(
+        authenticated_client, tmp_path, mutation):
+    async with _scenario(authenticated_client, tmp_path, 0, False) as fixture:
+        service, client, calls, sid, _, interim_id, _ = fixture
+        await service.diagnostics.flush()
+        group = await _current_group(client, sid, interim_id)
+        rows = await _all_nodes(client, sid, group, 4)
+        original = next(row for row in rows if row["toolCallId"] == "read")
+        await _field(client, sid, original, "output", calls[1]["output"])
+        windows = service.event_log_view.windows
+        session = service._session(sid, hydrate=False)
+        reference = {**original["outputDetail"], "offset": 0, "limit": 4096}
+        async with _hold_model_result(service, "field") as model:
+            task = asyncio.create_task(_refused_field(client, reference))
+            try:
+                await asyncio.wait_for(model.entered.wait(), 5)
+                assert model.result["status"] == "complete"
+                # These are real canonical bytes, computed before invalidation.
+                value = model.result["field"]["text"]
+                assert value and len(value) <= 4096
+                assert "REGULAR-READ-OUTPUT" in value
+                if mutation == "source":
+                    with event_path(session, sid).open("a", encoding="utf-8") as stream:
+                        stream.write("{}\n")
+                elif mutation == "index":
+                    with service.diagnostics._db() as db:
+                        db.execute(
+                            "INSERT INTO records(id,at,stream,session,workspace,event,data) "
+                            "VALUES(?,0,'tools',?,?,'tool:post','{}')",
+                            ("regular-held-field-index-change", sid, str(tmp_path)))
+                elif mutation == "epoch":
+                    windows.invalidate({sid})
+                elif mutation == "entry-eviction":
+                    removed = windows.live_pages.groups.pop((BROWSER_ID, sid, group["id"]))
+                    assert original["id"] in removed["ids"]
+                elif mutation == "proof-eviction":
+                    support = windows._root_proofs[sid]["pages"][0][0]
+                    assert windows.pages.pop(support)
+                else:
+                    target = next(row for row in session["execution"]["nodes"]
+                                  if row["id"] == original["id"])
+                    target["parentId"] = "changed-after-field-await"
+                model.release.set()
+                await asyncio.wait_for(task, 5)
+                assert model.operations.count("field") == 1
+                assert "proof-step" not in model.operations
+            finally:
+                model.release.set()
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         assert not service.runtime.sent and not service.runtime.started

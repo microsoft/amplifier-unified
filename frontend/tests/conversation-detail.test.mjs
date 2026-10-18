@@ -8,6 +8,43 @@ const {useConversationDetail}=await server.ssrLoadModule('/src/conversation-deta
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>server.close());
 const source=id=>({id,messages:[{id:id+'-last',text:'Current'}],messageWindow:{offset:1,before:id+'-last'},execution:{nodes:[],turns:[],segments:[]},executionWindow:{offset:1,before:'g-last',part:'groups'}});
 const response=value=>new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});
+test('selected Work opens once, ignores metadata ticks, and explicitly reopens after a refusal',async()=>{
+ let detail,root,value={...source('one'),execution:{nodes:[],turns:[],segments:[],detailsDeferred:true}};
+ const original=globalThis.fetch,calls=[];
+ globalThis.fetch=(url,options)=>new Promise(resolve=>calls.push({url,options,resolve}));
+ function Probe(){detail=useConversationDetail(value);return detail.controls}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});
+  assert.equal(calls.length,1);
+  assert.equal(new URL(calls[0].url,'http://test').searchParams.get('part'),'groups');
+  value={...value,status:'working',workProjection:{rootProof:{status:'pending'}}};
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(calls.length,1,'state-only updates cannot rescan proof');
+  await act(async()=>calls[0].resolve(new Response(JSON.stringify({error:'Superseded Work read'}),{status:400})));
+  assert.equal(root.root.findAllByProps({role:'alert'}).length,1);
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(calls.length,1,'refusal cannot retry itself');
+  await act(async()=>detail.latest(false));
+  assert.equal(calls.length,2,'explicit latest reopens once');
+  await act(async()=>calls[1].resolve(response({items:[],turns:[]})));
+  assert.equal(root.root.findAllByProps({role:'alert'}).length,0);
+ }finally{await act(async()=>root?.unmount());globalThis.fetch=original}
+});
+test('leaving a selected Work read aborts it without carrying a late error to another chat',async()=>{
+ let detail,root,value={...source('one'),execution:{detailsDeferred:true}};
+ const original=globalThis.fetch,calls=[];
+ globalThis.fetch=(url,options)=>new Promise(resolve=>calls.push({url,options,resolve}));
+ function Probe(){detail=useConversationDetail(value);return detail.controls}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});
+  value={...source('two'),execution:{detailsDeferred:true}};
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(calls.length,2);assert.equal(calls[0].options.signal.aborted,true);
+  await act(async()=>calls[0].resolve(new Response(JSON.stringify({error:'Old failure'}),{status:400})));
+  await act(async()=>calls[1].resolve(response({items:[],turns:[]})));
+  assert.equal(detail.session.id,'two');assert.equal(root.root.findAllByProps({role:'alert'}).length,0);
+ }finally{await act(async()=>root?.unmount());globalThis.fetch=original}
+});
 test('unchanged message branches survive parent renders and unrelated session updates',async()=>{
  let detail,root,value=source('one');
  function Probe(){detail=useConversationDetail(value);return detail.controls}
