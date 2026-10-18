@@ -105,7 +105,10 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
     assert (output/'evidence.json').is_file(), (output/'stderr.log').read_text()[-3000:]
     report = json.loads((output/'evidence.json').read_text())
     require_normal_cleanup(report,cleanup)
-    assert report['variant']==variant and report['workerReadyAtSettlement']
+    assert report['variant']==variant
+    assert report.get('workerReadyAtSettlement') is True, json.dumps({
+        'failure':report.get('failure'), 'state':report.get('state'),
+        'stages':report.get('stages'), 'stderr':(output/'stderr.log').read_text()[-3000:]})
     assert len(report['workerSources'])==len(report['processes'])
     methods={x['method'] for x in report['workerEvents'] if x['stage']=='production-method-entry'}
     assert {'start','prepare_manager','acquire_for_mutation'} <= methods
@@ -180,3 +183,45 @@ def test_native_placement_next_response_requires_bound_success(case):
     else:
         with pytest.raises(AssertionError, match='Next generation did not succeed|Missing exact successful final response'):
             require_next_success(owner)
+
+
+def placement_provider_module():
+    from types import ModuleType
+    from fixtures.patch_placement_native_probe import PROVIDER
+    module = ModuleType('placement_metadata_contract')
+    exec(compile(PROVIDER, '<placement-provider-fixture>', 'exec'), module.__dict__)
+    return module
+
+
+async def test_placement_provider_supports_actual_metadata_constructor():
+    from amplifier_web.provider_environment import construct_schema_provider, config_schema, close_provider
+    module = placement_provider_module()
+    supplied = {'scenario':'synthetic-not-read', 'default_model':'offline-placement'}
+    provider = construct_schema_provider(module.PlacementProvider, supplied)
+    try:
+        assert provider.coordinator is None
+        assert provider.config == {} and provider.config is not supplied
+        assert await config_schema(provider) == {'fields':[]}
+        assert provider.get_info().defaults['model'] == 'offline-placement'
+        assert supplied == {'scenario':'synthetic-not-read', 'default_model':'offline-placement'}
+    finally:
+        await close_provider(provider)
+
+
+async def test_placement_provider_real_mount_preserves_arguments():
+    from amplifier_core import ModuleCoordinator
+    module = placement_provider_module()
+    coordinator = ModuleCoordinator()
+    config = {'scenario':'synthetic-not-read', 'default_model':'offline-placement'}
+    try:
+        await module.mount(coordinator, config)
+        provider = coordinator.get('providers')['placement']
+        assert isinstance(provider, module.PlacementProvider)
+        assert provider.coordinator is coordinator
+        assert provider.config is config
+        assert config == {'scenario':'synthetic-not-read', 'default_model':'offline-placement'}
+    finally:
+        try:
+            await coordinator.unmount('providers', name='placement')
+        finally:
+            await coordinator.cleanup()

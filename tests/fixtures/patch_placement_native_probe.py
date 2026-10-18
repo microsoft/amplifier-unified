@@ -47,7 +47,8 @@ def body(message):
 
 class PlacementProvider:
     name = 'placement'
-    def __init__(self, coordinator, config): self.coordinator, self.config = coordinator, config
+    def __init__(self, coordinator=None, config=None):
+        self.coordinator, self.config = coordinator, config if config is not None else {}
     def get_info(self):
         return ProviderInfo(id=self.name, display_name='Offline placement fixture',
             capabilities=['tools'], defaults={'model':'offline-placement'})
