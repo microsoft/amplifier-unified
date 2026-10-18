@@ -208,17 +208,34 @@ def _producer_result_encodings(output):
             json.loads(result.get_serialized_output())]
 
 
+async def _producer_post_hook_serialization(output):
+    """Model the pinned native continue-result branch without live hook effects.
+
+    Core's JSON bridge returns a distinct result dict even for continue/no
+    handlers. Streaming therefore uses json.dumps(returned_result), not
+    ToolResult.get_serialized_output(). Use the public native round trip so
+    object/key-order behavior is measured, not hardcoded or guessed.
+    """
+    from amplifier_core import HookRegistry, ToolResult
+
+    result_data = ToolResult(success=True, output=output).model_dump()
+    post = await HookRegistry().emit("tool:post", {"result": result_data})
+    returned = post.data["result"]
+    assert post.action == "continue" and type(returned) is dict
+    assert returned == result_data and returned is not result_data
+    return json.dumps(returned)
+
+
 async def _producer_context_result(content, output, observe=lambda *args: None):
     """Check model-facing context, never use its clipped text as canonical truth.
 
-    Pinned streaming serializes ToolResult, then default context-simple bounds
-    direct text at ingress. Our long Unicode JSON exceeds that bound; the
-    appended retrieval marker is not JSON. Exercise the public context API on
-    an independent synthetic message rather than parsing the provider view or
-    changing the real context's policy. No hooks, worker or inference is started.
+    Pinned native hooks return a copied full ToolResult, which streaming
+    serializes before context-simple bounds direct text at ingress. Our long
+    Unicode JSON exceeds that bound; the retrieval marker is not JSON. Exercise
+    an empty native registry and public context API on independent synthetic
+    data. No live hooks, worker, inference or real context policy is changed.
     """
     import hashlib
-    from amplifier_core import ToolResult
     from amplifier_module_context_simple import SimpleContextManager
 
     observe("context-block-normalization", lambda: {
@@ -227,7 +244,7 @@ async def _producer_context_result(content, output, observe=lambda *args: None):
     if not isinstance(content, str):
         content = "".join(getattr(block, "text", "") for block in content or [])
     observe("context-serialization", lambda: {"normalized": _producer_completion_text(content)})
-    serialized = ToolResult(success=True, output=output).get_serialized_output()
+    serialized = await _producer_post_hook_serialization(output)
     observe("context-policy", lambda: {"serialized": _producer_completion_text(serialized)})
     oracle = SimpleContextManager()
     observe("context-policy", lambda: {"oracleLimitBytes": oracle.max_tool_result_bytes})

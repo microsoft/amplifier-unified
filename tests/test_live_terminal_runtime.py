@@ -327,9 +327,11 @@ def _check_worker_schema_diagnostic_contract(tmp_path):
         asyncio.run(mount_controls())
 
     async def context_controls():
-        from amplifier_core import ToolResult
-        from amplifier_core.message_models import TextBlock
+        import hashlib
+        from amplifier_core import HookRegistry, HookResult, ToolResult
+        from amplifier_core.message_models import TextBlock, ToolCall
         from amplifier_module_context_simple import SimpleContextManager
+        from amplifier_module_loop_streaming import StreamingOrchestrator
 
         long_output, short_output = [case["output"] for case in fixture._producer_cases()]
         serialized = ToolResult(success=True, output=long_output).get_serialized_output()
@@ -346,14 +348,65 @@ def _check_worker_schema_diagnostic_contract(tmp_path):
             json.loads(projected)  # The previous provider oracle rejects this valid context.
         passed.append("real-context-ingress-rejects-legacy-full-json-oracle")
 
+        output_only_projected = projected
+        assert hashlib.sha256(output_only_projected.encode()).hexdigest() == (
+            "95acd5cd80a87c5e863c6f556c517d6670ed44ccf8c9759cb5c5c00a9f6d66ee")
+        full_result = ToolResult(success=True, output=long_output).model_dump()
+        seen = []
+
+        async def continuing(event, data):
+            seen.append((event, data["result"]))
+            return HookResult(action="continue")
+
+        hooks = HookRegistry()
+        hooks.register("tool:post", continuing)
+        post = await hooks.emit("tool:post", {"result": full_result})
+        assert len(seen) == 1 and seen[0] == ("tool:post", full_result)
+        assert post.action == "continue" and post.data["result"] == full_result
+        assert post.data["result"] is not full_result  # Streaming's `is not` branch.
+        serialized = json.dumps(post.data["result"])
+        assert await fixture._producer_post_hook_serialization(long_output) == serialized
+        assert len(serialized.encode()) == 150085
+        assert hashlib.sha256(serialized.encode()).hexdigest() == (
+            "e786c966f2385075845ca6469a63d1f1b92191ff49103681c7291e1b2cc55742")
+        passed.append("native-continue-hook-roundtrip-preserves-full-values-not-identity")
+
+        calls = []
+        class Echo:
+            async def execute(self, arguments):
+                calls.append(arguments)
+                return ToolResult(success=True, output=long_output)
+
+        # Exercise the actual pinned streaming tool/post/context path, not a
+        # copied branch. This focused control does not claim capture persistence.
+        context = SimpleContextManager()
+        tool_call = ToolCall(id="native-envelope-control", name="regular_echo",
+                             arguments={"slot": 1})
+        result = await StreamingOrchestrator({})._execute_tool_with_result(
+            tool_call, {"regular_echo": Echo()}, context, hooks)
+        assert result == {"success": True, "error": None} and calls == [{"slot": 1}]
+        messages = await context.get_messages()
+        assert len(messages) == 1 and messages[0]["tool_call_id"] == tool_call.id
+        assert len(seen) == 2 and seen[1] == ("tool:post", full_result)
+        assert seen[1][1]["output"] == long_output  # Full hook value precedes clipping.
+        projected = messages[0]["content"]
+        assert len(projected.encode()) == 131072
+        assert hashlib.sha256(projected.encode()).hexdigest() == (
+            "618a8d223510196ab140fd2c5007d40bbc1082076388c4daf9bdbe5f67d30842")
+        passed.append("native-streaming-post-hook-context-reproduces-retained-actual-hash")
+
+        # The old output-only oracle is not an alternate accepted encoding.
+        with pytest.raises(AssertionError):
+            await fixture._producer_context_result(output_only_projected, long_output)
+        passed.append("native-envelope-oracle-rejects-output-only-context")
         observed = await fixture._producer_context_result(projected, long_output)
         assert observed["exactContext"] and observed["contextClipped"]
-        assert observed["serializedBytes"] == 150041 and observed["contextBytes"] == 131072
+        assert observed["serializedBytes"] == 150085 and observed["contextBytes"] == 131072
         assert await fixture._producer_context_result([TextBlock(text=projected)], long_output) == observed
         with pytest.raises(AssertionError):
             await fixture._producer_context_result(projected[:-1], long_output)
-        small = ToolResult(success=True, output=short_output).get_serialized_output()
-        assert json.loads(small) == short_output
+        small = await fixture._producer_post_hook_serialization(short_output)
+        assert json.loads(small) == ToolResult(success=True, output=short_output).model_dump()
         assert not (await fixture._producer_context_result(small, short_output))["contextClipped"]
         passed.append("provider-context-exact-clipped-and-small-values-with-corruption-refusal")
 
