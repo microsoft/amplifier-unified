@@ -595,6 +595,82 @@ def _check_worker_schema_diagnostic_contract(tmp_path):
         passed.append("completion-collection-and-save-failure-cannot-prevent-cleanup")
 
     asyncio.run(completion_controls())
+
+    def capture_controls():
+        from types import SimpleNamespace
+        from amplifier_web.diagnostics import Diagnostics
+
+        state = None
+        reads = []
+        unregistered = []
+
+        def capability(name):
+            reads.append(name)
+            assert name == "context_intelligence._hook_state"
+            return state
+
+        coordinator = SimpleNamespace(get_capability=capability)
+        absent = fixture._producer_capture_registration(coordinator)
+        assert absent == {"source": "worker-hook-state", "statePresent": False,
+                          "registrationsValid": False, "registrationCount": None, "enabled": False}
+        state = {"unregister_fns": []}
+        disabled = fixture._producer_capture_registration(coordinator)
+        assert disabled["statePresent"] and disabled["registrationsValid"]
+        assert disabled["registrationCount"] == 0 and disabled["enabled"] is False
+        for bad in ({"unregister_fns": secret}, {"unregister_fns": [secret]},
+                    {"unregister_fns": [lambda: None] * 4097}):
+            state = bad
+            observed = fixture._producer_capture_registration(coordinator)
+            assert observed["enabled"] is False and not observed["registrationsValid"]
+            assert observed["registrationCount"] is None and secret not in json.dumps(observed)
+        passed.append("capture-registration-absent-disabled-invalid-fail-closed")
+
+        # Hook mount creates an empty list; its later on_session_ready callback
+        # adds registrations. Read current state, never cache the mount-time false.
+        registrations = []
+        state = {"unregister_fns": registrations}
+        assert fixture._producer_capture_registration(coordinator)["enabled"] is False
+        registrations.append(lambda: unregistered.append(True))
+        enabled = fixture._producer_capture_registration(coordinator)
+        assert enabled["enabled"] is True and enabled["registrationCount"] == 1
+        assert unregistered == []  # Inspecting state never calls unregister.
+        state = None  # Actual hook cleanup clears the capability.
+        assert fixture._producer_capture_registration(coordinator)["enabled"] is False
+        assert len(reads) == 8
+        passed.append("capture-registration-late-ready-and-cleanup-not-cached")
+
+        calls = [{"ordinal": n, "captureState": dict(enabled)} for n in (1, 2, 3)]
+        evidence = fixture._producer_capture_evidence(calls)
+        assert evidence["enabled"] is True
+        assert evidence["source"] == "worker-hook-state-per-completion"
+        for bad_calls in (
+            calls[:2],
+            [calls[0], calls[0], calls[2]],
+            [calls[0], {"ordinal": 2, "captureState": disabled}, calls[2]],
+            [{"ordinal": n, "captureResolverPresent": True,
+              "runtimeReport": {"contextIntelligence": {"enabled": True}}} for n in (1, 2, 3)],
+        ):
+            assert fixture._producer_capture_evidence(bad_calls)["enabled"] is False
+        passed.append("capture-enabled-requires-three-real-state-receipts-not-public-flag")
+
+        # Characterize, do not fix, the product's presence-only suppression.
+        # The test-only change must not inject a public flag and alter this path.
+        for report, expected_records in (
+            ({}, 1),
+            ({"contextIntelligence": {"enabled": True}}, 0),
+            ({"contextIntelligence": {"enabled": False}}, 0),
+        ):
+            records = []
+            diagnostic = SimpleNamespace(record=lambda *args, **kwargs: records.append((args, kwargs)))
+            session = {"id": "capture-report-control", "workspace": str(root), "runtimeReport": report}
+            before = json.dumps(session)
+            Diagnostics._runtime_event(diagnostic, "execution.event", {
+                "kind": "tool", "phase": "completed", "label": "synthetic-tool",
+                "toolCallId": "synthetic-call"}, session)
+            assert len(records) == expected_records and json.dumps(session) == before
+        passed.append("capture-public-presence-suppression-current-contract-characterized")
+
+    capture_controls()
     return {"status": "passed", "cases": passed,
             "scope": "Authored helper controls only; actual worker evidence is separate"}
 
@@ -673,6 +749,10 @@ def _check_regular_work_details_real_producer_and_service_reopen(tmp_path):
     assert evidence["processGuardPreflight"]["cases"][0]["actualPopenAndPosixSpawn"] is True
     assert evidence["noExtraColdExecution"] is True
     assert evidence["actualCaptureState"]["enabled"] is True
+    assert evidence["actualCaptureState"]["source"] == "worker-hook-state-per-completion"
+    assert len(evidence["actualCaptureState"]["perCompletion"]) == 3
+    assert all(state["enabled"] is True and state["registrationCount"] > 0
+               for state in evidence["actualCaptureState"]["perCompletion"])
     assert evidence["captureConfiguration"]["destinations"] == {}
     assert evidence["countsBeforeCold"] == evidence["countsAfterCold"]
     assert evidence["finalCounts"]["provider"] == 3

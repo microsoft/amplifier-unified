@@ -208,6 +208,36 @@ def _producer_result_encodings(output):
             json.loads(result.get_serialized_output())]
 
 
+def _producer_capture_registration(coordinator):
+    """Observe the host's enabled predicate at the actual provider boundary.
+
+    The host derives enabled from this hook-owned registration list. The public
+    runtime.ready report currently omits it. This is registration evidence,
+    not proof that the real writer retained any particular body or flushed.
+    """
+    state = coordinator.get_capability("context_intelligence._hook_state")
+    registrations = state.get("unregister_fns") if type(state) is dict else None
+    valid = (type(registrations) is list and len(registrations) <= 4096
+             and all(callable(fn) for fn in registrations))
+    return {"source": "worker-hook-state", "statePresent": state is not None,
+            "registrationsValid": valid,
+            "registrationCount": len(registrations) if valid else None,
+            "enabled": valid and bool(registrations)}
+
+
+def _producer_capture_evidence(calls):
+    states = [call.get("captureState") for call in calls]
+    enabled = (len(calls) == 3 and [call.get("ordinal") for call in calls] == [1, 2, 3]
+               and all(type(state) is dict and state.get("source") == "worker-hook-state"
+                       and state.get("statePresent") is True
+                       and state.get("registrationsValid") is True
+                       and type(state.get("registrationCount")) is int
+                       and 0 < state["registrationCount"] <= 4096
+                       and state.get("enabled") is True for state in states))
+    return {"source": "worker-hook-state-per-completion", "enabled": enabled,
+            "perCompletion": states}
+
+
 async def _producer_post_hook_serialization(output):
     """Model the pinned native continue-result branch without live hook effects.
 
@@ -513,14 +543,14 @@ def _producer_schema_diagnostics(root):
 
 _COMPLETION_STAGES = {
     "mounted-provider", "network-guard", "provider-attempt", "provider-budget",
-    "capture-resolver", "capture-destinations", "prior-tool-message",
+    "capture-resolver", "capture-destinations", "capture-registration", "prior-tool-message",
     "context-block-normalization", "context-serialization", "context-policy",
     "context-comparison", "context-result", "next-call", "provider-receipt",
     "stream-deltas", "response-construction",
 }
 _COMPLETION_TYPES = {"none", "string", "list", "tuple", "mapping", "other"}
 _COMPLETION_BOOLS = {
-    "mounted", "guardPresent", "resolverPresent", "expectedIdPresent",
+    "mounted", "guardPresent", "resolverPresent", "captureEnabled", "expectedIdPresent",
     "priorFound", "priorIdMatches", "messagesCapped",
     "actualEqualsSerialized", "expectedEqualsSerialized", "actualEqualsExpected",
 }
@@ -1083,6 +1113,10 @@ class RegularProducerProvider:
         observe("capture-destinations")
         assert resolver.destinations == {} and resolver.validate_destinations() == {}, (
             "Actual capture hook resolved a remote destination")
+        observe("capture-registration")
+        capture_state = _producer_capture_registration(coordinator)
+        observe("capture-registration", lambda: {"captureEnabled": capture_state["enabled"]})
+        assert capture_state["enabled"] is True, "Real capture hook has no active registrations"
         # Verify exact call identity and the model-facing context contract.
         # Full canonical result retention is checked separately by lazy reads.
         consumed = None
@@ -1110,6 +1144,7 @@ class RegularProducerProvider:
         _producer_record(directory, f"provider-{self.calls}", {
             "ordinal": self.calls, "pid": os.getpid(), "toolCallId": self.ids[-1] if call else None,
             "captureResolverPresent": True, "destinations": resolver.validate_destinations(),
+            "captureState": capture_state,
             "streamingImported": "amplifier_module_loop_streaming" in sys.modules,
             "text": text, "consumedToolResult": consumed,
         })
@@ -1733,14 +1768,23 @@ async def producer_main(root, report, save):
                             for m in session.get("messages", []))):
                         break
                     await asyncio.sleep(.05)
-            capture = session.get("runtimeReport", {}).get("contextIntelligence", {})
-            report["actualCaptureState"] = capture
-            assert capture.get("enabled") is True, "Real runtime did not report enabled capture"
+            # Preserve the public projection omission as a separate observation.
+            # Do not seed a public report flag: Diagnostics currently treats its
+            # mere presence as a reason to suppress fallback event capture.
+            public_report = session.get("runtimeReport", {})
+            public_capture = public_report.get("contextIntelligence")
+            public_enabled = public_capture.get("enabled") if type(public_capture) is dict else None
+            report["publicCaptureReport"] = {
+                "present": "contextIntelligence" in public_report,
+                "enabled": public_enabled if type(public_enabled) is bool else None}
             calls = [json.loads(path.read_text(encoding="utf-8"))
                      for path in sorted((root / "counts").glob("provider-[123].json"))]
             report["providerCalls"] = calls
             assert len(calls) == 3 and all(row["captureResolverPresent"] for row in calls)
             assert all(row["destinations"] == {} for row in calls)
+            report["actualCaptureState"] = _producer_capture_evidence(calls)
+            assert report["actualCaptureState"]["enabled"] is True, (
+                "Real capture hook registration was not enabled at every completion")
             assert any(row["streamingImported"] for row in calls), "Streaming runtime was not imported"
             report["streamingExecution"] = [
                 json.loads(path.read_text()) for path in (root / "guard").glob("streaming-*.json")]
