@@ -166,3 +166,83 @@ def test_orphan_recovery_keeps_settled_cold_execution_unloaded(tmp_path, monkeyp
     monkeypatch.setattr('amplifier_web.cold_display.load',lambda *args:pytest.fail('Settled history was loaded'))
     assert restore_voice_usage(row) is False
     assert not dict.__contains__(row,'execution')
+
+
+@pytest.mark.parametrize('cold', [False, True])
+@pytest.mark.parametrize('owner', ['call', 'manager-running', 'manager-completed'])
+async def test_legacy_realtime_restart_only_exempts_exact_call_owned_turn(tmp_path, cold, owner):
+    from amplifier_web.cold_display import execution_reference
+    from amplifier_web.execution import ensure_turn, ingest
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    await service.dispatch('session.create',{})
+    session=service._session()
+    sid=session['id']
+    session['status']='idle'
+    turn_id='voice:legacy:manager-input' if owner!='call' else 'voice:legacy'
+    ensure_turn(session,turn_id)
+    # Persist the pre-lifecycle Realtime shape, including a genuinely separate
+    # manager turn whose input also happens to originate from voice.
+    ingest(session,{'id':'voice:legacy:resp_123','turnId':turn_id,'sessionId':sid,'rootSessionId':sid,
+        'kind':'llm','phase':'running','provider':'OpenAI voice','model':'gpt-realtime',
+        'startedAt':1,'usage':{'costType':'unavailable'}})
+    if owner=='manager-completed':
+        session['execution']['turns'][0].update(phase='completed',endedAt=2)
+    if cold:
+        reference=execution_reference(service.db,session.pop('execution'))
+        reference.pop('pendingVoice')  # Legacy cold metadata has no voice bit.
+        if owner=='manager-completed':
+            assert reference['pendingWork'] is False and reference['pendingObservation'] is False
+        session['_coldFields']={**dict.get(session,'_coldFields',{}),'execution':reference}
+        service._state['selectedSessionId']=None
+    await service.close()
+    restored=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    try:
+        if cold:
+            assert all(row['id']!=sid for row in restored._state['sessions'])
+        current=restored._session(sid)
+        tree=current['execution']
+        assert tree['nodes'][0]['phase']=='incomplete'
+        assert 'voiceSeconds' not in tree['nodes'][0]['usage']
+        if owner=='manager-running':
+            assert current['status']=='interrupted'
+            assert tree['turns'][0]['phase']=='interrupted'
+            assert tree['turns'][0].get('lifecycle')!='voice'
+        elif owner=='manager-completed':
+            assert current['status']=='idle' and not current.get('error')
+            assert tree['turns'][0]['phase']=='completed'
+            assert tree['turns'][0].get('lifecycle')!='voice'
+        else:
+            assert current['status']=='idle' and not current.get('error')
+            assert tree['turns'][0]['phase']=='incomplete'
+            assert tree['turns'][0]['lifecycle']=='voice'
+        assert not restored.runtime.sent
+    finally:
+        await restored.close()
+
+
+async def test_incomplete_realtime_receipt_retains_observed_tokens_and_price(tmp_path):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    await service.dispatch('session.create',{})
+    sid=service._session()['id']
+    try:
+        await service.record_voice_usage(sid,'call','response','gpt-realtime',{
+            'input_tokens':100,'output_tokens':20,'cost_usd':.03},'running')
+        await service.record_voice_usage(sid,'call','response','gpt-realtime',{
+            'input_tokens':110,'output_tokens':25,'cost_usd':-1},'incomplete')
+        tree=service._session(sid)['execution']
+        usage=tree['nodes'][0]['usage']
+        assert usage['inputTokens']==110 and usage['outputTokens']==25 and usage['totalTokens']==135
+        assert usage['costUsd']==.03 and usage['costType']=='reported'
+        await service.record_voice_usage(sid,'call','response','gpt-realtime',{},'incomplete')
+        assert tree['nodes'][0]['usage']==usage
+        assert tree['aggregateUsage']['totalTokens']==135
+        assert tree['aggregateUsage']['costUsd']==.03
+        assert tree['aggregateUsage']['tokenPendingCalls']==0
+        await service.record_voice_usage(sid,'call','response','gpt-realtime',{
+            'input_tokens':120,'output_tokens':30,'cost_usd':.04},'completed')
+        await service.record_voice_usage(sid,'call','response','gpt-realtime',{},'incomplete')
+        assert tree['nodes'][0]['phase']=='completed'
+        assert tree['aggregateUsage']['totalTokens']==150
+        assert tree['aggregateUsage']['costUsd']==.04
+    finally:
+        await service.close()

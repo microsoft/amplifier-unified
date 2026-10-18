@@ -288,6 +288,7 @@ class VoiceCall:
         self.realtime_playing = False
         self.realtime_awaiting_vad_response = False
         self.realtime_pending_response = False
+        self.pending_realtime_responses: set[str] = set()
         self.response_lock = asyncio.Lock()
 
     def context(self, state):
@@ -546,6 +547,8 @@ class VoiceCall:
             self.realtime_awaiting_vad_response = False
             self.realtime_responding = True
             response=event.get('response',{})
+            if self.provider == 'realtime' and isinstance(response.get('id'), str):
+                self.pending_realtime_responses.add(response['id'])
             if response.get('id') and hasattr(self.service,'record_voice_usage'):
                 await self.service.record_voice_usage(self.session_id,self.id,response['id'],MODELS[self.provider],{},'running',
                     **({'transfer_id': self.transfer_id} if hasattr(self.service, 'portability') else {}))
@@ -554,6 +557,8 @@ class VoiceCall:
             if response.get('id') and hasattr(self.service,'record_voice_usage'):
                 await self.service.record_voice_usage(self.session_id,self.id,response['id'],MODELS[self.provider],response.get('usage'),
                     **({'transfer_id': self.transfer_id} if hasattr(self.service, 'portability') else {}))
+            if self.provider == 'realtime' and isinstance(response.get('id'), str):
+                self.pending_realtime_responses.discard(response['id'])
             self.realtime_responding = False
             await self.flush_realtime_response()
         elif kind == "input_audio_buffer.speech_started":
@@ -1012,6 +1017,11 @@ class VoiceCall:
             if self.provider == 'live' and not self.final.is_set() and hasattr(self.service, 'record_voice_usage'):
                 await self.service.record_voice_usage(self.session_id, self.id, 'session', MODELS[self.provider], self.latest_usage, 'incomplete',
                     **({'transfer_id': self.transfer_id} if hasattr(self.service, 'portability') else {}))
+            elif self.provider == 'realtime' and hasattr(self.service, 'record_voice_usage'):
+                for response_id in tuple(self.pending_realtime_responses):
+                    await self.service.record_voice_usage(self.session_id, self.id, response_id, MODELS[self.provider], {}, 'incomplete',
+                        **({'transfer_id': self.transfer_id} if hasattr(self.service, 'portability') else {}))
+                    self.pending_realtime_responses.discard(response_id)
             for pending in self.append_events.values():
                 if pending['status'] in {'sending', 'sent'}:
                     pending['status'] = 'delivery_unknown'

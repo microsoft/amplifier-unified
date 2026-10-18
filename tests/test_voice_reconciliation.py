@@ -343,6 +343,26 @@ async def test_provider_closed_without_usage_does_not_finalize_last_running_obse
     assert call.final.is_set() and call.closed
 
 
+async def test_realtime_close_settles_only_responses_missing_their_final_receipt():
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    service.record_voice_usage = AsyncMock()
+    call.manager.request = AsyncMock(return_value=({}, '', {}))
+    await call.handle({'type': 'response.created', 'response': {'id': 'missing-final'}})
+    await call.handle({'type': 'response.created', 'response': {'id': 'completed'}})
+    await call.handle({'type': 'response.done', 'response': {'id': 'completed', 'usage': {'total_tokens': 12}}})
+    call.socket.closed = True  # Sideband loss prevents a remaining response.done.
+    result = await call.close()
+    calls = service.record_voice_usage.await_args_list
+    assert [row.args[2] for row in calls] == ['missing-final', 'completed', 'completed', 'missing-final']
+    assert calls[2].args[4] == {'total_tokens': 12}
+    assert calls[3].args[4:] == ({}, 'incomplete')
+    assert not call.pending_realtime_responses
+    assert result['closed'] and result['finalized']  # Hangup succeeded; response usage is separately incomplete.
+    await call.close()
+    assert service.record_voice_usage.await_count == 4
+
+
 async def test_send_failure_does_not_relabel_successful_backend_work_as_failed():
     service, call = call_fixture()
     call.execute = AsyncMock(return_value={'generation_id': 'saved', 'text': 'The report is saved.'})

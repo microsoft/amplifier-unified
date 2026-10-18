@@ -12,9 +12,11 @@ def voice_usage_node(node):
 
 def voice_usage_turns(tree):
     identities = {turn['id'] for turn in tree.get('turns', []) if turn.get('lifecycle') == 'voice'}
-    # Older Live session receipts predate explicit lifecycle ownership.
+    # Older call-only turns predate explicit lifecycle ownership. Realtime
+    # uses a response ID where Live uses "session"; manager input turns have
+    # a different exact identity and must retain their work lifecycle.
     identities.update(node['turnId'] for node in tree.get('nodes', []) if voice_usage_node(node)
-        and node.get('turnId') and node.get('id') == node['turnId'] + ':session')
+        and node.get('turnId') and str(node.get('id', '')).rsplit(':', 1)[0] == node['turnId'])
     return identities
 
 
@@ -28,9 +30,9 @@ def pending_voice_usage(tree):
 def restore_voice_usage(session):
     """Only host restart/admission loses the provider observer, never manager idle."""
     reference = dict.get(session, '_coldFields', {}).get('execution', {})
-    if (not dict.__contains__(session, 'execution') and
-            (reference.get('pendingVoice') is False or
-             'pendingVoice' not in reference and reference.get('pendingWork') is False)):
+    # A completed manager turn does not rule out a later Realtime response.
+    # Legacy summaries need one exact-owner read; new metadata avoids it.
+    if not dict.__contains__(session, 'execution') and reference.get('pendingVoice') is False:
         return False
     tree = session.get('execution', {})
     turns = voice_usage_turns(tree)

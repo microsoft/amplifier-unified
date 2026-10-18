@@ -3935,6 +3935,14 @@ class AppService:
             if existing and existing.get('phase') == 'completed' and phase != 'completed':
                 return
             normalized=normalize_voice_usage(usage)
+            if response_id != 'session' and phase == 'incomplete' and existing:
+                # A lost response.done can still leave observed token/cost
+                # evidence. Missing fields are not a report of zero usage.
+                previous_usage=existing.get('usage', {})
+                supplied={key:value for key,value in normalized.items()
+                          if key != 'costType' or 'costUsd' in normalized}
+                normalized={**previous_usage,**supplied}
+                normalized.setdefault('costType','unavailable')
             if response_id == 'session':
                 final_duration_reported=phase == 'completed' and 'voiceSeconds' in normalized
                 previous_usage=(existing or {}).get('usage', {})
