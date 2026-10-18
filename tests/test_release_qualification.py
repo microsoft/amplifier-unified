@@ -630,6 +630,22 @@ def test_native_core_qualification_is_manual_and_cannot_publish():
     assert 'tests/test_runtime_module_cache.py' in commands
     assert 'runtime-snapshot' in commands and 'cmp ' in commands
     assert 'publish' not in commands
+    assert job['timeout-minutes'] == '20'
+    steps = job['steps']
+    host = next(step['run'] for step in steps if step.get('name') == 'Install and record the released host Core wheel')
+    runtime = next(step['run'] for step in steps if step.get('name') == 'Qualify real runtime behavior without model calls')
+    assert host.count('--junitxml="$RUNNER_TEMP/host-core-junit.xml"') == 1
+    assert runtime.count('--junitxml="$RUNNER_TEMP/runtime-core-junit.xml"') == 1
+    assert runtime.index('cp ') < runtime.index('runtime-snapshot') < runtime.index('cmp ') < runtime.index('git rev-parse HEAD')
+    retained = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@v4')
+    assert retained['if'] == 'always()'
+    assert set(retained['with']['path'].splitlines()) == {
+        '${{ runner.temp }}/' + name for name in (
+            'app-revision.txt', 'host-core-wheel.json', 'host-core-junit.xml',
+            'runtime-core-junit.xml', 'before-tests.json', 'core-runtime/pyproject.toml',
+            'core-runtime/uv.lock', 'core-runtime/build-constraints.txt',
+            'core-runtime/build-identity.json', 'core-runtime/qualified-runtime.json')
+    }
 
 
 @pytest.mark.parametrize('workflow', ['release.yml', 'core-wheels.yml'])
