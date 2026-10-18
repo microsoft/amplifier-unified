@@ -865,11 +865,20 @@ class RegularProducerProvider:
 
 
 async def mount_producer_provider(coordinator, config=None):
-    directory = Path(os.environ["UNIFIED_PRODUCER_ROOT"]) / "counts"
     provider = RegularProducerProvider(config)
     provider.coordinator = coordinator
-    _producer_record(directory, "worker-mounted", {"pid": os.getpid()})
     await coordinator.mount("providers", provider, name=provider.name)
+
+
+async def producer_session_ready(coordinator):
+    # Core's ProviderValidator calls mount with a separate coordinator before
+    # the real mount. Only this post-mount lifecycle callback is runtime proof;
+    # an exclusive receipt inside mount would make the real call collide.
+    provider = coordinator.get("providers", "regularproducer")
+    assert type(provider) is RegularProducerProvider and provider.coordinator is coordinator
+    assert provider.calls == 0 and coordinator.get("tools", "regular_echo") is not None
+    directory = Path(os.environ["UNIFIED_PRODUCER_ROOT"]) / "counts"
+    _producer_record(directory, "worker-mounted", {"pid": os.getpid(), "phase": "session-ready"})
 
 
 async def mount_producer_tools(coordinator, config=None):
@@ -1293,7 +1302,7 @@ async def producer_main(root, report, save):
         package.mkdir(parents=True)
         package.joinpath("__init__.py").write_text(
             f"from live_terminal_probe import {mount} as mount\n"
-            + ("from live_terminal_probe import RegularProducerProvider\n"
+            + ("from live_terminal_probe import RegularProducerProvider, producer_session_ready as on_session_ready\n"
                if name == "provider-regularproducer" else "")
             + f"__amplifier_module_type__ = {name.split('-')[0]!r}\n", encoding="utf-8")
         # Foundation activates the declared directory itself on sys.path.
@@ -1420,7 +1429,7 @@ async def producer_main(root, report, save):
                 "tool": sum("result" in row for row in rows),
                 "providerAttempts": sum(row.get("attempt") == "provider" for row in rows),
                 "toolAttempts": sum(row.get("attempt") == "tool" for row in rows),
-                "workerMounts": sum("ordinal" not in row and "pid" in row for row in rows),
+                "workerMounts": sum(row.get("phase") == "session-ready" for row in rows),
                 "workerLaunches": sum(row["kind"] == "spawn" and row["runtimeWorker"] for row in guard),
                 "denials": [row for row in guard if row["kind"] == "denied" and row.get("controlCase") is None],
                 "controlDenials": [row for row in guard if row["kind"] == "denied" and row.get("controlCase")],
@@ -1600,6 +1609,7 @@ def run_producer():
                   "WorkWindows occurrence and registered-web detail API evidence, not rendered UI acceptance.",
                   "Missing bodies/associations and distinct diagnostic occurrences are observed, not prescribed.",
                   "At most three provider completions, two tool executions and one runtime worker.",
+                  "workerMounts counts the bound provider's on_session_ready receipt, not validation or mount entry.",
               ]}
 
     def save():

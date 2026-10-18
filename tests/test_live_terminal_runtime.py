@@ -268,6 +268,63 @@ def _check_worker_schema_diagnostic_contract(tmp_path):
         assert caught.value is primary_error
     assert len(cleanup_calls) == 2
     passed.append("cleanup-exception-not-swallowed")
+
+    # Core validates providers by calling mount with a validation coordinator,
+    # then calls mount again for the session. Reproduce the old receipt collision
+    # using the actual validators, without model/tool execution or another worker.
+    from amplifier_core.testing import MockCoordinator
+    from amplifier_core.validation.base import ValidationResult
+    from amplifier_core.validation.provider import ProviderValidator
+    from amplifier_core.validation.tool import ToolValidator
+
+    mount_root = root / "mount-lifecycle"
+    counts = mount_root / "counts"
+    counts.mkdir(parents=True)
+    validator = ProviderValidator()
+    legacy_receipt = counts / "legacy-mounted.json"
+
+    async def legacy_mount(coordinator, config=None):
+        fixture._producer_record(counts, "legacy-mounted", {"pid": os.getpid()})
+        await fixture.mount_producer_provider(coordinator, config)
+
+    async def mount_controls():
+        legacy_result = ValidationResult(module_type="provider", module_path="synthetic-legacy")
+        await validator._check_protocol_compliance(legacy_result, legacy_mount, config={})
+        assert legacy_result.passed and legacy_receipt.exists()
+        legacy_session = MockCoordinator()
+        with pytest.raises(FileExistsError):
+            await legacy_mount(legacy_session, {})
+        assert not legacy_session.get("providers")
+        legacy_receipt.unlink()
+        passed.append("legacy-validation-consumes-exclusive-mount-receipt")
+
+        provider_result = ValidationResult(module_type="provider", module_path="synthetic-provider")
+        tool_result = ValidationResult(module_type="tool", module_path="synthetic-tool")
+        await validator._check_protocol_compliance(
+            provider_result, fixture.mount_producer_provider, config={})
+        await ToolValidator()._check_protocol_compliance(
+            tool_result, fixture.mount_producer_tools, config={})
+        assert provider_result.passed and tool_result.passed and not list(counts.iterdir())
+        session = MockCoordinator()
+        await fixture.mount_producer_provider(session, {})
+        await fixture.mount_producer_tools(session, {})
+        provider = session.get("providers", "regularproducer")
+        assert provider.coordinator is session and provider.calls == 0
+        assert not list(counts.iterdir())  # Validation and mount are not readiness.
+        passed.append("provider-and-tool-validation-then-mount-have-no-receipt-side-effect")
+
+        await fixture.producer_session_ready(session)
+        receipt = json.loads((counts / "worker-mounted.json").read_text())
+        assert receipt == {"pid": os.getpid(), "phase": "session-ready"}
+        with pytest.raises(FileExistsError):
+            await fixture.producer_session_ready(session)
+        assert len(list(counts.iterdir())) == 1 and provider.calls == 0
+        assert not list(counts.glob("*attempt*.json"))
+        passed.append("readiness-records-one-bound-provider-without-provider-tool-execution")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("UNIFIED_PRODUCER_ROOT", str(mount_root))
+        asyncio.run(mount_controls())
     return {"status": "passed", "cases": passed,
             "scope": "Authored helper controls only; actual worker evidence is separate"}
 
