@@ -289,6 +289,110 @@ def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
     assert 'tests/test_runtime_module_cache.py' in runtime
 
 
+def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    selection = workflow['on']['workflow_dispatch']['inputs']['suite']
+    assert selection['type'] == 'choice' and selection['default'] == 'full'
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction']
+    assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
+    assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    jobs = workflow['jobs']
+    assert jobs['python']['if'] == '${{ !inputs.core_wheels }}'
+    assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
+    assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
+    rejected = jobs['incompatible-selection']
+    assert rejected['if'] == "${{ inputs.core_wheels && inputs.suite && inputs.suite != 'full' }}"
+    assert 'exit 1' in rejected['steps'][0]['run']
+    steps = jobs['python']['steps']
+    assert steps[1]['name'] == 'Record and validate the fixed Python selection'
+    complete = next(step for step in steps if step.get('name') == 'Run the complete Python suite')
+    focused = next(step for step in steps if step.get('name') == 'Run the selected repair suite')
+    assert complete['if'] == "${{ env.CHECK_SUITE == 'full' }}"
+    assert focused['if'] == "${{ env.CHECK_SUITE != 'full' }}" and focused['shell'] == 'bash'
+    assert 'mapfile -t targets < output/python-checks/targets.txt' in focused['run']
+    assert 'test "${#targets[@]}" -gt 0' in focused['run']
+    assert '"${targets[@]}"' in focused['run'] and 'set -o pipefail' in focused['run']
+    assert '--junitxml=output/python-checks/junit.xml' in focused['run']
+    assert 'tee output/python-checks/pytest.log' in focused['run']
+    assert '${{' not in focused['run'] and '${{' not in steps[1]['run']
+
+
+@pytest.mark.parametrize(('suite', 'targets'), [
+    ('full', []),
+    ('inline-chat-card', ['tests/test_chat_references.py']),
+    ('queued-configuration', ['tests/test_queued_configuration_boundary.py']),
+    ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
+])
+@pytest.mark.parametrize('missing', [False, True])
+def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):
+    import subprocess
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    run = workflow['jobs']['python']['steps'][1]['run']
+    lines = run.splitlines()
+    assert lines[0] == "python - <<'PY'" and lines[-1] == 'PY'
+    script = compile('\n'.join(lines[1:-1]), 'workflow-python-selection', 'exec')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('CHECK_SUITE', suite)
+    monkeypatch.setenv('GITHUB_RUN_ID', 'synthetic-run')
+    monkeypatch.setenv('GITHUB_RUN_ATTEMPT', '1')
+    def git(args, **kwargs):
+        assert args[:2] == ['git', 'rev-parse']
+        assert args[2] in ('HEAD', 'HEAD^{tree}')
+        return ('a' if args[2] == 'HEAD' else 'b') * 40 + '\n'
+    monkeypatch.setattr(subprocess, 'check_output', git)
+    for target in targets[1:] if missing else targets:
+        path = tmp_path / target
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    if missing and targets:
+        with pytest.raises(SystemExit, match='Selected tests are missing: ' + targets[0]):
+            exec(script, {})
+    else:
+        exec(script, {})
+    record = json.loads((tmp_path / 'output/python-checks/selection.json').read_text())
+    assert record == {'suite': suite, 'fullSuite': suite == 'full', 'targets': targets,
+                      'revision': 'a' * 40, 'tree': 'b' * 40, 'runId': 'synthetic-run', 'runAttempt': '1',
+                      'missing': targets[:1] if missing else []}
+    assert (tmp_path / 'output/python-checks/targets.txt').read_text().splitlines() == targets
+
+
+@pytest.mark.parametrize('suite', ['unknown', 'tests/test_service.py', 'full; echo unexpected'])
+def test_python_selection_rejects_arbitrary_input_before_commands(tmp_path, monkeypatch, suite):
+    import subprocess
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    script = '\n'.join(workflow['jobs']['python']['steps'][1]['run'].splitlines()[1:-1])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('CHECK_SUITE', suite)
+    monkeypatch.setattr(subprocess, 'check_output', lambda *a, **kw: pytest.fail('Invalid selection ran a command'))
+    with pytest.raises(SystemExit, match='Unknown fixed Python suite:'):
+        exec(compile(script, 'workflow-python-selection', 'exec'), {})
+    assert not (tmp_path / 'output').exists()
+
+
+def test_browser_retains_only_the_successfully_built_public_web_payload():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['permissions'] == {'contents': 'read'}
+    steps = workflow['jobs']['browser']['steps']
+    identity = next(index for index, step in enumerate(steps) if step.get('id') == 'build-source')
+    assert steps[identity - 1]['uses'] == 'actions/checkout@v4'
+    assert steps[identity]['run'] == 'echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"'
+    build = next(index for index, step in enumerate(steps) if step.get('id') == 'frontend-build')
+    assert identity < build
+    assert steps[build]['run'] == 'npm run build --prefix frontend'
+    upload = steps[build + 1]
+    assert upload['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
+    assert upload['uses'] == 'actions/upload-artifact@v4'
+    assert upload['with'] == {
+        'name': 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}',
+        'path': 'amplifier_web/static/', 'include-hidden-files': 'true', 'if-no-files-found': 'error'}
+    assert steps[build + 2]['name'] == 'Install browser dependencies'
+    # The artifact includes the builder's metadata and is retained before later
+    # scenario failure; an unrun/failed build cannot upload the old tracked tree.
+    vite = (ROOT / 'frontend/vite.config.js').read_text()
+    assert 'emptyOutDir:true' in vite and 'static/build.json' in vite
+
+
 def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():
     jobs = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
     steps = jobs['runtime']['steps']
