@@ -51,6 +51,41 @@ async def test_live_uses_client_delegation_and_separate_endpoint():
     call.final.set()
     await call.close()
 
+
+async def test_live_usage_starts_on_provider_creation_before_first_usage_update():
+    service, socket = Service(), Socket()
+    service.record_voice_usage = AsyncMock()
+    async def attach(*args, **kwargs):
+        receipt = service.record_voice_usage.await_args
+        assert receipt.args == ('main', 'live_created', 'session', 'gpt-live-1', {}, 'running')
+        return socket
+    manager = VoiceService(service, api_key='fixture', http=SimpleNamespace(ws_connect=attach))
+    manager.request = AsyncMock(return_value=({'session': {'id': 'live_created'}, 'transport': {'sdp': 'answer'}}, '', {}))
+    call = VoiceCall(manager, 'main')
+    await call.create('v=0', 'live')
+    assert service.record_voice_usage.await_count == 1
+    call.final.set()
+    await call.close()
+
+
+@pytest.mark.parametrize('failure', ['provider', 'sideband'])
+async def test_live_creation_failure_receipt_requires_created_provider_session(failure):
+    service = Service()
+    service.record_voice_usage = AsyncMock()
+    manager = VoiceService(service, api_key='fixture',
+        http=SimpleNamespace(ws_connect=AsyncMock(side_effect=OSError('attach failed'))))
+    manager.request = AsyncMock(return_value=({'session': {'id': 'live_created'}, 'transport': {'sdp': 'answer'}}, '', {}))
+    if failure == 'provider':
+        manager.request.side_effect = ProviderError(404, 'model_not_found')
+    call = VoiceCall(manager, 'main')
+    with pytest.raises((VoiceError, ProviderError)):
+        await call.create('v=0', 'live')
+    if failure == 'provider':
+        service.record_voice_usage.assert_not_awaited()
+    else:
+        assert [row.args[-1] for row in service.record_voice_usage.await_args_list] == ['running', 'incomplete']
+        assert all(not row.args[4] for row in service.record_voice_usage.await_args_list)
+
 async def test_realtime_uses_multipart_and_call_sideband():
     socket = Socket()
     manager = VoiceService(Service(),api_key='secret',http=SimpleNamespace(ws_connect=AsyncMock(return_value=socket)))

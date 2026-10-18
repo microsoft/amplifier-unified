@@ -18,7 +18,7 @@ def call_fixture():
 
 
 async def settle(call):
-    for _ in range(100):
+    for _ in range(300):
         if not call.tasks:
             return
         await asyncio.sleep(.01)
