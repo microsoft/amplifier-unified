@@ -524,7 +524,8 @@ def effect(app, row, action, args, config, request, admit):
                 row, preparation_cleanup = cleanup_preparation(home, row, config)
         confirmation = (action == 'remove' and isinstance(result, dict) and (
             result.get('ok') is True and result.get('status') == 'removed'
-            or isinstance(result.get('removal'), dict) and result['removal'].get('destroyEffect') == 'confirmed'))
+            or isinstance(result.get('removal'), dict) and result['removal'].get('destroyEffect') == 'confirmed'
+            or result.get('code') == 'receipt_unavailable' and result.get('destroyEffect') == 'confirmed'))
         request = app.operations.requests.finish(request, 'outcome_unknown' if admitted or row.get('preparationPending') else 'failed', resourceId=row['id'],
             result={'ok': False, 'status': 'not-started' if not admitted else 'unknown',
                     'preparationCleanup': preparation_cleanup,

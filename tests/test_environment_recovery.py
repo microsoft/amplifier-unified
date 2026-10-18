@@ -645,24 +645,35 @@ async def test_direct_effect_route_cannot_bypass_original_unknown(app, backend, 
     assert app.operations.requests.read(row['sessionId'], 'direct-original') == failed['request']
 
 
-async def test_confirmed_destroy_survives_host_guest_removed_persistence_failure(app, backend, monkeypatch):
+@pytest.mark.parametrize('boundary', ['guest-record', 'fallback-journal'])
+async def test_confirmed_destroy_survives_host_guest_removed_persistence_failure(app, backend, monkeypatch, boundary):
     row = (await start(app))['resource']
     row = (await act(app, 'stop', row, 'metadata-stop'))['resource']
     original_invoke, original_save = owner.invoke, owner.save
+    original_finish = app.operations.requests.finish
     calls, injected = [], []
     def invoke(config, home, raw, action, args):
         calls.append(action)
         result = original_invoke(config, home, raw, action, args)
         if action == 'remove':
             result['removal'] = {'version':1, 'phase':'settle', 'code':'complete', 'destroyEffect':'confirmed'}
+            if boundary == 'fallback-journal':
+                return {'ok':False, 'status':'unknown', 'code':'receipt_unavailable',
+                        'destroyEffect':'confirmed'}
         return result
     def save(home, raw, **changes):
         if changes.get('guestRemoved'):
             injected.append(True)
             raise OSError('private synthetic metadata failure')
         return original_save(home, raw, **changes)
+    def finish(record, state, **fields):
+        if boundary == 'fallback-journal' and fields.get('result', {}).get('code') == 'receipt_unavailable':
+            injected.append(True)
+            raise OSError('private synthetic journal failure')
+        return original_finish(record, state, **fields)
     monkeypatch.setattr(owner, 'invoke', invoke)
     monkeypatch.setattr(owner, 'save', save)
+    monkeypatch.setattr(app.operations.requests, 'finish', finish)
     result = await act(app, 'remove', row, 'metadata-remove')
     assert injected == [True] and calls == ['remove']
     assert result['request']['state'] == 'outcome_unknown'
