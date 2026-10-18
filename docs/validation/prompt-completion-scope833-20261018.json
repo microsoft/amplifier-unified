@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "issue": "https://github.com/microsoft/amplifier-unified/issues/833",
+  "date": "2026-10-18",
+  "source": {
+    "base": "711933cb8f0af031ae1505284073d7fac49c51ad",
+    "changedFiles": {
+      "amplifier_web/host/prompt_events.py": "b7fbed253e2f8f1aee3427666116371b56a39291b7d4ad54e49c3ea97adf2202",
+      "tests/test_prompt_completion_scope.py": "1308f5f4359e7de2397a50f0b17ab0a1d4aa8ccfcec826073e2dd3e6f3b78445",
+      "tests/fixtures/prompt_completion_runtime_probe.py": "40b83ef1a4e5184b6d2e59a0ae4506f5104132e1861affa1f19c6f6249722181"
+    },
+    "baselinePromptEventsSha256": "64a30509443bad3ccbddf718c4b6e107e7b386e590a054f820afd2b55dc813f5"
+  },
+  "diagnosis": "The host synthesizes prompt:complete after each loop-live turn. A completion hook can call the mounted model and emit text deltas. Without an auxiliary call purpose, loop-live forwards those deltas publicly; host idle settlement saves the remaining text as an interrupted response.",
+  "change": "Scope the synthesized completion event to purpose=prompt_completion and restore the prior context in finally. Existing runtime public-stream filtering suppresses auxiliary text; provider observations and usage remain recorded.",
+  "environment": {
+    "platform": "Linux arm64, isolated owned DTU",
+    "core": "2.0.2",
+    "foundation": "8d26eceb9b7cafe6e93346f8f4294596bd45dcd1",
+    "loopLive": "08de4d442fde0210c4c89f7628c17846c5dfd67b",
+    "canonicalShellHook": "https://github.com/microsoft/amplifier-module-hook-shell/tree/a030cc685dbb6d33cafaaf196c6ac0185ff43f65",
+    "provider": "Deterministic local fixture; no network inference"
+  },
+  "focusedTests": {
+    "baseline": {
+      "tests": 6,
+      "failed": 6,
+      "errors": 0,
+      "skipped": 0
+    },
+    "candidate": {
+      "tests": 46,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "candidateCommand": "python -m pytest tests/test_prompt_completion_scope.py tests/test_naming_lifecycle.py tests/test_execution_events.py -q",
+    "controls": [
+      "Normal answer remains public before and after completion",
+      "All normal and auxiliary model calls retain usage and turn ownership",
+      "Prompt, response and session payloads are unchanged",
+      "Prior purpose restored after failure and cancellation",
+      "Spawned completion tasks retain auxiliary purpose without affecting other tasks"
+    ]
+  },
+  "runtimeProof": {
+    "command": "python tests/fixtures/prompt_completion_runtime_probe.py",
+    "prerequisites": [
+      "Installed Core, loop-live and context-simple",
+      "Canonical shell-hook source on PYTHONPATH",
+      "Private HOME/TMPDIR and PROBE_OUTPUT receipt path"
+    ],
+    "boundaries": [
+      "Actual Core session and hook registry",
+      "Actual loop-live Runtime with two submitted turns",
+      "Canonical shell-hook mounted through its normal mount function",
+      "Worker activity and provider observation hooks",
+      "Real normalize_event and AppService.on_runtime_event projection of captured Runtime events"
+    ],
+    "baseline": {
+      "result": "failed as expected",
+      "publicTextDeltas": 4,
+      "savedAssistantMessages": 4,
+      "extraMessages": "Two interrupted-response records containing the auxiliary JSON",
+      "modelCalls": 4,
+      "totalTokens": 24
+    },
+    "candidate": {
+      "result": "passed",
+      "publicTextDeltas": 2,
+      "savedAssistantMessages": 2,
+      "extraMessages": 0,
+      "modelCalls": 4,
+      "totalTokens": 24
+    }
+  },
+  "evidenceSha256": {
+    "release-commands.json": "3c42782c4da9afbde82c2a9763811a6ce3a2f5729b2c7130e4ac57d0fd0e2db6",
+    "release-dependencies.json": "e353790db906d7a2cbc5964e66ea09b0b7eb028e01897bd98fc9def77bf5a80a",
+    "release-red.xml": "7750713934526251687699936254fc2ef3fcb249d99b6d056cd75eb421829cc0",
+    "release-green.xml": "3de57fd464d2620644265f3920a71de7cba1dbc320c9356299ce2f77ee98181f",
+    "release-red-actual.json": "615146ae2395e09dc81c12f60e0f07ae7aeffa6d0231f8923bc1977e0a2d62c9",
+    "release-green-actual.json": "ef55133ccea53578bf43fb7f4b0d466111d1633bb1872dffb95fbf8eb4afe8cf"
+  },
+  "limits": [
+    "The public issue lacks the reporter's mounted-hook and model configuration; the identical failure mechanism is reproduced, not that exact Mac incident.",
+    "The runtime proof runs real Core and loop-live in the test process and projects their captured events through AppService; it does not claim subprocess transport, browser or live-provider acceptance.",
+    "Only host-synthesized completion scope changes. Upstream completion-hook argument construction is unchanged.",
+    "Earlier Core 2.0.1 exploratory checks and fixture setup errors are retained separately; the reported final results use Core 2.0.2.",
+    "No new dependency installation, production mutation, frontend change or broad-suite claim."
+  ]
+}
