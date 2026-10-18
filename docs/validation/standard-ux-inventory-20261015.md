@@ -604,6 +604,17 @@ the sole browser owner for a current recent-events receipt, live/terminal Work,
 retry, copy and reload. See [qualification and limits](work-receipt832.md).
 No frozen inventory or 65-scenario migration hash changes.
 
+**WORK-836** adds the reload-before-shell-registration boundary to the existing
+WorkWindows Python owner and `canonical-work` extended-browser acceptance.
+Hold real source revalidation and delay the new document's shell registration;
+after completion, require its current recent-events receipt without an unrelated
+command or view report repairing the cache. Verify selected connected/current
+web readers receive the notice while unrelated, dormant and non-web clients do
+not. The controlled old-source browser fails the unchanged final 15-second
+receipt assertion; the narrow notification correction passes the same sequence.
+Keep historical failures distinct from this controlled cause. See
+[qualification and retained uncertainty](work-readiness836.md).
+
 **INTERIM-832** strengthens the existing extended `interim-replies` owner. Before
 testing long-scrollback completion and the explicit Jump to latest transition,
 require this generation's rendered message and exact completed-response binding.
