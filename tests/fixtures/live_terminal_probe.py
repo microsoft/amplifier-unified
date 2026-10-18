@@ -1296,16 +1296,37 @@ async def producer_main(root, report, save):
             + ("from live_terminal_probe import RegularProducerProvider\n"
                if name == "provider-regularproducer" else "")
             + f"__amplifier_module_type__ = {name.split('-')[0]!r}\n", encoding="utf-8")
-        sources[name] = str(package)
+        # Foundation activates the declared directory itself on sys.path.
+        # Like the passing terminal fixture, declare the importable parent,
+        # not the Python package directory. Keep generated package bytes intact.
+        sources[name] = str(package.parent)
     # Exercise the actual public setup contract before any conversation input.
-    # The fresh generated module is placed on sys.path just as module activation
-    # does; no patched schema loader or forged runtime configuration is used.
+    # Use the same Foundation source activation as worker Bundle.prepare.
+    # No manual sys.path insertion, worker bootstrap path or install is needed.
     report["phase"] = "provider-schema-preflight"
     save()
+    from importlib.machinery import PathFinder
+    from amplifier_foundation.modules.activator import ModuleActivator
     from amplifier_web.provider_environment import (
         provider_class, construct_schema_provider, config_schema, provider_config_schema)
-    sys.path.insert(0, str(Path(sources["provider-regularproducer"]).parent))
     before_counts = sorted((root / "counts").iterdir())
+    activator = ModuleActivator(cache_dir=root / "source-preflight-cache",
+                                install_deps=False, strict=True)
+    report["moduleSourcePreflight"] = {}
+    for name in ("provider-regularproducer", "tool-regularproducer"):
+        source = Path(sources[name])
+        module = "amplifier_module_" + name.replace("-", "_")
+        package = source / module
+        assert package.joinpath("__init__.py").is_file()
+        # The old declared package directory is not an import root for itself.
+        assert PathFinder.find_spec(module, [str(package)]) is None
+        activated = await activator.activate(name, str(source))
+        assert activated == source and str(source) in sys.path
+        spec = PathFinder.find_spec(module, [str(activated)])
+        assert spec is not None and spec.origin == str(package / "__init__.py")
+        report["moduleSourcePreflight"][name] = {
+            "declaredPackageParent": True, "oldPackageDirectoryRejected": True,
+            "foundationActivated": True, "originMatches": True, "installDependencies": False}
     schema_class = provider_class("provider-regularproducer")
     assert schema_class.__name__ == "RegularProducerProvider"
     schema_provider = construct_schema_provider(schema_class, {}, environment={})

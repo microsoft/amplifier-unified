@@ -327,9 +327,17 @@ def _check_regular_work_details_real_producer_and_service_reopen(tmp_path):
     assert evidence["providerSchemaPreflight"]["hostValidationUsed"] is True
     assert evidence["providerSchemaPreflight"]["providerAttempts"] == 0
     assert evidence["providerSchemaPreflight"]["toolAttempts"] == 0
+    assert set(evidence["moduleSourcePreflight"]) == {"provider-regularproducer", "tool-regularproducer"}
+    assert all(row == {"declaredPackageParent": True, "oldPackageDirectoryRejected": True,
+                       "foundationActivated": True, "originMatches": True, "installDependencies": False}
+               for row in evidence["moduleSourcePreflight"].values())
     assert evidence["workerSchemaDiagnostics"]["gaps"] == []
     assert not evidence.get("diagnosticIncomplete", False)
     assert any(row["status"] == "returned" for row in evidence["workerSchemaDiagnostics"]["rows"])
+    worker_schema = [row for row in evidence["workerSchemaDiagnostics"]["rows"] if row["status"] == "returned"]
+    assert all(row["ownedPackageOriginMatches"] and row["expectedParentInSysPath"]
+               and row["fixtureHelperOriginMatches"] and row["schemaHelperOriginMatches"]
+               for row in worker_schema)
     assert evidence["processGuardPreflight"]["status"] == "passed"
     assert evidence["processGuardPreflight"]["cases"][0]["actualPopenAndPosixSpawn"] is True
     assert evidence["noExtraColdExecution"] is True
