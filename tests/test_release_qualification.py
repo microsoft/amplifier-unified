@@ -393,6 +393,39 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     assert 'emptyOutDir:true' in vite and 'static/build.json' in vite
 
 
+def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert set(inputs) == {'app004_qualification'}
+    assert inputs['app004_qualification']['type'] == 'boolean'
+    assert inputs['app004_qualification']['default'] == 'false'
+    assert workflow['on']['workflow_call'] == {
+        'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
+    job = workflow['jobs']['browser']
+    assert job['timeout-minutes'] == '30'
+    steps = job['steps']
+    commands = [step['run'] for step in steps if 'browser_check_runner.py' in step.get('run', '')]
+    assert len(commands) == 2
+    flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
+    assert all(command.count(flag) == 1 for command in commands)
+    # Empty/default selection executes exactly the preexisting plan and budget.
+    assert commands[0].replace(flag, '').strip() == (
+        'python scripts/browser_check_runner.py --plan frontend/tests/browser-checks.json '
+        '--output output/browser-checks --initialize')
+    assert commands[1].replace(flag, '').strip() == (
+        'uv run --no-sync python scripts/browser_check_runner.py '
+        '--plan frontend/tests/browser-checks.json --output output/browser-checks --budget-seconds 1500')
+    assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
+        i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@v5')
+    # Opt-in can neither mask a failed step nor bypass the existing always upload.
+    assert not any('continue-on-error' in step for step in steps)
+    diagnostics = steps[-1]
+    assert diagnostics['if'] == 'always()'
+    assert diagnostics['uses'] == 'actions/upload-artifact@v4'
+    assert 'output/browser-checks/' in diagnostics['with']['path']
+
+
 def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():
     jobs = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
     steps = jobs['runtime']['steps']

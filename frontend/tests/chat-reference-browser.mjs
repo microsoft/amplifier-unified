@@ -17,7 +17,9 @@ await mkdir(evidence,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/chat_reference_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser,page,exit,primaryFailure;
-const secondaryFailures=[],routeTrace=[];
+const secondaryFailures=[],routeTrace=[],errors=[];
+const identityBoundary={id:'app004-same-document',attempted:false};
+const negativeReload=process.env.CHAT_REFERENCE_NEGATIVE_RELOAD==='1';
 const pendingActions=[];
 const observe=promise=>{const outcome=observed(promise);pendingActions.push(outcome);return outcome};
 const exited=new Promise(resolve=>fixture.once('exit',(code,signal)=>{exit={code,signal};resolve(exit)}));
@@ -38,7 +40,7 @@ try{
  const context=await browser.newContext({extraHTTPHeaders:headers,viewport:{width:1440,height:1000}});
  context.setDefaultTimeout(15000);context.setDefaultNavigationTimeout(15000);
  page=await context.newPage();
- const peer=await context.newPage(),errors=[],posts=[];
+ const peer=await context.newPage(),posts=[];
  let additionalPages=0;
  context.on('page',()=>additionalPages++);
  for(const p of [page,peer]){
@@ -80,8 +82,11 @@ try{
  // Proposed API spelling is a test-first implementation hypothesis.
  const attached=await act(page,'outputs.attachChatReference',{sessionId:source,messageId:message,targetSessionId:target});
  assert.equal(attached.accepted,true,'The real host must accept the typed reference; never inject a record');
+ identityBoundary.attachmentAccepted=true;
  const card=()=>sourceArticle.getByRole('button',{name:/^Open (?:archived )?chat.*Investigation destination/});
  await expect(card()).toBeVisible();
+ identityBoundary.cardVisible=true;
+ identityBoundary.targetSessionId=target;
  assert.equal(await selected(page),source,'Publication must not navigate');
  await page.screenshot({path:join(evidence,'card-wide.png')});
 
@@ -109,7 +114,7 @@ try{
   await route.continue();
  };
  await withActionRoute(page,{label:'held-draft',handle:holdDraft,release:releaseDraft,trace:routeTrace},async()=>{
- if(process.env.CHAT_REFERENCE_NEGATIVE_RELOAD==='1'){
+ if(negativeReload){
   // Deliberately replace one genuine click with the reported bad behavior.
   // This run MUST fail the unchanged-document/client assertion, not turn green.
   await card().evaluate((node,target)=>{
@@ -122,12 +127,22 @@ try{
   await composer(page).fill('Source draft before debounced save');
   await expect.poll(()=>draftHeld).toBe(true);
   assert.notEqual((await authoritative(page)).view.draft,'Source draft before debounced save');
+  identityBoundary.draftHeld=true;
   await card().click();
+  identityBoundary.clickCompleted=true;
  });
  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
+ identityBoundary.selectedSessionId=(await authoritative(page)).selectedSessionId;
  // Keep the deliberately forced reload control's first discriminating failure
  // at document/client identity, not a later destination-focus assertion.
- assert.deepEqual(await marker(page),before);
+ const afterMarker=await marker(page);
+ Object.assign(identityBoundary,{before,after:afterMarker,attempted:true});
+ try{
+  assert.deepEqual(afterMarker,before);
+  identityBoundary.verdict='passed';
+ }catch(error){
+  identityBoundary.verdict='failed';error.boundary=identityBoundary.id;throw error;
+ }
  await expect(page.locator(`[data-part="messages"][data-session-id="${target}"]`)).toBeFocused();
  assert.equal(context.pages().length,2,'Click must not open a tab/window');
  assert.equal(additionalPages,0,'Even a short-lived popup must be detected');
@@ -299,10 +314,11 @@ try{
  }catch(error){secondaryFailures.push(error)}
  try{await writeFile(join(evidence,'route-lifecycle.json'),JSON.stringify(routeTrace,null,2)+'\n')}
  catch(error){secondaryFailures.push(error)}
- const describe=error=>error?{name:error.name,message:error.message,stack:error.stack,
+ const describe=error=>error?{name:error.name,message:error.message,stack:error.stack,code:error.code,boundary:error.boundary,
   ...(error instanceof AggregateError?{errors:error.errors.map(child=>({name:child.name,message:child.message,stack:child.stack}))}:{})}:null;
  try{await writeFile(join(evidence,'outcome.json'),JSON.stringify({
   primary:describe(primaryFailure),secondary:secondaryFailures.map(describe),fixtureExit:exit??null,
+  negativeReload,qualificationToken:process.env.APP004_QUALIFICATION_TOKEN??null,identityBoundary,browserErrors:errors,
  },null,2)+'\n')}catch(error){secondaryFailures.push(error)}
 }
 const failure=combinedFailure(primaryFailure,secondaryFailures);
