@@ -324,19 +324,19 @@ def _host_receipts(cache_home, session, path, identity, facts, guard):
     entries and expired/missing receipts are insufficient provenance.
     """
     if cache_home is None:
-        return set()
+        return set(), None
     home = Path(cache_home).resolve()
     database = home / 'diagnostics' / 'events.sqlite3'
+    before = binding_revision(home)
     if database.resolve() != database or not database.is_file():
-        return set()
+        return set(), before
     accepted = set()
     try:
-        before = binding_revision(home)
         if before is None:
-            return set()
+            return set(), None
+        original_database = before[0]
         with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=.05)) as db:
             db.execute('PRAGMA query_only=ON')
-            db.execute('BEGIN')
             steps = 0
             def progress():
                 nonlocal steps
@@ -344,6 +344,17 @@ def _host_receipts(cache_home, session, path, identity, facts, guard):
                 guard()
                 return int(steps > 100000)
             db.set_progress_handler(progress, 1000)
+            # A first read can create an empty WAL even in mode=ro. Initialize
+            # the pager before choosing the authority baseline, then discard
+            # that snapshot. No rows from this initialization attest anything.
+            db.execute('BEGIN')
+            db.execute('SELECT 1 FROM records LIMIT 1').fetchone()
+            db.rollback()
+            before = binding_revision(home)
+            if (before is None or before[0] is None or original_database is None
+                    or before[0][:2] != original_database[:2]):
+                return set(), None
+            db.execute('BEGIN')  # Fresh authority snapshot, never relabel old rows.
             for fact in facts:
                 guard()
                 data = fact['data']
@@ -368,19 +379,22 @@ def _host_receipts(cache_home, session, path, identity, facts, guard):
                 if reference == expected:
                     accepted.add(fact['id'])
             if binding_revision(home) != before:
-                return set()
+                return set(), before
+        # Teardown is part of the measured lifetime. Any writer/checkpoint or
+        # replacement changing this dependency still invalidates the result.
+        if binding_revision(home) != before:
+            return set(), before
     except (OSError, sqlite3.Error, ValueError, TypeError):
-        return set()
-    return accepted
+        return set(), before
+    return accepted, before
 
 
-def _bind_complete_root(session, path, identity, items, facts, cache_home, guard):
+def _bind_complete_root(session, path, identity, items, facts, attested, guard):
     """Conservative root tools only: four occurrences, one invocation, one turn.
 
     Call-ID reuse anywhere in this complete bounded source refuses the call.
     Models use only their own attested lifecycle pair, never inferred payloads.
     """
-    attested = _host_receipts(cache_home, session, path, identity, facts, guard)
     by_call = {}
     for fact in facts:
         call = fact['data'].get('tool_call_id') or fact['data'].get('call_id')
@@ -579,17 +593,22 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
     complete = (before is None and start == 0 and end == stamp[2]
         and not invalid and not shape_invalid and not lines.partial
         and not lines.blocked and not lines.gaps)
-    index_revision = binding_revision(cache_home)
-    bound = (_bind_complete_root(session, path, identity, items, facts, cache_home, guard)
-             if complete and index_revision is not None else [])
-    if binding_revision(cache_home) != index_revision:
-        raise StaleWindow('The binding index changed during its read')
+    bound, dependency = [], {}
+    if complete:
+        attested, index_revision = _host_receipts(cache_home, session, path, identity, facts, guard)
+        if index_revision is not None:
+            bound = _bind_complete_root(session, path, identity, items, facts, attested, guard)
+        if binding_revision(cache_home) != index_revision:
+            raise StaleWindow('The binding index changed during its read')
+        # Complete misses retain a dependency so an index-only commit is
+        # reconsidered. Partial raw pages never consulted this authority.
+        dependency['_bindingRevision'] = index_revision
     if _stamp(path.stat()) != stamp:
         raise StaleWindow('The event source changed during binding')
     used = {identity for node in bound for identity in node['sourceOccurrenceIds']}
     return {'status': 'ready', 'windowKey': window_key,
             '_boundWork': bound,
-            '_bindingRevision': index_revision,
+            **dependency,
             'bindingCoverage': {'status': 'complete-root' if complete else 'partial-source',
                                 'bound': len(bound), 'unassociated': len(items) - len(used)},
             'generation': _digest([owner, window_key, stamp, start, end]),

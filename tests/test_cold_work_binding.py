@@ -329,6 +329,131 @@ async def test_unavailable_index_revision_never_attests_existing_rows(source, mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('boundary', ['initialization', 'authority-query', 'teardown'])
+async def test_receipt_snapshot_observes_writer_without_relabelling_old_rows(source, monkeypatch, boundary):
+    source.call('one')
+    await source.diagnostics.flush()
+    connect = event_window.sqlite3.connect
+    committed, closed = [], []
+
+    def commit():
+        # Delete real indexed ownership records without changing canonical bytes.
+        with source.diagnostics._db() as writer:
+            writer.execute('DELETE FROM records')
+        committed.append(boundary)
+
+    class ObservedConnection:
+        def __init__(self, db):
+            self.db = db
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+        def execute(self, sql, *args):
+            result = self.db.execute(sql, *args)
+            if boundary == 'authority-query' and sql.startswith('SELECT event,stream') and not committed:
+                commit()
+            return result
+        def rollback(self):
+            self.db.rollback()
+            if boundary == 'initialization' and not committed:
+                commit()
+        def close(self):
+            self.db.close()
+            closed.append(True)
+            if boundary == 'teardown' and not committed:
+                commit()
+
+    def observed_connect(database, *args, **kwargs):
+        db = connect(database, *args, **kwargs)
+        return ObservedConnection(db) if str(database).endswith('?mode=ro') else db
+
+    monkeypatch.setattr(event_window.sqlite3, 'connect', observed_connect)
+    if boundary == 'initialization':
+        # Commit before the fresh authority transaction: it must see the miss,
+        # not reuse an earlier record under a newer physical revision.
+        page = event_window.read_window(source.session, window_key='writer-boundary',
+            cursor_key=b'k' * 32, cache_home=source.service.data_dir)
+        assert page['_boundWork'] == []
+        assert page['_bindingRevision'] == event_window.binding_revision(source.service.data_dir)
+    else:
+        with pytest.raises(event_window.StaleWindow, match='binding index changed'):
+            event_window.read_window(source.session, window_key='writer-boundary',
+                cursor_key=b'k' * 32, cache_home=source.service.data_dir)
+    assert committed == [boundary] and closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_partial_raw_page_never_consults_or_depends_on_ownership_index(source, monkeypatch):
+    source.call('one')
+    source.call('two')
+    await source.diagnostics.flush()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Partial raw observation must not consult ownership evidence')
+    monkeypatch.setattr(event_window, '_host_receipts', forbidden)
+    monkeypatch.setattr(event_window, 'binding_revision', forbidden)
+    page = event_window.read_window(source.session, window_key='partial-raw',
+        cursor_key=b'k' * 32, limit=2, cache_home=source.service.data_dir)
+    assert page['bindingCoverage']['status'] == 'partial-source'
+    assert page['_boundWork'] == [] and '_bindingRevision' not in page
+    assert len(page['items']) == 2 and page['before']
+    with source.diagnostics._db() as writer:
+        writer.execute('DELETE FROM records')
+    # The raw source has not changed and never relied on that index.
+    owner = SimpleNamespace(service=source.service)
+    assert WorkWindows._binding_current(owner, page)
+    assert all(row['association'] == 'unverified' for row in page['items'])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['source', 'epoch'])
+async def test_raw_evidence_keeps_source_and_after_await_fence(source, change):
+    source.call('one')
+    await source.diagnostics.flush()
+    owner = WorkWindows(source.service)
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            result = self.model.project(inputs, check_budget=lambda: None)
+            if inputs['operation'] == 'field':
+                entered.set()
+                await release.wait()
+            return result
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    read = barrier = None
+    try:
+        page = await owner.read('root')
+        evidence = page['evidence']
+        raw = owner.observations('root', evidence['group'], evidence['revision'])
+        ref = next(row['inputDetail'] for row in raw['items'] if 'inputDetail' in row)
+        read = asyncio.create_task(owner.read_text('root', ref))
+        barrier = asyncio.create_task(entered.wait())
+        done, _ = await asyncio.wait({read, barrier}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+        if read in done:
+            await read
+            pytest.fail('Raw field completed before its barrier')
+        assert barrier in done
+        if change == 'source':
+            append_event(source.workspace, 'root', 'tool:post', {'session_id': 'root', 'result': 'later'})
+            with pytest.raises(ValueError, match='source changed'):
+                owner.observations('root', evidence['group'], evidence['revision'])
+        else:
+            owner.invalidate({'root'})
+        release.set()
+        with pytest.raises(ValueError, match='expired'):
+            await asyncio.wait_for(read, timeout=5)
+    finally:
+        release.set()
+        tasks = [task for task in (read, barrier) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await owner.close()
+
+
+@pytest.mark.asyncio
 async def test_real_persisted_projection_and_new_window_owner_preserve_proven_groups(source):
     from amplifier_web.session_projection import stored_execution
     source.call('one')

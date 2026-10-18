@@ -181,6 +181,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                     before=request.query.get('before'), native=request.query.get('native') == 'true'))
             if part == 'groups':
                 return web.json_response(await windows.read(session['id'], before=request.query.get('before')))
+            if part == 'observations':
+                return web.json_response(windows.observations(session['id'], request.query.get('group'),
+                    request.query.get('revision')))
             if part == 'nodes' and (request.query.get('group') or '').startswith('event-window:'):
                 return web.json_response(windows.nodes(session['id'], request.query['group'],
                     revision=request.query.get('revision')))

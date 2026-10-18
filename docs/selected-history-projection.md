@@ -73,6 +73,12 @@ bounded unique-ID lookup must match the indexed event, stream, session, workspac
 and exact source path/offset/length/hash/event-ID receipt. JSONL `id`, `turnId` or
 `app` fields alone are not authority. Missing, suppressed, expired or unhashed
 receipts remain unassociated; capture policy and recording are unchanged.
+The read-only SQLite pager is initialized before recording the ownership-index
+baseline; that initialization snapshot is discarded. Attestation uses a fresh
+transaction, and its recorded dependency must remain unchanged through queries,
+connection teardown and host publication. A writer change still refuses the
+read. Partial raw windows do not consult or depend on the ownership index;
+complete misses retain the dependency so later indexed receipts are reconsidered.
 
 The initial implementation qualifies only a whole root source fitting one
 existing bounded page with no malformed records, gaps or partial tail. An older
@@ -89,6 +95,18 @@ proven turn, never identifies a turn. Page-backed subgroup IDs keep the existing
 distinct from the accepted page. Full fields still use the bounded field reader.
 Source/index (including WAL) changes or invalidation expire bound reads. Snapshot
 rendering does not perform source/index IO or hydrate cold execution.
+
+Every accepted root group page also exposes an `evidence` reference containing
+`sessionId`, `part: observations`, the original root `group` and its `revision`.
+Bound groups and nodes carry that same reference. The registered-web detail
+route accepts it only for a retained root page with the exact revision, returning
+all original occurrences in that page (at most 100), including those deduplicated
+from ordinary Work. Original IDs and independent field references remain intact;
+raw field `windowKey` values identify the root page, not a merged bound subgroup.
+This explicit read uses no ownership-index authority, adds no store or hydration,
+and does not change ordinary Work deduplication. Awaited fields retain current
+source/owner/page and invalidation-fence checks. Raw availability does not prove
+turn association, and these additions remain unqualified until executed checks pass.
 
 Unproven/off-page work remains in Recent saved work with explicit placement
 coverage. This candidate does not repair live ordinary references, generic

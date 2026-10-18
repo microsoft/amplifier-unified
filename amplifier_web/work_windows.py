@@ -347,7 +347,8 @@ class WorkWindows:
                 continue
             logical = turn['id'] + '@' + anchor['id']
             group = page['group'] + ':bound:' + hashlib.sha256(logical.encode()).hexdigest()[:24]
-            node = {**original, 'anchorMessageId': anchor['id']}
+            node = {**original, 'anchorMessageId': anchor['id'],
+                    'evidence': WorkWindows._evidence(page)}
             page['_boundNodes'].setdefault(group, []).append(node)
             used.update(node['sourceOccurrenceIds'])
             page['_boundTurns'][turn['id']] = {key: turn[key] for key in
@@ -357,12 +358,18 @@ class WorkWindows:
                 'bindingProvenance': 'host-diagnostics-receipt',
                 'placementProvenance': 'timestamp-within-proven-turn',
                 'partialWindow': True, 'nodeCounts': None, 'aggregateUsage': None,
-                'detailRevision': page['generation'], 'coverage': page['coverage']}
+                'detailRevision': page['generation'], 'coverage': page['coverage'],
+                'evidence': WorkWindows._evidence(page)}
         for group, rows in page['_boundNodes'].items():
             page['_boundGroups'][group].update(
                 startedAt=min(row['startedAt'] for row in rows),
                 endedAt=max(row['endedAt'] for row in rows))
         page['_unassociatedIds'] = {row['id'] for row in page['items']} - used
+
+    @staticmethod
+    def _evidence(page):
+        return {'sessionId': page['sessionId'], 'part': 'observations',
+                'group': page['group'], 'revision': page['generation']}
 
     @staticmethod
     def _groups(page, *, bindings=True):
@@ -371,7 +378,8 @@ class WorkWindows:
         group = {'id': identity, 'turnId': identity, 'anchorMessageId': None,
             'observationWindow': True, 'phase': 'recorded', 'label': 'Recent saved work',
             'nodeCounts': None, 'aggregateUsage': None, 'detailRevision': page['generation'],
-            'coverage': coverage, 'bindingCoverage': page.get('bindingCoverage')}
+            'coverage': coverage, 'bindingCoverage': page.get('bindingCoverage'),
+            'evidence': WorkWindows._evidence(page)}
         separate = bool((page.get('_unassociatedIds', page['items']) if bindings else page['items'])
                         or page.get('unavailableRanges'))
         return {'items': [*([group] if separate else []),
@@ -381,6 +389,7 @@ class WorkWindows:
             'mode': 'cursor', 'offset': None, 'total': None, 'before': page.get('before'),
             'hasEarlier': page.get('before') is not None, 'revision': page['generation'],
             'windowKey': page['windowKey'], 'coverage': coverage,
+            'evidence': WorkWindows._evidence(page),
             'unavailableRanges': page.get('unavailableRanges', [])}
 
     def live_view(self, session):
@@ -468,6 +477,30 @@ class WorkWindows:
                 'offset': 0, 'total': len(selected), 'before': None,
                 'group': group, 'revision': page['generation'], 'coverage': page['coverage']}
 
+    def observations(self, identity, group, revision):
+        """Read original occurrences, independently of ordinary Work placement."""
+        # Only the accepted root page owns raw fields. A bound subgroup is not
+        # an alternate spelling, and ownership-index authority is not claimed.
+        if group not in self.pages:
+            raise ValueError('This saved evidence window expired. Open its Work window again.')
+        page = self._page(identity, group)
+        if revision != page['generation']:
+            raise ValueError('This saved evidence window changed. Open it again.')
+        if not self._matches(page['source'], page.get('revisions')):
+            raise ValueError('This saved evidence source changed. Open its Work window again.')
+        items = []
+        for original in page['items']:
+            row = {key: deepcopy(value) for key, value in original.items() if key != '_eventFields'}
+            row.update(turnId=group, detailVersion=page['generation'], observationWindow=True)
+            for field in ('input', 'output', 'error', 'request', 'response'):
+                if field + 'Detail' in row:
+                    row[field + 'Detail'].update(sessionId=identity, windowKey=group)
+            items.append(row)
+        return {'items': items, 'order': [row['id'] for row in items],
+                'sessionId': identity, 'offset': 0, 'total': len(items), 'before': None,
+                'group': group, 'revision': page['generation'], 'coverage': page['coverage'],
+                'evidence': self._evidence(page)}
+
     async def read_text(self, identity, args):
         owner = self._owner(identity)
         page = self._page(owner['id'], args.get('windowKey'))
@@ -487,8 +520,9 @@ class WorkWindows:
             'limit': min(16384, max(1, int(args.get('limit', 16000))))}, key=owner['id'] + ':field:' + row['id'])
         if (self.closed or self._owner(owner['id']) is not owner or self.pages.get(page['group']) is not page
                 or source_identity(owner) != page['source']
-                or bound and (self.epochs.get(identity) != fence
-                    or page.get('_boundNodes', {}).get(group) is not mapping
+                or self.epochs.get(identity) != fence
+                or not self._matches(page['source'], page.get('revisions'))
+                or bound and (page.get('_boundNodes', {}).get(group) is not mapping
                     or not self._bound_current(page))):
             raise ValueError('This saved field expired.')
         if result.get('status') != 'complete':

@@ -311,10 +311,8 @@ async def _all_nodes(client, sid, group, count):
     return rows
 
 
-async def _saved_observations(client, sid, calls):
+async def _saved_observations(client, sid, count):
     """Page raw saved observations; never merge pre/post into logical calls."""
-    call_ids = {call["call"] for call in calls}
-    count = 2 * len(calls)
     rows, before, seen_cursors, seen_groups = [], None, set(), set()
     for page_number in range(8):
         query = {"sessionId": sid, "part": "groups"}
@@ -329,24 +327,29 @@ async def _saved_observations(client, sid, calls):
         assert coverage["invalidEvents"] == 0, coverage
         if page_number == 0 and count > 100:
             assert page["before"], "Saved observations must expose the earlier pages"
-        for group in page["items"]:
-            assert group["observationWindow"] is True
-            assert group["id"] not in seen_groups, "Saved group pagination repeated a window"
-            seen_groups.add(group["id"])
-            nodes = await _get(client, {"sessionId": sid, "part": "nodes",
-                "group": group["id"], "revision": group["detailRevision"]})
-            assert nodes["group"] == group["id"]
-            assert nodes["revision"] == group["detailRevision"]
-            assert len(nodes["items"]) <= 100 and nodes["before"] is None
-            for row in nodes["items"]:
-                assert row["observationWindow"] is True and row["observation"] is True
-                assert row["association"] == "unverified"
-                assert row["turnId"] == group["id"]
-                assert row["sessionId"] == sid
-                if row.get("toolCallId") in call_ids:
-                    assert row["inputId"] == INPUT_ID
-                assert "_eventFields" not in row
-            rows.extend(nodes["items"])
+        evidence = page["evidence"]
+        assert evidence["sessionId"] == sid and evidence["part"] == "observations"
+        assert evidence["revision"] == page["revision"]
+        assert evidence["group"] not in seen_groups, "Saved group pagination repeated a window"
+        seen_groups.add(evidence["group"])
+        nodes = await _get(client, evidence)
+        assert nodes["group"] == evidence["group"]
+        assert nodes["revision"] == evidence["revision"]
+        assert nodes["sessionId"] == sid and nodes["evidence"] == evidence
+        assert len(nodes["items"]) <= 100 and nodes["before"] is None
+        assert nodes["order"] == [row["id"] for row in nodes["items"]]
+        for row in nodes["items"]:
+            assert row["observationWindow"] is True and row["observation"] is True
+            assert row["association"] == "unverified"
+            assert row["turnId"] == evidence["group"]
+            assert row["sessionId"] == sid
+            assert "_eventFields" not in row
+            for field in ("input", "output", "error", "request", "response"):
+                if field + "Detail" in row:
+                    reference = row[field + "Detail"]
+                    assert reference["windowKey"] == evidence["group"]
+                    assert reference["sessionId"] == sid and reference["id"] == row["id"]
+        rows.extend(nodes["items"])
         before = page["before"]
         if before is None:
             assert coverage["rootExhausted"] is True, coverage
@@ -356,11 +359,9 @@ async def _saved_observations(client, sid, calls):
     else:
         pytest.fail("REGULAR-DETAILS-01 exceeded eight bounded saved-observation pages")
     assert len({row["id"] for row in rows}) == len(rows)
-    # Service reopen may add unrelated host lifecycle observations. Keep them
-    # distinct, rather than asserting the fixture owns every canonical row.
-    selected = [row for row in rows if row.get("toolCallId") in call_ids]
-    assert len(selected) == count, "Authored saved observations were lost or repeated"
-    return selected
+    # Call IDs occur in authored bodies AND metadata-only diagnostic receipts.
+    # Callers select exact receipt IDs, allowing unrelated lifecycle records.
+    return rows
 
 
 async def _field(client, sid, node, field, expected):
@@ -458,9 +459,14 @@ async def test_regular_work_details_observer_and_service_reopen(
 async def test_regular_saved_observation_bodies(
         authenticated_client, tmp_path, later_calls, reopen):
     """Saved-body availability is independent of interim-group ownership."""
-    async with _scenario(authenticated_client, tmp_path, later_calls, reopen) as fixture:
+    audit = {}
+    async with _scenario(authenticated_client, tmp_path, later_calls, reopen, audit) as fixture:
         service, client, calls, sid, _, _, _ = fixture
-        rows = await _saved_observations(client, sid, calls)
+        observations = {row["id"]: row for row in
+                        await _saved_observations(client, sid, 2 * len(calls))}
+        assert len(audit["authored"]) == 2 * len(calls)
+        assert audit["authored"].keys() <= observations.keys(), "An authored record is not visible"
+        rows = [observations[identity] for identity in audit["authored"]]
         expected = {(call["call"], event): (field, call[field], call["tool"])
                     for call in calls
                     for event, field in (("tool:pre", "input"), ("tool:post", "output"))}
@@ -469,6 +475,9 @@ async def test_regular_saved_observation_bodies(
             "Each authored hook observation must appear exactly once")
         assert set(keys) == set(expected)
         for row, key in zip(rows, keys):
+            assert row["inputId"] == INPUT_ID
+            receipt = audit["authored"][row["id"]]
+            assert key == (receipt["call"], receipt["event"])
             field, body, tool = expected[key]
             assert row["kind"] == "tool" and row["label"] == tool
             assert isinstance(row.get(field + "Detail"), dict), (
@@ -481,35 +490,15 @@ async def test_regular_saved_observation_bodies(
 async def test_cold_observation_exact_origin_diagnostic(authenticated_client, tmp_path, later_calls):
     """Diagnostic only: distinguish authored bodies from fallback receipts.
 
-    The original cold ownership/body tests remain unchanged and failing.
+    Ordinary ownership/body acceptance is separate from raw evidence access.
     No event file is reread: identities come from bytes this fixture wrote and
     transparent append receipts, compared with the supported bounded HTTP read.
     """
     audit = {}
     async with _scenario(authenticated_client, tmp_path, later_calls, True, audit) as fixture:
         service, client, calls, sid, _, _, _ = fixture
-        observations, before, cursors = {}, None, set()
-        for _ in range(8):
-            query = {"sessionId": sid, "part": "groups"}
-            if before is not None:
-                query["before"] = before
-            page = await _get(client, query)
-            assert not page["unavailableRanges"]
-            for group in page["items"]:
-                nodes = await _get(client, {"sessionId": sid, "part": "nodes",
-                    "group": group["id"], "revision": group["detailRevision"]})
-                assert nodes["before"] is None
-                for row in nodes["items"]:
-                    assert row["id"] not in observations
-                    observations[row["id"]] = row
-            before = page["before"]
-            if before is None:
-                assert page["coverage"]["rootExhausted"]
-                break
-            assert before not in cursors
-            cursors.add(before)
-        else:
-            pytest.fail("Diagnostic exceeded eight bounded pages")
+        observations = {row["id"]: row for row in
+                        await _saved_observations(client, sid, 2 * len(calls))}
 
         authored = set(audit["authored"])
         diagnostic = set(audit["diagnostic"])
@@ -539,4 +528,73 @@ async def test_cold_observation_exact_origin_diagnostic(authenticated_client, tm
             assert not receipt["inputPresent"] and not receipt["outputPresent"]
             assert "inputId" not in row
             assert "inputDetail" not in row and "outputDetail" not in row
+        assert not service.runtime.sent and not service.runtime.started
+
+
+async def test_cold_ordinary_calls_keep_original_evidence(authenticated_client, tmp_path):
+    """Four ordinary calls coexist with eight authored and eight diagnostic rows."""
+    audit = {}
+    async with _scenario(authenticated_client, tmp_path, 0, True, audit) as fixture:
+        service, client, calls, sid, _, interim_id, _ = fixture
+        group = await _current_group(client, sid, interim_id)
+        ordinary = await _all_nodes(client, sid, group, 4)
+        evidence = group["evidence"]
+        assert evidence["sessionId"] == sid and evidence["part"] == "observations"
+        assert evidence["revision"] == group["detailRevision"]
+        assert evidence["group"] != group["id"]
+        by_call = {call["call"]: call for call in calls}
+        for row in ordinary:
+            assert row["evidence"] == evidence
+            assert row["turnId"] == INPUT_ID and row["anchorMessageId"] == interim_id
+            assert row["observationWindow"] is False and row["phase"] == "completed"
+            assert set(row["sourceOccurrenceIds"]) == {
+                identity for manifest in (audit["authored"], audit["diagnostic"])
+                for identity, receipt in manifest.items() if receipt["call"] == row["toolCallId"]}
+            for field in ("input", "output"):
+                await _field(client, sid, row, field, by_call[row["toolCallId"]][field])
+
+        raw = await _get(client, evidence)
+        assert raw["sessionId"] == sid and raw["group"] == evidence["group"]
+        assert raw["revision"] == evidence["revision"] and raw["evidence"] == evidence
+        assert raw["before"] is None and len(raw["items"]) <= 100
+        assert raw["order"] == [row["id"] for row in raw["items"]]
+        observations = {row["id"]: row for row in raw["items"]}
+        assert len(observations) == len(raw["items"]) == raw["total"]
+        authored, diagnostic = set(audit["authored"]), set(audit["diagnostic"])
+        assert len(authored) == len(diagnostic) == 8 and authored.isdisjoint(diagnostic)
+        assert authored | diagnostic <= observations.keys()
+        for identity in authored:
+            row = observations[identity]
+            receipt = audit["authored"][identity]
+            assert row["id"] == identity and row["inputId"] == INPUT_ID
+            assert (row["toolCallId"], row["event"]) == (receipt["call"], receipt["event"])
+            assert row["observationWindow"] is True and row["association"] == "unverified"
+            assert row["turnId"] == evidence["group"] and "_eventFields" not in row
+            field, absent = (("input", "output") if receipt["event"] == "tool:pre"
+                             else ("output", "input"))
+            assert absent not in row and absent + "Detail" not in row
+            reference = row[field + "Detail"]
+            assert reference["id"] == identity and reference["windowKey"] == evidence["group"]
+            await _field(client, sid, row, field, by_call[receipt["call"]][field])
+        for identity in diagnostic:
+            row = observations[identity]
+            receipt = audit["diagnostic"][identity]
+            assert row["id"] == identity and row["sessionId"] == sid
+            assert (row["toolCallId"], row["event"]) == (receipt["call"], receipt["event"])
+            assert receipt["kind"] == "tool" and receipt["turnId"] == INPUT_ID
+            assert receipt["inputId"] is None
+            assert not receipt["inputPresent"] and not receipt["outputPresent"]
+            assert "inputId" not in row and not BODY_FIELDS.intersection(row)
+            assert row["observationWindow"] is True and row["association"] == "unverified"
+
+        # Root identity and exact revision are required; never substitute a
+        # merged subgroup, omit the revision, or silently accept an old one.
+        for query in ({**evidence, "group": group["id"]},
+                      {**evidence, "revision": "obsolete"},
+                      {key: value for key, value in evidence.items() if key != "revision"}):
+            rejected = await client.get(DETAIL_URL, params=query)
+            assert rejected.status == 400, await rejected.text()
+            await rejected.read()
+        retained = await _all_nodes(client, sid, group, 4)
+        assert [row["id"] for row in retained] == [row["id"] for row in ordinary]
         assert not service.runtime.sent and not service.runtime.started
