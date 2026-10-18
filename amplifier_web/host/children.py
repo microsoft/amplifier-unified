@@ -448,6 +448,19 @@ class Children:
         if components is not None:
             components.apply(effective)
         child_prepared = replace(prepared, mount_plan=plan, bundle=effective)
+        parent_isolation = parent.coordinator.get_capability("web.provider_isolation")
+        isolation = None
+        if parent_isolation is not None:
+            from ..provider_isolation import ProviderIsolation
+            from ..provider_environment import materialize_bundle_providers
+            from types import SimpleNamespace
+            isolation = ProviderIsolation()
+            isolation.preparation = copy.deepcopy(parent_isolation.preparation)
+            # Validate this child's effective declaration, not a stale parent
+            # outcome. An explicit repair may differ even for the same account.
+            await materialize_bundle_providers(
+                SimpleNamespace(providers=plan.get("providers", []), agents=plan.get("agents", {})),
+                child_prepared, isolation=isolation)
         persistent = _PERSISTENT.get()
         # Resume metadata belongs to the previous invocation. Use this task's
         # dispatch identity, as the delegate tool itself does for its events.
@@ -495,12 +508,19 @@ class Children:
             completion.update(data)
             return HookResult()
         try:
+            initialization = ({"before_initialize": partial(
+                prepare_default_routing, automatic=metadata["automatic_default_routing"])}
+                if routing_policy else {})
+            if isolation:
+                routing_callback = initialization.get("before_initialize")
+                async def initialize_with_isolation(session):
+                    await isolation.before_initialize(session)
+                    if routing_callback:
+                        await routing_callback(session)
+                initialization["before_initialize"] = initialize_with_isolation
             child = await child_prepared.create_session(session_id=identity, parent_id=parent.session_id,
                 approval_system=self.approvals, display_system=getattr(parent.coordinator, "display_system", None),
-                session_cwd=cwd, is_resumed=resumed,
-                **({"before_initialize": partial(
-                    prepare_default_routing, automatic=metadata["automatic_default_routing"])}
-                   if routing_policy else {}))
+                session_cwd=cwd, is_resumed=resumed, **initialization)
             coordinator = child.coordinator
             from ..read_policy import validate_mounted_read_policy
             validate_mounted_read_policy(coordinator)
@@ -518,6 +538,9 @@ class Children:
                 if not hasattr(child_loop, "root_provider"):
                     raise ValueError("The child orchestrator cannot apply the inherited model selection")
                 child_loop.root_provider = SelectedProvider(providers[provider_identity], selection)
+            if isolation:
+                from ..provider_isolation import require_selected
+                require_selected(coordinator)
             coordinator.register_capability("live.child", True)
             coordinator.register_capability("web.child.resumed", resumed)
             coordinator.register_capability("live.child_mode", "persistent" if persistent else "finite")

@@ -1,17 +1,16 @@
+import {finishFixture} from './fixture-lifecycle.mjs';
 import {openSettingsPage,openPhoneNotificationSettings,settingsToolObservations} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
-import {spawn} from 'node:child_process';
-import {fileURLToPath} from 'node:url';
+import {startSettingsFixture} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_ui_server.py',import.meta.url))],{stdio:'ignore'});
-let browser,page;const errors=[];
+const {base,stop}=await startSettingsFixture();
+let browser,page,failure;const errors=[];
 try{
- for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8957/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
  browser=await chromium.launch({headless:true});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto('http://127.0.0.1:8957/');await page.waitForSelector('#amp-one');
+ await page.goto(base+'/');await page.waitForSelector('#amp-one');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const presentation=async(id,value)=>{
   if(id!=='scheme'&&!await page.locator('#'+id).isVisible())await page.getByText('Layout & background',{exact:true}).click();
@@ -156,5 +155,10 @@ try{
  await openSettingsPage(page,'providers');await page.screenshot({animations:'disabled',path:'/tmp/settings-providers-final.png'});
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({destinations:settingsSections.reduce((count,section)=>count+section.pages.length,0),layouts,notificationPersistence:true,privateDrafts:true,voicePersistence:true,skinPersistence:true,catalogToConnection:true,browserErrors:0}));
-}catch(error){if(page)await page.screenshot({animations:'disabled',path:'/tmp/settings-completeness-failure.png'});throw error}
-finally{await browser?.close();fixture.kill('SIGTERM')}
+}catch(error){
+ failure=error;
+ console.error(error);
+ try{if(page)await page.screenshot({animations:'disabled',path:'/tmp/settings-completeness-failure.png'})}catch(captureError){console.error('Failure screenshot unavailable:',captureError.message)}
+ throw error;
+}
+finally{await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}

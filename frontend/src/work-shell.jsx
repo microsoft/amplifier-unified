@@ -4,7 +4,7 @@ import {WorkspaceConfiguration} from './workspace-configuration';
 import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal} from 'lucide-react';
+import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal,CalendarClock} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
 import {useNavigationController,ChatList,NavigationEditor,ChatSearch} from './shell/navigation-components';
 import {WorkspaceCleanup} from './storage-settings';
@@ -45,6 +45,7 @@ function ActionMenu({label,children,icon=<MoreHorizontal/>,badge,caption}){
 }
 export function AppFooter({state,connected,open,act}){
  return <div className="a-work-footer">
+  <button type="button" className="a-footer-action" onClick={()=>open('automation')}><CalendarClock/><span>Automation</span></button>
   <button type="button" className="a-footer-action" onClick={()=>open('activity')}><Bell/><span>Activity</span><AttentionBadge state={state}/></button>
   <button type="button" className="a-footer-action" onClick={()=>open('settings')}><Settings/><span>Settings</span><AttentionBadge state={state} settings/></button>
   <div className="a-footer-status"><ShellSlot name="app.status"><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected':'Reconnecting'}/></ShellSlot><span>{connected?'Connected':'Reconnecting…'}</span><ShellSlot name="app.actions"><ActionMenu label="App options"><button onClick={()=>open('feedback')}><Bug/>Send feedback</button><button onClick={()=>open('agent')}><ScanEye/>What the agent sees</button></ActionMenu></ShellSlot></div>

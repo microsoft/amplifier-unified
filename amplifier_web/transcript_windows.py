@@ -256,8 +256,10 @@ class TranscriptWindows:
                 from .browser_detail import compact
                 result['items'][index] = compact(row, session_id, 'messages', 4096)
                 annotation = annotations.get(row.get('id'), {})
-                if isinstance(annotation, dict) and 'reactions' in annotation:
-                    result['items'][index]['reactions'] = copy.deepcopy(annotation['reactions'])
+                if isinstance(annotation, dict):
+                    for field in ('reactions', 'assistantReactions'):
+                        if field in annotation:
+                            result['items'][index][field] = copy.deepcopy(annotation[field])
                 if row.get('attribution'):
                     result['items'][index]['attribution'] = row['attribution']
                 if saved_owner and result['items'][index].get('textDetail'):

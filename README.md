@@ -116,6 +116,9 @@ After installation, open **Settings → Updates** to check for and install updat
 review any failed checks, or choose the automatic check interval. See the
 [update guide](docs/UPDATES.md) for active-work handling and recovery details.
 
+For opt-in, read-only local observations shared with CLI tools, see the
+[status emitter guide](docs/status-emitter.md). Publication is disabled by default.
+
 ## Default capabilities
 
 Ordinary conversations compose Unified shell, image generation, Computer Use,

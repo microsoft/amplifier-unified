@@ -23,6 +23,7 @@ EXTRA_DEPENDENCIES = (
     "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@main#subdirectory=modules/context-managed",
     "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@main",
     "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@main",
+    "amplifier-module-hooks-routing @ git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=modules/hooks-routing",
 )
 REQUIRED_MODULES = (
     "amplifier_core", "amplifier_foundation", "amplifier_module_loop_live",
@@ -30,6 +31,7 @@ REQUIRED_MODULES = (
     "amplifier_module_provider_openai.native", "amplifier_module_tool_bash",
     "amplifier_module_tool_exec", "amplifier_module_tool_filesystem",
     "amplifier_module_tool_search.grep", "amplifier_module_tool_search.glob",
+    "amplifier_module_hooks_routing.resolver",
 )
 
 

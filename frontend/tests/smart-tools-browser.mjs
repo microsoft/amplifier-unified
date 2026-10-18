@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {build} from 'esbuild';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {settingsButton} from './browser-settings.mjs';
 const temp=await mkdtemp(join(tmpdir(),'unified-mcp-browser-'));
 const source=`import {App} from '@modelcontextprotocol/ext-apps';
 const app=new App({name:'Independent counter',version:'1.0.0'},{});
@@ -58,7 +59,7 @@ try{
  const appearance=async()=>{
   const navigation=page.getByRole('button',{name:'Open navigation',exact:true});
   if(await navigation.isVisible())await navigation.click();
-  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await settingsButton(page).click();
   await page.locator('[data-settings-section="appearance"]').click();
  };
  await action('view.update',{patch:{scheme:'system'}});

@@ -409,7 +409,93 @@ def test_real_bundle_switch_isolates_module_revisions_and_preserves_history(tmp_
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '"fresh_worker_per_revision": true' in result.stdout
+    assert '"failed_mount_diagnostic": "provider_mount_failed"' in result.stdout
     assert '"model_calls": 0' in result.stdout
+
+
+@pytest.mark.parametrize('serialized', [False, True])
+def test_probe_snapshot_serializes_with_native_checkpoint(tmp_path, monkeypatch, serialized):
+    """Force the actual cross-process writer race, including its negative control."""
+    import queue
+    import subprocess
+    import sys
+    import threading
+    from amplifier_foundation.session import history
+    from fixtures.bundle_switch_probe import saved_history
+
+    store = SessionStore(tmp_path / 'sessions')
+    messages = [{'role': 'user', 'content': 'Keep the saved conversation'}]
+    store.save('source', messages, {'status': 'idle'})
+    writer = subprocess.Popen([sys.executable, '-c', '''
+import sys
+from pathlib import Path
+from filelock import FileLock, Timeout
+from amplifier_foundation.session.history import SessionHistoryStore
+directory = Path(sys.argv[1])
+store = SessionHistoryStore(directory)
+rows = store.load_messages()
+metadata = store.load_metadata()
+print('ready', flush=True)
+assert sys.stdin.readline().strip() == 'checkpoint'
+try:
+    with FileLock(directory.parent / f'.{directory.name}.metadata.lock', timeout=0):
+        pass
+except Timeout:
+    print('blocked', flush=True)
+else:
+    print('unlocked', flush=True)
+# Use the real portable checkpoint writer, including transcript replacement
+# with unchanged content. The runtime's checkpoint saves share this lock.
+store.save(rows, {**metadata, 'status': 'completed'}, merge_metadata=True)
+print('saved', flush=True)
+''', str(store.directory('source'))], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True)
+    receipts = queue.Queue()
+    def read_receipts():
+        for line in writer.stdout:
+            receipts.put(line.strip())
+        receipts.put(None)
+    reader = threading.Thread(target=read_receipts, daemon=True)
+    reader.start()
+
+    def receipt():
+        line = receipts.get(timeout=5)
+        assert line is not None, 'Checkpoint writer exited before its receipt'
+        return line
+
+    original = history._read_messages
+    reads = 0
+    def concurrent_checkpoint(path):
+        nonlocal reads
+        rows = original(path)
+        reads += 1
+        writer.stdin.write('checkpoint\n'); writer.stdin.flush()
+        assert receipt() == ('blocked' if serialized else 'unlocked')
+        if not serialized:
+            assert receipt() == 'saved'
+        return rows
+
+    try:
+        assert receipt() == 'ready'
+        with monkeypatch.context() as patch:
+            patch.setattr(history, '_read_messages', concurrent_checkpoint)
+            if serialized:
+                rows, metadata = saved_history(store, 'source')
+                assert rows == messages and metadata['status'] == 'idle'
+            else:
+                with pytest.raises(ValueError, match='saved session changed while it was being read'):
+                    store.load('source')
+        if serialized:
+            assert receipt() == 'saved'
+        assert writer.wait(timeout=5) == 0, writer.stderr.read()
+        assert reads == 1  # No retry of the guarded snapshot.
+        rows, metadata = saved_history(store, 'source')
+        assert rows == messages and metadata['status'] == 'completed'
+    finally:
+        if writer.poll() is None:
+            writer.kill(); writer.wait(timeout=5)
+        reader.join(timeout=5)
+        assert not reader.is_alive()
 
 
 @pytest.mark.parametrize('revocation', ['after-prepare', 'during-stop'])

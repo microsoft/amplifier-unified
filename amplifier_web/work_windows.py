@@ -17,6 +17,10 @@ MAX_PAGES = 8
 MAX_JOBS = 4
 
 
+class _SupersededRead(ValueError):
+    """A newer publication owns this display; the discarded read did not fail."""
+
+
 def source_identity(session):
     return {key: session[key] for key in IDENTITY_FIELDS if key in session}
 
@@ -84,6 +88,20 @@ class WorkWindows:
     def _owner(self, identity):
         return self.service._session(identity, hydrate=False)
 
+    def _check_current(self, identity, owner, source, fence):
+        if (self.closed or getattr(self.service, 'closed', False)
+                or self.epochs.get(identity) != fence):
+            raise _SupersededRead('The requested conversation changed. Open it again.')
+        from .service import AppError
+        try:
+            current = self._owner(identity)
+        except AppError as error:
+            if error.status not in {404, 409}:
+                raise
+            raise _SupersededRead('The requested conversation changed. Open it again.') from None
+        if current is not owner or source_identity(owner) != source:
+            raise _SupersededRead('The requested conversation changed. Open it again.')
+
     @staticmethod
     def _window_key(source):
         # Identity only: source mutation invalidates the signed page cursor,
@@ -127,11 +145,22 @@ class WorkWindows:
         if len(self.pending) >= MAX_JOBS or self.retry_at.get(identity, 0) > time.monotonic():
             return None
         async def refresh():
+            owner = None
             try:
+                owner = self._owner(identity)
+                source, fence = source_identity(owner), self._fence(identity)
                 return await self.read(identity, _initial=True)
             except asyncio.CancelledError:
                 raise
+            except _SupersededRead:
+                return None  # The existing interest loop retries the current owner next tick.
             except Exception:
+                # A failure from an obsolete probe cannot replace newer status.
+                if owner is not None:
+                    try:
+                        self._check_current(identity, owner, source, fence)
+                    except _SupersededRead:
+                        return None
                 if not self.closed and self.status.get(identity, {}).get('status') != 'retrying':
                     self.retry_at[identity] = time.monotonic() + 5
                     self._state(identity, {'status': 'retrying', 'current': False, 'reason': 'worker_failed'})
@@ -177,25 +206,22 @@ class WorkWindows:
         # Read only exact source stats before deciding whether this small page
         # needs rereading. No transcript, tree, directory scan or prefix digest.
         if _initial and prior is not None and self.pages.get(prior, {}).get('source') == source:
-            if await asyncio.to_thread(self._matches, source, self.pages.get(prior, {}).get('revisions')):
-                if (not self.closed and self._owner(identity) is owner
-                        and source_identity(owner) == source and prior in self.pages):
-                    if self.epochs.get(identity) != fence:
-                        raise ValueError('Work changed while it was read.')
-                    current = self.status.get(identity)
-                    if current and not current.get('current'):
-                        self._state(identity, {**current, 'status': 'ready', 'current': True})
-                    return self._groups(self.pages[prior])
-                raise ValueError('The requested conversation changed. Open it again.')
+            matches = await asyncio.to_thread(self._matches, source, self.pages.get(prior, {}).get('revisions'))
+            self._check_current(identity, owner, source, fence)
+            if matches:
+                if prior not in self.pages or self.current.get(identity) != prior:
+                    raise _SupersededRead('The requested conversation changed. Open it again.')
+                current = self.status.get(identity)
+                receipt = self.pages[prior]['receipt']
+                if not current or not current.get('current') or current.get('receipt') != receipt:
+                    self._state(identity, {'status': 'ready', 'current': True, 'receipt': receipt})
+                return self._groups(self.pages[prior])
         if _initial:
             self._state(identity, {'status': 'loading', 'current': False})
         result = await self._worker().project({'operation': 'window', 'session': source,
             'windowKey': window_key, 'before': before, 'cursorKey': self.key.hex()},
             key=identity + ':' + str(before or 'latest'))
-        if (self.closed or getattr(self.service, 'closed', False)
-                or self._owner(identity) is not owner or source_identity(owner) != source
-                or self.epochs.get(identity) != fence):
-            raise ValueError('The requested conversation changed. Open it again.')
+        self._check_current(identity, owner, source, fence)
         if result.get('status') != 'complete':
             if _initial:
                 self.retry_at[identity] = time.monotonic() + 5
@@ -203,15 +229,13 @@ class WorkWindows:
                                       'reason': result.get('reason', 'worker_failed')})
             raise ValueError('Saved work is unavailable. Try again shortly.')
         page = result['page']
-        if not await asyncio.to_thread(self._matches, source, page.get('revisions')):
+        matches = await asyncio.to_thread(self._matches, source, page.get('revisions'))
+        self._check_current(identity, owner, source, fence)
+        if not matches:
             if _initial:
                 self.retry_at[identity] = time.monotonic() + 1
                 self._state(identity, {'status': 'retrying', 'current': False, 'reason': 'source_changed'})
             raise ValueError('Saved work changed while it was read. Refresh this window.')
-        if (self.closed or getattr(self.service, 'closed', False)
-                or self._owner(identity) is not owner or source_identity(owner) != source
-                or self.epochs.get(identity) != fence):
-            raise ValueError('The requested conversation changed. Open it again.')
         page = {**page, 'sessionId': identity, 'source': source}
         group = 'event-window:' + page['generation']
         page['group'] = group
@@ -230,12 +254,13 @@ class WorkWindows:
             self.current[identity] = group
             self.generation += 1
             coverage = page.get('coverage', {})
-            self._state(identity, {'status': 'ready', 'current': True, 'receipt': {
+            page['receipt'] = {
                 'hostInstanceId': getattr(self.service, 'instance_id', None), 'sessionId': identity,
                 'generation': self.generation, 'scope': 'recent-events', 'windowKey': window_key,
                 'historyComplete': False, 'sourceCount': coverage.get('sourceCount', 0),
                 'itemCount': len(page['items']), 'scannedBytes': coverage.get('scannedBytes', 0),
-                'scannedEvents': coverage.get('scannedEvents', 0)}})
+                'scannedEvents': coverage.get('scannedEvents', 0)}
+            self._state(identity, {'status': 'ready', 'current': True, 'receipt': page['receipt']})
         return self._groups(page)
 
     @staticmethod

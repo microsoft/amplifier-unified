@@ -3,7 +3,7 @@ import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-import {openSettingsPage} from './browser-settings.mjs';
+import {openSettingsPage,settingsButton} from './browser-settings.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/archive-feedback';
@@ -159,7 +159,7 @@ try{
  const managed=(await state()).selectedSessionId;
  await action('session.select',{id:managed});await action('session.restore',{id:managed});
  await page.setViewportSize({width:1440,height:1050});
- await expect(page.getByRole('button',{name:'Settings',exact:true})).toBeVisible();
+ await expect(settingsButton(page)).toBeVisible();
  mode='hold';await headerArchive();await expect.poll(()=>!!release).toBe(true);
  await openSettingsPage(page,'providers');
  const settings=page.locator('.a-settings-experience[data-settings-page="providers"]');

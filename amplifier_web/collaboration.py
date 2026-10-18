@@ -1183,7 +1183,7 @@ class Collaboration:
             if authorized and authorized[:2] == (caller, fingerprint(args)):
                 self.source({}, origin, caller)
                 return None
-            self.error("Use coordination.create for a task inheriting this conversation's workspace and configuration; raw agent session.create is not authorized. For an independent chat in another folder, session.draft can open setup, but the user must submit its first message. No conversation was created or work started.")
+            self.error("Use coordination.create for a task inheriting this conversation's workspace and configuration; raw agent session.create is not authorized. For an independent chat in another folder that the user explicitly requested, use session.handoff.start directly. Use session.handoff.propose for an unapproved suggestion, or session.draft for editable setup. No conversation was created or work started.")
         from .service import SESSION_ID_ACTIONS, ACTION_POLICIES
         policy = ACTION_POLICIES.get(action, {})
         access = policy.get("access")

@@ -20,6 +20,17 @@ _retention_spec = importlib.util.spec_from_file_location('_environment_retention
 retention = importlib.util.module_from_spec(_retention_spec)
 _retention_spec.loader.exec_module(retention)
 
+_jobs_spec = importlib.util.spec_from_file_location('_environment_jobs', Path(__file__).with_name('test_job_transport.py'))
+jobs = importlib.util.module_from_spec(_jobs_spec)
+_jobs_spec.loader.exec_module(jobs)
+
+
+def selected_profile(payload):
+    spec = importlib.util.spec_from_file_location('_environment_profiles', Path(__file__).with_name('test_environment_profiles.py'))
+    profiles = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(profiles)
+    return profiles.get(payload.get('profileId', 'linux-python'))
+
 
 def read_private_record(path):
     try:
@@ -348,22 +359,25 @@ def retain_manifest(directory, archives):
 
 
 def profile(image, payload=None):
+    selected = selected_profile(payload or {})
     value = {
         'name': 'unified-test',
         'services': {'twin': {
             'image': image, 'command': ['sleep', 'infinity'],
             'read_only': True, 'cap_drop': ['ALL'],
+            'cap_add': ['CHOWN', 'SETUID', 'SETGID', 'KILL'],
             'security_opt': ['no-new-privileges:true'],
-            'pids_limit': 128, 'mem_limit': '1g', 'cpus': 2,
+            'pids_limit': selected['pids'], 'mem_limit': str(selected['memoryMiB'])+'m', 'cpus': selected['cpus'],
+            'shm_size': str(selected['shmMiB'])+'m',
             'healthcheck': {'test': ['CMD', 'true'], 'interval': '2s'},
-            'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
-            'volumes': ['workspace:/workspace', 'artifacts:/artifacts'],
+            'tmpfs': ['/tmp:rw,noexec,nosuid,size='+str(selected['tmpMiB']*1024**2)],
+            'volumes': ['workspace:/workspace', 'artifacts:/artifacts', 'control:/var/lib/unified-jobs'],
             'networks': ['default'], 'working_dir': '/workspace',
             # Root only inside this container, with no capabilities or host mounts.
             # Docker copy initializes the fresh owned volumes before commands run.
             'user': '0:0',
         }},
-        'volumes': {'workspace': {}, 'artifacts': {}},
+        'volumes': {'workspace': {}, 'artifacts': {}, 'control': {}},
         'networks': {'default': {'internal': True}},
         'x-dtu': {'twin_machine': 'twin'},
     }
@@ -427,6 +441,11 @@ def execute_call(payload):
             if unpack.exit_code != 0:
                 return {'ok': False, 'universeId': identity, 'snapshot': snapshot, 'status': 'unknown',
                         'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.', 'result': serialize(unpack)}
+            initialized = lib.execute(identity, jobs.initialize_command(selected_profile(payload)['preparationRequired']),
+                workdir='/', timeout_seconds=120, max_output_bytes=32768, config=config)
+            if initialized.exit_code != 0:
+                return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
+                        'message': 'The owned source and dependency initialization did not complete. It was not repeated.'}
             retain_source_ready(root, identity, snapshot)
             return {'ok': True, 'universeId': identity, 'sourceReady': True,
                     'status': universe.state, 'services': [serialize(item) for item in universe.services]}
@@ -434,8 +453,16 @@ def execute_call(payload):
             # One resource has its own backend root. Exact launch identity is the
             # recovery key when the host lost the original helper response.
             identity = lib.launch_id(payload['operationId'], config=config)
-        if action in {'read', 'execute', 'stop', 'remove'}:
+        if action in {'read', 'execute', 'stop', 'remove'} | jobs.JOB_ACTIONS:
             docker_owner(payload, identity, backend, binding_source)
+        if action in jobs.JOB_ACTIONS:
+            if not source_ready(root, identity, snapshot):
+                return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
+                        'message': 'The exact source preparation is not confirmed; no job was started.'}
+            payload = {**payload, 'universeId': identity, 'jobEnvironment': selected_profile(payload)['environment']}
+            result = lib.execute(identity, jobs.command(payload), workdir='/', timeout_seconds=15,
+                max_output_bytes=262144, config=config)
+            return jobs.result(payload, serialize(result))
         if action == 'read':
             universe = lib.status(identity, config=config)
             ready = source_ready(root, identity, snapshot)

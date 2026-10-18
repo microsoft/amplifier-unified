@@ -46,7 +46,7 @@ function Info({session,act,open}){
   {(session.failure||session.error||session.moduleFailures?.length>0)&&<ConversationFailure session={session}/>}
   <dl className="a-chat-facts"><div><dt>Status</dt><dd>{session.status}</dd></div>{session.createdAt&&<div><dt>Created</dt><dd>{new Date(session.createdAt*1000).toLocaleString()}</dd></div>}{session.bundle&&<div><dt>Bundle</dt><dd>{session.bundle}</dd></div>}</dl>
   {session.workspace&&<CopyDetail label="Workspace / saved settings home" value={session.workspace}/>}
-  <ConversationUsage sessionId={session.id} act={act}/><button type="button" className="a-link" onClick={()=>open('chat-context')}>Inspect current model context</button>
+  <button type="button" className="a-link" onClick={()=>open('chat-context')}>Inspect current model context</button>
   <details><summary>Call receipts &amp; provider quota</summary><CapacityControls session={session} act={act} readOnly/></details>
   <details><summary>Locations &amp; identifiers</summary>
    {identity!==session.id&&<CopyDetail label="App record ID" value={session.id}/>}
@@ -55,6 +55,7 @@ function Info({session,act,open}){
    {error&&<p role="alert">{error}</p>}
   </details>
   <details><summary>Questions &amp; answers</summary><Questions session={session} dispatch={act} history/></details>
+  <ConversationUsage sessionId={session.id} act={act}/>
  </div>;
 }
 function Help({state,act,open}){

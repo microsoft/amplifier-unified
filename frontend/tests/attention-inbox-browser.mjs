@@ -16,11 +16,17 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:920},extraHTTPHeaders:headers});
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
  const initial=await control({op:'many',count:13}),sid=initial.alpha,other=initial.beta;
+ await page.goto(vite.resolvedUrls.local[0]);
+ await page.getByRole('button',{name:/^Activity(?: \d+ unread items)?$/}).click();
+ const inbox=page.getByRole('region',{name:'Activity to review',exact:true});await expect(inbox).toBeVisible();
+ // A fresh install can have release notices. Review those through the real UI
+ // before seeding the scenario's completion/question/approval counts.
+ const initialReview=inbox.getByRole('button',{name:'Mark all reviewed',exact:true});
+ if(await initialReview.isEnabled())await initialReview.click();
+ await expect(inbox.getByText('All caught up.',{exact:true})).toBeVisible();
+ await expect(initialReview).toBeDisabled();
  const sessions=Object.fromEntries(initial.state.sessions.filter(s=>s.id.startsWith('library-')).map((s,i)=>[s.id,{completion:{id:'g1',at:100+i}}]));
  await control({op:'patch',sessions});
- await page.goto(vite.resolvedUrls.local[0]);
- await page.getByRole('button',{name:'Activity',exact:true}).click();
- const inbox=page.getByRole('region',{name:'Activity to review',exact:true});await expect(inbox).toBeVisible();
  await page.waitForFunction(()=>window.amplifier?.getState()?.attention?.badgeUnread===0);
  await expect(inbox.getByRole('region',{name:'Finished responses',exact:true}).locator('.a-attention-item')).toHaveCount(10);
  await inbox.getByRole('button',{name:/Show more responses/}).click();

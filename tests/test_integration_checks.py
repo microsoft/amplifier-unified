@@ -47,7 +47,8 @@ def test_changed_feature_selects_its_owner_without_full_matrix():
 
 
 @pytest.mark.parametrize('probe', ['warm_worker_probe.py', 'history_edit_probe.py', 'attachments_runtime_probe.py',
-                                  'live_terminal_probe.py', 'standalone_controls_probe.py', 'computation_runtime.py', 'bundle_switch_probe.py'])
+                                  'live_terminal_probe.py', 'standalone_controls_probe.py', 'computation_runtime.py', 'bundle_switch_probe.py',
+                                  'provider_isolation_native.py'])
 def test_runtime_probe_changes_select_native_owner(probe):
     assert 'native' in {row['lane'] for row in checks.select_lanes([f'tests/fixtures/{probe}'])}
 
@@ -156,12 +157,19 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
     assert hashlib.sha256(frozen).hexdigest() == '8356817d31275554bf00c526c4f76b467646d2146f06907cd0ed564ac455b9f0'
     records = coverage['additionalRecords']
     expected = {
+        'tests/test_runtime.py::test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged': 'native',
+        'tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input': 'native',
+        'tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay': 'native',
+        **{f'tests/test_host_components.py::test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances[{resumed}]': 'native'
+           for resumed in ('False', 'True')},
         'tests/test_search_read_policy.py': 'native',
         'tests/test_default_capability_policy.py': 'native',
         'tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip': 'native',
         **{f'tests/test_{name}.py': 'default-installed' for name in (
             'default_behaviors_integration', 'default_runtime_safety',
             'default_mount_runtime', 'default_routing_runtime')},
+        'tests/fixtures/status_emitter_probe.py': 'status-installed',
+        'tests/fixtures/status_package_probe.py': 'status-installed',
     }
     assert {row['node']: row['owner'] for row in records} == expected
     assert len(records) == len(expected)
@@ -172,6 +180,20 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
             assert row['owner'] in {job['lane'] for job in checks.select_lanes([row['node'].split('::')[0]])}
     assert coverage['lanes']['default-installed']['mode'] == 'manual'
     assert 'default-installed' not in {job['lane'] for job in checks.select_lanes()}
+
+
+def test_status_installed_owner_is_explicit_and_affected_changes_are_discoverable(tmp_path):
+    coverage = checks.manifest()
+    lane = coverage['lanes']['status-installed']
+    assert lane['mode'] == 'manual'
+    assert lane['command'] == ['python', 'scripts/qualify_status_emitter.py']
+    assert 'status-installed' not in {job['lane'] for job in checks.select_lanes()}
+    for path in ['amplifier_web/status_emitter.py', 'amplifier_web/status_protocol/hook.py',
+                 'amplifier_web/execution_events.py', 'tests/fixtures/status_package_probe.py']:
+        assert 'status-installed' in {job['lane'] for job in checks.select_lanes([path], include_manual=True)}
+    assert 'status-installed' not in {job['lane'] for job in checks.select_lanes(['README.md'], include_manual=True)}
+    with pytest.raises(ValueError, match='explicit qualification runner'):
+        checks.run_lane('status-installed', 'python', tmp_path)
 
 
 def test_new_default_and_search_skips_cannot_be_ownerless():

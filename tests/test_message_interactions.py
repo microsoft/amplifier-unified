@@ -181,7 +181,7 @@ async def test_agent_same_actions_require_caller_scope_and_connected_client(app)
         result = await app.app_bridge('dispatch', {'action': 'message.reply', 'args': {**args, 'clientId': 'one'}}, args['sessionId'])
         assert result['result']['sent'] is False
         await app.app_bridge('dispatch', {'action': 'message.reaction', 'args': {**args, 'emoji': '🎉', 'present': True}}, args['sessionId'])
-        assert app._session()['messageAnnotations'][args['messageId']]['reactions'] == ['🎉']
+        assert app._session()['messageAnnotations'][args['messageId']]['assistantReactions'] == ['🎉']
         with pytest.raises(AppError, match='calling conversation'):
             await app.dispatch('message.reaction', {**args, 'emoji': '👍', 'present': True}, origin='agent', caller_session_id='different')
     finally:
@@ -299,7 +299,7 @@ async def test_bounded_annotations_read_has_explicit_removals_and_never_reads_bo
             return super().get(key, *args)
     result = read_annotations(MetadataOnly(session), [identity, 'not-annotated'])
     assert result == {'sessionId': session['id'], 'revision': second['result']['annotationRevision'],
-                      'items': {identity: {'reactions': []}, 'not-annotated': {'reactions': []}}}
+                      'items': {identity: {'reactions': [], 'assistantReactions': []}, 'not-annotated': {'reactions': [], 'assistantReactions': []}}}
     result['items'][identity]['reactions'].append('👍')
     assert session['messageAnnotations'][identity]['reactions'] == []
     assert session['messages'] == before and app.runtime.sent == []
@@ -335,3 +335,50 @@ async def test_annotation_route_requires_exact_owner_and_avoids_hydration():
     response = await handler(SimpleNamespace(json=AsyncMock(return_value={'sessionId': 'owner', 'messageIds': ['one']})))
     service._session.assert_called_once_with('owner', hydrate=False)
     assert response.status == 200 and response.headers['Cache-Control'] == 'no-store'
+
+
+async def test_assistant_reactions_have_independent_ownership_and_survive_restart(app):
+    from amplifier_web.message_interactions import read_annotations
+    args = {**target(app), 'emoji': '👍', 'present': True}
+    original = copy.deepcopy(app._session()['messages'])
+    agent = await app.app_bridge('dispatch', {'action': 'message.reaction', 'args': args, 'id': 'agent-thumbs'}, args['sessionId'])
+    assert agent['result']['reactionActor'] == 'assistant'
+    replay = await app.app_bridge('dispatch', {'action': 'message.reaction', 'args': args, 'id': 'agent-thumbs'}, args['sessionId'])
+    assert replay['duplicate']
+    repeated = await app.app_bridge('dispatch', {'action': 'message.reaction', 'args': args}, args['sessionId'])
+    assert repeated['result']['annotationRevision'] == agent['result']['annotationRevision']
+    user = await call(app, 'message.reaction', args)
+    assert user['result']['reactionActor'] == 'user'
+    await call(app, 'message.reaction', {**args, 'present': False})
+    annotation = read_annotations(app._session(), [args['messageId']])['items'][args['messageId']]
+    assert annotation == {'reactions': [], 'assistantReactions': ['👍']}
+    await call(app, 'message.reaction', {**args, 'emoji': '❤️'})
+    await app.app_bridge('dispatch', {'action': 'message.reaction', 'args': {**args, 'present': False}}, args['sessionId'])
+    assert read_annotations(app._session(), [args['messageId']])['items'][args['messageId']] == {'reactions': ['❤️'], 'assistantReactions': []}
+    await app.app_bridge('dispatch', {'action': 'message.reaction', 'args': args}, args['sessionId'])
+    assert app._session()['messages'] == original and not app.runtime.sent and not app.runtime.started
+    directory, workspace = app.data_dir, app._session()['workspace']
+    app._save(); await app.close(); app._test_closed = True
+    reopened = AppService(directory, Runtime(), workspace=workspace)
+    try:
+        saved = reopened._session(args['sessionId'])
+        assert read_annotations(saved, [args['messageId']])['items'][args['messageId']] == {'reactions': ['❤️'], 'assistantReactions': ['👍']}
+        assert page(saved, 'messages')['items'][0]['assistantReactions'] == ['👍']
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize('origin,via,role', [('agent','chat','user'), ('peer','peer','user'), ('scheduler','schedule','user'), (None,'chat','assistant')])
+async def test_assistant_reactions_reject_nonhuman_messages(app, origin, via, role):
+    session = app._session()
+    row = app._message(session, role, 'Not a human request', via, inputOrigin=origin)
+    with pytest.raises(AppError, match='only to a human message'):
+        await app.app_bridge('dispatch', {'action':'message.reaction','args':{'sessionId':session['id'],'messageId':row['id'],'emoji':'👍','present':True}}, session['id'])
+    assert row['id'] not in session.get('messageAnnotations', {})
+    assert not app.runtime.sent
+
+
+async def test_reaction_actor_cannot_be_supplied_in_action_arguments(app):
+    with pytest.raises(AppError):
+        await call(app, 'message.reaction', {**target(app), 'emoji':'👍','present':True,'actor':'assistant'})
+    assert not app._session().get('messageAnnotations')

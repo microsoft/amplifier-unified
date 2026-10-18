@@ -358,6 +358,12 @@ async def test_cached_graph_uncertainty_preserves_all_garbage(tmp_path, monkeypa
     from types import SimpleNamespace
     from amplifier_web.storage_migration import _maintenance_async, close_maintenance
     from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    # This case exercises graph integrity and cache reuse after complete root
+    # proofs. Host scheduling must not defer its warmup's 20ms admission window;
+    # initial/final deadline deferral has separate controlled-clock coverage.
+    original_budget = files.ReferenceBudget
+    monkeypatch.setattr(files, 'ReferenceBudget',
+                        lambda: original_budget(clock=lambda: 0.0))
     db = database(tmp_path / 'cached.sqlite3')
     keep = files.put(db, {'retained': 'original'})
     db.commit()

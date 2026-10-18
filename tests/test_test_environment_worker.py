@@ -73,7 +73,8 @@ def payload(tmp_path, action):
 def test_fixed_profile_has_no_host_mount_ports_or_privilege_escalation():
     profile = worker.profile(owner.APPROVED_IMAGE)
     twin = profile['services']['twin']
-    assert twin['volumes'] == ['workspace:/workspace', 'artifacts:/artifacts']
+    assert twin['volumes'] == ['workspace:/workspace', 'artifacts:/artifacts', 'control:/var/lib/unified-jobs']
+    assert set(twin['cap_add']) == {'CHOWN', 'SETUID', 'SETGID', 'KILL'}
     assert 'ports' not in twin and 'privileged' not in twin and 'build' not in twin
     assert twin['read_only'] and twin['cap_drop'] == ['ALL']
     assert twin['security_opt'] == ['no-new-privileges:true']
@@ -144,7 +145,7 @@ def test_readiness_receipt_requires_exact_snapshot_and_universe(library, tmp_pat
         (tmp_path / 'source-ready.json').unlink()
     assert worker.execute_call(altered)['status'] == 'unknown'
     assert not worker.execute_call({**altered, 'action': 'execute'})['ok']
-    assert sum(name == 'execute' for name, _, _ in calls) == 1
+    assert sum(name == 'execute' for name, _, _ in calls) == 2
 
 
 def test_confirmed_source_survives_lost_host_response_without_reextraction(library, tmp_path):
@@ -153,7 +154,7 @@ def test_confirmed_source_survives_lost_host_response_without_reextraction(libra
     lib.status = lambda *a, **k: Value(state='running', services=[])
     observed = worker.execute_call(payload(tmp_path, 'read'))
     assert observed['status'] == 'running' and observed['sourceReady']
-    assert sum(name == 'execute' for name, _, _ in calls) == 1
+    assert sum(name == 'execute' for name, _, _ in calls) == 2
 
 
 def test_partial_source_can_still_be_stopped_and_preserved(library, tmp_path):

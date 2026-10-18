@@ -409,7 +409,23 @@ def credential_host(mounted_host, monkeypatch):
         h.session.session_id = kwargs["session_id"]
         coordinator.config = h.session.config = copy.deepcopy(h.prepared.mount_plan)
         providers.clear()
+        async def mount_provider(kind, provider, *, name):
+            assert kind == "providers"
+            providers[name] = provider
+        coordinator.mount = mount_provider
+        if kwargs.get("before_initialize"):
+            await kwargs["before_initialize"](h.session)
         for row in h.prepared.mount_plan["providers"]:
+            # This host fixture exercises admission, not Core rollback (covered
+            # by test_provider_isolation_native with the real native wheel).
+            from amplifier_web.provider_isolation import ProviderUnavailable
+            before_load = coordinator.get_capability("provider.before_load")
+            if before_load:
+                try:
+                    await before_load(coordinator, row)
+                except ProviderUnavailable as error:
+                    await coordinator.get_capability("provider.load_failure")(coordinator, row, error)
+                    continue
             config = row["config"]
             assert isinstance(config["api_key"], str) and config["api_key"]
             info = Info(id="fixture", defaults={"model": config["model"],
@@ -553,12 +569,15 @@ async def test_bound_child_refuses_unauthorized_credentials_before_prepare_witho
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["empty-literal", "missing-envref", "empty-envref"])
+@pytest.mark.parametrize("isolated", [False, True])
 async def test_authorized_binding_does_not_relax_required_secret_schema(
-        credential_host, monkeypatch, case):
+        credential_host, monkeypatch, case, isolated):
     from amplifier_web.host import session as host
     from amplifier_web.module_failures import ConfiguredModuleError
+    from amplifier_web import provider_isolation
 
     h = credential_host
+    monkeypatch.setattr(provider_isolation, "supported", lambda: isolated)
     authorized = binding_plan()
     authorized["providers"][0]["config"]["api_key"] = "" if case == "empty-literal" else "${EXACT_MISSING_KEY}"
     monkeypatch.delenv("EXACT_MISSING_KEY", raising=False)
@@ -572,7 +591,12 @@ async def test_authorized_binding_does_not_relax_required_secret_schema(
                                    runtime_plan=child, qualification_readonly=True)
     assert [(row["instance_id"], row["reason_code"]) for row in failure.value.failures] == [
         ("fable", "provider_configuration_failed")]
-    h.prepared.create_session.assert_not_awaited()
+    if isolated:
+        h.prepared.create_session.assert_awaited_once()
+        h.session.cleanup.assert_awaited_once()
+    else:
+        h.prepared.create_session.assert_not_awaited()
+    h.session.execute.assert_not_awaited()
     assert len(h.prepare_calls) == 1
     assert "synthetic-" not in str(failure.value)
     assert not h.path.exists()

@@ -28,3 +28,4 @@
 @media(min-width:761px) and (hover:hover) and (pointer:fine){
  #amp-one:not([data-interface-detail="detailed"]) .a-quiet-sidebar :is(.a-nav-chat,.a-workspace-row):not(:hover,:focus-within,.is-peeking)>:is(.a-navigation-more,.a-workspace-new-chat){width:0;min-width:0;flex-basis:0;padding-inline:0;margin-inline:0;overflow:hidden;opacity:0}
 }
+.a-chat-shortcut{position:absolute;left:4px;top:50%;transform:translateY(-50%);z-index:2;display:grid;place-items:center;width:22px;height:24px;border:1px solid var(--a-line);border-radius:6px;background:var(--a-surface,#fff);color:var(--a-ink);box-shadow:0 1px 4px #0002;font:600 12px/1 system-ui;pointer-events:none}

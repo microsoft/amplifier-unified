@@ -3,7 +3,12 @@ let viz;
 self.onmessage=async({data})=>{
  try{
   viz ||= await instance();
-  const options={engine:data.engine||'dot',graphAttributes:{bgcolor:'transparent',pad:'0.3'},nodeAttributes:{fontname:'Arial',shape:'box',style:'rounded,filled',fillcolor:'#eef2ff',color:'#818cf8',fontcolor:'#172033'},edgeAttributes:{fontname:'Arial',color:'#64748b'}};
+  // Graphviz defaults yield to attributes in the document, including explicit
+  // shapes, colors, layout direction and cluster styling.
+  const options={engine:data.engine||'dot',
+   graphAttributes:{bgcolor:'transparent',overlap:'false',pad:'0.35',nodesep:'0.45',ranksep:'0.65',fontname:'Arial',fontsize:'13'},
+   nodeAttributes:{fontname:'Arial',fontsize:'12',shape:'box',style:'rounded,filled',margin:'0.18,0.12',penwidth:'1.2',fillcolor:'#f3f2ff',color:'#aaa1df',fontcolor:'#24213e'},
+   edgeAttributes:{fontname:'Arial',fontsize:'10',arrowsize:'0.7',penwidth:'1.2',color:'#8981b5',fontcolor:'#5d5779'}};
   const result=viz.renderFormats(data.source,['svg','json'],options);
   if(result.status!=='success')throw Error(result.errors.map(e=>e.message).join('\n'));
   const graph=JSON.parse(result.output.json),hidden=new Set(['_gvid','pos','width','height','rects','vertices']);
