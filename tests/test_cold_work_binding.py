@@ -1638,3 +1638,90 @@ async def test_host_cumulative_proof_retains_many_bound_references_inside_existi
         assert all(row['association'] == 'unverified' for row in raw['items'])
     finally:
         await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_selected_work_consumer_pages_complete_proof_without_manual_raw_discovery(source):
+    source.call('one')
+    for number in range(143):
+        _compact_proof_call(source, f'later-{number}')
+    await source.diagnostics.flush()
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    try:
+        selected = await owner.read_selected('root')
+        assert selected['rootProof']['status'] == 'complete'
+        groups = [row for row in selected['items'] if not row.get('observationWindow')]
+        assert len(groups) == 1
+        group = groups[0]
+        rows, before = [], None
+        for _ in range(8):
+            page = owner.nodes('root', group['id'], revision=group['detailRevision'], before=before)
+            assert len(page['items']) <= 100
+            rows[0:0] = page['items']
+            before = page['before']
+            if before is None:
+                break
+        assert len(rows) == len({row['id'] for row in rows}) == 144
+        assert len({row['toolCallId'] for row in rows}) == 144
+        synced = []
+        for start in range(0, len(rows), 100):
+            result = owner.nodes('root', group['id'], paged=True,
+                revision=group['detailRevision'],
+                known={row['id']: row['detailVersion'] for row in rows[start:start + 100]})
+            assert len(result['order']) <= 100
+            synced.extend(result['order'])
+        assert synced == [row['id'] for row in rows]
+        one = next(row for row in rows if row['toolCallId'] == 'one')
+        chunks, offset = [], 0
+        for _ in range(64):
+            result = await owner.read_text('root', {**one['outputDetail'], 'offset': offset, 'limit': 4096})
+            chunks.append(result['value'])
+            offset = result['nextOffset']
+            if offset is None:
+                break
+        assert json.loads(''.join(chunks)) == source.calls[0][3]
+        owner.invalidate({'root'})
+        with pytest.raises(ValueError):
+            await owner.read_text('root', one['outputDetail'])
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('changed', ['none', 'id', 'sessionId', 'rootSessionId', 'turnId',
+                                   'parentId', 'revision', 'phase', 'startedAt', 'endedAt'])
+async def test_live_binding_requires_whole_attested_invocation_not_call_id(source, changed):
+    source.call('one')
+    await source.diagnostics.flush()
+    row = copy.deepcopy(source.observer.calls[('root', 'one')])
+    source.session['execution']['nodes'] = [row]
+    owner = WorkWindows(source.service)
+    class Direct:
+        model = WindowModel(source.service.data_dir)
+        async def project(self, inputs, *, key):
+            return self.model.project(inputs, check_budget=lambda: None)
+        async def close(self):
+            pass
+    owner.projector = Direct()
+    try:
+        assert owner.live_binding(source.session, row) == (None, None)
+        await owner.read_selected('root')
+        original = copy.deepcopy(source.session['execution']['nodes'])
+        candidate = copy.deepcopy(row)
+        if changed != 'none':
+            candidate[changed] = 999 if changed in {'revision', 'startedAt', 'endedAt'} else 'untrusted'
+        proof_id, bound = owner.live_binding(source.session, candidate)
+        if changed == 'none':
+            assert proof_id and bound['_eventFields']['input'] and bound['_eventFields']['output']
+        else:
+            assert (proof_id, bound) == (None, None)
+        assert source.session['execution']['nodes'] == original
+    finally:
+        await owner.close()
