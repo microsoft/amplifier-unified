@@ -194,6 +194,14 @@ def patch(engine, path='file.txt'):
     return {'patch': f'{marker} Begin Patch\n{marker} Update File: {path}\n@@\n-old\n+new\n{marker} End Patch'}
 
 
+def assert_patch_access_denied(result, engine):
+    expected_code = {'native': 'file_source_access', 'function': 'file_source_check_failed'}[engine]
+    assert result['success'] is False
+    assert result['error']['code'] == expected_code
+    assert result['error']['message'].startswith('Access denied:')
+    assert result['error']['effect'] == 'none'
+
+
 async def test_public_contract_exposes_no_arbitrary_path_or_full_plan():
     require_contract()
     spec = ACTION_DEFINITIONS[BIND][1]
@@ -216,8 +224,7 @@ async def test_process_fixture_readiness_uses_real_engines_and_guard(placement, 
     before = b.path.read_bytes()
     assert (await tool(b, 'read_file', {'file_path': 'file.txt'}))['success']
     denied = await tool(b, 'apply_patch', patch(engine))
-    assert not denied['success'] and denied['error']['code'] == 'file_source_access'
-    assert denied['error']['effect'] == 'none'
+    assert_patch_access_denied(denied, engine)
     assert b.path.read_bytes() == before
     assert (b.home / 'file.txt').read_text() == (b.checkout / 'file.txt').read_text() == 'old\n'
 
@@ -285,8 +292,7 @@ async def test_bound_remount_changes_only_pin_and_requires_fresh_guarded_read(pl
     assert not unread['success'] and unread['error']['code'] == 'file_source_unread'
     for denied in (str(b.home / 'file.txt'), 'denied/file.txt'):
         result = await tool(b, 'apply_patch', patch(engine, denied))
-        assert not result['success'] and result['error']['code'] == 'file_source_access'
-        assert result['error']['effect'] == 'none'
+        assert_patch_access_denied(result, engine)
     assert (await tool(b, 'read_file', {'file_path': 'file.txt'}))['success']
     (b.checkout / 'file.txt').write_text('peer\n')
     stale = await tool(b, 'apply_patch', patch(engine))
