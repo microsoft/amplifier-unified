@@ -34,10 +34,23 @@ def _module_id(row):
 
 
 def _desktop_ceiling(policies):
-    """Preserve ComputerTool's effective truthiness, including expanded strings."""
+    """Union effective ComputerTool restrictions, including remote defaults."""
     from .config import expand_environment
-    return {key: True for key in ("read_only", "gate_writes")
-            if any(bool(expand_environment(policy.get(key))) for policy in policies)}
+    ceiling = {}
+    for policy in policies:
+        config = expand_environment(policy)
+        # Computer Use's registry selects the remote path for a truthy target.
+        # Leave target parsing/errors to that registry: never mount, probe, or
+        # rewrite an invalid target into a usable local/default configuration.
+        remote = bool(config.get("target"))
+        read_only = config.get("read_only")
+        read_only = remote if read_only is None else bool(read_only)
+        gate_writes = config.get("gate_writes")
+        gate_writes = remote and not read_only if gate_writes is None else bool(gate_writes)
+        for key, restricted in (("read_only", read_only), ("gate_writes", gate_writes)):
+            if restricted:
+                ceiling[key] = True
+    return ceiling
 
 
 def _restrict_child_tools(rows, policies, working_dir, modules):
@@ -95,10 +108,15 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
     if retained_image_tools is not None and not isinstance(retained_image_tools, list):
         raise ValueError("Saved child tools must be a list of module declarations.")
     desktop_policies = [parent.get("_unified_desktop_policy", {})]
-    for rows in (parent.get("tools", []), spawn.get("tools", []), overlay.get("tools", []),
-                 retained_image_tools or []):
+    for rows in (parent.get("tools", []), spawn.get("tools", []), retained_image_tools or []):
         desktop_policies.extend(row.get("config", {}) for row in rows
                                 if isinstance(row, dict) and row.get("module") == "tool-computer-use")
+    # Partial overlays inherit same-instance configuration. Preserve their
+    # explicit restrictions now, but derive defaults only after that merge.
+    desktop_policies.extend({key: row.get("config", {}).get(key)
+                             for key in ("read_only", "gate_writes")}
+                            for row in overlay.get("tools", [])
+                            if isinstance(row, dict) and row.get("module") == "tool-computer-use")
     image_policies = []
     file_policies = []
     patch_policies = []
@@ -168,6 +186,8 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
                 searches=search_configs, paths=lambda values: policy_paths(values, working_dir or Path.cwd()))
     # Child overlays and instance aliases cannot grant desktop writes that the
     # parent did not opt into. Explicit root settings remain the authority.
+    desktop_policies.extend(row.get("config", {}) for row in result.get("tools", [])
+                            if row.get("module") == "tool-computer-use")
     desktop_ceiling = _desktop_ceiling(desktop_policies)
     # Retain ceilings even when an intermediate child omits the desktop tool.
     # Neither an overlay nor a new instance ID can erase ancestor restrictions.
