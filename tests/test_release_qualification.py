@@ -420,6 +420,9 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert 'exit 1' in rejected['steps'][0]['run']
     steps = jobs['python']['steps']
     assert steps[1]['name'] == 'Record and validate the fixed Python selection'
+    native = next(step for step in steps if step.get('name') == 'Select the prepared native-controls interpreter')
+    assert native['if'] == "${{ env.CHECK_SUITE == 'patch-placement-native' }}"
+    assert native['run'] == 'echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"'
     complete = next(step for step in steps if step.get('name') == 'Run the complete Python suite')
     focused = next(step for step in steps if step.get('name') == 'Run the selected repair suite')
     assert complete['if'] == "${{ env.CHECK_SUITE == 'full' }}"

@@ -106,6 +106,9 @@ jobs:
               if not callable(mount) or mount is not module.mount:
                   raise RuntimeError('Native module entry point is not its canonical mount: ' + name)
           PY
+      - name: Select the prepared native-controls interpreter
+        if: ${{ env.CHECK_SUITE == 'patch-placement-native' }}
+        run: echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
       - name: Run the complete Python suite
         if: ${{ env.CHECK_SUITE == 'full' }}
         run: |
