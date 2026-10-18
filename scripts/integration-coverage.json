@@ -293,6 +293,29 @@
       ],
       "prerequisite": "Explicit owned container, noneditable candidate wheel and source-bound offline behavior repositories/runtime packages. Run copied tests outside source, then integration_checks.py check --lane default-installed; missing prerequisites/skips fail the owner. See docs/validation/release-qualification.md and integration-coverage.md."
     },
+    "default-desktop-safety": {
+      "runner": "owned-container",
+      "mode": "manual",
+      "command": [
+        "python",
+        "scripts/qualify_default_installed.py",
+        "run",
+        "--desktop-safety"
+      ],
+      "selectors": [
+        "tests/test_default_desktop_safety.py"
+      ],
+      "paths": [
+        "amplifier_web/host/**",
+        "amplifier_web/desktop_policy.py",
+        "amplifier_web/runtime*",
+        "tests/test_default_*.py",
+        "scripts/qualify_default_installed.py",
+        "scripts/default-installed-pins.json",
+        ".github/workflows/default-installed.yml"
+      ],
+      "prerequisite": "Use the existing hosted manual workflow with desktop_safety=true, or the command prefix with required --loop-source, --work and --output arguments. Owned offline container, noneditable candidate wheel and exact prepared dependencies; separate preserved-22 and remote-defaults receipts must execute all 25 cases with zero skips. Adapter helpers and IC-13 baseline are separate. See docs/validation/integration-coverage.md."
+    },
     "status-installed": {
       "runner": "owned-container",
       "mode": "manual",
@@ -942,6 +965,13 @@
       "owner": "status-installed",
       "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md.",
       "introducedBy": "#290"
+    },
+    {
+      "node": "tests/test_default_desktop_safety.py",
+      "kind": "module_collection",
+      "owner": "default-desktop-safety",
+      "prerequisite": "UNIFIED_BEHAVIOR_REPOS in the owned installed-wheel environment with exact prepared sources and matching packages; run the separate --desktop-safety qualification, not the IC-13 baseline. Missing prerequisites or skipped cases fail the owner.",
+      "introducedBy": "Installed desktop safety continuation"
     }
   ]
 }

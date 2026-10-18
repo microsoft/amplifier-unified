@@ -170,6 +170,7 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
             'default_mount_runtime', 'default_routing_runtime')},
         'tests/fixtures/status_emitter_probe.py': 'status-installed',
         'tests/fixtures/status_package_probe.py': 'status-installed',
+        'tests/test_default_desktop_safety.py': 'default-desktop-safety',
     }
     assert {row['node']: row['owner'] for row in records} == expected
     assert len(records) == len(expected)
@@ -194,6 +195,35 @@ def test_status_installed_owner_is_explicit_and_affected_changes_are_discoverabl
     assert 'status-installed' not in {job['lane'] for job in checks.select_lanes(['README.md'], include_manual=True)}
     with pytest.raises(ValueError, match='explicit qualification runner'):
         checks.run_lane('status-installed', 'python', tmp_path)
+
+
+def test_desktop_safety_owner_uses_its_manual_runner_without_changing_ic13(tmp_path):
+    coverage = checks.manifest()
+    lane = coverage['lanes']['default-desktop-safety']
+    assert lane['runner'] == 'owned-container'
+    assert lane['mode'] == 'manual'
+    assert lane['command'] == [
+        'python', 'scripts/qualify_default_installed.py', 'run', '--desktop-safety']
+    assert lane['selectors'] == ['tests/test_default_desktop_safety.py']
+    assert 'default-desktop-safety' not in {job['lane'] for job in checks.select_lanes()}
+    for path in ['tests/test_default_desktop_safety.py', 'amplifier_web/host/children.py',
+                 'scripts/qualify_default_installed.py', 'scripts/default-installed-pins.json']:
+        assert 'default-desktop-safety' in {
+            job['lane'] for job in checks.select_lanes([path], include_manual=True)}
+        assert 'default-desktop-safety' not in {
+            job['lane'] for job in checks.select_lanes([path])}
+    assert 'default-desktop-safety' not in {
+        job['lane'] for job in checks.select_lanes(['README.md'], include_manual=True)}
+    assert coverage['lanes']['default-installed']['selectors'] == [
+        'tests/test_default_behaviors_integration.py',
+        'tests/test_default_runtime_safety.py',
+        'tests/test_default_mount_runtime.py',
+        'tests/test_default_routing_runtime.py',
+    ]
+    output = tmp_path / 'not-generic-pytest'
+    with pytest.raises(ValueError, match='explicit qualification runner'):
+        checks.run_lane('default-desktop-safety', 'python', output)
+    assert not output.exists()
 
 
 def test_new_default_and_search_skips_cannot_be_ownerless():
