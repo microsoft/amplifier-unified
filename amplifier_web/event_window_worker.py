@@ -1,5 +1,7 @@
 """Disposable bounded Work-window process, sharing the existing transport."""
 import argparse
+import math
+import time
 from .history_projection_worker import run, MEMORY_LIMIT
 
 
@@ -9,8 +11,27 @@ class WindowModel:
         self.cache_home = cache_home
 
     def project(self, inputs, *, check_budget):
-        from .event_window import read_window, read_field, StaleWindow
+        from .event_window import read_window, read_field, read_proof_step, StaleWindow
         try:
+            if inputs.get('operation') == 'proof-step':
+                deadline = inputs.get('deadline')
+                if type(deadline) not in (int, float) or not math.isfinite(deadline):
+                    raise ValueError('A finite absolute proof deadline is required')
+                deadline = min(deadline, time.monotonic() + 20)
+                def guard():
+                    check_budget()
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError('The cumulative root proof deadline expired')
+                try:
+                    guard()
+                    page = read_proof_step(inputs['session'], window_key=inputs['windowKey'],
+                        cursor_key=bytes.fromhex(inputs['cursorKey']), before=inputs.get('before'),
+                        limit=inputs.get('limit', 100), check_budget=guard, cache_home=self.cache_home,
+                        expected_source=inputs.get('expectedSource'), expected_index=inputs.get('expectedIndex'))
+                    guard()
+                except TimeoutError:
+                    return {'status': 'retry', 'reason': 'timeout'}
+                return {'status': 'complete', 'page': page}
             if inputs.get('operation') == 'window':
                 page = read_window(inputs['session'], window_key=inputs['windowKey'],
                     cursor_key=bytes.fromhex(inputs['cursorKey']), before=inputs.get('before'),

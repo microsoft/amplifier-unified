@@ -28,6 +28,7 @@ MAX_ITEMS = 100
 BLOCK_BYTES = 64 * 1024
 PREVIEW_CHARS = 512
 MAX_CURSOR_BYTES = 2048
+MAX_PROOF_PAGES = 8
 FIELD_KEYS = frozenset({'tool_input', 'arguments', 'input', 'prompt', 'result',
                         'tool_result', 'error', 'error_message', 'raw', 'raw_request', 'raw_response'})
 
@@ -486,8 +487,211 @@ def _bind_complete_root(session, path, identity, items, facts, attested, guard):
     return sorted(result, key=lambda row: (row['startedAt'], row['eventOrder']))
 
 
+def _proof_owner(session):
+    """Pure input fingerprint; canonical resolution happens only in the reader."""
+    return _digest({key: session.get(key) for key in
+        ('id', 'workspace', 'nativeIdentity', 'runtimeSessionId', 'nativeProject')})
+
+
+def _proof_receipt(page, cursor_key, guard=None):
+    """Authenticate the private evidence AND original page, without body copies."""
+    guard = guard or (lambda: None)
+    proof = {key: value for key, value in page['_proof'].items() if key != 'receiptDigest'}
+    # The host decorates retained pages with group/owner/fence/support metadata.
+    # Authenticate every reader-owned field, not those later host decorations.
+    fields = ('status', 'windowKey', 'generation', 'items', 'before', 'coverage',
+              'unavailableRanges', 'revisions', '_boundWork', '_bindingRevision',
+              'bindingCoverage')
+    value = {'proof': proof, 'page': {key: page[key] for key in fields if key in page}}
+    digest = hmac.new(cursor_key, b'event-root-proof-v1:', 'sha256')
+    total, checked = 0, 0
+    guard()
+    for chunk in json.JSONEncoder(ensure_ascii=False, allow_nan=False, sort_keys=True,
+                                  separators=(',', ':')).iterencode(value):
+        raw = chunk.encode()
+        total += len(raw)
+        if total > MAX_BYTES:
+            raise ValueError('Root proof page exceeds the existing output budget')
+        if total - checked >= 16384:
+            guard()
+            checked = total
+        digest.update(raw)
+    guard()
+    return digest.hexdigest()
+
+
+def _proof_stamp(value):
+    return (isinstance(value, list) and len(value) == 5
+            and all(type(part) is int for part in value) and value[2] >= 0)
+
+
+def _proof_index(value):
+    return (isinstance(value, list) and len(value) == 2 and _proof_stamp(value[0])
+            and (value[1] is None or _proof_stamp(value[1])))
+
+
+def validate_root_proof(session, pages, *, cursor_key, check_budget=None):
+    """Pure, bounded root-coverage check. Never resolve paths or read an index.
+
+    These are private host-worker pages, not client assertions. HMAC receipts
+    bind their original raw items, occurrence manifest and input owner. Physical
+    source/index currentness is still the publisher's responsibility.
+    """
+    guard = check_budget or (lambda: None)
+    result = {'status': 'incomplete', 'reason': 'invalid_proof', 'bound': [],
+              'sourceStamp': None, 'indexRevision': None, 'windowKey': None,
+              'pageReceipts': []}
+    def refuse(reason):
+        return {**result, 'reason': reason}
+    guard()
+    if (not isinstance(session, dict) or not isinstance(cursor_key, bytes) or len(cursor_key) != 32
+            or not isinstance(pages, (list, tuple)) or not pages):
+        return result
+    if len(pages) > MAX_PROOF_PAGES * 2:
+        return refuse('page_limit')  # Bounded duplicate replay input, not extra physical steps.
+    facts, items, attested, seen = [], [], set(), {}
+    previous = None
+    try:
+        expected_owner = _proof_owner(session)
+        identity = session.get('nativeIdentity') or session.get('runtimeSessionId') or session.get('id')
+        for page in pages:
+            guard()
+            if not isinstance(page, dict) or not isinstance(page.get('_proof'), dict):
+                return refuse('missing_proof')
+            proof = page['_proof']
+            records, page_facts, page_items = proof['records'], proof['facts'], page['items']
+            if (not isinstance(records, list) or not isinstance(page_facts, list)
+                    or not isinstance(page_items, list)
+                    or len(records) > MAX_EVENTS or len(page_facts) > MAX_EVENTS
+                    or len(page_items) > MAX_ITEMS):
+                return refuse('page_limit')
+            receipt = proof['receiptDigest']
+            if (not isinstance(receipt, str) or len(receipt) != 64
+                    or not hmac.compare_digest(receipt, _proof_receipt(page, cursor_key, guard))):
+                return refuse('invalid_receipt')
+            request = proof['requestBefore']
+            if request is not None and not isinstance(request, str):
+                return result
+            # Identical retries contribute once; a different result for the same
+            # requested step cannot overwrite previously accepted evidence.
+            if request in seen:
+                if seen[request] != receipt:
+                    return refuse('conflicting_step')
+                continue
+            if len(seen) == MAX_PROOF_PAGES:
+                return refuse('page_limit')
+            seen[request] = receipt
+            if (type(proof['version']) is not int or proof['version'] != 1
+                    or proof['ownerKey'] != expected_owner
+                    or proof['identity'] != identity):
+                return refuse('owner_changed')
+            stamp, revision, window = proof['sourceStamp'], proof['indexRevision'], proof['windowKey']
+            if proof['missing'] or not _proof_stamp(stamp):
+                return refuse('missing_source')
+            if not _proof_index(revision):
+                return refuse('index_unavailable')
+            if page.get('_bindingRevision') != revision:
+                return refuse('index_changed')
+            if (proof['shapeInvalid'] is not False or proof['invalid'] != 0
+                    or proof['partial'] is not False or proof['blocked'] is not False
+                    or proof['gaps']):
+                return refuse('incomplete_source')
+            if previous is None:
+                if request is not None:
+                    return refuse('broken_chain')
+                result.update(sourceStamp=stamp, indexRevision=revision, windowKey=window)
+            else:
+                if stamp != result['sourceStamp']:
+                    return refuse('source_changed')
+                if revision != result['indexRevision']:
+                    return refuse('index_changed')
+                if (window != result['windowKey'] or proof['owner'] != previous['owner']
+                        or proof['path'] != previous['path']):
+                    return refuse('owner_changed')
+                if previous['nextBefore'] is None or request != previous['nextBefore']:
+                    return refuse('broken_chain')
+            end, aligned = _end(request, cursor_key, proof['owner'], window, stamp)
+            start, consumed_end = proof['consumedStart'], proof['consumedEnd']
+            if (not aligned or type(start) is not int or type(consumed_end) is not int
+                    or consumed_end != end or not 0 <= start <= end <= stamp[2]
+                    or (end > 0 and start == end)):
+                return refuse('bad_span')
+            next_before = proof['nextBefore']
+            if start == 0:
+                if next_before is not None:
+                    return refuse('broken_chain')
+            else:
+                if next_before is None:
+                    return refuse('broken_chain')
+                next_end, next_aligned = _end(next_before, cursor_key, proof['owner'], window, stamp)
+                if not next_aligned or next_end != start:
+                    return refuse('broken_chain')
+            coverage = page['coverage']
+            if (page.get('status') != 'ready' or page['before'] != next_before
+                    or page['windowKey'] != window or page['unavailableRanges']
+                    or page['generation'] != _digest([proof['owner'], window, stamp, start, end])
+                    or page['revisions'] != [[proof['path'], [[stamp[0], stamp[1]], *stamp[2:]]]]
+                    or coverage['sourceCount'] != 1 or coverage['rangeStart'] != start
+                    or coverage['rangeEnd'] != end or coverage['partialRecord']
+                    or coverage['pagingBlocked'] or coverage['invalidEvents']
+                    or coverage['rootExhausted'] != (start == 0)
+                    or coverage['scannedEvents'] != len(records)
+                    or type(coverage['scannedBytes']) is not int
+                    or not end - start <= coverage['scannedBytes'] <= MAX_BYTES
+                    or len(records) != len(page_facts)):
+                return refuse('bad_span')
+            position, occurrences = end, {}
+            for record, fact in zip(records, page_facts):
+                guard()
+                offset, length, sha = record['offset'], record['bytes'], record['sha256']
+                if (type(offset) is not int or type(length) is not int
+                        or not 0 < length <= MAX_BYTES or offset < 0
+                        or offset + length != position or not isinstance(sha, str)
+                        or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha)
+                        or any(fact[key] != record[key] for key in ('offset', 'bytes', 'sha256'))
+                        or fact['id'] != f'event:{identity}:{offset}:{sha[:16]}'
+                        or fact['id'] in occurrences or not isinstance(fact['data'], dict)):
+                    return refuse('bad_manifest')
+                occurrences[fact['id']] = fact
+                position = offset
+            if position != start:
+                return refuse('bad_span')
+            page_attested = proof['attestedIds']
+            if (not isinstance(page_attested, list) or len(page_attested) > len(page_facts)
+                    or any(not isinstance(value, str) or value not in occurrences for value in page_attested)
+                    or len(set(page_attested)) != len(page_attested)):
+                return refuse('bad_attestation')
+            row_ids = set()
+            for row in page_items:
+                guard()
+                fact = occurrences.get(row['id'])
+                if (fact is None or row['id'] in row_ids or row['eventOrder'] != fact['offset']
+                        or row['sourceSessionId'] != identity or row['event'] != fact['event']):
+                    return refuse('bad_manifest')
+                row_ids.add(row['id'])
+                for reference in row['_eventFields'].values():
+                    if (reference['path'] != proof['path'] or reference['key'] not in FIELD_KEYS
+                            or any(reference[key] != fact[key] for key in ('offset', 'bytes', 'sha256'))):
+                        return refuse('bad_manifest')
+            # Retain all scalar facts, including non-display events. Filtering
+            # before the complete-root binder would hide fifth occurrences.
+            facts.extend(page_facts)
+            items.extend(page_items)
+            attested.update(page_attested)
+            result['pageReceipts'].append(receipt)
+            previous = proof
+        if previous is None or previous['nextBefore'] is not None or previous['consumedStart'] != 0:
+            return refuse('incomplete_source')
+        guard()
+        bound = _bind_complete_root(session, None, identity, items, facts, attested, guard)
+        guard()
+        return {**result, 'status': 'complete', 'reason': 'complete_root', 'bound': bound}
+    except (KeyError, TypeError, ValueError, OverflowError, RecursionError):
+        return refuse('invalid_proof')
+
+
 def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS, check_budget=None,
-                cache_home=None):
+                cache_home=None, _proof=False):
     """Read one explicit recent/older event page without loading its prefix.
 
     Returned references are private owner facts, never client-supplied paths.
@@ -504,6 +708,7 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
     guard = check_budget or (lambda: None)
     guard()
     items, facts, scanned, invalid, earliest, shape_invalid = [], [], 0, 0, None, False
+    records = []
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0)
                              | getattr(os, 'O_NOFOLLOW', 0))
@@ -511,13 +716,24 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
     except FileNotFoundError:
         if before is not None:
             raise StaleWindow('The event source is no longer available')
-        return {'status': 'ready', 'windowKey': window_key,
+        page = {'status': 'ready', 'windowKey': window_key,
                 'generation': _digest([owner, window_key, None]), 'items': [], 'before': None,
                 'coverage': {'kind': 'event-window', 'historyComplete': False,
                     'rootExhausted': True, 'sourceCount': 0, 'rangeStart': 0, 'rangeEnd': 0,
                     'scannedEvents': 0, 'scannedBytes': 0, 'unassociatedCount': 0,
                     'partialRecord': False, 'pagingBlocked': False, 'invalidEvents': 0},
                 'unavailableRanges': [], 'revisions': [[str(path), None]]}
+        if _proof:
+            # Absence is not a complete empty source. No index lookup is needed
+            # when there is no canonical byte range to attest.
+            page['_proof'] = {'version': 1, 'owner': owner, 'ownerKey': _proof_owner(session),
+                'identity': identity, 'path': str(path), 'windowKey': window_key,
+                'sourceStamp': None, 'requestBefore': before, 'nextBefore': None,
+                'consumedStart': None, 'consumedEnd': None, 'facts': [], 'records': [],
+                'shapeInvalid': False, 'invalid': 0, 'partial': False, 'blocked': False,
+                'gaps': [], 'missing': True, 'indexRevision': None, 'attestedIds': []}
+            page['_proof']['receiptDigest'] = _proof_receipt(page, cursor_key, guard)
+        return page
     with stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode):
@@ -534,6 +750,9 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
         for offset, raw in lines:
             scanned += 1
             earliest = offset
+            if _proof:
+                records.append({'offset': offset, 'bytes': len(raw),
+                                'sha256': hashlib.sha256(raw).hexdigest()})
             try:
                 event = _bounded_json(raw, guard)
                 if (not isinstance(event, dict) or not isinstance(event.get('data'), dict)
@@ -595,20 +814,21 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
     complete = (before is None and start == 0 and end == stamp[2]
         and not invalid and not shape_invalid and not lines.partial
         and not lines.blocked and not lines.gaps)
-    bound, dependency = [], {}
-    if complete:
+    bound, dependency, attested, index_revision = [], {}, set(), None
+    if complete or _proof:
         attested, index_revision = _host_receipts(cache_home, session, path, identity, facts, guard)
-        if index_revision is not None:
+        if complete and index_revision is not None:
             bound = _bind_complete_root(session, path, identity, items, facts, attested, guard)
         if binding_revision(cache_home) != index_revision:
             raise StaleWindow('The binding index changed during its read')
         # Complete misses retain a dependency so an index-only commit is
-        # reconsidered. Partial raw pages never consulted this authority.
+        # reconsidered. Only private proof pages additionally consult authority
+        # for partial ranges; ordinary partial raw pages remain index-independent.
         dependency['_bindingRevision'] = index_revision
     if _stamp(path.stat()) != stamp:
         raise StaleWindow('The event source changed during binding')
     used = {identity for node in bound for identity in node['sourceOccurrenceIds']}
-    return {'status': 'ready', 'windowKey': window_key,
+    page = {'status': 'ready', 'windowKey': window_key,
             '_boundWork': bound,
             **dependency,
             'bindingCoverage': {'status': 'complete-root' if complete else 'partial-source',
@@ -617,6 +837,67 @@ def read_window(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS
             'items': items, 'coverage': coverage, 'before': cursor,
             'unavailableRanges': list(reversed(lines.gaps)),
             'revisions': [[str(path), [[stamp[0], stamp[1]], *stamp[2:]]]]}
+    if _proof:
+        page['_proof'] = {'version': 1, 'owner': owner, 'ownerKey': _proof_owner(session),
+            'identity': identity, 'path': str(path), 'windowKey': window_key,
+            'sourceStamp': stamp, 'requestBefore': before, 'nextBefore': cursor,
+            # Actual yielded records only: read-ahead/continuation offsets cannot
+            # attest bytes which this page never decoded.
+            'consumedStart': records[-1]['offset'] if records else end,
+            'consumedEnd': records[0]['offset'] + records[0]['bytes'] if records else end,
+            'facts': facts, 'records': records, 'shapeInvalid': shape_invalid,
+            'invalid': invalid, 'partial': lines.partial, 'blocked': lines.blocked,
+            'gaps': list(lines.gaps), 'missing': False, 'indexRevision': index_revision,
+            'attestedIds': sorted(attested)}
+        page['_proof']['receiptDigest'] = _proof_receipt(page, cursor_key, guard)
+        if _stamp(path.stat()) != stamp:
+            raise StaleWindow('The event source changed during proof signing')
+        if binding_revision(cache_home) != index_revision:
+            raise StaleWindow('The binding index changed during proof signing')
+        guard()
+    return page
+
+
+def read_proof_step(session, *, window_key, cursor_key, before=None, limit=MAX_ITEMS,
+                    check_budget=None, cache_home=None, expected_source=None, expected_index=None):
+    """One read only; subsequent steps must use one frozen source/index pair.
+
+    The first index read may initialize its read-only WAL baseline. An expected
+    revision on later steps must match before reading AND after pager teardown.
+    """
+    guard = check_budget or (lambda: None)
+    guard()
+    if before is not None and (expected_source is None or expected_index is None):
+        raise StaleWindow('Missing cumulative proof generation')
+    if expected_source is not None:
+        path, _, _ = _source(session)
+        try:
+            current = _stamp(path.stat())
+        except OSError as exc:
+            raise StaleWindow('The proof source is no longer available') from exc
+        if current != expected_source:
+            raise StaleWindow('The cumulative proof source changed')
+    if expected_index is not None and binding_revision(cache_home) != expected_index:
+        raise StaleWindow('The cumulative proof binding index changed')
+    page = read_window(session, window_key=window_key, cursor_key=cursor_key, before=before,
+                       limit=limit, check_budget=guard, cache_home=cache_home, _proof=True)
+    guard()
+    proof = page['_proof']
+    if ((expected_source is not None and proof['sourceStamp'] != expected_source)
+            or (expected_index is not None and proof['indexRevision'] != expected_index)):
+        raise StaleWindow('The cumulative proof generation changed')
+    if not proof['missing']:
+        path, _, owner = _source(session)
+        try:
+            current = _stamp(path.stat())
+        except OSError as exc:
+            raise StaleWindow('The proof source is no longer available') from exc
+        if current != proof['sourceStamp'] or owner != proof['owner']:
+            raise StaleWindow('The cumulative proof source changed')
+        if binding_revision(cache_home) != proof['indexRevision']:
+            raise StaleWindow('The cumulative proof binding index changed')
+    guard()
+    return page
 
 
 def read_field(session, reference, *, offset=0, limit=4096, check_budget=None):

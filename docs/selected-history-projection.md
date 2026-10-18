@@ -80,13 +80,68 @@ connection teardown and host publication. A writer change still refuses the
 read. Partial raw windows do not consult or depend on the ownership index;
 complete misses retain the dependency so later indexed receipts are reconsidered.
 
-The initial implementation qualifies only a whole root source fitting one
-existing bounded page with no malformed records, gaps or partial tail. An older
-page reaching offset zero does not qualify. Tools need one canonical pre/end
-pair and one attested host pre/end pair, consistent root ownership and revisions;
-reused IDs, conflicting aliases and cross-source candidates refuse binding.
-Model lifecycle rows use their own attested pair, without inventing provider
-payloads. This does not implement cross-page invocation reconstruction.
+The ordinary page path qualifies only a whole root source fitting one existing
+bounded page with no malformed records, gaps or partial tail. An older page
+reaching offset zero does not qualify. Tools need one canonical pre/end pair and
+one attested host pre/end pair, consistent root ownership and revisions; reused
+IDs, conflicting aliases and cross-source candidates refuse binding. Model
+lifecycle rows use their own attested pair, without inventing provider payloads.
+
+### Finite cumulative root proof prerequisite (not consumer qualification)
+
+An explicit host request may additionally call `WorkWindows.prove(session_id)`,
+or the equivalent private latest-read option `read(..., proof=True)`. This is
+not a new public HTTP parameter, a snapshot side effect or a field-read retry.
+The live overlay, cold pagination/sync consumer and frontend still need their
+separate integration. A complete proof alone does not satisfy their acceptance.
+
+Each operation owns one canonical owner/source/window generation and one
+20-second aggregate deadline, including worker waits and aggregation. It asks
+the existing worker for at most eight `proof-step` operations. Each step reads
+exactly one page with the unchanged 100-item, 512-record and 4-MiB read bounds.
+Transport remains 64-KiB input, 4-MiB output, 20-MiB aggregate spool and four
+jobs. Proof support uses the same **eight total retained event pages**, not a
+second proof cache. Descriptors contain only operation identity, status,
+dependency stamps and support-page identities. Retained proof results contain
+metadata and exact field references, never captured bodies or resident copies.
+
+The worker's private page proof carries the actual consumed record span,
+bounded scalar collision facts and offset/length/hash receipts for every
+consumed record, including records omitted from visible observations. Read-ahead
+bytes are not coverage. It also carries malformed/shape-invalid/partial-tail/gap
+flags, authenticated cursor linkage, attested diagnostic occurrence identities
+and the index revision measured through connection teardown. Ordinary partial
+raw reads retain their existing no-index-dependency behavior.
+
+Pure cumulative validation requires an authentic cursor chain from the same
+frozen last byte to offset zero, contiguous consumed record boundaries, unchanged
+owner/window/source stamps and index generation, and no missing, overlapping,
+unaligned, malformed or ambiguous spans. An exact repeated step contributes once;
+a conflicting receipt is refused. All collision facts are counted before any
+display filtering. Only after complete validation is the existing exact
+four-occurrence/lifecycle/attested-owner predicate applied. No tool-ID-only or
+timestamp-only association is introduced.
+
+`workProjection.rootProof` reports `pending`, `complete`, `incomplete` or `stale`,
+with bounded step count and a reason. Polling, passive interests and field chunks
+cannot start or resume a proof. A failed or stale operation stays held until an
+explicit `prove(..., reopen=True)`; that creates a new finite operation, never a
+ninth step or eviction-driven continuation. Same-operation waiters join. A timed
+out physical step remains owned and counted until it settles, and cannot publish
+a late proof. Shutdown retains ownership through worker cleanup.
+
+Source/index changes, published invalidation, owner replacement or loss of any
+supporting page invalidate every reference derived from the proof. Snapshot
+status checks only already-known owner/fence/page facts; explicit proof use also
+checks physical source and index stamps. A follow-on awaited field consumer must
+repeat those checks after its await. Raw occurrences retain their independent,
+unverified identity and normal exact-source field readability; proof incompleteness
+does not delete them. No logging, capture opt-out, index writer, agent read scope
+or historical accounting authority changes.
+
+This source candidate needs focused cumulative-proof and lifecycle execution
+before qualification. The normal live-reference and large-history acceptance
+failures remain open; recent-only success is not behind-tail acceptance.
 
 Placement also requires the completed host turn and unambiguous message times
 already resident in the requested window. Time places work only within that
