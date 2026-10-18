@@ -215,6 +215,245 @@ def _producer_record(directory, name, value):
         json.dump(value, stream, ensure_ascii=False)
 
 
+_SCHEMA_MODULE = "amplifier_module_provider_regularproducer"
+_DIAGNOSTIC_CLASSES = {
+    "builtins": {"ModuleNotFoundError", "ImportError", "AttributeError", "TypeError",
+                 "ValueError", "RuntimeError", "OSError", "FileNotFoundError",
+                 "PermissionError", "AssertionError", "TimeoutError"},
+    "asyncio.exceptions": {"CancelledError"},
+    "amplifier_web.module_failures": {"ConfiguredModuleError"},
+    "amplifier_web.session_client": {"SessionClientError"},
+}
+_DIAGNOSTIC_LOCATIONS = (
+    "amplifier_web/provider_environment.py", "amplifier_web/module_failures.py",
+    "amplifier_web/runtime_worker.py", "amplifier_web/runtime_preparation.py",
+    "tests/fixtures/live_terminal_probe.py",
+)
+_STARTUP_PHASES = {"runtime-setup", "bundle-preparation", "session-mount", "worker_startup"}
+
+
+def _producer_frame_location(filename, line, root):
+    """No source text, function name, locals, or arbitrary path components."""
+    paths = {str(ROOT / name): "repo/" + name for name in _DIAGNOSTIC_LOCATIONS}
+    paths[str(root / "provider-regularproducer" / _SCHEMA_MODULE / "__init__.py")] = "owned/provider"
+    paths[str(root / "bootstrap/sitecustomize.py")] = "owned/bootstrap"
+    return {"location": paths.get(filename, "other"),
+            "line": line if type(line) is int and 0 < line < 1_000_000 else None}
+
+
+def _producer_exception_shape(error, root):
+    cls = type(error)
+    allowed = cls.__name__ in _DIAGNOSTIC_CLASSES.get(cls.__module__, set())
+    frames, tb, count = [], error.__traceback__, 0
+    while tb is not None and count < 64:
+        frames.append(_producer_frame_location(tb.tb_frame.f_code.co_filename, tb.tb_lineno, root))
+        frames = frames[-20:]
+        count += 1
+        tb = tb.tb_next
+    missing = error.name if type(error) is ModuleNotFoundError else None
+    return {"exceptionClass": cls.__name__ if allowed else "other",
+            "missingModule": missing if missing in {
+                _SCHEMA_MODULE, "live_terminal_probe", "amplifier_core", "amplifier_web"
+            } else ("other" if missing is not None else None),
+            "frames": frames, "framesCapped": count > 20 or tb is not None}
+
+
+def _producer_schema_observer(root, original, record):
+    """Observe the real worker helper, not a replacement schema or loader."""
+    ordinal = 0
+
+    def retain(outcome, *, schema=None, error=None):
+        nonlocal ordinal
+        ordinal += 1
+        # Observation failure must not replace an original return or exception.
+        try:
+            if ordinal > 4:
+                record("overflow", {"status": "overflow"})
+                return
+            package = root / "provider-regularproducer" / _SCHEMA_MODULE / "__init__.py"
+            loaded = sys.modules.get(_SCHEMA_MODULE)
+            helper = sys.modules.get("live_terminal_probe")
+            row = {
+                "status": outcome, "ordinal": ordinal,
+                "ownedPackageExists": package.is_file() and not package.is_symlink(),
+                "ownedPackageOriginMatches": bool(
+                    loaded and getattr(loaded, "__file__", None) == str(package)),
+                "fixtureHelperOriginMatches": bool(
+                    helper and getattr(helper, "__file__", None) == str(Path(__file__))),
+                "schemaHelperOriginMatches": original.__code__.co_filename == str(
+                    ROOT / "amplifier_web/provider_environment.py"),
+                "expectedParentInSysPath": str(package.parent.parent) in sys.path,
+            }
+            if error is not None:
+                row["exception"] = _producer_exception_shape(error, root)
+            else:
+                fields = schema.get("fields") if type(schema) is dict else None
+                row["schemaShape"] = {
+                    "mapping": type(schema) is dict, "fieldsList": type(fields) is list,
+                    "fieldCount": min(len(fields), 1024) if type(fields) is list else None,
+                    "fieldCountCapped": type(fields) is list and len(fields) > 1024}
+            record(f"schema-{ordinal}", row)
+        except BaseException:
+            # An absent row is an explicit collection gap, never synthetic success.
+            pass
+
+    async def observed(module_id, *, config=None, environment=None):
+        if module_id != "provider-regularproducer":
+            return await original(module_id, config=config, environment=environment)
+        try:
+            result = await original(module_id, config=config, environment=environment)
+        except BaseException as error:
+            retain("raised", error=error)
+            raise
+        retain("returned", schema=result)
+        return result
+
+    return observed
+
+
+def _observe_worker_schema(root):
+    from amplifier_web import provider_environment
+
+    directory = root / "schema-diagnostics"
+    original = provider_environment.provider_config_schema
+    provider_environment.provider_config_schema = _producer_schema_observer(
+        root, original, lambda name, row: _producer_record(directory, name, row))
+    try:
+        _producer_record(directory, "installed", {"status": "installed"})
+    except Exception:
+        pass  # Missing installation evidence is a gap, not a new startup error.
+
+
+def _producer_owned_bytes(root, path, limit):
+    """Read a bounded regular file via no-follow directory descriptors."""
+    import stat
+
+    parts = path.relative_to(root).parts
+    if not parts or any(p in {"", ".", ".."} for p in parts):
+        raise ValueError("Invalid owned path")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        child = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        try:
+            info = os.fstat(child)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
+                raise ValueError("Not a bounded owned regular file")
+            with os.fdopen(child, "rb", closefd=False) as stream:
+                data = stream.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError("Owned file grew beyond limit")
+            return data
+        finally:
+            os.close(child)
+    finally:
+        os.close(fd)
+
+
+def _producer_startup_diagnostic(root, name):
+    """Only a sanitized derivative of this synthetic worker's exact receipt."""
+    import re
+    from amplifier_web.worker_diagnostics import receipt_path
+
+    if type(name) is not str or not re.fullmatch(r"startup-[a-f0-9]{32}\.log", name):
+        return {"status": "invalid-name", "present": None, "name": None}
+    result = {"status": "unavailable", "present": None, "name": name}
+    try:
+        path = receipt_path(name, home=root / "app")
+        if path is None:
+            return result
+        expected = root / "app/logs/workers" / name
+        if path != expected:
+            return {**result, "status": "refused-path"}
+        raw = _producer_owned_bytes(root, path, 60_000)
+        result["present"] = True
+        # Never copy stderr or best-effort-redacted exception messages. Only the
+        # strict header and StartupCapture's structured frame locations qualify.
+        header = json.loads(raw.split(b"\n", 1)[0])
+        if type(header) is not dict:
+            raise ValueError("Malformed receipt header")
+        detail = json.loads(header["failure"]) if type(header.get("failure")) is str else {}
+        if (type(detail) is not dict or type(detail.get("frames", [])) is not list
+                or any(type(f) is not dict or type(f.get("file")) is not str
+                       or type(f.get("line")) is not int for f in detail.get("frames", [])[-20:])):
+            raise ValueError("Malformed receipt detail")
+        allowed_names = set().union(*_DIAGNOSTIC_CLASSES.values())
+        frames = [_producer_frame_location(f.get("file"), f.get("line"), root)
+                  for f in detail.get("frames", [])[-20:] if type(f) is dict]
+        return {**result, "status": "read" if "errorType" in detail and "frames" in detail else "metadata-only",
+                "phase": header.get("phase") if header.get("phase") in _STARTUP_PHASES else "other",
+                "exitCode": header.get("exitCode") if type(header.get("exitCode")) is int
+                            and -128 <= header["exitCode"] <= 255 else None,
+                "exceptionClass": detail.get("errorType")
+                                  if detail.get("errorType") in allowed_names else "other",
+                "frames": frames}
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return {**result, "status": "malformed-or-unavailable"}
+
+
+def _producer_valid_schema_record(row, name):
+    """Validate every uploaded leaf, including corrupted diagnostic records."""
+    if name in {"installed", "overflow"}:
+        return row == {"status": name}
+    if type(row) is not dict or row.get("status") not in {"raised", "returned"}:
+        return False
+    bools = {"ownedPackageExists", "ownedPackageOriginMatches", "fixtureHelperOriginMatches",
+             "schemaHelperOriginMatches", "expectedParentInSysPath"}
+    extra = "exception" if row["status"] == "raised" else "schemaShape"
+    if (set(row) != bools | {"status", "ordinal", extra}
+            or type(row["ordinal"]) is not int or name != f"schema-{row['ordinal']}"
+            or not all(type(row[k]) is bool for k in bools)):
+        return False
+    detail = row[extra]
+    if type(detail) is not dict:
+        return False
+    if extra == "schemaShape":
+        return (set(detail) == {"mapping", "fieldsList", "fieldCount", "fieldCountCapped"}
+                and all(type(detail[k]) is bool for k in ("mapping", "fieldsList", "fieldCountCapped"))
+                and (detail["fieldCount"] is None or
+                     type(detail["fieldCount"]) is int and 0 <= detail["fieldCount"] <= 1024))
+    if (set(detail) != {"exceptionClass", "missingModule", "frames", "framesCapped"}
+            or detail["exceptionClass"] not in set().union(*_DIAGNOSTIC_CLASSES.values(), {"other"})
+            or detail["missingModule"] not in {None, "other", _SCHEMA_MODULE,
+                                               "live_terminal_probe", "amplifier_core", "amplifier_web"}
+            or type(detail["framesCapped"]) is not bool or type(detail["frames"]) is not list
+            or len(detail["frames"]) > 20):
+        return False
+    locations = {"other", "owned/provider", "owned/bootstrap"} | {
+        "repo/" + path for path in _DIAGNOSTIC_LOCATIONS}
+    return all(type(frame) is dict and set(frame) == {"location", "line"}
+               and frame["location"] in locations
+               and (frame["line"] is None or type(frame["line"]) is int and 0 < frame["line"] < 1_000_000)
+               for frame in detail["frames"])
+
+
+def _producer_schema_diagnostics(root):
+    """Only fixed observer files; never search private app logs or event files."""
+    rows, gaps = [], []
+    for name in ("installed", "schema-1", "schema-2", "schema-3", "schema-4", "overflow"):
+        try:
+            raw = _producer_owned_bytes(root, root / "schema-diagnostics" / (name + ".json"), 16_384)
+            row = json.loads(raw)
+            # The only writer is the allowlisted observer above. Reject malformed
+            # records rather than copying arbitrary content into the report.
+            if not _producer_valid_schema_record(row, name):
+                raise ValueError("Invalid observer record")
+            rows.append(row)
+        except FileNotFoundError:
+            if name == "installed":
+                gaps.append("observer-not-installed")
+        except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+            gaps.append("unreadable-" + name)
+    if not any(row.get("status") in {"returned", "raised"} for row in rows):
+        gaps.append("schema-outcome-not-observed")
+    if any(row.get("status") == "overflow" for row in rows):
+        gaps.append("schema-observations-capped")
+    return {"rows": rows, "gaps": gaps}
+
+
 def _observe_worker_appends(root):
     """Retain exact worker-side diagnostic receipts without changing the write."""
     from amplifier_web import session_files
@@ -671,7 +910,7 @@ def _producer_environment(root):
             if key in os.environ}
     os.environ.clear()
     os.environ.update(keep)
-    for name in ("workspace", "counts", "guard", "receipts", "capture-receipts",
+    for name in ("workspace", "counts", "guard", "receipts", "capture-receipts", "schema-diagnostics",
                  "bootstrap", "user", "amplifier-home"):
         (root / name).mkdir(parents=True)
     os.environ.update(
@@ -696,9 +935,10 @@ def _producer_environment(root):
         "import os, sys\n"
         "try:\n"
         "    from pathlib import Path\n"
-        "    from live_terminal_probe import _install_producer_guard, _observe_worker_appends\n"
+        "    from live_terminal_probe import _install_producer_guard, _observe_worker_appends, _observe_worker_schema\n"
         "    _install_producer_guard(Path(os.environ['UNIFIED_PRODUCER_ROOT']))\n"
         "    if sys.argv[0].endswith('/amplifier_web/runtime_worker.py'):\n"
+        "        _observe_worker_schema(Path(os.environ['UNIFIED_PRODUCER_ROOT']))\n"
         "        _observe_worker_appends(Path(os.environ['UNIFIED_PRODUCER_ROOT']))\n"
         "except BaseException:\n"
         "    os._exit(97)\n", encoding="utf-8")
@@ -1102,11 +1342,31 @@ async def producer_main(root, report, save):
     try:
         app, service, client, url = await start_app()
         report["runtimeEvents"] = []
+        report["startupDiagnostics"] = []
         single = service.on_runtime_event.single
 
         async def observed_event(kind, payload):
             assert len(report["runtimeEvents"]) < 512, "Runtime event budget exceeded"
-            report["runtimeEvents"].append({"kind": kind, "payload": json.loads(json.dumps(payload))})
+            public = payload
+            if kind == "runtime.error":
+                # Original callback still receives the original payload once.
+                # Do not copy raw error text/exception messages into artifacts.
+                public = {"phase": payload.get("phase") if payload.get("phase") in _STARTUP_PHASES else "other",
+                          "errorType": "RuntimeStartupError" if payload.get("errorType") == "RuntimeStartupError"
+                                       else "other"}
+                failures = payload.get("moduleFailures")
+                failures = failures if type(failures) is list else []
+                public["providerSchemaFailed"] = any(
+                    type(row) is dict and row.get("module") == "provider-regularproducer"
+                    and row.get("reason_code") == "provider_schema_failed"
+                    for row in failures[:16])
+                if payload.get("sessionId") == report.get("sessionId"):
+                    name = payload.get("diagnosticReceipt")
+                    if len(report["startupDiagnostics"]) < 2 and not any(
+                            row.get("name") == name for row in report["startupDiagnostics"]):
+                        report["startupDiagnostics"].append(_producer_startup_diagnostic(root, name))
+                        save()  # Derivative retained before any service cleanup.
+            report["runtimeEvents"].append({"kind": kind, "payload": json.loads(json.dumps(public))})
             return await single(kind, payload)
 
         service.on_runtime_event.single = observed_event
@@ -1130,8 +1390,7 @@ async def producer_main(root, report, save):
                 while True:
                     snapshot = await controller.snapshot(sid)
                     session = snapshot["session"]
-                    report["lastRuntimeState"] = {k: session.get(k) for k in
-                                                   ("status", "error", "activity", "runtimeReport")}
+                    report["lastRuntimeState"] = {"status": session.get("status")}
                     if session.get("status") in {"error", "stopped"}:
                         raise RuntimeError(json.dumps(report["lastRuntimeState"]))
                     if (session.get("status") == "idle" and any(
@@ -1207,35 +1466,39 @@ async def producer_main(root, report, save):
         assert not report["fieldIntegrityErrors"], "Returned owned fields did not preserve exact values"
         report["status"] = "observed"
     except BaseException as error:
-        report["primaryFailure"] = {"phase": report["phase"], "type": type(error).__name__,
-                                    "message": str(error)}
+        report["primaryFailure"] = {"phase": report["phase"],
+                                    **_producer_exception_shape(error, root)}
         save()
         raise
     finally:
         report["phaseBeforeCleanup"] = report["phase"]
+        report["workerSchemaDiagnostics"] = _producer_schema_diagnostics(root)
+        report["startupDiagnosticGaps"] = [
+            row["status"] for row in report.get("startupDiagnostics", []) if row["status"] != "read"]
+        save()
         cleanup_errors = []
         for ws in sockets:
             try:
                 await asyncio.wait_for(ws.close(), 3)
             except Exception as error:
-                cleanup_errors.append({"type": type(error).__name__, "message": str(error)})
+                cleanup_errors.append(_producer_exception_shape(error, root))
         for task in tasks:
             task.cancel()
         try:
             await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 3)
         except Exception as error:
-            cleanup_errors.append({"type": type(error).__name__, "message": str(error)})
+            cleanup_errors.append(_producer_exception_shape(error, root))
         for client in reversed(clients):
             try:
                 await asyncio.wait_for(client.close(), 15)
             except Exception as error:
-                cleanup_errors.append({"type": type(error).__name__, "message": str(error)})
+                cleanup_errors.append(_producer_exception_shape(error, root))
         for service in services:
             if not service.closed:
                 try:
                     await asyncio.wait_for(service.close(), 10)
                 except Exception as error:
-                    cleanup_errors.append({"type": type(error).__name__, "message": str(error)})
+                    cleanup_errors.append(_producer_exception_shape(error, root))
         session_files.append_event = original_append
         report["finalCounts"] = counts()
         report["finalCleanup"] = {"allServicesClosed": all(s.closed for s in services),
@@ -1244,6 +1507,8 @@ async def producer_main(root, report, save):
         report["guardObservations"] = [json.loads(path.read_text(encoding="utf-8"))
                                       for path in sorted((root / "guard").glob("*.json"))]
         secondary = []
+        if report["workerSchemaDiagnostics"]["gaps"]:
+            secondary.append({"phase": "diagnostics", "reason": "Worker schema observation incomplete"})
         if cleanup_errors or not report["finalCleanup"]["allServicesClosed"]:
             secondary.append({"phase": "cleanup", "reason": "Services did not close cleanly"})
         if report["finalCleanup"]["remainingWorkers"]:
@@ -1285,14 +1550,16 @@ def run_producer():
     try:
         asyncio.run(bounded())
     except BaseException as error:
-        failure = {"phase": report["phase"], "type": type(error).__name__, "message": str(error)}
+        failure = {"phase": report["phase"], **_producer_exception_shape(error, root)}
         report.setdefault("primaryFailure", failure)
         report.update(status="failed", failure=report["primaryFailure"])
         report["guardObservations"] = [json.loads(path.read_text(encoding="utf-8"))
                                       for path in sorted((root / "guard").glob("*.json"))]
         save()
         print(json.dumps({"status": "failed", "phase": report["phase"], "evidence": str(evidence)}))
-        raise
+        # The exact exception was bare-rethrown at its worker observation site.
+        # Do not leak its message/traceback via wrapper stdout/stderr/JUnit.
+        raise SystemExit(1) from None
     report["phase"] = "complete"
     save()
     print(json.dumps({"status": report["status"], "evidence": str(evidence),
