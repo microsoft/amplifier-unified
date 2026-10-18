@@ -385,6 +385,163 @@ def _check_worker_schema_diagnostic_contract(tmp_path):
         passed.append("canonical-lazy-full-unicode-accepted-clipped-context-rejected")
 
     asyncio.run(context_controls())
+
+    async def completion_controls():
+        from types import SimpleNamespace
+        from amplifier_core.message_models import TextBlock
+
+        captured, called = [], []
+        request = object()
+        argument = object()
+        returned = object()
+        primary_error = AssertionError(secret)
+        provider = fixture.RegularProducerProvider()
+        should_raise = False
+
+        async def original(actual_request, observe, **kwargs):
+            called.append((actual_request, kwargs))
+            observe("prior-tool-message", lambda: {"priorFound": False, "exactMatchCount": 0})
+            if should_raise:
+                raise primary_error
+            return returned
+
+        # Exercise the actual complete wrapper, not a copied observer call.
+        provider._complete = original
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv("UNIFIED_PRODUCER_ROOT", str(root))
+            patch.setattr(fixture, "_producer_record",
+                          lambda directory, name, row: captured.append((name, row)))
+            assert await provider.complete(request, marker=argument) is returned
+            should_raise = True
+            with pytest.raises(AssertionError) as caught:
+                await provider.complete(request, marker=argument)
+            assert caught.value is primary_error
+            tb = caught.value.__traceback__
+            while tb is not None and tb.tb_frame.f_code is not original.__code__:
+                tb = tb.tb_next
+            assert tb is not None
+        assert len(called) == 2 and all(r is request and kw["marker"] is argument for r, kw in called)
+        assert [row["status"] for _, row in captured] == ["returned", "raised"]
+        assert all(row["stage"] == "prior-tool-message" for _, row in captured)
+        assert all(fixture._producer_valid_completion_record(row, name) for name, row in captured)
+        assert secret not in json.dumps(captured)
+        passed.append("completion-wrapper-once-same-arguments-result-and-exception")
+
+        for failing in (False, True):
+            should_raise = failing
+            before = len(called)
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setenv("UNIFIED_PRODUCER_ROOT", str(root))
+                patch.setattr(fixture, "_producer_record", broken_writer)
+                if failing:
+                    with pytest.raises(AssertionError) as caught:
+                        await provider.complete(request, marker=argument)
+                    assert caught.value is primary_error
+                else:
+                    assert await provider.complete(request, marker=argument) is returned
+            assert len(called) == before + 1
+        passed.append("completion-writer-failure-preserves-return-and-primary")
+
+        context_rows = []
+        async def mismatched(observe):
+            return await fixture._producer_context_result(
+                [TextBlock(text=secret)], fixture._producer_cases()[1]["output"], observe)
+
+        with pytest.raises(AssertionError):
+            await fixture._producer_completion_observer(
+                2, mismatched, lambda name, row: context_rows.append((name, row)))
+        row = context_rows[0][1]
+        assert row["stage"] == "context-comparison" and row["status"] == "raised"
+        assert row["details"]["actual"]["type"] == "list"
+        assert row["details"]["blocks"] == {"count": 1, "capped": False, "types": ["TextBlock"]}
+        assert row["details"]["normalized"]["bytes"] == len(secret.encode())
+        assert not row["details"]["actualEqualsExpected"]
+        assert row["details"]["expectedEqualsSerialized"] is True
+        assert row["details"]["oracleLimitBytes"] == 131072
+        assert row["exception"]["exceptionClass"] == "AssertionError"
+        assert any(f["location"] == "fixture" for f in row["exception"]["frames"])
+        assert secret not in json.dumps(row)
+        passed.append("completion-context-failure-stage-and-mismatch-without-content")
+
+        def unavailable_measurement():
+            raise OSError(secret)
+
+        async def bad_measurement(observe):
+            observe("capture-destinations", unavailable_measurement)
+            return returned
+
+        bounded = []
+        writer = lambda name, row: bounded.append((name, row))
+        assert await fixture._producer_completion_observer(1, bad_measurement, writer) is returned
+        assert bounded[0][1]["incomplete"] and bounded[0][1]["details"] == {}
+        assert await fixture._producer_completion_observer(4, bad_measurement, writer) is returned
+        assert bounded[-1] == ("completion-overflow", {"status": "overflow"})
+        blocks = fixture._producer_completion_blocks([{"type": secret}] * 100)
+        assert blocks == {"count": 16, "capped": True, "types": ["dict-other"] * 16}
+        assert fixture._producer_completion_text("x" * 1_048_577) == {
+            "type": "string", "bytes": None, "sha256": None, "capped": True}
+        shape = fixture._producer_prior_shape(SimpleNamespace(messages=[
+            SimpleNamespace(role="tool", tool_call_id=secret)] * 1025), [secret])
+        assert shape == {"messagesType": "list", "messageCount": 1024,
+                         "messagesCapped": True, "expectedIdPresent": True, "exactMatchCount": 1024}
+        assert secret not in json.dumps((bounded, blocks, shape))
+        passed.append("completion-measurement-failure-and-observation-bounds")
+
+        diagnostic_root = root / "completion-files"
+        directory = diagnostic_root / "schema-diagnostics"
+        directory.mkdir(parents=True)
+        (diagnostic_root / "counts").mkdir()
+        (diagnostic_root / "counts/provider-attempt-2.json").write_text("{}")
+        assert fixture._producer_completion_diagnostics(diagnostic_root)["gaps"] == ["missing-completion-2"]
+        path = directory / "completion-2.json"
+        path.write_text(json.dumps(row))
+        assert fixture._producer_completion_diagnostics(diagnostic_root) == {"rows": [row], "gaps": []}
+        for bad in (
+            {**row, "stage": secret}, {**row, "details": {"raw": secret}},
+            {**row, "exception": {**row["exception"], "frames": [{"location": secret, "line": 2}]}},
+            {**row, "details": {"normalized": {**row["details"]["normalized"], "sha256": secret}}},
+        ):
+            path.write_text(json.dumps(bad))
+            result = fixture._producer_completion_diagnostics(diagnostic_root)
+            assert result == {"rows": [], "gaps": ["unreadable-completion-2"]}
+            assert secret not in json.dumps(result)
+        path.write_text("x" * 8193)
+        assert fixture._producer_completion_diagnostics(diagnostic_root)["gaps"] == ["unreadable-completion-2"]
+        passed.append("completion-missing-corrupt-oversized-records-stay-gaps")
+
+        for failing_save in (False, True):
+            report = {"status": "failed", "primaryFailure": {"phase": "producer-completion"},
+                      "startupDiagnostics": []}
+            primary = report["primaryFailure"]
+            cleanup_calls = []
+
+            async def cleanup():
+                cleanup_calls.append(True)
+                return returned
+
+            def broken_collect(root):
+                raise OSError(secret)
+
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(fixture, "_producer_schema_diagnostics", lambda root: {"rows": [], "gaps": []})
+                patch.setattr(fixture, "_producer_completion_diagnostics", broken_collect)
+                async def attempt():
+                    try:
+                        raise primary_error
+                    finally:
+                        assert await fixture._producer_cleanup_with_diagnostics(
+                            root, report, broken_writer if failing_save else lambda: None, cleanup) is returned
+
+                with pytest.raises(AssertionError) as caught:
+                    await attempt()
+                assert caught.value is primary_error
+            assert cleanup_calls == [True] and report["primaryFailure"] is primary
+            assert report["diagnosticIncomplete"] and report["secondaryFailures"]
+            assert report["diagnosticFailures"][0]["phase"] == "completion-collection"
+            assert secret not in json.dumps(report)
+        passed.append("completion-collection-and-save-failure-cannot-prevent-cleanup")
+
+    asyncio.run(completion_controls())
     return {"status": "passed", "cases": passed,
             "scope": "Authored helper controls only; actual worker evidence is separate"}
 
@@ -449,6 +606,10 @@ def _check_regular_work_details_real_producer_and_service_reopen(tmp_path):
                        "foundationActivated": True, "originMatches": True, "installDependencies": False}
                for row in evidence["moduleSourcePreflight"].values())
     assert evidence["workerSchemaDiagnostics"]["gaps"] == []
+    assert evidence["providerCompletionDiagnostics"]["gaps"] == []
+    assert [row["ordinal"] for row in evidence["providerCompletionDiagnostics"]["rows"]] == [1, 2, 3]
+    assert all(row["status"] == "returned" and not row["incomplete"]
+               for row in evidence["providerCompletionDiagnostics"]["rows"])
     assert not evidence.get("diagnosticIncomplete", False)
     assert any(row["status"] == "returned" for row in evidence["workerSchemaDiagnostics"]["rows"])
     worker_schema = [row for row in evidence["workerSchemaDiagnostics"]["rows"] if row["status"] == "returned"]

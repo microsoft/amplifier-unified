@@ -208,7 +208,7 @@ def _producer_result_encodings(output):
             json.loads(result.get_serialized_output())]
 
 
-async def _producer_context_result(content, output):
+async def _producer_context_result(content, output, observe=lambda *args: None):
     """Check model-facing context, never use its clipped text as canonical truth.
 
     Pinned streaming serializes ToolResult, then default context-simple bounds
@@ -221,14 +221,26 @@ async def _producer_context_result(content, output):
     from amplifier_core import ToolResult
     from amplifier_module_context_simple import SimpleContextManager
 
+    observe("context-block-normalization", lambda: {
+        "actual": _producer_completion_text(content),
+        "blocks": _producer_completion_blocks(content)})
     if not isinstance(content, str):
         content = "".join(getattr(block, "text", "") for block in content or [])
+    observe("context-serialization", lambda: {"normalized": _producer_completion_text(content)})
     serialized = ToolResult(success=True, output=output).get_serialized_output()
+    observe("context-policy", lambda: {"serialized": _producer_completion_text(serialized)})
     oracle = SimpleContextManager()
+    observe("context-policy", lambda: {"oracleLimitBytes": oracle.max_tool_result_bytes})
     await oracle.add_message({"role": "tool", "name": "regular_echo",
                               "tool_call_id": "context-oracle", "content": serialized})
     expected = (await oracle.get_messages())[0]["content"]
+    observe("context-comparison", lambda: {
+        "expected": _producer_completion_text(expected),
+        "actualEqualsSerialized": content == serialized,
+        "expectedEqualsSerialized": expected == serialized,
+        "actualEqualsExpected": content == expected})
     assert content == expected, "Provider tool context differs from the declared default context contract"
+    observe("context-result")
     return {"source": "provider-context", "exactContext": True,
             "serializedBytes": len(serialized.encode("utf-8")),
             "contextBytes": len(content.encode("utf-8")),
@@ -479,6 +491,189 @@ def _producer_schema_diagnostics(root):
         gaps.append("schema-outcome-not-observed")
     if any(row.get("status") == "overflow" for row in rows):
         gaps.append("schema-observations-capped")
+    return {"rows": rows, "gaps": gaps}
+
+
+_COMPLETION_STAGES = {
+    "mounted-provider", "network-guard", "provider-attempt", "provider-budget",
+    "capture-resolver", "capture-destinations", "prior-tool-message",
+    "context-block-normalization", "context-serialization", "context-policy",
+    "context-comparison", "context-result", "next-call", "provider-receipt",
+    "stream-deltas", "response-construction",
+}
+_COMPLETION_TYPES = {"none", "string", "list", "tuple", "mapping", "other"}
+_COMPLETION_BOOLS = {
+    "mounted", "guardPresent", "resolverPresent", "expectedIdPresent",
+    "priorFound", "priorIdMatches", "messagesCapped",
+    "actualEqualsSerialized", "expectedEqualsSerialized", "actualEqualsExpected",
+}
+
+
+def _producer_completion_type(value):
+    return {type(None): "none", str: "string", list: "list",
+            tuple: "tuple", dict: "mapping"}.get(type(value), "other")
+
+
+def _producer_completion_text(value):
+    """Hash only bounded direct strings; never stringify arbitrary objects."""
+    import hashlib
+    row = {"type": _producer_completion_type(value), "bytes": None,
+           "sha256": None, "capped": False}
+    if type(value) is str:
+        row["capped"] = len(value) > 1_048_576
+        if not row["capped"]:
+            raw = value.encode("utf-8")
+            row.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    return row
+
+
+def _producer_completion_blocks(value):
+    from amplifier_core.message_models import TextBlock
+    blocks = value if type(value) in {list, tuple} else []
+    kinds = []
+    for block in blocks[:16]:
+        if type(block) is TextBlock:
+            kinds.append("TextBlock")
+        elif type(block) is dict:
+            kinds.append("dict-text" if block.get("type") == "text" else "dict-other")
+        else:
+            kinds.append(_producer_completion_type(block))
+    return {"count": min(len(blocks), 16), "capped": len(blocks) > 16, "types": kinds}
+
+
+def _producer_prior_shape(request, ids):
+    # Count only a bounded real message list; do not replace the original lookup.
+    messages = request.messages
+    rows = messages[-1024:] if type(messages) in {list, tuple} else []
+    expected = ids[-1] if ids else None
+    return {"messagesType": _producer_completion_type(messages),
+            "messageCount": len(rows), "messagesCapped": len(messages) > 1024 if rows else False,
+            "expectedIdPresent": expected is not None,
+            "exactMatchCount": sum(m.role == "tool" and m.tool_call_id == expected for m in rows)}
+
+
+def _producer_valid_completion_detail(key, value):
+    import re
+    if key in _COMPLETION_BOOLS:
+        return type(value) is bool
+    if key in {"messageCount", "exactMatchCount"}:
+        return type(value) is int and 0 <= value <= 1024
+    if key == "oracleLimitBytes":
+        return type(value) is int and 0 < value <= 2**31
+    if key == "messagesType":
+        return type(value) is str and value in _COMPLETION_TYPES
+    if key in {"actual", "normalized", "serialized", "expected"}:
+        return (type(value) is dict and set(value) == {"type", "bytes", "sha256", "capped"}
+                and type(value["type"]) is str and value["type"] in _COMPLETION_TYPES
+                and type(value["capped"]) is bool
+                and (value["bytes"] is None or type(value["bytes"]) is int
+                     and 0 <= value["bytes"] <= 4_194_304)
+                and (value["sha256"] is None or type(value["sha256"]) is str
+                     and re.fullmatch(r"[a-f0-9]{64}", value["sha256"]) is not None))
+    if key == "blocks":
+        return (type(value) is dict and set(value) == {"count", "capped", "types"}
+                and type(value["count"]) is int and 0 <= value["count"] <= 16
+                and type(value["capped"]) is bool and type(value["types"]) is list
+                and len(value["types"]) == value["count"]
+                and all(type(kind) is str and kind in _COMPLETION_TYPES | {
+                    "TextBlock", "dict-text", "dict-other"} for kind in value["types"]))
+    return False
+
+
+def _producer_valid_completion_record(row, name):
+    if name == "completion-overflow":
+        return row == {"status": "overflow"}
+    if (type(row) is not dict
+            or set(row) != {"ordinal", "stage", "status", "details", "incomplete", "exception"}
+            or type(row["ordinal"]) is not int or not 1 <= row["ordinal"] <= 3
+            or name != f"completion-{row['ordinal']}"
+            or type(row["stage"]) is not str or row["stage"] not in _COMPLETION_STAGES
+            or row["status"] not in {"returned", "raised"}
+            or type(row["incomplete"]) is not bool or type(row["details"]) is not dict
+            or len(row["details"]) > 24
+            or not all(_producer_valid_completion_detail(k, v) for k, v in row["details"].items())):
+        return False
+    error = row["exception"]
+    if row["status"] == "returned":
+        return error is None
+    return (type(error) is dict and set(error) == {"exceptionClass", "frames", "framesCapped"}
+            and type(error["exceptionClass"]) is str
+            and error["exceptionClass"] in set().union(*_DIAGNOSTIC_CLASSES.values(), {"other"})
+            and type(error["framesCapped"]) is bool and type(error["frames"]) is list
+            and len(error["frames"]) <= 8
+            and all(type(f) is dict and set(f) == {"location", "line"}
+                    and f["location"] in {"fixture", "other"}
+                    and (f["line"] is None or type(f["line"]) is int and 0 < f["line"] < 1_000_000)
+                    for f in error["frames"]))
+
+
+async def _producer_completion_observer(ordinal, original, record):
+    """One original call; diagnostic extraction/writes never change its outcome."""
+    row = {"ordinal": ordinal, "stage": "mounted-provider", "status": "returned",
+           "details": {}, "incomplete": False, "exception": None}
+
+    def observe(stage, measure=None):
+        try:
+            if stage not in _COMPLETION_STAGES:
+                raise ValueError("Unknown completion stage")
+            row["stage"] = stage
+            if measure is not None:
+                detail = measure()
+                if (type(detail) is not dict or len(detail) > 24
+                        or not all(_producer_valid_completion_detail(k, v) for k, v in detail.items())):
+                    raise ValueError("Invalid completion measurement")
+                row["details"].update(detail)
+        except BaseException:
+            row["incomplete"] = True
+
+    def retain(error=None):
+        try:
+            if type(ordinal) is not int or not 1 <= ordinal <= 3:
+                record("completion-overflow", {"status": "overflow"})
+                return
+            if error is not None:
+                shape = _producer_exception_shape(error, Path("."))
+                frames = [{"location": "fixture" if f["location"] ==
+                           "repo/tests/fixtures/live_terminal_probe.py" else "other",
+                           "line": f["line"]} for f in shape["frames"][-8:]]
+                row.update(status="raised", exception={
+                    "exceptionClass": shape["exceptionClass"], "frames": frames,
+                    "framesCapped": shape["framesCapped"] or len(shape["frames"]) > 8})
+            name = f"completion-{ordinal}"
+            if not _producer_valid_completion_record(row, name):
+                return  # Absence is collected as a gap, never invented success.
+            if len(json.dumps(row).encode("utf-8")) > 8192:
+                return
+            record(name, row)
+        except BaseException:
+            pass  # Missing/malformed terminal record fails observation downstream.
+
+    try:
+        result = await original(observe)
+    except BaseException as error:
+        retain(error)
+        raise
+    retain()
+    return result
+
+
+def _producer_completion_diagnostics(root):
+    rows, gaps = [], []
+    for name in ("completion-1", "completion-2", "completion-3", "completion-overflow"):
+        try:
+            raw = _producer_owned_bytes(root, root / "schema-diagnostics" / (name + ".json"), 8192)
+            row = json.loads(raw)
+            if not _producer_valid_completion_record(row, name):
+                raise ValueError("Invalid completion record")
+            rows.append(row)
+            if row.get("incomplete") or row["status"] == "overflow":
+                gaps.append("incomplete-" + name)
+        except FileNotFoundError:
+            if name != "completion-overflow" and (root / "counts" /
+                    ("provider-attempt-" + name[-1] + ".json")).exists():
+                gaps.append("missing-" + name)
+        except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            gaps.append("unreadable-" + name)
     return {"rows": rows, "gaps": gaps}
 
 
@@ -840,31 +1035,51 @@ class RegularProducerProvider:
         return response.tool_calls or []
 
     async def complete(self, request, **kwargs):
+        async def original(observe):
+            return await self._complete(request, observe, **kwargs)
+
+        return await _producer_completion_observer(self.calls + 1, original,
+            lambda name, row: _producer_record(
+                Path(os.environ["UNIFIED_PRODUCER_ROOT"]) / "schema-diagnostics", name, row))
+
+    async def _complete(self, request, observe, **kwargs):
         from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall, Usage
         import uuid
+        observe("mounted-provider", lambda: {"mounted": self.coordinator is not None})
         assert self.coordinator is not None, "Provider was not mounted"
         coordinator = self.coordinator
         directory = Path(os.environ["UNIFIED_PRODUCER_ROOT"]) / "counts"
+        observe("network-guard", lambda: {"guardPresent": hasattr(sys, "_unified_producer_guard")})
         assert hasattr(sys, "_unified_producer_guard"), "Worker network guard missing"
+        observe("provider-attempt")
         self.calls += 1
         _producer_record(directory, f"provider-attempt-{self.calls}",
                          {"ordinal": self.calls, "pid": os.getpid(), "attempt": "provider"})
+        observe("provider-budget")
         if self.calls > 3:
             _producer_record(directory, "provider-over-budget", {"calls": self.calls})
             raise RuntimeError("Producer exceeded three completions")
+        observe("capture-resolver")
         resolver = coordinator.get_capability("context_intelligence.hook_config_resolver")
+        observe("capture-resolver", lambda: {"resolverPresent": resolver is not None})
         assert resolver is not None, "Actual capture hook did not mount"
+        observe("capture-destinations")
         assert resolver.destinations == {} and resolver.validate_destinations() == {}, (
             "Actual capture hook resolved a remote destination")
         # Verify exact call identity and the model-facing context contract.
         # Full canonical result retention is checked separately by lazy reads.
         consumed = None
         if self.calls > 1:
+            observe("prior-tool-message", lambda: _producer_prior_shape(request, self.ids))
             prior = next((m for m in reversed(request.messages)
                           if m.role == "tool" and m.tool_call_id == self.ids[-1]), None)
+            observe("prior-tool-message", lambda: {
+                "priorFound": prior is not None,
+                "priorIdMatches": prior is not None and prior.tool_call_id == self.ids[-1]})
             assert prior is not None, "Native tool result missing from provider request"
             consumed = await _producer_context_result(
-                prior.content, _producer_cases()[self.calls - 2]["output"])
+                prior.content, _producer_cases()[self.calls - 2]["output"], observe)
+        observe("next-call")
         call = None
         text = ("Producer interim: first tool." if self.calls == 1 else
                 "Producer interim: second tool." if self.calls == 2 else
@@ -874,6 +1089,7 @@ class RegularProducerProvider:
             self.ids.append(identity)
             call = ToolCall(id=identity, name="regular_echo",
                             arguments=_producer_cases()[self.calls - 1]["input"])
+        observe("provider-receipt")
         _producer_record(directory, f"provider-{self.calls}", {
             "ordinal": self.calls, "pid": os.getpid(), "toolCallId": self.ids[-1] if call else None,
             "captureResolverPresent": True, "destinations": resolver.validate_destinations(),
@@ -882,10 +1098,12 @@ class RegularProducerProvider:
         })
         # Provider stream deltas only. The real orchestrator/worker creates
         # admission, generation, message and execution lifecycle events.
+        observe("stream-deltas")
         request_id = uuid.uuid4().hex
         for chunk in (text[:12], text[12:]):
             await coordinator.hooks.emit("llm:stream_block_delta", {
                 "block_type": "text", "text": chunk, "request_id": request_id, "block_index": 0})
+        observe("response-construction")
         return ChatResponse(content=[TextBlock(text=text)], tool_calls=[call] if call else None,
                             usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))
 
@@ -1301,6 +1519,8 @@ async def _producer_cleanup_with_diagnostics(root, report, save, cleanup):
             row["status"] for row in report.get("startupDiagnostics", []) if row["status"] != "read"]
 
     _producer_diagnostic_step(root, report, "precleanup-collection", collect)
+    _producer_diagnostic_step(root, report, "completion-collection",
+        lambda: report.update(providerCompletionDiagnostics=_producer_completion_diagnostics(root)))
     _producer_diagnostic_step(root, report, "precleanup-save", save)
     # The real socket/task/client/service cleanup runs even when either
     # observational step failed. Do not catch its result or exception here.
@@ -1608,6 +1828,8 @@ async def producer_main(root, report, save):
         secondary = report.setdefault("secondaryFailures", [])
         if report.get("workerSchemaDiagnostics", {"gaps": ["unavailable"]})["gaps"]:
             secondary.append({"phase": "diagnostics", "reason": "Worker schema observation incomplete"})
+        if report.get("providerCompletionDiagnostics", {"gaps": ["unavailable"]})["gaps"]:
+            secondary.append({"phase": "diagnostics", "reason": "Provider completion observation incomplete"})
         if cleanup_errors or not report["finalCleanup"]["allServicesClosed"]:
             secondary.append({"phase": "cleanup", "reason": "Services did not close cleanly"})
         if report["finalCleanup"]["remainingWorkers"]:
