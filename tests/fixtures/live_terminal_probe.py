@@ -208,6 +208,34 @@ def _producer_result_encodings(output):
             json.loads(result.get_serialized_output())]
 
 
+async def _producer_context_result(content, output):
+    """Check model-facing context, never use its clipped text as canonical truth.
+
+    Pinned streaming serializes ToolResult, then default context-simple bounds
+    direct text at ingress. Our long Unicode JSON exceeds that bound; the
+    appended retrieval marker is not JSON. Exercise the public context API on
+    an independent synthetic message rather than parsing the provider view or
+    changing the real context's policy. No hooks, worker or inference is started.
+    """
+    import hashlib
+    from amplifier_core import ToolResult
+    from amplifier_module_context_simple import SimpleContextManager
+
+    if not isinstance(content, str):
+        content = "".join(getattr(block, "text", "") for block in content or [])
+    serialized = ToolResult(success=True, output=output).get_serialized_output()
+    oracle = SimpleContextManager()
+    await oracle.add_message({"role": "tool", "name": "regular_echo",
+                              "tool_call_id": "context-oracle", "content": serialized})
+    expected = (await oracle.get_messages())[0]["content"]
+    assert content == expected, "Provider tool context differs from the declared default context contract"
+    return {"source": "provider-context", "exactContext": True,
+            "serializedBytes": len(serialized.encode("utf-8")),
+            "contextBytes": len(content.encode("utf-8")),
+            "contextSha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "contextClipped": content != serialized}
+
+
 def _producer_record(directory, name, value):
     """Exclusive fixture accounting, never a canonical event/transcript writer."""
     path = Path(directory) / (name + ".json")
@@ -828,17 +856,15 @@ class RegularProducerProvider:
         assert resolver is not None, "Actual capture hook did not mount"
         assert resolver.destinations == {} and resolver.validate_destinations() == {}, (
             "Actual capture hook resolved a remote destination")
-        # Verify the runtime really fed the previous tool's full result back.
+        # Verify exact call identity and the model-facing context contract.
+        # Full canonical result retention is checked separately by lazy reads.
         consumed = None
         if self.calls > 1:
             prior = next((m for m in reversed(request.messages)
                           if m.role == "tool" and m.tool_call_id == self.ids[-1]), None)
             assert prior is not None, "Native tool result missing from provider request"
-            content = prior.content
-            if not isinstance(content, str):
-                content = "".join(getattr(block, "text", "") for block in content or [])
-            consumed = json.loads(content)
-            assert consumed in _producer_result_encodings(_producer_cases()[self.calls - 2]["output"])
+            consumed = await _producer_context_result(
+                prior.content, _producer_cases()[self.calls - 2]["output"])
         call = None
         text = ("Producer interim: first tool." if self.calls == 1 else
                 "Producer interim: second tool." if self.calls == 2 else

@@ -325,6 +325,66 @@ def _check_worker_schema_diagnostic_contract(tmp_path):
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("UNIFIED_PRODUCER_ROOT", str(mount_root))
         asyncio.run(mount_controls())
+
+    async def context_controls():
+        from amplifier_core import ToolResult
+        from amplifier_core.message_models import TextBlock
+        from amplifier_module_context_simple import SimpleContextManager
+
+        long_output, short_output = [case["output"] for case in fixture._producer_cases()]
+        serialized = ToolResult(success=True, output=long_output).get_serialized_output()
+        context = SimpleContextManager()
+        message = {"role": "tool", "name": "regular_echo",
+                   "tool_call_id": "context-control", "content": serialized}
+        await context.add_message(message)
+        projected = (await context.get_messages())[0]["content"]
+        assert message["content"] == serialized  # Admission did not mutate the caller.
+        assert len(serialized.encode()) == 150041 > context.max_tool_result_bytes
+        assert len(projected.encode()) == context.max_tool_result_bytes == 131072
+        assert "[tool-result truncated at ingress:" in projected
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(projected)  # The previous provider oracle rejects this valid context.
+        passed.append("real-context-ingress-rejects-legacy-full-json-oracle")
+
+        observed = await fixture._producer_context_result(projected, long_output)
+        assert observed["exactContext"] and observed["contextClipped"]
+        assert observed["serializedBytes"] == 150041 and observed["contextBytes"] == 131072
+        assert await fixture._producer_context_result([TextBlock(text=projected)], long_output) == observed
+        with pytest.raises(AssertionError):
+            await fixture._producer_context_result(projected[:-1], long_output)
+        small = ToolResult(success=True, output=short_output).get_serialized_output()
+        assert json.loads(small) == short_output
+        assert not (await fixture._producer_context_result(small, short_output))["contextClipped"]
+        passed.append("provider-context-exact-clipped-and-small-values-with-corruption-refusal")
+
+        # The same full canonical comparator/field reader must reject the
+        # otherwise-valid clipped provider text, including through lazy chunks.
+        sid, node_id = "canonical-control-session", "canonical-control-node"
+        reference = {"sessionId": sid, "id": node_id, "part": "nodes", "field": "output"}
+        row = {"id": node_id, "outputDetail": reference}
+        expected = fixture._producer_result_encodings(long_output)
+        for full in (True, False):
+            wire = (json.dumps(ToolResult(success=True, output=long_output).model_dump(mode="json"),
+                               ensure_ascii=False) if full else projected)
+
+            async def read_chunk(client, query):
+                assert {key: query[key] for key in reference} == reference
+                assert query["limit"] == 4096
+                start = query["offset"]
+                value = wire[start:start + query["limit"]]
+                end = start + len(value)
+                return {"value": value, "nextOffset": end if end < len(wire) else None}
+
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(fixture, "_producer_get", read_chunk)
+                field = await fixture._producer_field(None, sid, row, "output", expected)
+            assert field["reference"] is reference and field["chunks"] > 1
+            assert field["exact"] is full
+            if full:
+                assert field["value"]["output"] == long_output
+        passed.append("canonical-lazy-full-unicode-accepted-clipped-context-rejected")
+
+    asyncio.run(context_controls())
     return {"status": "passed", "cases": passed,
             "scope": "Authored helper controls only; actual worker evidence is separate"}
 
