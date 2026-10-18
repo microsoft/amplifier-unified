@@ -88,19 +88,175 @@ def effects(app):
                      app.runtime.stopped, app.runtime.other_effects])
 
 
+def publication_state(app):
+    """Promised state, plus complete client records (including every cache)."""
+    return deepcopy({
+        "clients": app.clients.records,
+        "shared": {key: app._state.get(key) for key in
+                   ("selectedSessionId", "selectedWorkspaceId", "view", "canvas", "canvasArtifacts")},
+        "sessions": {row["id"]: {key: row.get(key) for key in
+                    ("messages", "execution", "approvals", "draft", "draftAttachments")}
+                     for row in app._state["sessions"]},
+        "effects": effects(app),
+    })
+
+
+def expected_after_client_save(before, dirty):
+    """Only the exact existing save-derived cache entry, from PRE-action bytes.
+
+    This is not normalization of the observed result. Any changed selection,
+    input, editor, visible Canvas, other cached chat or extra field still fails.
+    """
+    expected = deepcopy(before)
+    for identity in dirty:
+        source = before["clients"][identity]
+        sid = source.get("selectedSessionId")
+        if sid:
+            canvas = source.get("canvas", {})
+            expected["clients"][identity].setdefault("chatCanvas", {})[sid] = {
+                "canvas": {key: deepcopy(canvas[key]) for key in
+                           ("id", "open", "selectedVersion", "view") if key in canvas},
+                "view": {key: deepcopy(value) for key, value in source["view"].items()
+                         if key.startswith("canvas")},
+            }
+    return expected
+
+
+def assert_publication_unchanged(before, after, dirty=()):
+    assert after == expected_after_client_save(before, dirty)
+
+
 async def test_reference_attach_is_idempotent_exact_and_never_navigates(reference_app):
     app, args, other = reference_app
-    before = deepcopy(app.clients.records)
+    before = publication_state(app)
+    assert all("chatCanvas" not in row for row in before["clients"].values())
+    dirty = set(app.clients.dirty)
+    expected = expected_after_client_save(before, dirty)
     record = await attach(app, args, command_id="reference-once")
-    assert app.clients.records == before
+    assert_publication_unchanged(before, publication_state(app), dirty)
     duplicate = await attach(app, args, command_id="reference-once")
     assert duplicate["id"] == record["id"] and duplicate["duplicate"]
+    assert publication_state(app) == expected
     saved = outputs(app)
     with pytest.raises(AppError):
         await app.dispatch("outputs.attachChatReference",
                            {**args, "targetSessionId": other}, command_id="reference-once")
     assert outputs(app) == saved
+    assert publication_state(app) == expected
     assert effects(app) == [[], [], [], []]
+
+
+async def test_generic_output_save_has_the_same_exact_cache_derivation(reference_app, monkeypatch):
+    app, args, _ = reference_app
+    warmups = []
+    async def unexpected_warmup(*values, **kwargs):
+        warmups.append((values, kwargs))
+    monkeypatch.setattr(app.warmup, "schedule", unexpected_warmup)
+    for identity, row in app.clients.records.items():
+        # Explicit server-held input/editor state, not a claim about unsaved DOM.
+        row["drafts"][args["sessionId"]] = f"Private {identity} draft"
+        row["attachments"][args["sessionId"]] = [{"id": identity, "name": f"{identity}.txt"}]
+        row["view"].update(draft=f"Private {identity} draft",
+                           messageEdit={"sessionId": args["sessionId"], "messageId": args["messageId"],
+                                        "text": f"Unsent {identity} edit"},
+                           canvasDraft=f"Unsent {identity} Canvas edit",
+                           providerEditor={"id": f"Unsaved {identity} configuration"})
+        row["chatCanvas"] = {"other-cached-chat": {"canvas": {"id": "retained", "open": True}, "view": {}}}
+    before, dirty = publication_state(app), set(app.clients.dirty)
+    # Ordinary reference publication shares _save/clients.save. No fetch, model
+    # or APP-004 action is needed to reproduce the exact derived cache entry.
+    result = await app.dispatch("outputs.attach", {"sessionId": args["sessionId"],
+        "kind": "external_document", "title": "Generic reference",
+        "url": "https://example.test/reference"})
+    assert result["accepted"]
+    assert_publication_unchanged(before, publication_state(app), dirty)
+    assert args["sessionId"] in app.clients.records["one"]["chatCanvas"]
+    initialized = publication_state(app)
+    await attach(app, args)
+    async with asyncio.timeout(5):
+        while app.tasks:
+            await asyncio.gather(*list(app.tasks))
+    assert_publication_unchanged(initialized, publication_state(app))
+    assert warmups == [] and effects(app) == [[], [], [], []]
+
+
+async def test_registered_browser_initializes_cache_before_reference_publication(tmp_path, authenticated_client):
+    from amplifier_web.server import create_app
+    web = await create_app(tmp_path / "web", workspace=tmp_path, runtime=NoExecution(),
+                           voice=False, background_updates=False, preload_providers=False)
+    app = web["service"]
+    await app.dispatch("session.create", {"title": "Registered source"})
+    sid = app._session()["id"]
+    await app.on_runtime_event("assistant.message", {"sessionId": sid, "text": "Saved source"})
+    mid = app._session(sid)["messages"][-1]["id"]
+    await app.dispatch("session.create", {"title": "Registered destination"})
+    tid = app._session()["id"]
+    await app.dispatch("session.select", {"id": sid})
+    client = await authenticated_client(web)
+    for identity in ("registered-one", "registered-two"):
+        response = await client.post("/api/clients/attach",
+            json={"clientId": identity, "kind": "web", "protocolVersion": 1},
+            headers={"X-Amplifier-Client": identity, "X-Amplifier-State-Transport": "delta-v1"})
+        assert response.status == 200
+        assert "state" not in await response.json()  # Still saved before response.
+        row = app.clients.records[identity]
+        assert row["chatCanvas"][sid] == {
+            "canvas": {key: deepcopy(row["canvas"][key]) for key in
+                       ("id", "open", "selectedVersion", "view") if key in row["canvas"]},
+            "view": {key: deepcopy(value) for key, value in row["view"].items()
+                     if key.startswith("canvas")},
+        }
+    before = publication_state(app)
+    response = await client.post("/api/actions", json={"action": "outputs.attachChatReference",
+        "args": {"sessionId": sid, "messageId": mid, "targetSessionId": tid}},
+        headers={"X-Amplifier-Client": "registered-one", "X-Amplifier-State-Transport": "delta-v1"})
+    assert response.status == 200 and (await response.json())["accepted"]
+    assert_publication_unchanged(before, publication_state(app))
+
+
+@pytest.mark.parametrize("mutation", ["selection", "draft", "canvas"])
+async def test_publication_oracle_rejects_real_semantic_mutations(reference_app, mutation):
+    app, args, _ = reference_app
+    await attach(app, args)  # Actual positive feature witness.
+    before, dirty = publication_state(app), set(app.clients.dirty)
+    if mutation == "selection":
+        await command(app, "session.select", {"id": args["targetSessionId"]})
+    elif mutation == "draft":
+        await command(app, "view.update", {"patch": {"draft": "Unexpected changed input"}})
+    else:
+        await command(app, "canvas.show", {"kind": "text", "content": "Unexpected changed Canvas"})
+    with pytest.raises(AssertionError):
+        assert_publication_unchanged(before, publication_state(app), dirty)
+
+
+async def test_publication_oracle_rejects_private_state_and_cache_corruption(reference_app):
+    app, args, _ = reference_app
+    before, dirty = publication_state(app), set(app.clients.dirty)
+    good = expected_after_client_save(before, dirty)
+    assert_publication_unchanged(before, good, dirty)
+    # Detached negative controls prove the allowance cannot mask cache/input or
+    # execution corruption; the three tests above exercise real host mutations.
+    mutations = [
+        lambda value: value["clients"]["two"]["drafts"].update({args["sessionId"]: "Lost peer draft"}),
+        lambda value: value["clients"]["one"]["attachments"].update({args["sessionId"]: [{"id": "unexpected"}]}),
+        lambda value: value["clients"]["one"]["view"].update(messageEdit={"text": "Wrong edit"}),
+        lambda value: value["clients"]["one"]["view"].update(providerEditor={"id": "Wrong settings"}),
+        lambda value: value["clients"]["one"]["view"].update(canvasDraft="Wrong pending Canvas"),
+        lambda value: value["clients"]["one"].update(canvasViews={"preferences": {"primary:wrong": {"dirty": True}}}),
+        lambda value: value["clients"]["one"]["chatCanvas"][args["sessionId"]]["canvas"].update(open=True),
+        lambda value: value["clients"]["one"]["chatCanvas"].update(other={"canvas": {"id": "wrong"}}),
+        lambda value: value["clients"]["one"].update(selectionRevision=999),
+        lambda value: value["effects"][0].append("unexpected runtime start"),
+        lambda value: value["effects"][1].append("unexpected send"),
+        lambda value: value["effects"][3].append("unexpected approval or prewarm"),
+        lambda value: value["sessions"][args["sessionId"]]["messages"].append({"id": "unexpected message"}),
+        lambda value: value["sessions"][args["sessionId"]].update(approvals=[{"id": "unexpected"}]),
+    ]
+    for mutate in mutations:
+        changed = deepcopy(good)
+        mutate(changed)
+        with pytest.raises(AssertionError):
+            assert_publication_unchanged(before, changed, dirty)
 
 
 @pytest.mark.parametrize("defect", ["user", "observation", "missing", "foreign", "action", "title"])
@@ -346,6 +502,13 @@ async def test_reference_metadata_is_current_bounded_and_message_owned(reference
 @pytest.mark.parametrize("defect", ["missing", "worker", "foreign-host", "changed-source"])
 async def test_changed_reference_fails_closed_without_substitute(reference_app, defect):
     app, args, _ = reference_app
+    if defect == "missing":
+        # Deletion is supported only for genuinely host-owned managed chats,
+        # not a workspace chat with a hand-edited ownership flag.
+        created = await command(app, "session.create", {
+            "title": "Deletable reference destination", "location": {"kind": "managed"}})
+        args = {**args, "targetSessionId": created["sessionId"]}
+        await command(app, "session.select", {"id": args["sessionId"]})
     record = await attach(app, args)
     assert (await command(app, "session.select", click(args, record)))["accepted"]
     await command(app, "session.select", {"id": args["sessionId"]})
@@ -465,6 +628,9 @@ async def test_event_reference_survives_real_canonical_binding_and_cold_reopen(r
     merge_web_history(source, page["messages"])
     source["nativeRevision"] = page["revision"]
     assert next(m for m in source["messages"] if m["id"] == args["messageId"])["nativeIndex"] == 1
+    # The real retirement guard correctly retains externally borrowed mutable
+    # rows. Do not let this fixture's own aliases defeat the path being tested.
+    del saved, page
     read = {"sessionId": source["id"], "messageId": args["messageId"]}
     assert (await command(app, "outputs.chatReferences", read))["result"]["items"][0]["id"] == record["id"]
     raw = (directory(source) / "transcript.jsonl").read_bytes()

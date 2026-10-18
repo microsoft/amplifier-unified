@@ -1,13 +1,14 @@
-// Test-first contract, not executed/qualified. Run only in owned isolation.
+// Real-host contract. Earlier failed runs remain evidence; run only in admitted isolation.
 // Uses the real host/renderer. No mocked card, target or successful action.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
+import {bounded,combinedFailure,observed,resultOf,withActionRoute} from './chat-reference-harness.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const evidence=process.env.CHAT_REFERENCE_EVIDENCE_DIR;
@@ -15,7 +16,10 @@ if(!evidence)throw Error('Set CHAT_REFERENCE_EVIDENCE_DIR inside the owned test 
 await mkdir(evidence,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/chat_reference_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,page,exit;
+let browser,page,exit,primaryFailure;
+const secondaryFailures=[],routeTrace=[];
+const pendingActions=[];
+const observe=promise=>{const outcome=observed(promise);pendingActions.push(outcome);return outcome};
 const exited=new Promise(resolve=>fixture.once('exit',(code,signal)=>{exit={code,signal};resolve(exit)}));
 const headers={Authorization:'Bearer fixture-browser-control-token'};
 try{
@@ -104,7 +108,7 @@ try{
   }
   await route.continue();
  };
- await page.route('**/api/actions',holdDraft);
+ await withActionRoute(page,{label:'held-draft',handle:holdDraft,release:releaseDraft,trace:routeTrace},async()=>{
  if(process.env.CHAT_REFERENCE_NEGATIVE_RELOAD==='1'){
   // Deliberately replace one genuine click with the reported bad behavior.
   // This run MUST fail the unchanged-document/client assertion, not turn green.
@@ -115,18 +119,16 @@ try{
    },{capture:true,once:true});
   },target);
  }
- try{
   await composer(page).fill('Source draft before debounced save');
   await expect.poll(()=>draftHeld).toBe(true);
   assert.notEqual((await authoritative(page)).view.draft,'Source draft before debounced save');
   await card().click();
- }finally{
-  releaseDraft();
-  await page.unroute('**/api/actions',holdDraft);
- }
+ });
  await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(target);
- await expect(page.locator(`[data-part="messages"][data-session-id="${target}"]`)).toBeFocused();
+ // Keep the deliberately forced reload control's first discriminating failure
+ // at document/client identity, not a later destination-focus assertion.
  assert.deepEqual(await marker(page),before);
+ await expect(page.locator(`[data-part="messages"][data-session-id="${target}"]`)).toBeFocused();
  assert.equal(context.pages().length,2,'Click must not open a tab/window');
  assert.equal(additionalPages,0,'Even a short-lived popup must be detected');
  assert.equal(await selected(peer),other);
@@ -176,16 +178,16 @@ try{
  await expect(providerId).toHaveValue('unsaved-reference-fixture');
  await expect(card()).toBeFocused();
  // Compare ordinary selection: same dialog, same cancel, no discard.
- const pendingSelection=act(page,'session.select',{id:target});
+ const pendingSelection=observe(act(page,'session.select',{id:target}));
  await expect(guard).toBeVisible();
  await guard.getByRole('button',{name:'Keep settings open',exact:true}).click();
- assert.equal((await pendingSelection).accepted,false);
+ assert.equal((await resultOf(pendingSelection)).accepted,false);
  await expect(providerId).toHaveValue('unsaved-reference-fixture');
  // Selecting another artifact is also an existing guarded Settings exit.
- const exitSettings=act(page,'canvas.show',{kind:'text',title:'After Settings',content:'Retained'});
+ const exitSettings=observe(act(page,'canvas.show',{kind:'text',title:'After Settings',content:'Retained'}));
  await expect(guard).toBeVisible();
  await guard.getByRole('button',{name:'Discard changes',exact:true}).click();
- assert.equal((await exitSettings).accepted,true);
+ assert.equal((await resultOf(exitSettings)).accepted,true);
  await act(page,'canvas.close');
 
  // Keyboard and narrow layout must exercise the actual control, not its API.
@@ -226,23 +228,28 @@ try{
  };
  await act(page,'canvas.show',{kind:'markdown',title:'Navigation order',content:'# Safe'});
  const orderView=(await act(page,'canvas.views.inspect')).result.views.find(v=>v.viewId==='primary');
- await page.route('**/api/actions',holdBarrier);
- const pendingBarrier=act(page,'canvas.views.dirty',{...Object.fromEntries(
-  ['viewId','resourceId','resourceRevision','generation'].map(key=>[key,orderView[key]])),dirty:false});
+ await withActionRoute(page,{label:'navigation-barrier',handle:holdBarrier,release:releaseBarrier,trace:routeTrace},async()=>{
+ const pendingBarrier=observe(act(page,'canvas.views.dirty',{...Object.fromEntries(
+  ['viewId','resourceId','resourceRevision','generation'].map(key=>[key,orderView[key]])),dirty:false}));
+ let newer,barrierFailure;
  try{
   await expect.poll(()=>barrierHeld).toBe(true);
   const beforePosts=posts.length;
   await renamed.click();
-  const newer=page.evaluate(id=>{
+  newer=observe(bounded(page.evaluate(id=>{
    const result=window.amplifier.dispatch('session.select',{id});
    window.__referenceLaterSelectionStarted=true;
    return result;
-  },other);
+  },other),20000,'Later navigation did not settle'));
   await page.waitForFunction(()=>window.__referenceLaterSelectionStarted===true);
-  releaseBarrier();await pendingBarrier;await newer;
+  releaseBarrier();await resultOf(pendingBarrier);await resultOf(newer);
   await expect.poll(async()=>(await authoritative(page)).selectedSessionId).toBe(other);
   assert.equal(posts.slice(beforePosts).filter(row=>row.action==='session.select'&&row.args?.chatReference).length,0);
- }finally{releaseBarrier();await page.unroute('**/api/actions',holdBarrier)}
+ }catch(error){barrierFailure=error}
+ releaseBarrier();
+ const pendingFailures=(await Promise.all([pendingBarrier,...(newer?[newer]:[])])).flatMap(row=>row.error?[row.error]:[]);
+ const failure=combinedFailure(barrierFailure,pendingFailures);if(failure)throw failure;
+ });
  await act(page,'session.select',{id:source});
  await act(page,'canvas.close');
  let uncertainPosts=0;
@@ -253,8 +260,7 @@ try{
   }
   await route.continue();
  };
- await page.route('**/api/actions',loseReference);
- try{
+ await withActionRoute(page,{label:'uncertain-selection',handle:loseReference,trace:routeTrace},async()=>{
   await renamed.click();
   await expect(sourceArticle.getByRole('alert')).toContainText('connection');
   await expect(renamed).not.toHaveAttribute('aria-busy','true');
@@ -262,28 +268,43 @@ try{
   await expect(sourceArticle.getByRole('alert')).toContainText('will not be replayed');
   assert.equal(uncertainPosts,1,'Unknown navigation is not retried by another click');
   assert.equal((await authoritative(page)).selectedSessionId,source);
- }finally{await page.unroute('**/api/actions',loseReference)}
+ });
  await assertNoExecution();assert.deepEqual(errors,[]);assert.equal(additionalPages,0);
- console.log('Chat-reference source-browser checks passed: exact same-document selection, client isolation, draft/attachment retention, Canvas/Settings guards, keyboard/mobile and saved reload.');
 }catch(error){
- if(page&&!page.isClosed())await page.screenshot({path:join(evidence,'failure.png')}).catch(()=>{});
- throw error;
+ primaryFailure=error;
+ if(page&&!page.isClosed()){
+  try{await page.screenshot({path:join(evidence,'failure.png')})}
+  catch(captureError){secondaryFailures.push(captureError)}
+ }
 }finally{
- try{await browser?.close()}finally{
+ try{await browser?.close()}catch(error){secondaryFailures.push(error)}
+ try{
+  const results=await bounded(Promise.all(pendingActions),10000,'Pending browser actions did not settle');
+  secondaryFailures.push(...results.flatMap(result=>result.error?[result.error]:[]));
+ }catch(error){secondaryFailures.push(error)}
+ try{
   if(!exit)fixture.kill('SIGTERM');
-  const waitExit=async(milliseconds)=>{
-   let timer;
-   try{return await Promise.race([exited,new Promise((_,reject)=>{
-    timer=setTimeout(()=>reject(Error('Owned fixture did not terminate')),milliseconds);
-   })])}finally{clearTimeout(timer)}
-  };
+  const waitExit=milliseconds=>bounded(exited,milliseconds,'Owned fixture did not terminate');
   try{
    const result=await waitExit(10000);
    assert.equal(result.code,0,'Fixture cleanup must exit successfully');
    assert.equal(result.signal,null,'Fixture must exit gracefully, not by signal');
   }catch(error){
-   if(!exit){fixture.kill('SIGKILL');await waitExit(5000)}
-   throw error;
+   secondaryFailures.push(error);
+   if(!exit){
+    fixture.kill('SIGKILL');
+    try{await waitExit(5000)}catch(killError){secondaryFailures.push(killError)}
+   }
   }
- }
+ }catch(error){secondaryFailures.push(error)}
+ try{await writeFile(join(evidence,'route-lifecycle.json'),JSON.stringify(routeTrace,null,2)+'\n')}
+ catch(error){secondaryFailures.push(error)}
+ const describe=error=>error?{name:error.name,message:error.message,stack:error.stack,
+  ...(error instanceof AggregateError?{errors:error.errors.map(child=>({name:child.name,message:child.message,stack:child.stack}))}:{})}:null;
+ try{await writeFile(join(evidence,'outcome.json'),JSON.stringify({
+  primary:describe(primaryFailure),secondary:secondaryFailures.map(describe),fixtureExit:exit??null,
+ },null,2)+'\n')}catch(error){secondaryFailures.push(error)}
 }
+const failure=combinedFailure(primaryFailure,secondaryFailures);
+if(failure)throw failure;
+console.log('Chat-reference source-browser checks passed: exact same-document selection, client isolation, draft/attachment retention, Canvas/Settings guards, keyboard/mobile and saved reload; graceful fixture cleanup.');
