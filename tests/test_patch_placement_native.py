@@ -12,6 +12,8 @@ import sys
 
 import pytest
 
+from test_queued_configuration_boundary import boundary
+
 
 async def cleanup_workers(root, probe_pid, events):
     """Last-resort cleanup uses exact owned PID/start/argv/group evidence."""
@@ -136,6 +138,18 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
         if variant == 'parked-remount':
             assert report['staleRemountRequested'] and report['staleRemountObserved']
             assert 'remount' in methods
+            recovery = report['explicitRecovery']
+            assert recovery['originalState']['effect'] == 'unknown'
+            assert recovery['effectRead']['nativeEffect'] == 'none'
+            assert recovery['reconciled']['state']['effect'] == 'none'
+            assert recovery['reconciled']['state']['stage'] == 'reconciled'
+            assert recovery['cancelledState']['phase'] == 'cancelled'
+            assert recovery['cancelledHistory'][:len(recovery['originalHistory'])] == recovery['originalHistory']
+            assert recovery['freshOperationId'] != recovery['originalOperationId']
+            assert recovery['freshCommandId'] != recovery['originalCommandId']
+            assert recovery['remountedObjectId'] != recovery['originalMountedObjectId']
+            assert recovery['originalRecordPreserved'] and recovery['noOriginalReplay']
+            assert 'explicit-none-cancel-fresh-binding' in report['stages']
         if variant != 'when-idle':
             assert report['noBindingProviderReplay']
             assert report['nextSuccessfulResponse']['inputId'] == 'placement-next-input'
@@ -225,3 +239,65 @@ async def test_placement_provider_real_mount_preserves_arguments():
             await coordinator.unmount('providers', name='placement')
         finally:
             await coordinator.cleanup()
+
+
+@pytest.mark.parametrize('evidence_kind', ['none','missing','unknown','saved','nonterminal','conflicting'])
+async def test_explicit_rebind_requires_authenticated_terminal_none(boundary, evidence_kind):
+    """Real public recovery/cancel; only signed effect faults and transport are synthetic."""
+    import copy
+    from amplifier_web.configuration_recovery import receipt_path, seal
+    from amplifier_web.service import AppError
+    from fixtures.patch_placement_native_probe import reconcile_proven_none
+    from test_configuration_authority import finished
+    from test_queued_configuration_boundary import native_refusal, operation
+    b = boundary
+    original = await native_refusal(b)
+    attempt = original['attempts'][-1]
+    receipt = receipt_path(attempt)
+    if evidence_kind == 'missing':
+        receipt.unlink()
+    elif evidence_kind in {'unknown','saved','nonterminal','conflicting'}:
+        effect = {'unknown':'unknown','saved':'saved_not_mounted',
+                  'nonterminal':'none','conflicting':'none'}[evidence_kind]
+        value = seal(attempt, effect, **({} if evidence_kind == 'nonterminal' else {'terminal':True}))
+        if evidence_kind == 'conflicting':
+            value['body']['attemptId'] = 'not-the-original-attempt'
+        receipt.write_text(json.dumps(value))
+    calls_before = list(b.runtime.calls)
+    controls_before = b.runtime.controls.state_path().read_bytes()
+    commands = []
+    async def action(name, args, identity):
+        commands.append(name)
+        return await b.app.dispatch(name, args, command_id=identity, include_state=False)
+    # Disposal BEFORE classification must refuse even when a valid none receipt
+    # exists. The original public state is still unknown.
+    await action('configuration.cancel', {'id':b.owner['id']}, 'premature-cancel')
+    refused = await finished(b.app, 'premature-cancel')
+    assert refused['phase'] == 'error' and 'unresolved' in refused['error']
+    assert operation(b) == original and b.owner['configurationBusy']
+    retained = {}
+    if evidence_kind == 'none':
+        await reconcile_proven_none(action, b.owner['id'], original['id'], retained)
+        reconciled = copy.deepcopy(operation(b))
+        assert reconciled['request'] == original['request']
+        assert reconciled['attempts'] == original['attempts']
+        assert reconciled['history'][:-1] == original['history']
+        await action('configuration.cancel', {'id':b.owner['id']}, 'proven-none-cancel')
+        assert (await finished(b.app, 'proven-none-cancel'))['phase'] == 'ready'
+        cancelled = b.app.management.configuration_record(b.owner['id'], original['id'])
+        assert cancelled['state']['phase'] == 'cancelled' and cancelled['state']['effect'] == 'none'
+        assert cancelled['request'] == original['request'] and cancelled['attempts'] == original['attempts']
+        assert cancelled['history'][:-1] == reconciled['history']
+        assert not b.owner.get('pendingConfiguration') and not b.owner.get('configurationBusy')
+    else:
+        expected = {'missing':'Authenticated native no-effect is unproven',
+                    'unknown':'Authenticated native no-effect is unproven',
+                    'saved':'Authenticated native no-effect is unproven',
+                    'nonterminal':'not terminal', 'conflicting':'different binding'}[evidence_kind]
+        with pytest.raises((AssertionError, AppError), match=expected):
+            await reconcile_proven_none(action, b.owner['id'], original['id'], retained)
+        assert operation(b) == original and b.owner['configurationBusy']
+        assert commands.count('configuration.cancel') == 1  # No disposal after the failed proof.
+        assert 'configuration.patchPlacement.bind' not in commands
+    assert b.runtime.calls == calls_before
+    assert b.runtime.controls.state_path().read_bytes() == controls_before

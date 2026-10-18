@@ -243,6 +243,24 @@ def require_next_success(owner):
             'messageId':final[0]['id'], 'text':final[0]['text']}
 
 
+async def reconcile_proven_none(action, sid, operation_id, retained):
+    """Public observation/reconciliation only; never dispose on inferred no-effect."""
+    target = {'sessionId':sid, 'operationId':operation_id}
+    observed = (await action('configuration.operation.read', target, 'placement-original-effect-read'))['result']
+    retained['effectRead'] = observed
+    assert observed['operationId'] == operation_id and observed['sessionId'] == sid
+    assert observed['nativeEffect'] == 'none', 'Authenticated native no-effect is unproven; retain the hold'
+    reconciled = (await action('configuration.operation.reconcile',
+        {**target, 'expectedRevision':observed['revision']}, 'placement-original-reconcile'))['result']
+    retained['reconciled'] = reconciled
+    # Reconciliation enforces the sealed receipt's terminal bit, authority and CAS.
+    assert reconciled['operationId'] == operation_id and reconciled['nativeEffect'] == 'none'
+    assert reconciled['state']['phase'] == 'error' and reconciled['state']['stage'] == 'reconciled'
+    assert reconciled['state']['effect'] == 'none' and not reconciled['workReplayed']
+    assert reconciled['attempts'] == observed['attempts'] == 1
+    return reconciled
+
+
 async def probe(root, variant):
     root.mkdir(parents=True, exist_ok=False)
     home, workspace, checkout, shared = (root / x for x in ('app','history','checkout','shared'))
@@ -343,8 +361,8 @@ async def probe(root, variant):
             report['parkedPid'] = runtime.workers[sid]['process'].pid
         if variant == 'parked-remount':
             # Invalidate the production stat-stamp without altering any setting.
-            # A resulting frozen-product CAS refusal is a diagnostic failure,
-            # never permission for this probe to substitute a new snapshot.
+            # The first request must retain its refusal. Only an explicit
+            # proven-no-effect disposition may precede a separate fresh request.
             previous = controls.stat()
             same_bytes = controls.read_bytes()
             os.utime(controls, ns=(previous.st_atime_ns, previous.st_mtime_ns + 2_000_000_000))
@@ -353,6 +371,7 @@ async def probe(root, variant):
         # Freeze bytes at the actual preparation/admission boundary, not before
         # an unrelated ordinary warmup is allowed to persist its controls.
         control_bytes, plan_bytes = controls.read_bytes(), stored.read_bytes()
+        bind_command = 'placement-bind-command'
         report['controlHashBefore'] = digest(controls)
         if variant == 'when-idle':
             grant = (await action('capability.grant', {'sessionId':sid,'effects':['runtime_configuration'],
@@ -399,6 +418,9 @@ async def probe(root, variant):
                 assert runtime.workers[sid]['process'].pid==report['parkedPid']
             bind_args = {'sessionId':sid,'moduleId':MODULE,'expectedRevision':snapshot['revision'],
                 'expectedExecutionRevision':snapshot['executionRevision'],'choice':'bind-to-execution'}
+            if variant == 'parked-remount':
+                initial_object = await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE})
+                assert initial_object['status'] == 'observed'
             before_calls = calls.read_bytes() if calls.exists() else b''
             await action(BIND, bind_args, 'placement-bind-command')
         await until(lambda: 'placement-bind-command' in app.state.get('managementResults',{})
@@ -419,8 +441,80 @@ async def probe(root, variant):
                       for line in p.read_text().splitlines()]
             assert any(x.get('method') == 'remount' for x in events), 'Production stale remount was not entered'
             report['staleRemountObserved'] = True
-            if current['state']['phase'] != 'ready':
-                report['productionBoundaryFailure'] = 'parked-remount-binding-refused'
+            original = copy.deepcopy(current)
+            original_args = copy.deepcopy(bind_args)
+            report['explicitRecovery'] = recovery_proof = {
+                'originalOperationId':original['id'], 'originalRequestHash':original['requestHash'],
+                'originalCommandId':original['request']['commandId'],
+                'originalState':copy.deepcopy(original['state']),
+                'originalHistory':copy.deepcopy(original['history']),
+                'originalAttemptIds':[a['attemptId'] for a in original['attempts']],
+                'originalMountedObjectId':initial_object['objectId']}
+            assert original['state']['phase'] == 'error' and original['state']['effect'] == 'unknown'
+            assert len(original['attempts']) == 1 and owner['configurationBusy']
+            report['productionBoundaryFailure'] = 'parked-remount-binding-refused'
+            assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
+            try:
+                await reconcile_proven_none(action, sid, original['id'], recovery_proof)
+            except BaseException:
+                # Missing, nonterminal, unknown, saved or conflicting evidence
+                # cannot silently become cancellation or another binding.
+                assert owner['configurationBusy']
+                raise
+            reconciled_record = app.management.configuration_record(sid, original['id'])
+            assert reconciled_record['request'] == original['request']
+            assert reconciled_record['requestHash'] == original['requestHash']
+            assert reconciled_record['attempts'] == original['attempts']
+            assert reconciled_record['history'][:len(original['history'])] == original['history']
+            assert len(reconciled_record['history']) == len(original['history']) + 1
+            assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
+            assert calls.read_bytes() == before_calls and len(processes) == 1
+            # Explicit synthetic UI/operator disposition, not an agent pin reset.
+            await action('configuration.cancel', {'id':sid}, 'placement-original-cancel')
+            await until(lambda: 'placement-original-cancel' in app.state.get('managementResults', {}))
+            assert app.state['managementResults']['placement-original-cancel']['phase'] == 'ready'
+            cancelled = app.management.configuration_record(sid, original['id'])
+            assert cancelled['state']['phase'] == cancelled['state']['stage'] == 'cancelled'
+            assert cancelled['state']['effect'] == 'none'
+            assert cancelled['request'] == original['request']
+            assert cancelled['requestHash'] == original['requestHash']
+            assert cancelled['attempts'] == original['attempts']
+            assert cancelled['history'][:-1] == reconciled_record['history']
+            assert not owner.get('pendingConfiguration') and not owner.get('configurationBusy')
+            recovery_proof['cancelledState'] = copy.deepcopy(cancelled['state'])
+            recovery_proof['cancelledHistory'] = copy.deepcopy(cancelled['history'])
+            remounted = await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE})
+            assert remounted['status'] == 'observed' and remounted['objectId'] != initial_object['objectId']
+            fresh = (await action(READ, {'sessionId':sid,'moduleId':MODULE}, 'placement-fresh-read'))['result']
+            assert fresh['revision'] != snapshot['revision']
+            assert fresh['mounted'] == {'status':'observed','workingDirectory':remounted['workingDirectory']}
+            bind_args = {**original_args, 'expectedRevision':fresh['revision'],
+                         'expectedExecutionRevision':fresh['executionRevision']}
+            bind_command = 'placement-fresh-bind-command'
+            accepted = await action(BIND, bind_args, bind_command)
+            fresh_operation = accepted['result']['operationId']
+            assert fresh_operation != original['id']
+            await until(lambda: bind_command in app.state.get('managementResults', {})
+                and sid not in app.management.pending_config_tasks, seconds=60)
+            current = app.management.configuration_record(sid, fresh_operation)
+            assert current['request']['source']['origin'] == 'ui'
+            assert current['request']['source']['choice'] == 'bind-to-execution'
+            assert current['request']['config']['mounted']['objectId'] == remounted['objectId']
+            assert current['request']['config']['mounted']['objectId'] != original['request']['config']['mounted']['objectId']
+            assert current['attempts'][0]['attemptId'] != original['attempts'][0]['attemptId']
+            assert app.management.configuration_record(sid, original['id']) == cancelled
+            assert calls.read_bytes() == before_calls
+            recovery_proof.update(freshRead=fresh, remountedObjectId=remounted['objectId'],
+                freshOperationId=fresh_operation, freshCommandId=bind_command,
+                freshRequestHash=current['requestHash'], originalRecordPreserved=True,
+                noOriginalReplay=True)
+            report.update(operationId=current['id'], state=current['state'], attempts=len(current['attempts']),
+                controlHashAfter=digest(controls), actualReadback=(await action(READ,
+                    {'sessionId':sid,'moduleId':MODULE}, 'placement-fresh-post-read'))['result'])
+            row = runtime.workers.get(sid)
+            report['workerReadyAtSettlement'] = bool(row and row['ready'].done()
+                and not row['ready'].cancelled() and row['ready'].exception() is None)
+            report['stages'].append('explicit-none-cancel-fresh-binding')
         if mutant:
             injected = [json.loads(line) for p in root.glob('worker-events-*.jsonl') for line in p.read_text().splitlines()]
             assert sum(x['stage']=='injected-skip-preservation' for x in injected)>=1
@@ -437,7 +531,7 @@ async def probe(root, variant):
         assert report['actualReadback']['mounted']=={'status':'observed','workingDirectory':str(checkout)}
         assert owner['workspace']==str(workspace) and owner['executionRevision']==1
         assert owner.get('configuration') is None
-        assert current['request']['commandId']=='placement-bind-command' and len(current['attempts'])==1
+        assert current['request']['commandId']==bind_command and len(current['attempts'])==1
         assert report['workerReadyAtSettlement']
         assert len(processes)==2 and processes[0].returncode==0
         if variant in {'parked','parked-remount'}:
@@ -458,7 +552,7 @@ async def probe(root, variant):
             return value['objectId']
         duplicate_object = await object_identity()
         if variant!='when-idle':
-            duplicate=await action(BIND,bind_args,'placement-bind-command')
+            duplicate=await action(BIND,bind_args,bind_command)
             assert duplicate['duplicate']
         await asyncio.sleep(0)
         assert app.management.configuration_record(sid,current['id'])==observed
@@ -513,6 +607,9 @@ async def probe(root, variant):
             report['stages'].append('exact-duplicate-no-effect')
         else:
             report['nextSuccessfulResponse'] = require_next_success(owner)
+        if variant == 'parked-remount':
+            assert app.management.configuration_record(sid, original['id']) == cancelled
+            assert len(app.management.configuration_record(sid, original['id'])['attempts']) == 1
         report['stages'].append('next-generation-and-park-usable')
     except BaseException as exc:
         primary=exc
