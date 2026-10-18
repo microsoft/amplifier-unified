@@ -13,11 +13,20 @@ import yaml
 PLAN={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':10}},'context':{'module':'context-simple','config':{'max_tokens':1000}}},'providers':[{'module':'provider-openai','id':'openai','config':{'default_model':'fixture-model'}}],'tools':[{'module':'tool-filesystem','config':{'read_only':False,'max_bytes':2000}}],'hooks':[{'module':'hooks-logging','config':{'enabled':True}}]}
 class Runtime:
  def __init__(self):self.plan=copy.deepcopy(PLAN)
- async def start(self,session,emit,*,preserve_emit=False):await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
+ async def start(self,session,emit,*,preserve_emit=False,guard=None):
+  if guard:guard()
+  await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
  async def stop(self,*args,reason="stopped"):pass
  async def close(self):pass
- async def control(self,sid,operation,args):
-  if operation=='configuration.apply':self.plan=copy.deepcopy(args['config']);return {'requiresRestart':True}
+ async def control(self,sid,operation,args,*,guard=None):
+  if guard:guard()
+  if operation=='configuration.apply':
+   from amplifier_web.configuration_recovery import receipt_path,seal
+   self.plan=copy.deepcopy(args['config'])
+   attempt=args['_configurationAttempt']
+   # This UI fixture simulates persistence; native writes have separate tests.
+   write_private(receipt_path(attempt),json.dumps(seal(attempt,'saved_not_mounted',terminal=True)))
+   return {'requiresRestart':True}
   if operation=='configuration.inspect':return {'plan':self.plan,'capabilities':{'configuration':True}}
   return {}
 async def probe(self,action,args,workspace):

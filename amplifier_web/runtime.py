@@ -865,7 +865,7 @@ class RuntimeManager:
         # lock. Only successful delivery suppresses the stop-path retry.
         row["executionEnded"] = True
 
-    async def _request(self, sid, op, **args):
+    async def _request(self, sid, op, *, guard=None, **args):
         row = self.workers.get(sid)
         if op == 'approval' and row and not row['ready'].done():
             # A module can ask for approval during initialization. start() owns
@@ -875,9 +875,13 @@ class RuntimeManager:
         # The admission portion holds the same lock as retirement. Waiting for
         # replies does not: a tool control may itself await an approval/bridge.
         async with self._admission(sid):
+            if guard is not None: guard()
             if sid not in self.workers and sid in self._retired and op in {"send", "retry", "control", "resume"} and not (op == "control" and (args.get("operation", "").startswith(("operations.", "kernels.")))):
                 session, emit = self._retired[sid]
-                await self._start_locked(session, emit)
+                await self._start_locked(session, emit, **({'guard': guard} if guard is not None else {}))
+            # No suspension between this authority check and _admit's transport
+            # write. The callback is host-only and is never serialized.
+            if guard is not None: guard()
             pending = await self._admit(sid, op, args)
         return await self._reply(*pending, op=op, args=args)
 
@@ -1182,8 +1186,9 @@ class RuntimeManager:
             pending = await self._admit(session_id, "control", args)
         return await self._reply(*pending, op="control", args=args)
 
-    async def control(self, session_id, operation, arguments=None):
-        return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
+    async def control(self, session_id, operation, arguments=None, *, guard=None):
+        return await self._request(session_id, "control", operation=operation, arguments=arguments or {},
+            **({'guard': guard} if guard is not None else {}))
 
     async def integration_validation_supported(self, session_id):
         """Require a positive current-worker capability; older adapters refuse."""

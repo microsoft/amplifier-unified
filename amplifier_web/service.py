@@ -370,6 +370,8 @@ for theme_action in ('theme.apply', 'theme.preview'):
 
 from .profiling_host import DEFINITIONS as PROFILING_DEFINITIONS
 ACTION_DEFINITIONS.update(PROFILING_DEFINITIONS)
+from .configuration_recovery import definitions as configuration_recovery_definitions
+ACTION_DEFINITIONS.update(configuration_recovery_definitions(schema, string))
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -380,6 +382,7 @@ for _access, _actions in {
         "conversation.send", "conversation.stop", "conversation.retry", "worker.spawn",
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
+        *configuration_recovery_definitions(schema, string),
         "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
         "call.start", "permissions.save", "permissions.reset", "providers.save", "providers.finishSetup", "providers.configureImages",
         "providers.remove", "providers.move", "providers.reorder", "providers.login",
@@ -1442,7 +1445,8 @@ class AppService:
                 restore(session)
                 settle_stream(session)
                 interrupt_unfinished(session)
-                session['configurationBusy'] = False
+                from .management import Management
+                session['configurationBusy'] = Management.unresolved_configuration(session)
                 if session.get('status') in {'working', 'starting', 'ready', 'stopping'}:
                     session['status'] = 'interrupted'
                     session['activity'] = {'phase': 'interrupted', 'label': 'Previous work was interrupted; it has not been replayed.',
@@ -1803,6 +1807,8 @@ class AppService:
             args['args'] = {**invocation, 'actor': origin}
         if action == 'runtime.control' and args.get('operation', '').startswith(('schedule.', 'observation.', 'coordination.')):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
+        if action == 'runtime.control' and args.get('operation', '').startswith(('configuration.operation.', 'configuration.effect.')):
+            raise AppError('Use the operation-bound configuration recovery actions.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('memory.'):
             raise AppError('Use the shared memory controls; model consolidation is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
@@ -1851,6 +1857,14 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action == 'configuration.operation.read':
+            from .configuration_recovery import command as recovery_command
+            async with self.lock:
+                try:
+                    result = recovery_command(self.management, action, args, origin, caller_session_id)
+                except (ValueError, OSError, KeyError, TypeError) as exc:
+                    raise AppError('The retained configuration operation cannot be read: ' + str(exc), 409) from None
+            return {'accepted': True, 'result': result}
         if action.startswith("session.handoff."):
             return await self.handoffs.dispatch(action, args, origin, caller_session_id,
                 include_state=include_state, admission_check=admission_check)
@@ -2350,7 +2364,8 @@ class AppService:
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
-                if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+                if (current.get('configurationBusy') or self.management and self.management.unresolved_configuration(current)) and action != 'question.answer':
+                    raise AppError('Applying or reconciling conversation settings; new input must wait.',409)
                 if action != 'question.answer' and current.get('fileAccessPending'):
                     from .chat_permissions import PENDING_DETAIL
                     raise AppError(PENDING_DETAIL, 409)
@@ -3212,9 +3227,23 @@ class AppService:
                     SettingsStore(self.data_dir).update(workspace, 'local' if args['scope']=='workspace' else 'global', update_default)
                 self._shared_preferences_stamp = None
                 self._refresh_shared_preferences()
+            elif action in {'configuration.operation.reconcile', 'configuration.operation.resume'}:
+                from .configuration_recovery import command as recovery_command
+                try:
+                    diagnostic_result = recovery_command(self.management, action, args, origin, caller_session_id)
+                except (ValueError, OSError, KeyError, TypeError) as exc:
+                    raise AppError('Configuration recovery refused: ' + str(exc), 409) from None
             elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
-                pending.append((self.management.command,(action,copy.deepcopy(args),command_id,configuration_authority)))
+                values = (action, copy.deepcopy(args), command_id, configuration_authority)
+                if action == 'configuration.apply' or action == 'runtime.control' and args.get('operation') == 'configuration.apply':
+                    target = self._session(args.get('id') or args.get('sessionId'))
+                    # Host-only provenance, captured before the background wait;
+                    # never accept origin or caller identity from model arguments.
+                    values += ({'origin': origin, 'callerSessionId': caller_session_id,
+                        'generation': copy.deepcopy(target.get('collaborationGeneration')),
+                        'target': self.management.configuration_target_binding(target)},)
+                pending.append((self.management.command, values))
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
                 if action == 'updates.forceRestart':
@@ -4414,6 +4443,10 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'configuration.effect.admit':
+            from .configuration_recovery import authorize
+            async with self.lock:
+                return authorize(self.management, session_id, args)
         if operation == "coordination.continuation_ready":
             return self.collaboration.continuation_ready(session_id, args)
         if operation == "coordination.admit":

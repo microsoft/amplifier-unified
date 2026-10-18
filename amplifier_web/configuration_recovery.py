@@ -1,0 +1,253 @@
+"""Operation-bound configuration recovery; never infer no effect from absence.
+
+The native receipt is private, authenticated by a per-attempt host secret, and
+written independently of the transport reply. This is not a permission system:
+every admission still checks the original grant and target at the host.
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+from pathlib import Path
+import secrets
+import uuid
+
+from .configuration_authority import fingerprint
+from .host.config import write_private
+from .runtime_controls import override_path, public_config
+
+
+def definitions(schema, string):
+    properties = {"sessionId": string(200), "operationId": string(200)}
+    return {
+        "configuration.operation.read": (
+            "Observe this owner's retained configuration operation without starting a runtime. No payload, grant or secret is returned.",
+            schema(properties, ["sessionId"])),
+        **{f"configuration.operation.{name}": (
+            description, schema({**properties, "expectedRevision": {"type": "integer", "minimum": 1}}))
+            for name, description in {
+                "reconcile": "Reconcile the exact operation with its sealed native receipt at an expected revision. Never applies or warms; absent/partial evidence stays unknown.",
+                "resume": "Queue one explicit resume of the original operation after proven no effect, under its still-valid authority and target. Application waits for exclusive idle admission. Unknown or partial writes refuse; no new plan or grant.",
+            }.items()},
+    }
+
+
+def binding(record):
+    """Allocate privately; neither this key nor the envelope enters public state."""
+    return {
+        "version": 1, "operationId": record["id"], "attemptId": str(uuid.uuid4()),
+        "sessionId": record["request"]["sessionId"], "requestHash": record["requestHash"],
+        "payloadHash": record["request"]["payloadHash"],
+        "number": len(record.get("attempts", [])) + 1, "key": secrets.token_hex(32),
+    }
+
+
+def receipt_path(attempt, *, home=None):
+    for key in ("operationId", "attemptId"):
+        if str(uuid.UUID(attempt[key])) != attempt[key]:
+            raise ValueError("Invalid configuration effect identity")
+    if attempt["version"] != 1 or len(bytes.fromhex(attempt["key"])) != 32:
+        raise ValueError("Invalid configuration effect binding")
+    base = override_path(attempt["sessionId"]).parent
+    if home is not None:
+        # Host reads use the owning service's home, not process-global settings.
+        base = Path(home) / "sessions" / attempt["sessionId"]
+    return base / "configuration-effects" / (
+        attempt["operationId"] + "-" + attempt["attemptId"] + ".json")
+
+
+def seal(attempt, effect, **details):
+    body = {key: value for key, value in attempt.items() if key != "key"}
+    body.update(effect=effect, **details)
+    return {"body": body, "signature": hmac.new(bytes.fromhex(attempt["key"]),
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode(), hashlib.sha256).hexdigest()}
+
+
+def evidence(attempt, *, home=None):
+    """Read only. Missing, corrupt, foreign or forged receipts are NOT no-effect."""
+    path = receipt_path(attempt, home=home)
+    if not path.exists():
+        return None
+    record = json.loads(path.read_text())
+    body = record["body"]
+    expected = {key: value for key, value in attempt.items() if key != "key"}
+    if any(body.get(key) != value for key, value in expected.items()):
+        raise ValueError("The native configuration receipt has a different binding.")
+    signed = seal(attempt, body["effect"], **{key: value for key, value in body.items()
+        if key not in expected and key != "effect"})
+    if not hmac.compare_digest(signed["signature"], record["signature"]):
+        raise ValueError("The native configuration receipt could not be authenticated.")
+    if body["effect"] not in {"none", "unknown", "saved_not_mounted"}:
+        raise ValueError("Unrecognized native configuration effect.")
+    return body
+
+
+async def native_apply(controls, config, attempt, authorize, stop_epoch):
+    """Called under the worker command lock, with no await after final admission.
+
+    An exclusive claim prevents duplicate transport delivery (including after
+    process restart) from entering the settings writer again. A crash during the
+    claim/receipt writes is deliberately unknown, never a reusable no-effect.
+    """
+    if (attempt["nativeSessionId"] != controls.session.session_id
+            or attempt.get("workerPid") not in {None, os.getpid()}
+            or fingerprint(config) != attempt["payloadHash"]):
+        raise ValueError("The configuration attempt does not match its native target or payload.")
+    path = receipt_path(attempt)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise ValueError("This native configuration attempt already has retained evidence.")
+    claim = path.with_suffix(".claim")
+    fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)  # Existence is an exclusion fence, never proof of an effect.
+    write_private(path, json.dumps(seal(attempt, "unknown")))
+    epoch = stop_epoch()
+    try:
+        allowed = await authorize({key: value for key, value in attempt.items() if key != "key"})
+        if not allowed.get("admitted") or epoch != stop_epoch():
+            raise ValueError("Original configuration authority or Stop boundary changed.")
+        controls.require_idle()
+        plan = controls.prepare_configuration(config)
+    except BaseException:
+        write_private(path, json.dumps(seal(attempt, "none", terminal=True)))
+        raise
+    # No suspension from authority/idle checks to the two synchronous writes.
+    # A failure in either write leaves the durable unknown receipt unchanged.
+    controls.save_configuration(plan)
+    write_private(path, json.dumps(seal(attempt, "saved_not_mounted", terminal=True)))
+    return {"requiresRestart": True, "configuration": public_config(plan)}
+
+
+def prepare_attempt(management, session, operation):
+    record = management.configuration_record(session["id"], operation)
+    if record["state"]["effect"] != "none" or record["state"]["stage"] != "preparing":
+        raise ValueError("Only a proven unperformed configuration can enter native dispatch.")
+    attempt = binding(record)
+    row = getattr(management.service.runtime, "workers", {}).get(session["id"], {})
+    attempt.update(nativeSessionId=row.get("runtime_id", session["id"]),
+        workerPid=getattr(row.get("process"), "pid", None))
+    record.setdefault("attempts", []).append(attempt)
+    write_private(management.configuration_record_path(session["id"], operation), json.dumps(record))
+    management.configuration_transition(session, operation, stage="dispatching",
+        effect="unknown", attemptId=attempt["attemptId"])
+    return attempt
+
+
+def latest_attempt(record):
+    attempts = record.get("attempts", [])
+    if not attempts:
+        return None
+    attempt = attempts[-1]
+    if (attempt.get("operationId") != record["id"] or attempt.get("requestHash") != record["requestHash"]
+            or attempt.get("payloadHash") != record["request"]["payloadHash"]
+            or attempt.get("sessionId") != record["request"]["sessionId"]
+            or attempt.get("number") != len(attempts)
+            or attempt.get("attemptId") != record["state"].get("attemptId")):
+        raise ValueError("The native attempt is not bound to the original configuration operation.")
+    receipt_path(attempt)  # Validate safe file and seal identities before reading.
+    return attempt
+
+
+def authorize(management, sid, args):
+    """Host-only worker bridge; public control arguments cannot authorize this."""
+    session = management.service._session(sid)
+    record = management.configuration_record(sid, args.get("operationId"))
+    attempt = latest_attempt(record)
+    if (not attempt or args != {key: value for key, value in attempt.items() if key != "key"}
+            or record["state"]["stage"] != "dispatching"
+            or session.get("pendingConfiguration", {}).get("operationId") != record["id"]
+            or session.get("configurationOperationFence") != record["id"]
+            or not session.get("configurationBusy")):
+        raise ValueError("The configuration attempt is no longer admitted.")
+    management.check_configuration_operation(session, record)
+    return {"admitted": True}
+
+
+def public(record, observed=None):
+    fields = {"phase", "stage", "effect", "attemptId", "revision", "at"}
+    return {
+        "operationId": record["id"], "commandId": record["request"]["commandId"],
+        "sessionId": record["request"]["sessionId"], "revision": record["revision"],
+        "state": {key: value for key, value in record["state"].items() if key in fields},
+        "history": [{key: value for key, value in row.items() if key in fields} for row in record["history"]],
+        "nativeEffect": observed["effect"] if observed else "unconfirmed",
+        "attempts": len(record.get("attempts", [])), "workReplayed": False,
+    }
+
+
+def command(management, action, args, origin, caller):
+    """Run under service.lock; use the existing shared command ledger for dedup."""
+    service = management.service
+    session = service._session(args["sessionId"])
+    if origin not in {"ui", "user"}:
+        source = service.collaboration.source({}, origin, caller)
+        if source["id"] != session["id"]:
+            raise ValueError("Configuration recovery belongs to the original root.")
+        if not action.endswith(".read"):
+            service.collaboration.active_binding(source)
+    pending = session.get("pendingConfiguration", {})
+    operation = args.get("operationId") or pending.get("operationId")
+    record = management.configuration_record(session["id"], operation)
+    attempt = latest_attempt(record)
+    observed = evidence(attempt, home=service.data_dir) if attempt else None
+    if action.endswith(".read"):
+        return public(record, observed)
+    if pending.get("operationId") != operation or args["expectedRevision"] != record["revision"]:
+        raise ValueError("The original configuration operation revision changed.")
+    interrupted = (action.endswith(".reconcile")
+        and record["state"]["phase"] == "applying"
+        and record["state"]["stage"] == "interrupted")
+    if record["state"]["phase"] != "error" and not interrupted:
+        raise ValueError("Only a settled failed configuration operation can be reconciled or resumed.")
+    if origin not in {"ui", "user"} and record["request"]["authorization"] != "grant":
+        raise ValueError("Agent recovery requires the original retained agent authority, not a UI or internal origin.")
+    task = management.pending_config_tasks.get(session["id"])
+    if task is not None and not task.done() or management.lock.locked():
+        raise ValueError("The original configuration task has not settled.")
+    management.check_configuration_operation(session, record)
+    recovery_authority = None
+    if origin not in {"ui", "user"}:
+        authority = record["request"]["authority"]
+        grant = service.configuration_authority.record(authority["grantId"])
+        peers = service.configuration_authority.peer_authorities(
+            session, grant, authority["effect"], authority["scope"])
+        recovery_authority = {**authority, "peerGrants": authority.get("peerGrants", []) + peers}
+    if action.endswith(".reconcile"):
+        effect = record["state"]["effect"]
+        if attempt:
+            if not observed:
+                raise ValueError("Native evidence is absent; the operation remains unknown.")
+            if observed["effect"] == "none" and observed.get("terminal") is not True:
+                raise ValueError("Native no-effect evidence is not terminal; the operation remains held.")
+            # Never downgrade acknowledged save/mount to an older no-effect receipt.
+            if effect in {"saved_not_mounted", "mounted"} and observed["effect"] != effect:
+                raise ValueError("Native evidence conflicts with retained saved-state evidence.")
+            effect = observed["effect"]
+        elif effect != "none":
+            raise ValueError("Legacy operation lacks native binding; its outcome remains unknown.")
+        # Cancellation leaves its original applying/interrupted evidence intact
+        # until the host task settles and an explicit reconciliation observes
+        # this attempt. Classification is not permission to replay the write.
+        record = management.configuration_transition(session, operation, phase="error", stage="reconciled",
+            effect=effect, recoveryRequired=False)
+        management.settle_configuration_fence(session, operation)
+    elif action.endswith(".resume"):
+        if (record["state"]["effect"] != "none"
+                or attempt and (record["state"]["stage"] != "reconciled"
+                    or not observed or observed["effect"] != "none" or not observed.get("terminal"))):
+            raise ValueError("Resume requires proven pre-write no-effect evidence; unknown or saved work is not repeated.")
+        if recovery_authority is not None:
+            # Preserve current request lineage as an additional ceiling, never
+            # replace the original grant or source binding.
+            record.setdefault("resumptions", []).append(recovery_authority)
+            write_private(management.configuration_record_path(session["id"], operation), json.dumps(record))
+        record = management.configuration_transition(session, operation,
+            phase="queued", stage="queued", effect="none", error=None, recoveryRequired=False)
+        # Queue acceptance is not native admission. Accepted work may finish;
+        # apply_queued rechecks authority and atomically claims the idle fence.
+        management.schedule_configuration(session["id"])
+    else:
+        raise ValueError("Unknown configuration recovery action")
+    return public(record, observed)

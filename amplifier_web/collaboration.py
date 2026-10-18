@@ -788,7 +788,10 @@ class Collaboration:
                         self.cancel_expiry(identity)
                         continue
                     if (target.get("status") in BUSY or target.get('configurationBusy')
-                            and target.get('configurationRefresh', {}).get('phase') == 'applying'):
+                            or target.get('pendingConfiguration', {}).get('phase') in {'queued', 'applying'}
+                            or target.get('pendingConfiguration', {}).get('recoveryRequired')
+                            or target.get('pendingConfiguration', {}).get('phase') == 'error'
+                            and target.get('pendingConfiguration', {}).get('effect', 'none') != 'none'):
                         break
                     # Durable claim precedes any runtime effect. Unknown never
                     # returns to queued, including cancellation and restart.
