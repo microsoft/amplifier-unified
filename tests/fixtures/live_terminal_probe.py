@@ -282,22 +282,130 @@ def _observe_worker_appends(root):
     sys.setprofile(streaming_entry)
 
 
+def _producer_spawn_spec(root, executable, argv, cwd, environment, *, cold=False, control=False):
+    """Exact fixture child allowlist; no argument/flag prefix matching."""
+    root = Path(root).resolve()
+    python = str(Path(sys.executable).absolute())  # Keep the venv launcher, not its symlink target.
+    if not isinstance(argv, (list, tuple)) or not all(isinstance(p, str) for p in argv):
+        return None
+    if executable != python or not argv or argv[0] != python:
+        return None
+    expected_path = os.pathsep.join((str(root / "bootstrap"), str(Path(__file__).parent), str(ROOT)))
+    if (environment.get("PYTHONPATH") != expected_path
+            or environment.get("UNIFIED_PRODUCER_ROOT") != str(root)
+            or environment.get("PYTHONNOUSERSITE") != "1"
+            or environment.get("PYTHONDONTWRITEBYTECODE") != "1"
+            or any(k.startswith(("LD_", "DYLD_")) or k in {"PYTHONHOME", "PYTHONSTARTUP"}
+                   for k in environment)):
+        return None
+    effective_cwd = Path(cwd if cwd is not None else os.getcwd()).resolve()
+    if not (effective_cwd == ROOT.resolve() or effective_cwd.is_relative_to(root)):
+        return None
+    tail = list(argv[1:])
+    if tail == [str(ROOT / "amplifier_web/runtime_worker.py")]:
+        return None if cold else "runtime-worker"
+    if control and tail == [str(Path(__file__)), str(root), "--guard-child"]:
+        return "guard-control"
+    # Actual ProcessProjector._start argv, no -c/-I/-E/-S/combined flags or
+    # arbitrary modules. Data directories must remain in this fixture's app.
+    if (len(tail) == 8 and tail[:2] in [
+            ["-m", "amplifier_web.event_window_worker"],
+            ["-m", "amplifier_web.history_projection_worker"]]
+            and tail[2::2] == ["--spool", "--cache-home", "--memory-limit"]
+            and tail[-1] == str(768 * 1024 * 1024)
+            and Path(tail[5]).resolve() == root / "app"
+            and Path(tail[3]).is_absolute()
+            and Path(tail[3]).resolve().is_relative_to(root / "app")
+            and Path(tail[3]).parent.name.startswith("projection-spool-")):
+        return "history-reader"
+    return None
+
+
+def _producer_spawn_evidence(root, executable, argv, cwd, environment):
+    """Retain exact safe paths/literals and redacted shapes, never raw env."""
+    allowed_words = {"-m", "-u", "-I", "-E", "-S", "-c", "-Es", "--guard-child",
+                     "--spool", "--cache-home", "--memory-limit", "805306368",
+                     "amplifier_web.event_window_worker", "amplifier_web.history_projection_worker"}
+
+    def safe(value):
+        if isinstance(value, os.PathLike):
+            value = os.fspath(value)
+        if isinstance(value, str) and "\n" not in value and "\0" not in value:
+            if value in allowed_words:
+                return value
+            if value == str(Path(sys.executable).absolute()):
+                return value
+            if Path(value).is_absolute() and (
+                    Path(value).is_relative_to(root) or Path(value).is_relative_to(ROOT)):
+                return value
+        return {"redacted": True, "type": type(value).__name__,
+                "length": len(value) if isinstance(value, (str, bytes)) else None}
+
+    expected_path = os.pathsep.join((str(root / "bootstrap"), str(Path(__file__).parent), str(ROOT)))
+    # Safe executable paths are evidence, not authority to execute them.
+    executable_evidence = safe(executable)
+    if isinstance(executable, str) and Path(executable).is_absolute() and Path(executable).parent in {
+            Path("/bin"), Path("/usr/bin"), Path("/usr/local/bin")}:
+        executable_evidence = executable
+    return {"executable": executable_evidence,
+            "argvShape": [safe(p) for p in argv[:16]] if isinstance(argv, (tuple, list)) else safe(argv),
+            "argc": len(argv) if isinstance(argv, (tuple, list)) else None,
+            "cwd": safe(cwd if cwd is not None else os.getcwd()),
+            "explicitCwd": cwd is not None,
+            "binding": {"pythonPathExact": environment.get("PYTHONPATH") == expected_path,
+                        "rootExact": environment.get("UNIFIED_PRODUCER_ROOT") == str(root),
+                        "noUserSite": environment.get("PYTHONNOUSERSITE") == "1",
+                        "noBytecode": environment.get("PYTHONDONTWRITEBYTECODE") == "1",
+                        "loaderEnvironmentPresent": any(
+                            k.startswith(("LD_", "DYLD_")) or k in {"PYTHONHOME", "PYTHONSTARTUP"}
+                            for k in environment)}}
+
+
 def _install_producer_guard(root):
     """Inherited by Python readers too; no installer or unguarded child escape."""
     import ipaddress
     import socket
+    import subprocess
+    import threading
 
     if hasattr(sys, "_unified_producer_guard"):
         return
-    state = {"cold": False, "ordinal": 0}
+    root = Path(root).resolve()
+    state = {"cold": False, "ordinal": 0, "controlCase": None, "controlActive": False}
     sys._unified_producer_guard = state
     directory = Path(root) / "guard"
-    bootstrap = str(Path(root) / "bootstrap")
+    pending = threading.local()
+    record_lock = threading.RLock()
 
     def record(kind, detail):
-        state["ordinal"] += 1
-        _producer_record(directory, f"{os.getpid()}-{state['ordinal']:04d}",
-                         {"kind": kind, "pid": os.getpid(), **detail})
+        with record_lock:
+            state["ordinal"] += 1
+            assert state["ordinal"] <= 512, "Guard observation budget exceeded"
+            _producer_record(directory, f"{os.getpid()}-{state['ordinal']:04d}",
+                             {"kind": kind, "pid": os.getpid(),
+                              "controlCase": state["controlCase"], **detail})
+
+    def popen_owner():
+        # CPython3.13: subprocess.Popen audit precedes _posix_spawn within
+        # _execute_child, with the same Popen instance. A direct os.posix_spawn
+        # has no such frame and cannot redeem a leftover Popen allowance.
+        frame = sys._getframe(1)
+        try:
+            for _ in range(16):
+                if frame is None:
+                    break
+                if (frame.f_code is subprocess.Popen._execute_child.__code__
+                        and frame.f_globals is vars(subprocess)):
+                    return frame.f_locals.get("self"), frame.f_locals.get("shell", True)
+                frame = frame.f_back
+            return None, True
+        finally:
+            del frame
+
+    def env_fingerprint(environment):
+        import hashlib
+        # Private correlation only, never persisted or printed.
+        return hashlib.sha256(json.dumps(dict(environment), sort_keys=True).encode()).digest()
 
     def local(host):
         if host in {"localhost", b"localhost"}:
@@ -309,6 +417,7 @@ def _install_producer_guard(root):
 
     def audit(event, args):
         allowed = True
+        detail = {}
         if event in {"socket.connect", "socket.connect_ex", "socket.bind", "socket.sendto",
                      "socket.sendmsg"}:
             family = getattr(args[0], "family", None)
@@ -322,108 +431,206 @@ def _install_producer_guard(root):
             allowed = local(args[0])
         elif event == "socket.getnameinfo":
             allowed = local(args[0][0])
-        elif event == "subprocess.Popen":
-            argv, env = args[1], args[3]
+        elif event in {"subprocess.Popen", "os.posix_spawn"}:
+            executable, argv = args[:2]
+            cwd, env = (args[2], args[3]) if event == "subprocess.Popen" else (None, args[2])
             child_env = os.environ if env is None else env
-            guarded_python = (
-                isinstance(argv, (tuple, list)) and argv
-                and Path(str(args[0])).absolute() == Path(sys.executable).absolute()
-                and not any(flag in argv for flag in ("-I", "-E", "-S", "-c"))
-                and not any(str(part) in {"pip", "uv", "ensurepip"} for part in argv)
-                and bootstrap in child_env.get("PYTHONPATH", "").split(os.pathsep)
-            )
-            worker = any(str(part).endswith("/amplifier_web/runtime_worker.py")
-                         for part in argv) if isinstance(argv, (tuple, list)) else False
-            record("spawn", {"argv": list(argv) if isinstance(argv, (tuple, list)) else str(argv),
-                             "runtimeWorker": worker, "cold": state["cold"]})
-            allowed = guarded_python and not (state["cold"] and worker)
-        elif event in {"os.system", "os.posix_spawn", "os.exec", "os.fork", "os.forkpty"}:
+            spec = _producer_spawn_spec(root, executable, argv, cwd, child_env,
+                                        cold=state["cold"], control=state["controlActive"])
+            owner, shell = popen_owner()
+            detail = {**_producer_spawn_evidence(root, executable, argv, cwd, child_env),
+                      "command": spec, "runtimeWorker": spec == "runtime-worker"}
+            allowed = spec is not None and owner is not None and not shell
+            # One-use, same-thread, same actual Popen, full env/argv/cwd match.
+            # The token is not a capability for another spawn or arbitrary code.
+            if event == "subprocess.Popen":
+                pending.value = None
+                if allowed:
+                    pending.value = (owner, executable, tuple(argv), cwd,
+                                     os.getcwd(), env_fingerprint(child_env))
+            else:
+                token, pending.value = getattr(pending, "value", None), None
+                paired = (token is not None and token[0] is owner
+                          and token[1:3] == (executable, tuple(argv)) and token[3] is None
+                          and token[4] == os.getcwd() and token[5] == env_fingerprint(child_env))
+                allowed = allowed and paired
+                detail["pairedPopen"] = paired
+            record("spawn" if event == "subprocess.Popen" else "posix-spawn",
+                   {"event": event, "allowed": bool(allowed), "cold": state["cold"], **detail})
+        elif event in {"os.system", "os.exec", "os.fork", "os.forkpty"}:
             allowed = False
         else:
             return
         if not allowed:
             # Endpoints/ambient environment are deliberately not copied.
-            record("denied", {"event": event, "cold": state["cold"]})
+            record("denied", {"event": event, "cold": state["cold"], **detail})
             raise RuntimeError("Producer audit guard denied " + event)
 
     sys.addaudithook(audit)
     record("installed", {"argv": sys.argv, "loopbackAndUnixOnly": True})
 
 
+def _producer_guard_preflight(root):
+    """Run only in the admitted native runner, before real producer admission."""
+    import subprocess
+    import socket
+
+    state = sys._unified_producer_guard
+    assert state["controlCase"] is None and not state["controlActive"] and not state["cold"]
+    python = str(Path(sys.executable).absolute())
+    command = [python, str(Path(__file__)), str(root), "--guard-child"]
+    environment = dict(os.environ)
+    results = []
+
+    def rows(case):
+        return [row for path in (root / "guard").glob("*.json")
+                if (row := json.loads(path.read_text())).get("controlCase") == case
+                and row["pid"] == os.getpid()]
+
+    def rejected(case, action):
+        state["controlCase"] = case
+        try:
+            action()
+        except RuntimeError as error:
+            assert str(error).startswith("Producer audit guard denied "), str(error)
+            denied = [row for row in rows(case) if row["kind"] == "denied"]
+            assert len(denied) == 1
+            results.append({"case": case, "status": "refused", "event": denied[0]["event"]})
+        else:
+            raise AssertionError("Guard unexpectedly allowed " + case)
+        finally:
+            state["controlCase"] = None
+
+    def run(argv, *, env=None, **kwargs):
+        return subprocess.run(argv, env=environment if env is None else env,
+                              capture_output=True, text=True, timeout=5, **kwargs)
+
+    state["controlActive"] = True
+    try:
+        state["controlCase"] = "paired-python-child"
+        child = run(command, close_fds=False)
+        assert child.returncode == 0, child.stderr
+        assert json.loads(child.stdout) == {"guardInstalled": True, "cold": False}
+        observed = rows(state["controlCase"])
+        assert sum(r["kind"] == "spawn" and r["allowed"] for r in observed) == 1
+        assert sum(r["kind"] == "posix-spawn" and r["allowed"] and r["pairedPopen"]
+                   for r in observed) == 1, "Owned runner did not exercise stdlib posix_spawn"
+        results.append({"case": state["controlCase"], "status": "passed",
+                        "actualPopenAndPosixSpawn": True})
+        state["controlCase"] = None
+
+        for flag in ("-I", "-E", "-S", "-Es", "-c"):
+            rejected("python-flag:" + flag, lambda flag=flag: run([python, flag, *command[1:]]))
+        rejected("arbitrary-script", lambda: run([python, str(Path(__file__)), str(root), "--not-allowed"]))
+        rejected("arbitrary-module", lambda: run([python, "-m", "json.tool"]))
+        rejected("missing-bootstrap", lambda: run(command, env={**environment, "PYTHONPATH": str(ROOT)}))
+        rejected("wrong-root", lambda: run(command, env={**environment, "UNIFIED_PRODUCER_ROOT": str(ROOT)}))
+        rejected("loader-injection", lambda: run(command, env={**environment, "LD_PRELOAD": "fixture-denied"}))
+        rejected("wrong-cwd", lambda: run(command, cwd="/"))
+        rejected("shell", lambda: run(["exit", "0"], shell=True))
+
+        def direct_spawn():
+            # If this unexpectedly starts, it is only the harmless guard child;
+            # reap it before reporting the failed negative control.
+            pid = os.posix_spawn(python, command, environment)
+            os.waitpid(pid, 0)
+        rejected("unpaired-posix-spawn", direct_spawn)
+        rejected("fork-audit", lambda: sys.audit("os.fork"))
+        state["cold"] = True
+        rejected("cold-runtime-start", lambda: run([python, str(ROOT / "amplifier_web/runtime_worker.py")]))
+        state["cold"] = False
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+            rejected("non-loopback-network", lambda: sys.audit(
+                "socket.connect", connection, ("192.0.2.1", 443)))
+    finally:
+        state.update(controlCase=None, controlActive=False, cold=False)
+    return {"status": "passed", "cases": results,
+            "scope": "Actual harmless Popen+posix_spawn; refused argv/environment/cwd/direct-spawn; fork/network audit controls"}
+
+
+class RegularProducerProvider:
+    """Public metadata construction is pure; execution requires a real mount."""
+    name = "regularproducer"
+
+    def __init__(self, config=None):
+        self.calls = 0
+        self.ids = []
+        self.coordinator = None
+
+    def get_info(self):
+        from amplifier_core import ProviderInfo
+        return ProviderInfo(id=self.name, display_name="Local regular-work producer",
+                            capabilities=["tools", "streaming"],
+                            defaults={"model": "offline", "context_window": 200000})
+
+    def get_config_schema(self):
+        return {"fields": []}
+
+    async def list_models(self):
+        return []
+
+    def parse_tool_calls(self, response):
+        return response.tool_calls or []
+
+    async def complete(self, request, **kwargs):
+        from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall, Usage
+        import uuid
+        assert self.coordinator is not None, "Provider was not mounted"
+        coordinator = self.coordinator
+        directory = Path(os.environ["UNIFIED_PRODUCER_ROOT"]) / "counts"
+        assert hasattr(sys, "_unified_producer_guard"), "Worker network guard missing"
+        self.calls += 1
+        _producer_record(directory, f"provider-attempt-{self.calls}",
+                         {"ordinal": self.calls, "pid": os.getpid(), "attempt": "provider"})
+        if self.calls > 3:
+            _producer_record(directory, "provider-over-budget", {"calls": self.calls})
+            raise RuntimeError("Producer exceeded three completions")
+        resolver = coordinator.get_capability("context_intelligence.hook_config_resolver")
+        assert resolver is not None, "Actual capture hook did not mount"
+        assert resolver.destinations == {} and resolver.validate_destinations() == {}, (
+            "Actual capture hook resolved a remote destination")
+        # Verify the runtime really fed the previous tool's full result back.
+        consumed = None
+        if self.calls > 1:
+            prior = next((m for m in reversed(request.messages)
+                          if m.role == "tool" and m.tool_call_id == self.ids[-1]), None)
+            assert prior is not None, "Native tool result missing from provider request"
+            content = prior.content
+            if not isinstance(content, str):
+                content = "".join(getattr(block, "text", "") for block in content or [])
+            consumed = json.loads(content)
+            assert consumed in _producer_result_encodings(_producer_cases()[self.calls - 2]["output"])
+        call = None
+        text = ("Producer interim: first tool." if self.calls == 1 else
+                "Producer interim: second tool." if self.calls == 2 else
+                "Producer final: two tools complete.")
+        if self.calls <= 2:
+            identity = "producer-" + uuid.uuid4().hex
+            self.ids.append(identity)
+            call = ToolCall(id=identity, name="regular_echo",
+                            arguments=_producer_cases()[self.calls - 1]["input"])
+        _producer_record(directory, f"provider-{self.calls}", {
+            "ordinal": self.calls, "pid": os.getpid(), "toolCallId": self.ids[-1] if call else None,
+            "captureResolverPresent": True, "destinations": resolver.validate_destinations(),
+            "streamingImported": "amplifier_module_loop_streaming" in sys.modules,
+            "text": text, "consumedToolResult": consumed,
+        })
+        # Provider stream deltas only. The real orchestrator/worker creates
+        # admission, generation, message and execution lifecycle events.
+        request_id = uuid.uuid4().hex
+        for chunk in (text[:12], text[12:]):
+            await coordinator.hooks.emit("llm:stream_block_delta", {
+                "block_type": "text", "text": chunk, "request_id": request_id, "block_index": 0})
+        return ChatResponse(content=[TextBlock(text=text)], tool_calls=[call] if call else None,
+                            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))
+
+
 async def mount_producer_provider(coordinator, config=None):
-    from amplifier_core import ProviderInfo
-    from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall, Usage
-    import uuid
-
     directory = Path(os.environ["UNIFIED_PRODUCER_ROOT"]) / "counts"
-
-    class Producer:
-        name = "regularproducer"
-
-        def __init__(self):
-            self.calls = 0
-            self.ids = []
-
-        def get_info(self):
-            return ProviderInfo(id=self.name, display_name="Local regular-work producer",
-                                capabilities=["tools", "streaming"],
-                                defaults={"model": "offline", "context_window": 200000})
-
-        async def list_models(self):
-            return []
-
-        def parse_tool_calls(self, response):
-            return response.tool_calls or []
-
-        async def complete(self, request, **kwargs):
-            assert hasattr(sys, "_unified_producer_guard"), "Worker network guard missing"
-            self.calls += 1
-            _producer_record(directory, f"provider-attempt-{self.calls}",
-                             {"ordinal": self.calls, "pid": os.getpid(), "attempt": "provider"})
-            if self.calls > 3:
-                _producer_record(directory, "provider-over-budget", {"calls": self.calls})
-                raise RuntimeError("Producer exceeded three completions")
-            resolver = coordinator.get_capability("context_intelligence.hook_config_resolver")
-            assert resolver is not None, "Actual capture hook did not mount"
-            assert resolver.destinations == {} and resolver.validate_destinations() == {}, (
-                "Actual capture hook resolved a remote destination")
-            # Verify the runtime really fed the previous tool's full result back.
-            consumed = None
-            if self.calls > 1:
-                prior = next((m for m in reversed(request.messages)
-                              if m.role == "tool" and m.tool_call_id == self.ids[-1]), None)
-                assert prior is not None, "Native tool result missing from provider request"
-                content = prior.content
-                if not isinstance(content, str):
-                    content = "".join(getattr(block, "text", "") for block in content or [])
-                consumed = json.loads(content)
-                assert consumed in _producer_result_encodings(_producer_cases()[self.calls - 2]["output"])
-            call = None
-            text = ("Producer interim: first tool." if self.calls == 1 else
-                    "Producer interim: second tool." if self.calls == 2 else
-                    "Producer final: two tools complete.")
-            if self.calls <= 2:
-                identity = "producer-" + uuid.uuid4().hex
-                self.ids.append(identity)
-                call = ToolCall(id=identity, name="regular_echo",
-                                arguments=_producer_cases()[self.calls - 1]["input"])
-            _producer_record(directory, f"provider-{self.calls}", {
-                "ordinal": self.calls, "pid": os.getpid(), "toolCallId": self.ids[-1] if call else None,
-                "captureResolverPresent": True, "destinations": resolver.validate_destinations(),
-                "streamingImported": "amplifier_module_loop_streaming" in sys.modules,
-                "text": text, "consumedToolResult": consumed,
-            })
-            # Provider stream deltas only. The real orchestrator/worker creates
-            # admission, generation, message and execution lifecycle events.
-            request_id = uuid.uuid4().hex
-            for chunk in (text[:12], text[12:]):
-                await coordinator.hooks.emit("llm:stream_block_delta", {
-                    "block_type": "text", "text": chunk, "request_id": request_id, "block_index": 0})
-            return ChatResponse(content=[TextBlock(text=text)], tool_calls=[call] if call else None,
-                                usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))
-
+    provider = RegularProducerProvider(config)
+    provider.coordinator = coordinator
     _producer_record(directory, "worker-mounted", {"pid": os.getpid()})
-    await coordinator.mount("providers", Producer(), name="regularproducer")
+    await coordinator.mount("providers", provider, name=provider.name)
 
 
 async def mount_producer_tools(coordinator, config=None):
@@ -761,6 +968,9 @@ async def _producer_observation(client, sid, calls, diagnostics, result):
 
 async def producer_main(root, report, save):
     _producer_environment(root)
+    report["phase"] = "process-guard-preflight"
+    save()
+    report["processGuardPreflight"] = _producer_guard_preflight(root)
     report["phase"] = "installed-imports"
     save()
     report["dependencies"], sources = _producer_dependencies(report, save)
@@ -777,8 +987,31 @@ async def producer_main(root, report, save):
         package.mkdir(parents=True)
         package.joinpath("__init__.py").write_text(
             f"from live_terminal_probe import {mount} as mount\n"
-            f"__amplifier_module_type__ = {name.split('-')[0]!r}\n", encoding="utf-8")
+            + ("from live_terminal_probe import RegularProducerProvider\n"
+               if name == "provider-regularproducer" else "")
+            + f"__amplifier_module_type__ = {name.split('-')[0]!r}\n", encoding="utf-8")
         sources[name] = str(package)
+    # Exercise the actual public setup contract before any conversation input.
+    # The fresh generated module is placed on sys.path just as module activation
+    # does; no patched schema loader or forged runtime configuration is used.
+    report["phase"] = "provider-schema-preflight"
+    save()
+    from amplifier_web.provider_environment import (
+        provider_class, construct_schema_provider, config_schema, provider_config_schema)
+    sys.path.insert(0, str(Path(sources["provider-regularproducer"]).parent))
+    before_counts = sorted((root / "counts").iterdir())
+    schema_class = provider_class("provider-regularproducer")
+    assert schema_class.__name__ == "RegularProducerProvider"
+    schema_provider = construct_schema_provider(schema_class, {}, environment={})
+    assert schema_provider.coordinator is None and schema_provider.calls == 0
+    assert schema_provider.get_info().id == "regularproducer"
+    assert await config_schema(schema_provider) == {"fields": []}
+    assert await provider_config_schema("provider-regularproducer", config={}, environment={}) == {"fields": []}
+    assert sorted((root / "counts").iterdir()) == before_counts
+    report["providerSchemaPreflight"] = {
+        "publicClass": schema_class.__name__, "fields": [], "coordinatorRequired": False,
+        "providerAttempts": 0, "toolAttempts": 0, "hostValidationUsed": True}
+    save()
     bundle = root / "producer.yaml"
     hook_config = {"base_path": str(root / "capture"), "destinations": {},
                    "context_intelligence_server_url": "", "context_intelligence_api_key": ""}
@@ -862,7 +1095,8 @@ async def producer_main(root, report, save):
                 "toolAttempts": sum(row.get("attempt") == "tool" for row in rows),
                 "workerMounts": sum("ordinal" not in row and "pid" in row for row in rows),
                 "workerLaunches": sum(row["kind"] == "spawn" and row["runtimeWorker"] for row in guard),
-                "denials": [row for row in guard if row["kind"] == "denied"],
+                "denials": [row for row in guard if row["kind"] == "denied" and row.get("controlCase") is None],
+                "controlDenials": [row for row in guard if row["kind"] == "denied" and row.get("controlCase")],
                 "overBudget": [path.name for path in (root / "counts").glob("*over-budget.json")]}
 
     try:
@@ -1007,10 +1241,21 @@ async def producer_main(root, report, save):
         report["finalCleanup"] = {"allServicesClosed": all(s.closed for s in services),
                                  "remainingWorkers": sum(len(s.runtime.workers) for s in services),
                                  "errors": cleanup_errors}
+        report["guardObservations"] = [json.loads(path.read_text(encoding="utf-8"))
+                                      for path in sorted((root / "guard").glob("*.json"))]
+        secondary = []
+        if cleanup_errors or not report["finalCleanup"]["allServicesClosed"]:
+            secondary.append({"phase": "cleanup", "reason": "Services did not close cleanly"})
+        if report["finalCleanup"]["remainingWorkers"]:
+            secondary.append({"phase": "cleanup", "reason": "Workers remain"})
+        if report["finalCounts"]["denials"] or report["finalCounts"]["overBudget"]:
+            secondary.append({"phase": "audit", "reason": "Unplanned refusal or count budget exceeded"})
+        report["secondaryFailures"] = secondary
         save()
-        assert not cleanup_errors and report["finalCleanup"]["allServicesClosed"]
-        assert report["finalCleanup"]["remainingWorkers"] == 0
-        assert not report["finalCounts"]["denials"] and not report["finalCounts"]["overBudget"]
+        # Preserve the original admission/producer error. Cleanup/audit evidence
+        # still fails an otherwise successful check, but never replaces it.
+        if secondary and "primaryFailure" not in report:
+            raise RuntimeError("Producer cleanup/audit failed; see secondaryFailures")
 
 
 def run_producer():
@@ -1040,8 +1285,11 @@ def run_producer():
     try:
         asyncio.run(bounded())
     except BaseException as error:
-        report.update(status="failed", failure={"phase": report["phase"],
-                                               "type": type(error).__name__, "message": str(error)})
+        failure = {"phase": report["phase"], "type": type(error).__name__, "message": str(error)}
+        report.setdefault("primaryFailure", failure)
+        report.update(status="failed", failure=report["primaryFailure"])
+        report["guardObservations"] = [json.loads(path.read_text(encoding="utf-8"))
+                                      for path in sorted((root / "guard").glob("*.json"))]
         save()
         print(json.dumps({"status": "failed", "phase": report["phase"], "evidence": str(evidence)}))
         raise
@@ -1052,7 +1300,10 @@ def run_producer():
 
 
 if __name__ == "__main__":
-    if sys.argv[2:] == ["--producer"]:
+    if sys.argv[2:] == ["--guard-child"]:
+        assert hasattr(sys, "_unified_producer_guard"), "Guard bootstrap missing"
+        print(json.dumps({"guardInstalled": True, "cold": sys._unified_producer_guard["cold"]}))
+    elif sys.argv[2:] == ["--producer"]:
         run_producer()
     elif len(sys.argv) == 2:
         asyncio.run(main())

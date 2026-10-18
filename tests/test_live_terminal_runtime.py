@@ -34,7 +34,10 @@ def _check_regular_work_details_real_producer_and_service_reopen(tmp_path):
 
     def failure(phase, message):
         evidence = json.loads(evidence_path.read_text()) if evidence_path.exists() else {}
-        evidence.update(status="failed", failure={"phase": phase, "message": message})
+        wrapper_failure = {"phase": phase, "message": message}
+        evidence["wrapperFailure"] = wrapper_failure
+        evidence.setdefault("primaryFailure", wrapper_failure)
+        evidence.update(status="failed", failure=evidence["primaryFailure"])
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -64,6 +67,11 @@ def _check_regular_work_details_real_producer_and_service_reopen(tmp_path):
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["status"] == "observed", evidence.get("failure")
     assert evidence["phase"] == "complete"
+    assert evidence["providerSchemaPreflight"]["hostValidationUsed"] is True
+    assert evidence["providerSchemaPreflight"]["providerAttempts"] == 0
+    assert evidence["providerSchemaPreflight"]["toolAttempts"] == 0
+    assert evidence["processGuardPreflight"]["status"] == "passed"
+    assert evidence["processGuardPreflight"]["cases"][0]["actualPopenAndPosixSpawn"] is True
     assert evidence["noExtraColdExecution"] is True
     assert evidence["actualCaptureState"]["enabled"] is True
     assert evidence["captureConfiguration"]["destinations"] == {}
@@ -75,6 +83,7 @@ def _check_regular_work_details_real_producer_and_service_reopen(tmp_path):
     assert evidence["finalCounts"]["workerMounts"] == evidence["finalCounts"]["workerLaunches"] == 1
     assert not evidence["finalCounts"]["denials"] and not evidence["fieldIntegrityErrors"]
     assert evidence["finalCleanup"] == {"allServicesClosed": True, "remainingWorkers": 0, "errors": []}
+    assert evidence["secondaryFailures"] == []
     # Do NOT assert missing/ambiguous counts are zero or positive. This admitted
     # experiment observes the installed producer, not an invented repair verdict.
 
