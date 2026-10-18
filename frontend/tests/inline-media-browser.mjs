@@ -87,6 +87,9 @@ async function receiptDeadline(label,work){
 async function action(page,name,args={}){
  return receiptDeadline(`App action ${name}`,()=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]));
 }
+function gifCanvasCleanupAllowed(clickAttempted,primaryFailed,clickSettled){
+ return !clickAttempted||(!primaryFailed&&clickSettled===true);
+}
 const canvasPixels=figure=>figure.locator('canvas').evaluate(node=>{
  const data=node.getContext('2d').getImageData(0,0,node.width,node.height).data;
  // Small synthetic pixels are exact; large proof is sampled, not a memory copy.
@@ -1206,6 +1209,7 @@ try{
    const inline=page.locator(`[data-message-id="${boot.messageId}"] [data-media-id="${saved.id}"]`);
    const canvasRoot=page.locator('[data-canvas-view="primary"]');
    let releaseEarlier,dirtyHostAdmitted=false,dirtyReceipt,dirtyTarget,primaryError;
+   let clickAttempted=false,clickSettled=null;
    const earlierGate=new Promise(done=>{releaseEarlier=done});
    const commandOrder=[],blockerId='gif-canvas-earlier-command';
    const dirtyTrueId=randomUUID(),ownedCommandIds=new Set([blockerId,dirtyTrueId]);
@@ -1298,6 +1302,7 @@ try{
      }));
     }catch{}
     const snapshot=JSON.parse(JSON.stringify({label,captureStartedAtMs,capturedAtMs:Date.now()-started,
+     clickOwned:{attempted:clickAttempted,settled:clickSettled,primaryFailed:!!primaryError},
      pinnedId,pinnedRequest,network,droppedNetwork,bodyObservers,observed}));
     await writeEvidence(join(evidenceDir,`gif-canvas-commands-${label}.json`),snapshot);
    };
@@ -1358,6 +1363,7 @@ try{
     const refused=page.waitForResponse(response=>response.request().method()==='POST'&&
      new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.action==='canvas.openGif');
     refused.catch(()=>{}); // Preserve its eventual rejection until the ordered receipt checks await it.
+    clickAttempted=true;clickSettled=null;
     await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
     await expect(inline.getByRole('button',{name:'Opening in Canvas…',exact:true})).toBeDisabled();
     // fetch is observed synchronously at issuance. No sleep or absence timeout
@@ -1384,6 +1390,7 @@ try{
     // Hold the REAL native first decode. Mounted is not ready; closing owns
     // pending-frame cleanup and may not leak a late frame into a replacement.
     await page.evaluate(()=>{window.__mediaProbe.hold=true});
+    clickAttempted=true;clickSettled=null;
     await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
     const figure=canvasRoot.locator(`[data-media-id="${saved.id}"]`);
     await expect(figure).toHaveAttribute('data-media-state','loading');
@@ -1406,6 +1413,7 @@ try{
      const response=await route.fetch();assert.equal(response.status(),200);
      await route.fulfill({response,body:Buffer.from('synthetic undecodable GIF')});
     });
+    clickAttempted=true;clickSettled=null;
     await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();
     await expect(figure).toHaveAttribute('data-media-state','error');
     await expect.poll(async()=>page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views
@@ -1434,6 +1442,18 @@ try{
      // Let the released route finish before unregistering its handler.
      let settled=await cleanup('settle latest Canvas receipts',pendingSettled);
      await cleanup('release action route',()=>page.unroute('**/api/actions',holdEarlier));
+     // UI clicks use the component's dispatch, not __gifDispatch. A primary
+     // failure after any click leaves that command conservatively unknown.
+     // Only on the successful path observe MediaFigure's post-dispatch finally
+     // binding; HTTP/body completion alone is never application settlement.
+     if(clickAttempted&&!primaryError)clickSettled=await cleanup('confirm UI-owned Canvas open settlement',async()=>{
+      await expect(inline.getByRole('button',{name:'Open in Canvas',exact:true})).toBeEnabled();
+     });
+     if(!gifCanvasCleanupAllowed(clickAttempted,!!primaryError,clickSettled)){
+      settled=false;
+      blockedApplicationCleanup.add(page);
+      cleanupErrors.push({step:'click-owned Canvas open',reason:'Settlement unconfirmed; application cleanup not attempted'});
+     }
      // Do not enqueue more app commands behind a receipt that never settled.
      if(settled)settled=await cleanup('clear owned dirty view',()=>page.evaluate(async target=>{
       const view=window.amplifier.getState().canvasWorkspace.views.find(view=>view.viewId==='primary');

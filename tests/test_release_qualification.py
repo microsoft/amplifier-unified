@@ -315,6 +315,51 @@ def test_media_diagnostic_product_guard_rejects_unlisted_changes(monkeypatch, ex
         exec(script, {})
 
 
+@pytest.mark.parametrize(('click_attempted', 'primary_failed', 'click_settled', 'allowed'), [
+    (False, False, None, True),
+    (False, True, None, True),
+    (True, False, None, False),
+    (True, False, False, False),
+    (True, False, True, True),
+    (True, True, False, False),
+    (True, True, True, False),
+])
+def test_media_diagnostic_cleanup_refuses_unknown_ui_command(
+    click_attempted, primary_failed, click_settled, allowed,
+):
+    import re
+    import subprocess
+    source = (ROOT / 'frontend/tests/inline-media-browser.mjs').read_text()
+    helper = re.search(r'function gifCanvasCleanupAllowed\([^)]*\)\{\n.*?\n\}', source, re.S)
+    assert helper, 'Exercise the actual harness cleanup decision, not a copied predicate'
+    args = json.dumps([click_attempted, primary_failed, click_settled])
+    result = subprocess.run(
+        ['node', '--input-type=module', '-e',
+         helper.group(0) + '\nconsole.log(JSON.stringify(gifCanvasCleanupAllowed(...' + args + ')));'],
+        capture_output=True, text=True, check=True, timeout=10,
+    )
+    assert json.loads(result.stdout) is allowed
+
+
+def test_media_diagnostic_applies_ui_guard_before_cleanup_mutations():
+    source = (ROOT / 'frontend/tests/inline-media-browser.mjs').read_text()
+    phase = source.split("await phase('gif-canvas-errors',async()=>{", 1)[1].split(
+        "await phase('endpoints'", 1)[0]
+    click = "await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();"
+    assert phase.count(click) == 3
+    assert phase.count('clickAttempted=true;clickSettled=null;\n    ' + click) == 3
+    assert 'clickOwned:{attempted:clickAttempted,settled:clickSettled,primaryFailed:!!primaryError}' in phase
+    cleanup = phase.split('}finally{', 1)[1]
+    guard = cleanup.index('if(!gifCanvasCleanupAllowed(clickAttempted,!!primaryError,clickSettled))')
+    clear = cleanup.index("if(settled)settled=await cleanup('clear owned dirty view'")
+    unmount = cleanup.index("if(settled)settled=await cleanup('unmount and close owned client'")
+    assert guard < cleanup.index('blockedApplicationCleanup.add(page)') < clear < unmount
+    assert 'if(clickAttempted&&!primaryError)' in cleanup
+    assert "getByRole('button',{name:'Open in Canvas',exact:true})).toBeEnabled()" in cleanup
+    final = source.split("await phase('cleanup',async()=>{", 1)[1]
+    assert final.index('blockedApplicationCleanup.has(page)') < final.index("await action(page,'session.create'")
+
+
 def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
     workflows = ROOT / '.github/workflows'
     manual = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
