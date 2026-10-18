@@ -183,7 +183,15 @@ async def test_running_mount_plan_changes_queue_then_remount_same_conversation(a
         async def control(self,sid,op,args,*,guard=None):
             if guard:guard()
             calls.append((op,sid))
-            if op=='configuration.apply':assert args['config']==plan;return {'requiresRestart':True}
+            if op=='configuration.apply':
+                from amplifier_web.configuration_recovery import receipt_path, seal
+                from amplifier_web.host.config import write_private
+                assert args['config']==plan
+                attempt=args['_configurationAttempt']
+                # Synthetic transport acknowledgement, not native-write proof.
+                write_private(receipt_path(attempt,home=app.data_dir),
+                    json.dumps(seal(attempt,'saved_not_mounted',terminal=True)))
+                return {'requiresRestart':True}
             return {'plan':copy.deepcopy(plan)}
     app.runtime=LiveRuntime();session=app._session();session['status']='working'
     app._message(session,'user','Preserve this conversation')
@@ -221,7 +229,14 @@ async def test_ui_stop_during_configuration_shutdown_does_not_restart(app, monke
     monkeypatch.setattr(app.management, 'ensure_runtime', AsyncMock())
     app.runtime.stop = stop
     app.runtime.start = start
-    app.runtime.control = AsyncMock(return_value={'requiresRestart': True})
+    async def acknowledged_save(sid, op, args, **kwargs):
+        from amplifier_web.configuration_recovery import receipt_path, seal
+        from amplifier_web.host.config import write_private
+        attempt=args['_configurationAttempt']
+        write_private(receipt_path(attempt,home=app.data_dir),
+            json.dumps(seal(attempt,'saved_not_mounted',terminal=True)))
+        return {'requiresRestart': True}
+    app.runtime.control = acknowledged_save
     plan = {'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}},
             'providers': [{'module': 'provider-fixture'}]}
     applying = asyncio.create_task(app.management.perform('runtime.control',

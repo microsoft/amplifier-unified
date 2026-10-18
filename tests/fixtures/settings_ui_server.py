@@ -20,7 +20,13 @@ class Runtime:
  async def close(self):pass
  async def control(self,sid,operation,args,*,guard=None):
   if guard:guard()
-  if operation=='configuration.apply':self.plan=copy.deepcopy(args['config']);return {'requiresRestart':True}
+  if operation=='configuration.apply':
+   from amplifier_web.configuration_recovery import receipt_path,seal
+   self.plan=copy.deepcopy(args['config'])
+   attempt=args['_configurationAttempt']
+   # This UI fixture simulates persistence; native writes have separate tests.
+   write_private(receipt_path(attempt),json.dumps(seal(attempt,'saved_not_mounted',terminal=True)))
+   return {'requiresRestart':True}
   if operation=='configuration.inspect':return {'plan':self.plan,'capabilities':{'configuration':True}}
   return {}
 async def probe(self,action,args,workspace):

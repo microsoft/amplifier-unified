@@ -1034,7 +1034,18 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
-                if data['operation'] == 'conversation.steer':
+                if data['operation'] == 'configuration.apply':
+                    from amplifier_web.configuration_recovery import native_apply
+                    # This envelope is supplied only by the host's retained
+                    # operation. The public raw route strips all but config.
+                    attempt = arguments.get('_configurationAttempt')
+                    if not isinstance(attempt, dict):
+                        raise ValueError('Configuration apply requires its original host operation binding.')
+                    async with self.controls.lock:
+                        result = await native_apply(self.controls, arguments.get('config'), attempt,
+                            lambda value: self.bridge('configuration.effect.admit', value),
+                            lambda: self.stop_revision)
+                elif data['operation'] == 'conversation.steer':
                     from amplifier_web.conversation_steering import submit
                     self.context_bindings[arguments['inputId']] = arguments.get('context_binding', {'clientId': None, 'targets': []})
                     self.context_bindings = dict(list(self.context_bindings.items())[-64:])

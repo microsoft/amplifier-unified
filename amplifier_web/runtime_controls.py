@@ -280,6 +280,29 @@ class RuntimeControls:
         async with self.lock:
             return await self._perform(operation, args)
 
+    def prepare_configuration(self, config):
+        previous = copy.deepcopy(self.coordinator.config)
+        stored = override_path(self.session.session_id)
+        if stored.exists():
+            saved = json.loads(stored.read_text())
+            for section in SECTIONS:
+                current = {identity(row) for row in previous.get(section, [])}
+                previous.setdefault(section, []).extend(
+                    row for row in saved.get(section, []) if identity(row) not in current)
+        plan = restore_redactions(config, previous)
+        validate_plan(plan)
+        return {key: value for key, value in plan.items() if key in PLAN_KEYS}
+
+    def save_configuration(self, plan):
+        write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
+        # A full mount-plan edit supersedes previous live module toggles.
+        if self.state_path().exists():
+            controls = json.loads(self.state_path().read_text())
+            disabled = controls.get('configurator', {}).get('disabled', {})
+            for section in SECTIONS:
+                disabled.pop(section, None)
+            write_private(self.state_path(), json.dumps(controls))
+
     async def _perform(self, operation, args):
         if operation == 'memory.consolidate':
             from .memory_consolidation import generate
@@ -310,23 +333,8 @@ class RuntimeControls:
             return await self.provider_control(operation,args)
         if operation == "configuration.apply":
             self.require_idle()
-            previous=copy.deepcopy(self.coordinator.config)
-            stored=override_path(self.session.session_id)
-            if stored.exists():
-                saved=json.loads(stored.read_text())
-                for section in SECTIONS:
-                    current={identity(row) for row in previous.get(section,[])}
-                    previous.setdefault(section,[]).extend(row for row in saved.get(section,[]) if identity(row) not in current)
-            plan = restore_redactions(args.get("config"), previous)
-            validate_plan(plan)
-            plan = {key:value for key,value in plan.items() if key in PLAN_KEYS}
-            write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
-            # A full mount-plan edit supersedes previous live module toggles.
-            if self.state_path().exists():
-                controls=json.loads(self.state_path().read_text())
-                disabled=controls.get('configurator',{}).get('disabled',{})
-                for section in SECTIONS:disabled.pop(section,None)
-                write_private(self.state_path(),json.dumps(controls))
+            plan = self.prepare_configuration(args.get("config"))
+            self.save_configuration(plan)
             return {"requiresRestart": True, "configuration": public_config(plan)}
         if operation == "configuration.toggle":
             self.require_idle()

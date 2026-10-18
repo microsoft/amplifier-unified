@@ -584,6 +584,8 @@ class Management:
             if not request.get('authority'):
                 raise ValueError('The original configuration authority is missing.')
             self.service.configuration_authority.check(request['authority'])
+            for retained in record.get('resumptions', []):
+                self.service.configuration_authority.check(retained)
         elif request['authorization'] not in {'ui', 'user', 'internal'} or request.get('authority') is not None:
             raise ValueError('The original configuration authority cannot be verified.')
         if (fingerprint(request['config']) != request['payloadHash']
@@ -1098,6 +1100,7 @@ class Management:
                     if current_row is None or self.runtime_catalog_key(session['id'],current_row,current.get('catalogRevision'))!=self.runtime_catalog_key(session['id'],row,mounted.get('catalogRevision')):return
                 else:
                     check_current()
+                    native_arguments = args.get('args', {})
                     if configuration_operation is not None:
                         async with self.service.lock:
                             current = self.service._session(session['id'])
@@ -1106,12 +1109,17 @@ class Management:
                             # Persist uncertainty BEFORE dispatch. No exception
                             # string (including a native busy error) proves that
                             # a remote settings write did not occur.
-                            self.configuration_transition(current, configuration_operation,
-                                stage='dispatching', effect='unknown')
+                            from .configuration_recovery import prepare_attempt
+                            attempt = prepare_attempt(self, current, configuration_operation)
+                            native_arguments = {**native_arguments, '_configurationAttempt': attempt}
                             self.service._publish_changes(sessions={current['id']})
-                    result=await self.service.runtime.control(session['id'],args['operation'],args.get('args',{}),
+                    result=await self.service.runtime.control(session['id'],args['operation'],native_arguments,
                         **({'guard': operation_guard} if configuration_operation is not None else {}))
                     if configuration_operation is not None and result.get('requiresRestart'):
+                        from .configuration_recovery import evidence
+                        native = evidence(attempt, home=self.service.data_dir)
+                        if not native or native['effect'] != 'saved_not_mounted' or not native.get('terminal'):
+                            raise ValueError('The bound native configuration save receipt is unconfirmed.')
                         async with self.service.lock:
                             self.configuration_transition(self.service._session(session['id']), configuration_operation,
                                 stage='saved', effect='saved_not_mounted')

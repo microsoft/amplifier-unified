@@ -1,9 +1,11 @@
-"""Synthetic host/worker boundary regressions; not installed-worker qualification.
+"""Configuration boundary regressions; not installed-release qualification.
 
 Management, Collaboration, ConfigurationAuthority and RuntimeControls are real.
 The coordinator and process transport are fixture adapters. Events hold a real
 await in runtime preparation; peer admission uses the real host command ledger.
-No provider, subprocess, service, network, or personal configuration is used.
+The original64 cases use no provider, subprocess, network or personal config.
+Recovery cases below also exercise real worker command/bridge/controls in an
+isolated subprocess with synthetic mounting and lease setup; no provider calls.
 """
 import asyncio
 import copy
@@ -90,7 +92,13 @@ class ControlsTransport:
             return {"providers": []}  # Not a provider-catalog test.
         if operation == "configuration.apply" and self.fault == "lost-before-dispatch":
             raise RuntimeError("Synthetic transport lost: mutation outcome unknown")
-        result = await self.controls.perform(operation, args)
+        if operation == "configuration.apply":
+            from amplifier_web.configuration_recovery import native_apply
+            result = await native_apply(self.controls, args["config"], args["_configurationAttempt"],
+                lambda value: self.app._app_bridge("configuration.effect.admit", value, sid),
+                lambda: self.app._session(sid).get("interruptionRevision", 0))
+        else:
+            result = await self.controls.perform(operation, args)
         if operation == "configuration.apply":
             self.calls.append("saved")
             if self.fault == "lost-after-save":
@@ -162,6 +170,474 @@ async def reach_apply(boundary):
     await asyncio.wait_for(boundary.runtime.entered.wait(), 3)
     assert boundary.owner["configurationBusy"]
     assert boundary.owner["pendingConfiguration"]["phase"] == "applying"
+
+
+@pytest.fixture
+async def process_boundary(tmp_path, monkeypatch):
+    from pathlib import Path
+    import sys
+    from amplifier_web.runtime import RuntimeManager
+    home = tmp_path / "process-app"
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(home))
+    monkeypatch.setenv("AMPLIFIER_HOME", str(tmp_path / "process-native"))
+    fixture = Path(__file__).parent / "fixtures/configuration_effect_worker.py"
+    runtime = RuntimeManager(command=[sys.executable, "-u", str(fixture)],
+        startup_timeout=10, retention={"prewarm_on_select": False})
+    app = AppService(home, runtime, workspace=tmp_path)
+    try:
+        owner = app._new_session({"title": "Synthetic process owner"})
+        # Exercise the actual app/native alias, not only identical UUIDs.
+        owner["runtimeSessionId"] = "synthetic-native-owner"
+        owner["collaborationGeneration"] = {
+            "id": "process-generation", "inputIds": ["synthetic-human"], "terminal": False}
+        app.state["sessions"] = [owner]
+        app.state["selectedSessionId"] = owner["id"]
+        app._publish()
+        app.management = Management(app)
+        runtime.app_bridge = app.app_bridge
+        await asyncio.wait_for(runtime.start(owner, app.on_runtime_event), 12)
+        ready = await runtime.control(owner["id"], "configuration.inspect", {})
+        assert ready["plan"]["tools"][0]["config"]["limit"] == 1
+        authorized = await grant(app, ["runtime_configuration"], ["session"])
+        yield SimpleNamespace(app=app, owner=owner, runtime=runtime, authorized=authorized)
+    finally:
+        await asyncio.wait_for(app.close(), 12)
+
+
+async def process_apply(boundary, identity="process-apply"):
+    await agent(boundary.app, boundary.owner, "configuration.apply",
+        {"id": boundary.owner["id"], "config": plan(2)}, identity,
+        _runtimeSessionId=boundary.owner["runtimeSessionId"])
+    result = await finished(boundary.app, identity)
+    # finished is written by the management command's terminal publication.
+    return result
+
+
+async def test_real_worker_process_refusal_reconciles_and_explicit_resume_mounts(process_boundary):
+    from amplifier_web.configuration_recovery import evidence
+    b = process_boundary
+    await b.runtime._request(b.owner["id"], "fixture.busy", count=1)
+    assert (await process_apply(b))["phase"] == "error"
+    saved = operation(b)
+    assert saved["state"]["effect"] == "unknown"
+    attempt = saved["attempts"][-1]
+    assert attempt["nativeSessionId"] == "synthetic-native-owner"
+    assert attempt["workerPid"] == b.runtime.workers[b.owner["id"]]["process"].pid
+    assert evidence(attempt)["effect"] == "none"
+    assert not override_path("synthetic-native-owner").exists()
+    await recovery(b, "reconcile")
+    await b.runtime._request(b.owner["id"], "fixture.busy", count=0)
+    await recovery(b, "resume")
+    await asyncio.wait_for(b.app.management.pending_config_tasks[b.owner["id"]], 12)
+    final = operation(b)
+    assert final["state"]["effect"] == "mounted"
+    assert final["request"] == saved["request"] and len(final["attempts"]) == 2
+    assert json.loads(override_path("synthetic-native-owner").read_text()) == plan(2)
+    assert b.owner["configuration"]["plan"]["tools"][0]["config"]["limit"] == 2
+
+
+async def test_real_worker_process_partial_save_stays_held(process_boundary):
+    from amplifier_web.configuration_recovery import evidence
+    b = process_boundary
+    await b.runtime._request(b.owner["id"], "fixture.partial")
+    assert (await process_apply(b))["phase"] == "error"
+    saved = operation(b)
+    assert evidence(saved["attempts"][-1])["effect"] == "unknown"
+    assert json.loads(override_path("synthetic-native-owner").read_text()) == plan(2)
+    await recovery(b, "reconcile")
+    with pytest.raises(AppError, match="no-effect"):
+        await recovery(b, "resume")
+    assert b.owner["configurationBusy"]
+
+
+async def test_cold_receipt_read_never_starts_worker_or_replays(process_boundary):
+    b = process_boundary
+    await b.runtime._request(b.owner["id"], "fixture.busy", count=1)
+    assert (await process_apply(b))["phase"] == "error"
+    saved = operation(b)
+    await b.runtime.stop(b.owner["id"], reason="shutdown")
+    assert b.owner["id"] not in b.runtime.workers
+    before = copy.deepcopy(saved)
+    observed = await recovery(b, "read")
+    assert observed["result"]["nativeEffect"] == "none"
+    assert not b.runtime.workers and operation(b) == before
+    assert not override_path("synthetic-native-owner").exists()
+
+
+async def test_real_process_lost_ack_keeps_saved_distinct_from_mounted(process_boundary, monkeypatch):
+    from amplifier_web.configuration_recovery import receipt_path
+    b = process_boundary
+    await b.runtime._request(b.owner["id"], "fixture.lose_reply")
+    original_wait = asyncio.wait_for
+    async def short_reply(awaitable, timeout):
+        return await original_wait(awaitable, .5 if timeout == 30 else timeout)
+    monkeypatch.setattr(asyncio, "wait_for", short_reply)
+    assert (await process_apply(b))["phase"] == "error"
+    saved = operation(b)
+    receipt = receipt_path(saved["attempts"][-1]).read_bytes()
+    read = (await recovery(b, "read"))["result"]
+    assert read["nativeEffect"] == "saved_not_mounted" and read["state"]["effect"] == "unknown"
+    await recovery(b, "reconcile")
+    assert operation(b)["state"]["effect"] == "saved_not_mounted"
+    with pytest.raises(AppError, match="no-effect"):
+        await recovery(b, "resume")
+    assert b.owner["configurationBusy"]
+    assert receipt_path(saved["attempts"][-1]).read_bytes() == receipt
+    assert json.loads(override_path("synthetic-native-owner").read_text()) == plan(2)
+
+
+async def test_unsealed_success_ack_is_not_configuration_save_proof(boundary):
+    original = boundary.runtime.control
+    async def forged(sid, name, args, *, guard=None):
+        if name == "configuration.apply":
+            return {"requiresRestart": True, "configuration": plan(2)}
+        return await original(sid, name, args, guard=guard)
+    boundary.runtime.control = forged
+    await queue(boundary)
+    await reach_apply(boundary)
+    await settle(boundary)
+    assert operation(boundary)["state"]["effect"] == "unknown"
+    assert boundary.owner["configurationBusy"]
+    assert "stop:configuration" not in boundary.runtime.calls
+    assert not override_path(boundary.owner["id"]).exists()
+
+
+@pytest.mark.parametrize("invalidated", ["revoked", "expired", "stop"])
+async def test_native_admission_wait_rechecks_original_authority(boundary, invalidated):
+    from amplifier_web.configuration_recovery import native_apply, evidence
+    entered, release = asyncio.Event(), asyncio.Event()
+    previous = boundary.runtime.control
+    async def authorize(value):
+        entered.set()
+        await release.wait()
+        return await boundary.app._app_bridge("configuration.effect.admit", value, boundary.owner["id"])
+    async def delayed(sid, name, args, *, guard=None):
+        if name != "configuration.apply":
+            return await previous(sid, name, args, guard=guard)
+        if guard:
+            guard()
+        return await native_apply(boundary.runtime.controls, args["config"], args["_configurationAttempt"],
+            authorize, lambda: boundary.owner.get("interruptionRevision", 0))
+    boundary.runtime.control = delayed
+    await queue(boundary)
+    await reach_apply(boundary)
+    boundary.runtime.release.set()
+    await asyncio.wait_for(entered.wait(), 3)
+    try:
+        if invalidated == "revoked":
+            await revoke(boundary.app, boundary.authorized)
+        elif invalidated == "expired":
+            grant_record = boundary.app.configuration_authority.record(boundary.authorized["id"])
+            grant_record["expiresAt"] = time.time() - 1
+            boundary.app.configuration_authority.save(grant_record)
+            boundary.app.db.commit()
+        else:
+            boundary.owner["interruptionRevision"] = 1
+    finally:
+        release.set()
+    await asyncio.wait_for(boundary.queued_task, 3)
+    assert evidence(operation(boundary)["attempts"][-1])["effect"] == "none"
+    assert not override_path(boundary.owner["id"]).exists()
+    with pytest.raises(AppError):
+        await recovery(boundary, "reconcile")
+    assert boundary.owner["configurationBusy"]  # Revocation doesn't authorize recovery.
+
+
+def use_native_receipts(boundary):
+    """Real native settings writer/receipt; process transport remains an adapter."""
+    from amplifier_web.configuration_recovery import native_apply
+    runtime = boundary.runtime
+    old = runtime.control
+
+    async def authorize(value):
+        return await boundary.app._app_bridge("configuration.effect.admit", value, runtime.sid)
+
+    async def control(sid, name, args, *, guard=None):
+        if name != "configuration.apply":
+            return await old(sid, name, args, guard=guard)
+        if guard:
+            guard()
+        runtime.calls.append(name)
+        return await native_apply(runtime.controls, args["config"], args["_configurationAttempt"],
+            authorize, lambda: boundary.owner.get("interruptionRevision", 0))
+
+    runtime.control = control
+
+
+async def recovery(boundary, verb, *, revision=None, identity=None, actor=None, **extra):
+    saved = operation(boundary)
+    args = {"sessionId": boundary.owner["id"], "operationId": saved["id"], **extra}
+    if verb != "read":
+        args["expectedRevision"] = revision if revision is not None else saved["revision"]
+    return await agent(boundary.app, actor or boundary.owner, "configuration.operation." + verb,
+        args, identity or "recovery-" + verb + "-" + str(saved["revision"]),
+        _runtimeSessionId=(actor or boundary.owner).get("runtimeSessionId", (actor or boundary.owner)["id"]))
+
+
+async def native_refusal(boundary):
+    use_native_receipts(boundary)
+    await queue(boundary)
+    boundary.runtime.native.queued_inputs = 1
+    await reach_apply(boundary)
+    await settle(boundary)
+    assert operation(boundary)["state"]["effect"] == "unknown"
+    assert not override_path(boundary.owner["id"]).exists()
+    return operation(boundary)
+
+
+async def test_original_operation_read_is_observational_and_redacted(boundary):
+    saved = await native_refusal(boundary)
+    before = copy.deepcopy(saved)
+    calls = list(boundary.runtime.calls)
+    inspected = (await recovery(boundary, "read"))["result"]
+    assert inspected["nativeEffect"] == "none"
+    assert inspected["state"]["effect"] == "unknown"
+    assert set(inspected) == {"operationId", "commandId", "sessionId", "revision", "state",
+                              "history", "nativeEffect", "attempts", "workReplayed"}
+    fields = {"phase", "stage", "effect", "attemptId", "revision", "at"}
+    assert not set(inspected["state"]) - fields
+    assert all(not set(row) - fields for row in inspected["history"])
+    assert saved["attempts"][0]["key"] not in json.dumps(inspected)
+    assert saved["request"]["authority"]["grantId"] not in json.dumps(inspected)
+    assert operation(boundary) == before and boundary.runtime.calls == calls
+    assert boundary.owner["configurationBusy"]
+
+
+async def test_host_receipt_reads_use_service_home_not_ambient_home(boundary, monkeypatch, tmp_path):
+    await native_refusal(boundary)
+    calls = list(boundary.runtime.calls)
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "unrelated-ambient-home"))
+    assert (await recovery(boundary, "read"))["result"]["nativeEffect"] == "none"
+    assert (await recovery(boundary, "reconcile"))["result"]["state"]["effect"] == "none"
+    assert boundary.runtime.calls == calls
+    assert not (tmp_path / "unrelated-ambient-home").exists()
+
+
+async def test_reconciliation_does_not_schedule_queued_peer_or_warm(boundary, monkeypatch):
+    await native_refusal(boundary)
+    called = []
+    async def drain(sid):
+        called.append(sid)
+    monkeypatch.setattr(boundary.app.collaboration, "drain", drain)
+    calls = list(boundary.runtime.calls)
+    await recovery(boundary, "reconcile")
+    await scheduler_barrier()
+    assert not called and boundary.runtime.calls == calls
+    assert not boundary.runtime.inputs
+
+
+async def test_recovery_cannot_borrow_original_grant_from_new_peer_input(boundary):
+    await native_refusal(boundary)
+    receipt = await agent(boundary.app, boundary.peer, "coordination.send",
+        {"sessionId": boundary.owner["id"], "text": "Synthetic recovery request", "mode": "notify"},
+        "unprivileged-peer-recovery")
+    boundary.owner["collaborationGeneration"] = {
+        "id": "peer-recovery-turn", "inputIds": [receipt["requestId"]], "terminal": False}
+    with pytest.raises(AppError, match="cannot borrow"):
+        await recovery(boundary, "reconcile")
+    assert operation(boundary)["state"]["effect"] == "unknown"
+
+
+async def test_stale_root_generation_cannot_resume(boundary):
+    saved = await native_refusal(boundary)
+    await recovery(boundary, "reconcile")
+    current = operation(boundary)
+    with pytest.raises(AppError, match="transport-bound"):
+        await agent(boundary.app, boundary.owner, "configuration.operation.resume",
+            {"sessionId": boundary.owner["id"], "operationId": saved["id"], "expectedRevision": current["revision"]},
+            "stale-recovery", _generationId="old-generation")
+    assert operation(boundary) == current
+
+
+async def test_explicit_resume_waits_for_original_owner_turn_without_reapproval(boundary):
+    await native_refusal(boundary)
+    await recovery(boundary, "reconcile")
+    boundary.runtime.native.queued_inputs = 0
+    boundary.owner["status"] = "working"
+    calls = list(boundary.runtime.calls)
+    receipt = await recovery(boundary, "resume")
+    task = boundary.app.management.pending_config_tasks[boundary.owner["id"]]
+    await scheduler_barrier()
+    assert receipt["result"]["state"]["phase"] == "queued"
+    assert boundary.runtime.calls == calls
+    boundary.owner["status"] = "idle"
+    await asyncio.wait_for(task, 3)
+    assert operation(boundary)["state"]["effect"] == "mounted"
+    assert len(boundary.app.configuration_authority.rows(boundary.owner["id"])) == 1
+
+
+async def test_original_operation_reconcile_resume_reuses_identity_and_authority(boundary):
+    saved = await native_refusal(boundary)
+    request, history = copy.deepcopy(saved["request"]), copy.deepcopy(saved["history"])
+    reconciled = (await recovery(boundary, "reconcile"))["result"]
+    assert reconciled["state"]["effect"] == "none"
+    assert boundary.runtime.native.queued_inputs == 1  # Accepted work wasn't erased.
+    assert not boundary.owner["configurationBusy"]
+    # A later owner turn uses the original grant, not a fresh capture.
+    boundary.owner["collaborationGeneration"] = {
+        "id": "later-recovery-generation", "inputIds": ["synthetic-recovery"], "terminal": False}
+    boundary.runtime.native.queued_inputs = 0
+    resumed = await recovery(boundary, "resume", identity="explicit-resume")
+    task = boundary.app.management.pending_config_tasks[boundary.owner["id"]]
+    await asyncio.wait_for(task, 3)
+    final = operation(boundary)
+    assert final["id"] == saved["id"] and final["request"] == request
+    assert final["history"][:len(history)] == history
+    assert len(final["attempts"]) == 2
+    assert final["attempts"][0] == saved["attempts"][0]
+    assert final["attempts"][1]["attemptId"] != final["attempts"][0]["attemptId"]
+    assert final["state"]["effect"] == "mounted" and final["state"]["phase"] == "ready"
+    assert json.loads(override_path(boundary.owner["id"]).read_text()) == plan(2)
+    calls = list(boundary.runtime.calls)
+    repeated = await recovery(boundary, "resume", revision=reconciled["revision"], identity="explicit-resume")
+    assert repeated["duplicate"] and repeated["result"] == resumed["result"]
+    await scheduler_barrier()
+    assert boundary.runtime.calls == calls
+
+
+@pytest.mark.parametrize("verb", ["reconcile", "resume"])
+async def test_recovery_stale_cas_and_peer_cannot_claim_original_operation(boundary, verb):
+    saved = await native_refusal(boundary)
+    if verb == "resume":
+        await recovery(boundary, "reconcile")
+    before = copy.deepcopy(operation(boundary))
+    with pytest.raises(AppError, match="revision changed"):
+        await recovery(boundary, verb, revision=1)
+    with pytest.raises(AppError):
+        await recovery(boundary, verb, actor=boundary.peer)
+    assert operation(boundary) == before
+    assert before["request"] == saved["request"]
+
+
+@pytest.mark.parametrize("invalidated", ["revoked", "expired", "stop", "workspace", "execution", "payload"])
+async def test_original_recovery_authority_and_target_cannot_be_replaced(boundary, invalidated):
+    await native_refusal(boundary)
+    await recovery(boundary, "reconcile")
+    saved = operation(boundary)
+    if invalidated == "revoked":
+        await revoke(boundary.app, boundary.authorized)
+        # A newly granted capability is deliberately NOT a replacement binding.
+        await grant(boundary.app, ["runtime_configuration"], ["session"], "replacement-grant")
+    elif invalidated == "expired":
+        expired = boundary.app.configuration_authority.record(boundary.authorized["id"])
+        expired["expiresAt"] = time.time() - 1
+        boundary.app.configuration_authority.save(expired)
+        boundary.app.db.commit()
+    elif invalidated == "stop":
+        boundary.owner["interruptionRevision"] = boundary.owner.get("interruptionRevision", 0) + 1
+    elif invalidated == "workspace":
+        boundary.owner["workspace"] += "/other"
+    elif invalidated == "execution":
+        boundary.owner["executionRevision"] = 1
+    else:
+        boundary.app.management.queued_path(boundary.owner["id"]).write_text(json.dumps(plan(3)))
+    with pytest.raises(AppError):
+        await recovery(boundary, "resume")
+    assert operation(boundary)["request"] == saved["request"]
+    assert len(operation(boundary)["attempts"]) == 1
+    assert not override_path(boundary.owner["id"]).exists()
+
+
+@pytest.mark.parametrize("fault", ["missing", "signature", "identity", "unknown", "saved"])
+async def test_recovery_never_infers_no_effect_from_missing_or_forged_evidence(boundary, fault):
+    from amplifier_web.configuration_recovery import receipt_path, seal
+    saved = await native_refusal(boundary)
+    attempt = saved["attempts"][-1]
+    path = receipt_path(attempt)
+    if fault == "missing":
+        path.unlink()
+    else:
+        value = json.loads(path.read_text())
+        if fault == "signature":
+            value["signature"] = "0" * 64
+        elif fault == "identity":
+            value["body"]["attemptId"] = "foreign-attempt"
+        else:
+            value = seal(attempt, "unknown" if fault == "unknown" else "saved_not_mounted", terminal=True)
+        path.write_text(json.dumps(value))
+    if fault in {"missing", "signature", "identity"}:
+        with pytest.raises(AppError):
+            await recovery(boundary, "reconcile")
+    else:
+        assert (await recovery(boundary, "reconcile"))["result"]["state"]["effect"] != "none"
+    with pytest.raises(AppError):
+        await recovery(boundary, "resume")
+    assert boundary.owner["configurationBusy"]
+    assert len(operation(boundary)["attempts"]) == 1
+
+
+async def test_native_attempt_duplicate_refuses_without_overwriting_receipt(boundary):
+    from amplifier_web.configuration_recovery import native_apply, receipt_path
+    saved = await native_refusal(boundary)
+    attempt = saved["attempts"][0]
+    original = receipt_path(attempt).read_bytes()
+    boundary.runtime.native.queued_inputs = 0
+    async def unauthorized(_):
+        raise AssertionError("Duplicate must refuse before another admission")
+    with pytest.raises((FileExistsError, ValueError)):
+        await native_apply(boundary.runtime.controls, plan(2), attempt, unauthorized, lambda: 0)
+    assert receipt_path(attempt).read_bytes() == original
+    assert not override_path(boundary.owner["id"]).exists()
+
+
+@pytest.mark.parametrize("field", ["operationId", "requestHash", "sessionId", "attemptId"])
+async def test_private_attempt_swap_cannot_reconcile_another_operation(boundary, field):
+    saved = await native_refusal(boundary)
+    path = boundary.app.management.configuration_record_path(boundary.owner["id"], saved["id"])
+    changed = copy.deepcopy(saved)
+    changed["attempts"][-1][field] = "foreign-binding"
+    path.write_text(json.dumps(changed))
+    with pytest.raises(AppError, match="native attempt"):
+        await recovery(boundary, "reconcile")
+    assert boundary.owner["configurationBusy"]
+    assert not override_path(boundary.owner["id"]).exists()
+
+
+async def test_late_previous_attempt_cannot_authorize_resumed_attempt(boundary):
+    from amplifier_web.configuration_recovery import authorize
+    saved = await native_refusal(boundary)
+    old = {k: v for k, v in saved["attempts"][0].items() if k != "key"}
+    await recovery(boundary, "reconcile")
+    boundary.runtime.native.queued_inputs = 0
+    await recovery(boundary, "resume")
+    await asyncio.wait_for(boundary.app.management.pending_config_tasks[boundary.owner["id"]], 3)
+    with pytest.raises(ValueError, match="no longer admitted"):
+        authorize(boundary.app.management, boundary.owner["id"], old)
+    assert operation(boundary)["state"]["effect"] == "mounted"
+
+
+async def test_partial_native_save_receipt_remains_unknown_and_cannot_resume(boundary, monkeypatch):
+    from amplifier_web import runtime_controls
+    from amplifier_web.configuration_recovery import evidence
+    use_native_receipts(boundary)
+    original = runtime_controls.write_private
+    def partial(path, text):
+        if path == boundary.runtime.controls.state_path():
+            raise OSError("Synthetic second settings write failure")
+        return original(path, text)
+    monkeypatch.setattr(runtime_controls, "write_private", partial)
+    await queue(boundary)
+    await reach_apply(boundary)
+    await settle(boundary)
+    saved = operation(boundary)
+    assert evidence(saved["attempts"][-1])["effect"] == "unknown"
+    assert json.loads(override_path(boundary.owner["id"]).read_text()) == plan(2)
+    assert boundary.runtime.controls.state_path().read_bytes() == boundary.runtime.original_controls
+    await recovery(boundary, "reconcile")
+    with pytest.raises(AppError, match="no-effect"):
+        await recovery(boundary, "resume")
+    assert boundary.owner["configurationBusy"]
+
+
+async def test_recovery_raw_route_cannot_inject_receipt_or_borrow_other_origin(boundary):
+    await native_refusal(boundary)
+    with pytest.raises(AppError):
+        await recovery(boundary, "reconcile", evidence={"effect": "none"})
+    with pytest.raises(AppError, match="operation-bound"):
+        await agent(boundary.app, boundary.owner, "runtime.control",
+            {"sessionId": boundary.owner["id"], "operation": "configuration.operation.resume",
+             "args": {"effect": "none"}}, "raw-recovery")
+    assert operation(boundary)["state"]["effect"] == "unknown"
 
 
 async def settle(boundary):
