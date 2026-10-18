@@ -373,6 +373,46 @@ async def probe(root, variant):
         control_bytes, plan_bytes = controls.read_bytes(), stored.read_bytes()
         bind_command = 'placement-bind-command'
         report['controlHashBefore'] = digest(controls)
+        if variant == 'retired-control':
+            # Inject actual host retirement after ensure_runtime/attempt capture
+            # but before the original guarded control reaches _request. Do not
+            # replace startup, ownership, park, retirement or the native writer.
+            original_control = runtime.control
+            async def retire_before_control(identity, operation, arguments=None, *, guard=None):
+                if operation == BIND:
+                    assert 'retiredControl' not in report, 'Original binding was replayed'
+                    assert callable(guard), 'Placement control lost its host guard'
+                    before = copy.deepcopy(app.management.configuration_record(
+                        sid, owner['pendingConfiguration']['operationId']))
+                    old = runtime.workers[identity]
+                    assert before['attempts'][-1]['workerPid'] == old['process'].pid
+                    await until(lambda: runtime.retention.eligible(old))
+                    guard()
+                    async with runtime._admission(identity):
+                        assert runtime.workers[identity] is old and runtime.retention.eligible(old)
+                        assert not runtime.retention.protected(identity)
+                        retirement = runtime.retention.schedule(identity, old)
+                    await asyncio.wait_for(asyncio.shield(retirement), runtime.retention.reply_timeout)
+                    assert old['process'].returncode == 0
+                    assert identity not in runtime.workers and identity in runtime._retired
+                    assert await writer_available(workspace, native)
+                    assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
+                    assert app.management.configuration_record(sid, before['id']) == before
+                    report['retiredControl'] = {
+                        'oldPid':old['process'].pid, 'oldReturncode':old['process'].returncode,
+                        'operationId':before['id'], 'originalRequestHash':before['requestHash'],
+                        'attemptId':before['attempts'][-1]['attemptId'],
+                        'attemptWorkerPid':before['attempts'][-1]['workerPid'],
+                        'writerAvailableAfterRetirement':True,
+                        'controlHashBeforeRestart':digest(controls), 'guardPresent':True}
+                    try:
+                        return await original_control(identity, operation, arguments, guard=guard)
+                    except Exception as exc:
+                        report['retiredControl']['controlFailure'] = {
+                            'type':type(exc).__name__, 'message':str(exc)}
+                        raise
+                return await original_control(identity, operation, arguments, guard=guard)
+            runtime.control = retire_before_control
         if variant == 'when-idle':
             grant = (await action('capability.grant', {'sessionId':sid,'effects':['runtime_configuration'],
                 'scopes':['session'],'reason':'Synthetic explicit placement choice'}, 'placement-grant'))['result']
@@ -410,7 +450,7 @@ async def probe(root, variant):
             release.touch()
         else:
             snapshot = (await action(READ, {'sessionId':sid,'moduleId':MODULE}, 'placement-read-command'))['result']
-            if variant == 'cold' or mutant:
+            if variant in {'cold', 'retired-control'} or mutant:
                 assert not runtime.workers and not calls.exists()
                 assert snapshot['mounted']['status']=='unobserved'
             else:
@@ -436,6 +476,50 @@ async def probe(root, variant):
         if variant != 'when-idle':
             assert (calls.read_bytes() if calls.exists() else b'') == before_calls
             report['noBindingProviderReplay'] = True
+        if variant == 'retired-control':
+            retained = copy.deepcopy(current)
+            proof = report['retiredControl']
+            assert report['workerReadyAtSettlement'] and len(processes) == 2
+            assert processes[0].pid == proof['oldPid']
+            assert processes[1].pid != proof['oldPid']
+            assert current['state']['phase'] == 'error' and current['state']['effect'] == 'unknown'
+            assert len(current['attempts']) == 1 and owner['configurationBusy']
+            assert current['requestHash'] == proof['originalRequestHash']
+            assert current['attempts'][0]['attemptId'] == proof['attemptId']
+            assert current['attempts'][0]['workerPid'] == proof['oldPid']
+            assert 'does not match its native target or payload' in proof['controlFailure']['message']
+            proof['newPid'] = processes[1].pid
+            proof['controlHashAfterRestart'] = digest(controls)
+            assert controls.read_bytes() == control_bytes, 'Retired placement startup changed control-state bytes'
+            assert stored.read_bytes() == plan_bytes
+            assert report['actualReadback']['mounted'] == {
+                'status':'observed', 'workingDirectory':str(workspace)}
+            observed = (await action('configuration.operation.read',
+                {'sessionId':sid, 'operationId':current['id']}, 'retired-effect-read'))['result']
+            proof['effectRead'] = observed
+            assert observed['state']['effect'] == 'unknown' and observed['nativeEffect'] == 'unconfirmed'
+            from amplifier_web.service import AppError
+            try:
+                await action('configuration.operation.reconcile', {
+                    'sessionId':sid, 'operationId':current['id'],
+                    'expectedRevision':observed['revision']}, 'retired-reconcile')
+            except AppError as exc:
+                assert 'Native evidence is absent' in str(exc)
+                proof['reconcileRefusal'] = str(exc)
+            else:
+                raise AssertionError('Retired PID mismatch was incorrectly classified as no effect')
+            duplicate = await action(BIND, bind_args, bind_command)
+            assert duplicate['duplicate']
+            await asyncio.sleep(0)
+            assert app.management.configuration_record(sid, current['id']) == retained
+            assert runtime.workers[sid]['process'] is processes[1] and len(processes) == 2
+            assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
+            assert not calls.exists()
+            await until(lambda: runtime.workers[sid].get('parked'))
+            assert await writer_available(workspace, native)
+            proof.update(originalRecordPreserved=True, noReplay=True, writerAvailableAfterRefusal=True)
+            report['stages'].append('retired-start-preserved-original-unknown-held')
+            return  # Deliberate held original, not mounted success or a new input.
         if variant == 'parked-remount':
             events = [json.loads(line) for p in root.glob('worker-events-*.jsonl')
                       for line in p.read_text().splitlines()]
