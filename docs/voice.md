@@ -47,6 +47,8 @@ Physical acceptance checklist (not yet executed): on iPhone Safari and its insta
 
 Automated scenarios cover the delegation-only boundary, root-generation ownership, pending-worker status, coalesced-result deduplication, continued steering, late transcripts and corrections, rejected admission, late completion after a waiter deadline, append acknowledgment/rejection, final-caveat preservation, newer-input result revision, bounded resume history, typed-message availability, scoped call controls, and call/work lifetime separation. These fixtures make no paid API requests. Their assertions do not establish actual speech quality, account-specific model access, latency, or browser microphone/playback behavior; those require real-call acceptance.
 
+A real synthetic resume scenario exposed a separate model-grounding failure: Amplifier inspected a saved canvas artifact, received `open:false`, and claimed it had reopened the artifact without dispatching an action. The browser correctly remained closed. The voice-to-backend prompt now requires an authorized action and verified outcome for mutation claims; inspection success alone is insufficient. This prompt policy is not a deterministic guarantee. Acceptance requires the same spoken request to produce an actual action receipt and visible browser state, not merely a plausible spoken answer.
+
 Sources verified during implementation:
 
 - [Live WebRTC](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live)

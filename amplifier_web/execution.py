@@ -112,7 +112,8 @@ def anchor_turns(session):
             continue
         exact=next((m for m in messages if m.get('role')=='user' and (
             m['id'] in {turn.get('messageId'),turn.get('userMessageId')} or
-            (m.get('inputId') and m['inputId'] in {turn.get('inputId'),turn.get('id')}))),None)
+            any(m.get(key) and m[key] in {turn.get('inputId'),turn.get('id')}
+                for key in ('inputId','voiceInputId')))),None)
         started=turn.get('startedAt')
         preceding=[m for m in messages if isinstance(started,(int,float)) and
                    isinstance(m.get('createdAt'),(int,float)) and m['createdAt']<=started]

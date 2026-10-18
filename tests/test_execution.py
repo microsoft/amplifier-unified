@@ -53,6 +53,31 @@ def test_voice_work_positions_are_persisted_and_do_not_follow_later_messages():
     assert [t['anchorMessageId'] for t in session['execution']['turns']]==['ack','ack']
 
 
+def test_voice_turn_anchors_to_exact_accepted_user_before_later_acknowledgment():
+    from amplifier_web.execution import anchor_turns
+    session = {'messages': [
+        {'id': 'spoken', 'role': 'user', 'voiceInputId': 'voice:call:request', 'text': 'Read the file.', 'createdAt': 10},
+        {'id': 'unrelated', 'role': 'user', 'voiceInputId': 'voice:call:other', 'text': 'Read the file.', 'createdAt': 10.5},
+        {'id': 'ack', 'role': 'assistant', 'text': 'On it.', 'createdAt': 11}],
+        'execution': {'turns': [{'id': 'voice:call:request', 'inputId': 'voice:call:request', 'startedAt': 12}], 'nodes': []}}
+    anchor_turns(session)
+    assert session['execution']['turns'][0]['anchorMessageId'] == 'spoken'
+
+
+def test_unmatched_voice_turn_keeps_saved_fallback_after_late_exact_binding():
+    from amplifier_web.execution import anchor_turns
+    session = {'messages': [
+        {'id': 'spoken', 'role': 'user', 'voiceInputId': 'voice:call:other', 'text': 'Read the file.', 'createdAt': 10},
+        {'id': 'ack', 'role': 'assistant', 'createdAt': 11}],
+        'execution': {'turns': [{'id': 'voice:call:request', 'label': 'Read the file.', 'startedAt': 12}], 'nodes': []}}
+    anchor_turns(session)
+    assert session['execution']['turns'][0]['anchorMessageId'] == 'ack'
+    session['messages'][0]['voiceInputId'] = 'voice:call:request'
+    session['messages'].append({'id': 'later', 'role': 'user', 'createdAt': 20})
+    anchor_turns(session)
+    assert session['execution']['turns'][0]['anchorMessageId'] == 'ack'
+
+
 def test_typed_turns_match_input_ids_and_work_without_messages_stays_at_start():
     session={'messages':[{'id':'u','role':'user','inputId':'typed','createdAt':10},{'id':'other','role':'user','createdAt':15}],
              'execution':{'turns':[{'id':'typed','startedAt':20},{'id':'early','startedAt':1}], 'nodes':[]}}
