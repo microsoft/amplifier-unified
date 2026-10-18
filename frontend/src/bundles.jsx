@@ -1,10 +1,11 @@
 import {SettingsActions} from './settings-layout';
+import {ConfigurationRecovery,configurationHeld} from './configuration-recovery';
 import {Collection,CollectionRow,OrderEditor} from './settings-collections';
 import {AttentionBadge} from './attention';
 import {useListFilter} from './list-filter.jsx';
-import {SettingsGroup,ResultNotice} from './settings-ui';
+import {SettingsGroup,ResultNotice,SettingsPageContext} from './settings-ui';
 import {providerConfig} from './setup-data';
-import React,{useState,useEffect} from 'react';
+import React,{useState,useEffect,useRef,useContext} from 'react';
 import {moduleRows,updateModule,parsePlan} from './module-config';
 import {Plus,Search,ArrowUp,ArrowDown,Trash2,Download,RefreshCw,Layers,Package,Check,Code2,Settings,SlidersHorizontal,Wrench} from 'lucide-react';
 
@@ -21,6 +22,7 @@ function useSharedDraft(shared,defaults,key,act){
  return [draft,edit];
 }
 export function BundleSettings({state,session,act}){
+ const scopedPage=useContext(SettingsPageContext);
  const [draft,edit]=useSharedDraft(state.view?.bundleManager,sourceDefaults,'bundleManager',act);
  const entries=Array.isArray(state.bundles)?state.bundles:state.bundles?.entries||[];
  const [enabledDrafts,setEnabledDrafts]=useState({});
@@ -39,7 +41,7 @@ export function BundleSettings({state,session,act}){
  const selected=candidates.find(candidate=>candidate.uri===draft.selectedUri);
  const management=state.management||{};
  const pending=Object.entries(state.actionStatus||{}).some(([action,op])=>action.startsWith('bundle')&&['queued','running','pending','working','discovering','applying'].includes(op.phase));
- useEffect(()=>{act('bundles.list',{})},[]);
+ useEffect(()=>{if(!scopedPage||!configurationHeld(session))act('bundles.list',{})},[]);
  return <div className="a-bundle-pane">
   <SettingsGroup id="add-bundles" title="Add capabilities" summary="Browse community bundle repositories" state={state} act={act}><section className="a-settings-section"><div className="a-settings-heading"><Layers/><div><h3>Build your Amplifier</h3><p>Add capabilities from community repositories, then shape the modules they compose into.</p></div></div>
    {management.error&&<div className="a-alert" role="alert"><span>{management.error}</span></div>}
@@ -67,10 +69,15 @@ export function ModuleSettings({state,session,act}){
  const plan=inspected?.plan;
  const management=state.management||{};
  const configOp=state.actionStatus?.['configuration.apply'],inspectOp=state.actionStatus?.['configuration.inspect'];
- const pending=!!session?.configurationBusy||['queued','working'].includes(inspectOp?.phase)||['queued','working'].includes(configOp?.phase);
+ const held=configurationHeld(session);
+ const recoveryDraft=useRef(null);
+ if(session?.pendingConfiguration?.phase==='error'||session?.pendingConfiguration?.stage==='interrupted')recoveryDraft.current=session.id+':'+session.pendingConfiguration.operationId;
+ const preserveRecoveryDraft=recoveryDraft.current===session?.id+':'+session?.pendingConfiguration?.operationId;
+ const pending=held||['queued','working'].includes(inspectOp?.phase)||['queued','working'].includes(configOp?.phase);
  const active=!!session&&['working','running','busy','starting','stopping'].includes(session.status);
- useEffect(()=>{if(session)act('configuration.inspect',{id:session.id})},[session?.id]);
- useEffect(()=>{if(plan&&session&&(draft.sessionId!==session.id||!draft.text||(session.pendingConfiguration?.phase==='ready'&&draft.appliedAt!==session.pendingConfiguration?.appliedAt)))edit({sessionId:session.id,text:pretty(plan),selectedKey:'',configText:'',appliedAt:session.pendingConfiguration?.appliedAt})},[session?.id,plan]);
+ useEffect(()=>{if(session&&!configurationHeld(session))act('configuration.inspect',{id:session.id})},[session?.id]);
+ // Preserve ordinary apply settlement; recovery must not overwrite an editor draft.
+ useEffect(()=>{if(plan&&session&&!held&&(draft.sessionId!==session.id||!draft.text||(!preserveRecoveryDraft&&session.pendingConfiguration?.phase==='ready'&&draft.appliedAt!==session.pendingConfiguration?.appliedAt)))edit({sessionId:session.id,text:pretty(plan),selectedKey:'',configText:'',appliedAt:session.pendingConfiguration?.appliedAt})},[session?.id,plan,held]);
  let parsed=null,parseError='';
  try{if(draft.sessionId===session?.id&&draft.text)parsed=parsePlan(draft.text)}catch(error){parseError=error.message}
  const rows=moduleRows(parsed),selected=rows.find(row=>row.key===draft.selectedKey);
@@ -79,14 +86,15 @@ export function ModuleSettings({state,session,act}){
  function update(key,patch){try{const next=updateModule(parsed,key,patch);edit({text:pretty(next),...(key===draft.selectedKey&&patch.config?{configText:pretty(patch.config)}:{})})}catch(error){edit({parseError:error.message})}}
  function select(row){edit({selectedKey:row.key,detailOpen:true,configText:pretty(row.config),parseError:''})}
  return <section className="a-settings-section a-module-settings"><div className="a-settings-heading"><Code2/><div><h3>Running mount plan</h3><p>{session?`Inspect the loaded configuration behind “${session.title}”.`:'Start or select a conversation to inspect its composed configuration.'}</p></div></div>
+  {session?.pendingConfiguration&&<ConfigurationRecovery key={session.id+':'+(session.pendingConfiguration.operationId||'legacy')} session={session} act={act}/>}
+  {session?.pendingConfiguration?.phase==='queued'&&<button type="button" className="a-soft" data-action="configuration.cancel" onClick={()=>act('configuration.cancel',{id:session.id})}>Cancel queued changes</button>}
   {session&&<><ResultNotice phase={inspectOp?.phase} message={inspectOp?.error||(['queued','working'].includes(inspectOp?.phase)?'Reading the loaded AmplifierSession mount plan…':'')}/><div className="a-settings-row"><span className="a-caption a-wrap">{session.bundle}</span><button className="a-soft" disabled={pending} data-action="configuration.inspect" onClick={()=>act('configuration.inspect',{id:session.id})}><RefreshCw/>{plan?'Refresh configuration':'Load configuration'}</button></div>
-  {plan&&<><p className="a-caption">The fully composed plan includes your root bundle and app capabilities. Edits below apply to this conversation’s mounted configuration. Apply changes to reload modules and preserve the conversation history.</p>
+  {plan&&!held&&<><p className="a-caption">The fully composed plan includes your root bundle and app capabilities. Edits below apply to this conversation’s mounted configuration. Apply changes to reload modules and preserve the conversation history.</p>
    <Collection label="modules" detailOpen={!!draft.detailOpen} onBack={()=>edit({detailOpen:false})} list={<>{moduleFilter}{shownRows.map(row=><CollectionRow key={row.key} id={row.key} label={row.id} description={row.section+(row.required?' · required':'')} checked={row.enabled} disabled={row.required} checkLabel={`Enable ${row.id}`} onCheck={enabled=>update(row.key,{enabled})} selected={row.key===draft.selectedKey} onSelect={()=>select(row)}/>)}</>}>{selected?<><h4>{selected.module}</h4>{selected.source&&<p className="a-caption a-wrap">{selected.source}</p>}<div className="a-module-fields">{Object.entries(selected.config).map(([key,value])=>{const secret=/api.?key|password|secret|(?:access|refresh|github|auth).?token/i.test(key),id='module-field-'+key;return <div key={key}><label htmlFor={id}>{key.replaceAll('_',' ')}</label>{secret?<p className="a-caption">Credential preserved. Manage keys in Model providers.</p>:typeof value==='boolean'?<select id={id} value={String(value)} data-action="view.update" onChange={e=>update(selected.key,{config:{...selected.config,[key]:e.target.value==='true'}})}><option value="true">On</option><option value="false">Off</option></select>:value===null||typeof value==='object'?<p className="a-caption">{Array.isArray(value)?`${value.length} items`:'Structured value'} · edit in advanced configuration below.</p>:<input id={id} type={typeof value==='number'?'number':'text'} value={value} data-action="view.update" onChange={e=>{if(typeof value==='number'&&!e.target.value)return;update(selected.key,{config:{...selected.config,[key]:typeof value==='number'?Number(e.target.value):e.target.value}})}}/>}</div>})}</div><button className="a-link" data-action="view.update" aria-expanded={draft.configAdvanced} onClick={()=>edit({configAdvanced:!draft.configAdvanced})}>{draft.configAdvanced?'Hide':'Edit'} advanced configuration</button>{draft.configAdvanced&&<><label htmlFor="module-config">Module configuration (JSON)</label><textarea id="module-config" className="a-json-editor" value={draft.configText} spellCheck={false} data-action="view.update" onChange={e=>{try{providerConfig(e.target.value);edit({configText:e.target.value,parseError:''})}catch(error){if(!error.message.includes('private API key'))edit({configText:e.target.value,parseError:''});else edit({parseError:error.message})}}}/><button className="a-soft" data-action="view.update" onClick={()=>{try{const config=providerConfig(draft.configText);edit({text:pretty(updateModule(parsed,selected.key,{config})),parseError:''})}catch(error){edit({parseError:error.message})}}}><Check/>Update draft</button></>}</>:<div className="a-settings-empty"><Code2/><span>Select a module to edit its configuration.</span></div>}</Collection>
    {(parseError||draft.parseError)&&<div className="a-alert" role="alert"><span>{parseError||draft.parseError}</span></div>}
    <div className="a-module-plan-options"><button className="a-link" data-action="view.update" onClick={()=>edit({showRaw:!draft.showRaw})}>{draft.showRaw?'Hide':'Edit'} full configuration JSON</button>{draft.showRaw&&<><label htmlFor="full-module-plan">Full composed plan</label><textarea id="full-module-plan" className="a-json-editor a-full-plan" spellCheck={false} value={draft.text} data-action="view.update" onChange={e=>edit({text:e.target.value,parseError:''})}/></>}
    {active&&<p className="a-caption">Work is active. Apply when idle will queue these changes until this turn and its worker lanes finish.</p>}
    </div><SettingsActions><button className="a-primary" disabled={!parsed||!!parseError||pending||!dirty} data-action="configuration.apply" onClick={()=>act('configuration.apply',{id:session.id,config:parsed,whenIdle:true})}><Check/>{active?'Apply when idle':'Apply to loaded session'}</button><button className="a-soft" data-action="view.update" disabled={!dirty&&!draft.parseError&&!parseError} onClick={()=>edit({text:pretty(plan),selectedKey:'',configText:'',parseError:''})}>Revert draft</button><span className="a-caption">{dirty?'Unapplied changes':'Saved configuration'}</span></SettingsActions>
-   {session.pendingConfiguration&&<><ResultNotice phase={session.pendingConfiguration.phase==='queued'?'pending':session.pendingConfiguration.phase==='applying'?'working':session.pendingConfiguration.phase} message={session.pendingConfiguration.error||session.pendingConfiguration.detail||'Applying mount-plan changes…'}/>{session.pendingConfiguration.phase==='queued'&&<button className="a-soft" data-action="configuration.cancel" onClick={()=>act('configuration.cancel',{id:session.id})}>Cancel queued changes</button>}</>}
    <div className="a-custom-bundle"><h4>Keep this as a custom bundle</h4><p>Save the applied configuration under your own name. Use Export below to share it. Apply any pending changes first.</p><div className="a-form-grid"><div><label htmlFor="custom-bundle-name">Name</label><input id="custom-bundle-name" value={draft.name} data-action="view.update" onChange={e=>edit({name:e.target.value})}/></div><div><label htmlFor="custom-bundle-description">Description</label><input id="custom-bundle-description" value={draft.description} data-action="view.update" onChange={e=>edit({description:e.target.value})}/></div></div><div className="a-dialog-actions"><button className="a-soft" disabled={!parsed||!!parseError||dirty||!draft.name.trim()||pending} data-action="bundle.save" onClick={()=>act('bundle.save',{sessionId:session.id,name:draft.name.trim(),description:draft.description})}><Download/>Save custom bundle</button></div></div>
   </>}
   </>}

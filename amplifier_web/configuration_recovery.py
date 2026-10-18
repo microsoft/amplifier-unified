@@ -24,7 +24,7 @@ def definitions(schema, string):
     return {
         "configuration.operation.read": (
             "Observe this owner's retained configuration operation without starting a runtime. No payload, grant or secret is returned.",
-            schema(properties, ["sessionId"])),
+            schema({**properties, "includeRecovery": {"type": "boolean"}}, ["sessionId"])),
         **{f"configuration.operation.{name}": (
             description, schema({**properties, "expectedRevision": {"type": "integer", "minimum": 1}}))
             for name, description in {
@@ -177,24 +177,11 @@ def public(record, observed=None):
     }
 
 
-def command(management, action, args, origin, caller):
-    """Run under service.lock; use the existing shared command ledger for dedup."""
+def validate_recovery(management, session, record, attempt, observed, action, args, origin):
+    """One validation path for mutations and observational UI availability."""
     service = management.service
-    session = service._session(args["sessionId"])
-    if origin not in {"ui", "user"}:
-        source = service.collaboration.source({}, origin, caller)
-        if source["id"] != session["id"]:
-            raise ValueError("Configuration recovery belongs to the original root.")
-        if not action.endswith(".read"):
-            service.collaboration.active_binding(source)
     pending = session.get("pendingConfiguration", {})
-    operation = args.get("operationId") or pending.get("operationId")
-    record = management.configuration_record(session["id"], operation)
-    attempt = latest_attempt(record)
-    observed = evidence(attempt, home=service.data_dir) if attempt else None
-    if action.endswith(".read"):
-        return public(record, observed)
-    if pending.get("operationId") != operation or args["expectedRevision"] != record["revision"]:
+    if pending.get("operationId") != record["id"] or args["expectedRevision"] != record["revision"]:
         raise ValueError("The original configuration operation revision changed.")
     interrupted = (action.endswith(".reconcile")
         and record["state"]["phase"] == "applying"
@@ -214,8 +201,8 @@ def command(management, action, args, origin, caller):
         peers = service.configuration_authority.peer_authorities(
             session, grant, authority["effect"], authority["scope"])
         recovery_authority = {**authority, "peerGrants": authority.get("peerGrants", []) + peers}
+    effect = record["state"]["effect"]
     if action.endswith(".reconcile"):
-        effect = record["state"]["effect"]
         if attempt:
             if not observed:
                 raise ValueError("Native evidence is absent; the operation remains unknown.")
@@ -227,6 +214,72 @@ def command(management, action, args, origin, caller):
             effect = observed["effect"]
         elif effect != "none":
             raise ValueError("Legacy operation lacks native binding; its outcome remains unknown.")
+    elif action.endswith(".resume"):
+        if (record["state"]["effect"] != "none"
+                or attempt and (record["state"]["stage"] != "reconciled"
+                    or not observed or observed["effect"] != "none" or not observed.get("terminal"))):
+            raise ValueError("Resume requires proven pre-write no-effect evidence; unknown or saved work is not repeated.")
+    else:
+        raise ValueError("Unknown configuration recovery action")
+    return effect, recovery_authority
+
+
+def recovery_status(management, session, record, attempt, observed, origin):
+    from .service import AppError
+    status = {"canReconcile": False, "canResume": False,
+              "reason": "This change remains held. Its original permission, target or evidence is not currently valid."}
+    for verb, key in (("reconcile", "canReconcile"), ("resume", "canResume")):
+        try:
+            if origin not in {"ui", "user"}:
+                management.service.collaboration.active_binding(session)
+            validate_recovery(management, session, record, attempt, observed,
+                "configuration.operation." + verb, {"expectedRevision": record["revision"]}, origin)
+            status[key] = True
+        except (ValueError, OSError, KeyError, TypeError, AttributeError, AppError):
+            pass  # Never publish raw errors, private paths, plan or authority.
+    if status["canResume"]:
+        status["reason"] = "No settings write occurred. You can explicitly resume the original change; its permission will be checked again."
+    elif status["canReconcile"]:
+        status["reason"] = "Check the saved outcome before deciding what can happen next. Checking never applies changes."
+    elif record["state"]["phase"] in {"queued", "applying"} and record["state"].get("stage") != "interrupted":
+        status["reason"] = "The original change is queued or still applying. Acceptance is not confirmation that it is mounted."
+    elif record["state"]["phase"] == "ready" and record["state"]["effect"] == "mounted":
+        status["reason"] = "Changes are applied to the loaded session."
+    return status
+
+
+def command(management, action, args, origin, caller):
+    """Run under service.lock; use the existing shared command ledger for dedup."""
+    service = management.service
+    session = service._session(args["sessionId"])
+    if origin not in {"ui", "user"}:
+        source = service.collaboration.source({}, origin, caller)
+        if source["id"] != session["id"]:
+            raise ValueError("Configuration recovery belongs to the original root.")
+        if not action.endswith(".read"):
+            service.collaboration.active_binding(source)
+    pending = session.get("pendingConfiguration", {})
+    operation = args.get("operationId") or pending.get("operationId")
+    include_recovery = action.endswith(".read") and args.get("includeRecovery")
+    try:
+        record = management.configuration_record(session["id"], operation)
+        attempt = latest_attempt(record)
+        observed = evidence(attempt, home=service.data_dir) if attempt else None
+        if include_recovery:
+            result = public(record, observed)
+            result["recovery"] = recovery_status(management, session, record, attempt, observed, origin)
+            return result
+    except (ValueError, OSError, KeyError, TypeError, AttributeError):
+        if include_recovery:
+            return {"sessionId": session["id"], "operationId": operation,
+                    "recovery": {"canReconcile": False, "canResume": False,
+                        "reason": "The original operation or its evidence cannot be verified. Changes remain held; nothing was retried."}}
+        raise
+    if action.endswith(".read"):
+        return public(record, observed)
+    effect, recovery_authority = validate_recovery(
+        management, session, record, attempt, observed, action, args, origin)
+    if action.endswith(".reconcile"):
         # Cancellation leaves its original applying/interrupted evidence intact
         # until the host task settles and an explicit reconciliation observes
         # this attempt. Classification is not permission to replay the write.
@@ -234,10 +287,6 @@ def command(management, action, args, origin, caller):
             effect=effect, recoveryRequired=False)
         management.settle_configuration_fence(session, operation)
     elif action.endswith(".resume"):
-        if (record["state"]["effect"] != "none"
-                or attempt and (record["state"]["stage"] != "reconciled"
-                    or not observed or observed["effect"] != "none" or not observed.get("terminal"))):
-            raise ValueError("Resume requires proven pre-write no-effect evidence; unknown or saved work is not repeated.")
         if recovery_authority is not None:
             # Preserve current request lineage as an additional ceiling, never
             # replace the original grant or source binding.
