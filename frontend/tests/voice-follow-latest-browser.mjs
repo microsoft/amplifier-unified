@@ -14,7 +14,7 @@ try {
  await page.addInitScript(()=>{
   window.Audio=class {setAttribute(){} pause(){} play(){return Promise.resolve()}};
   window.RTCPeerConnection=class extends EventTarget {
-   constructor(){super();this.connectionState='new'}
+   constructor(){super();this.connectionState='new';this.iceGatheringState='complete'}
    createDataChannel(){const c=new EventTarget();c.readyState='open';c.close=()=>{};return c}
    addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(value){this.localDescription=value}
    async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){this.connectionState='closed'}

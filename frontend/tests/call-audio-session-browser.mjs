@@ -18,7 +18,7 @@ try {
   Object.defineProperty(navigator,'mediaSession',{value:{metadata:null,playbackState:'none',setActionHandler:(name,handler)=>probe.handlers[name]=handler,setMicrophoneActive:value=>probe.microphones.push(value)},configurable:true});
   window.Audio=class {setAttribute(){} pause(){} play(){probe.plays++;probe.lastPlayUserActivation=navigator.userActivation.isActive;return probe.blocked?Promise.reject(Error('Playback blocked')):Promise.resolve();}};
   class Peer extends EventTarget {
-   constructor(){super();this.connectionState='new';probe.peer=this;}
+   constructor(){super();this.connectionState='new';this.iceGatheringState='complete';probe.peer=this;}
    createDataChannel(){const channel=new EventTarget();channel.readyState='open';channel.close=()=>{};return channel;}
    addTrack(){} async createOffer(){return {type:'offer',sdp:'synthetic-offer'};}
    async setLocalDescription(value){this.localDescription=value;}
@@ -50,7 +50,7 @@ try {
  await expect.poll(()=>page.evaluate(()=>callProbe.track.enabled)).toBe(true);
  await page.evaluate(()=>callProbe.handlers.togglemicrophone());
  await expect(page.getByRole('button',{name:'Unmute microphone',exact:true})).toBeVisible();
- assert.equal(await page.evaluate(()=>window.amplifier.getState().voice.muted),true);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().voice.muted)).toBe(true);
  assert.equal(await page.evaluate(()=>callProbe.track.enabled),false);
  await page.evaluate(()=>{callProbe.audioSession.state='interrupted';callProbe.audioSession.dispatchEvent(new Event('statechange'));});
  await expect(page.getByText('Call audio interrupted by your device. Waiting for audio to become available.',{exact:true})).toBeVisible();

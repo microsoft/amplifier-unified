@@ -15,7 +15,7 @@ async def test_metric_preferences_survive_restart_and_new_client_without_usage_c
     client = service.shell.client('browser-one')
     composition = deepcopy(client['composition'])
     composition['presentation'].update(executionVisibility={'step': False, 'turn': True, 'conversation': False},
-                                     executionMetrics=['costUsd', 'cacheReadTokens'], conversationStatus=True)
+                                     executionMetrics=['costUsd', 'cacheReadTokens', 'voiceSeconds'], conversationStatus=True)
     change = await prepare(service, composition)
     receipt = await command(service, 'shell.changes.apply', clientId='browser-one', expectedRevision=0, changeId=change)
     assert receipt['accepted']
@@ -27,9 +27,15 @@ async def test_metric_preferences_survive_restart_and_new_client_without_usage_c
     for client_id in ('browser-one', 'new-browser'):
         p = shell.client(client_id)['composition']['presentation']
         assert p['executionVisibility'] == {'step': False, 'turn': True, 'conversation': False}
-        assert p['executionMetrics'] == ['costUsd', 'cacheReadTokens']
+        assert p['executionMetrics'] == ['costUsd', 'cacheReadTokens', 'voiceSeconds']
         assert p['conversationStatus'] is True
     fresh.close()
+
+
+def test_all_ten_execution_metrics_can_be_selected():
+    metrics = COMPOSITION['properties']['presentation']['properties']['executionMetrics']['items']['enum']
+    assert len(metrics) == 10 and 'voiceSeconds' in metrics
+    validate({'executionMetrics': metrics}, COMPOSITION['properties']['presentation'])
 
 
 @pytest.mark.parametrize('patch', [

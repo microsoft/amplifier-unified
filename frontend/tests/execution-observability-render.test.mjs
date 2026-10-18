@@ -44,3 +44,16 @@ test('selected-only compact input/output keep partial and live state',async()=>{
  await act(async()=>{root=create(view({calls:2,inputTokens:10,metricKnownCalls:{inputTokens:1}}))});assert.match(text(),/In 10 · Partial/);
  await act(async()=>root.update(view({outputTokens:3},true)));assert.match(text(),/Out 3 · Live/);
 });
+
+test('voice usage remains visible and incomplete after close without a zero token or price claim',async()=>{
+ const usage={voiceSeconds:12.5,usageFinalized:false,usageStatus:'incomplete'};
+ await act(async()=>{root=create(wrap({},React.createElement(UsageDetails,{usage})))});
+ assert.match(text(),/Voice seconds/);assert.match(text(),/12.5/);assert.match(text(),/Incomplete/);
+ assert.ok(!text().includes('Total tokens'));assert.ok(!text().includes('$'));
+ await act(async()=>root.update(wrap({executionMetrics:['voiceSeconds']},React.createElement(MetricSummary,{usage}))));
+ assert.match(text(),/voice seconds/);assert.match(text(),/Incomplete/);assert.ok(!text().includes('tokens'));
+ await act(async()=>root.update(wrap({executionMetrics:['costUsd']},React.createElement(MetricSummary,{usage}))));
+ assert.equal(root.toJSON(),null);
+ await act(async()=>root.update(wrap({executionMetrics:['voiceSeconds']},React.createElement(MetricSummary,{usage:{voiceSeconds:12.5,usageFinalized:true,usageStatus:'final'},pending:true}))));
+ assert.match(text(),/voice seconds/);assert.ok(!text().includes('Live'),'ongoing backend work cannot make a finalized voice duration live');
+});

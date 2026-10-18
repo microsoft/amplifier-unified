@@ -111,7 +111,7 @@ function App(){
  const referenceDraftLock=useRef(false),[referencingDraft,setReferencingDraft]=useState(false);
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
  const [awayFromBottom,setAwayFromBottom]=useState(false);
- const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
+ const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),voiceControlQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
  const [connectionFailure,setConnectionFailure]=useState(null);
  const chatLinkReceiver=useRef(null),[chatLink,setChatLink]=useState(null);
  const reportError=useCallback(error=>{
@@ -139,14 +139,14 @@ function App(){
      try{let content=effect.content;if(effect.type==='clipboard.url'){const response=await fetch(effect.url);if(!response.ok)throw Error('Source unavailable');content=await response.text()}await navigator.clipboard.writeText(content);await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'ready',message:'Source copied'}}})}
      catch(e){await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'error',message:'Clipboard unavailable: '+e.message}}});throw e}
     }
-    if(effect.type==='call.start'){try{await voiceClient.current.start(effect.args||{})}catch(error){await request('/api/voice/end',{method:'POST',body:{id:null}}).catch(()=>{});throw error}}
+    if(effect.type==='call.start')await voiceClient.current.start(effect.args||{});
     if(effect.type==='canvas.checkpoint')await checkpointSurfaces(effect.sessionId,effect.id);
     if(effect.type==='voice.visual.capture')await visualClient.current?.capture(effect);
     if(effect.type==='computer.visual.capture')await computerClient.current?.capture(effect);
-    if(effect.type==='call.end')await voiceClient.current.end();
+    if(effect.type==='call.end')await voiceClient.current.control('call.end',effect.args||{});
     if(effect.type==='call.resumeAudio')voiceClient.current.callAudio.resumePlayback();
     if(effect.type==='call.keepAwake')voiceClient.current.setKeepAwake(effect.enabled??effect.args?.enabled??true);
-    if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
+    if(effect.type==='call.mute')await voiceClient.current.control('call.mute',effect.args||{});
     if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();window.dispatchEvent(new Event('amplifier:notification-permission'));await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
    }).catch(e=>reportError(e));
   }
@@ -193,6 +193,16 @@ function App(){
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,error:'Settings changes were kept.'});
   if(!meta.chatLink&&(['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='shell.command'&&['session.select','session.draft','workspace.select','session.create'].includes(args.action)))chatLinkReceiver.current?.dismiss();
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
+  if(action==='call.start')args={attemptId:crypto.randomUUID(),...args};
+  const localVoiceControl=action==='call.mute'||action==='call.end';
+  if(localVoiceControl){
+   const scope=voiceClient.current?.scope();
+   if(!scope)return Promise.resolve({accepted:true,result:{ignored:true}});
+   args={...scope,...args,controlId:args.controlId||crypto.randomUUID()};
+   // Device privacy controls take effect before either HTTP or the command queue.
+   // The shared action still records the same scoped intent for other clients.
+   voiceClient.current.control(action,args).catch(reportError);
+  }
   const referenceAction=action==='message.reply'||action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
   if(referenceAction&&!meta.referencePrepared){
    if(referenceDraftLock.current)return Promise.reject(Error('A reference is already being added.'));
@@ -217,7 +227,9 @@ function App(){
   if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
   const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
-  const settleTracking=trackAction(),settleFeedback=meta.feedback===false?()=>{}:actionFeedback.current.begin(action==='shell.command'?args.action:action);
+  // Mute stays reversible while host bookkeeping is pending. Hangup renders
+  // its own ending state as soon as local media has been silenced.
+  const settleTracking=trackAction(),settleFeedback=meta.feedback===false||localVoiceControl?()=>{}:actionFeedback.current.begin(action==='shell.command'?args.action:action);
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
@@ -239,7 +251,7 @@ function App(){
   // Optional plan summaries have their own exact read result; they must not
   // hold up browsing or ordered mutations while canonical files are read.
   const planRead=action==='session.plans';
-  const queue=navigation?navigationQueue:action.startsWith('coordination.')||meta.presentation||defaultsRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  const queue=navigation?navigationQueue:action==='call.mute'?voiceControlQueue:localVoiceControl||action.startsWith('coordination.')||meta.presentation||defaultsRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
   const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
@@ -388,6 +400,7 @@ function App(){
  useEffect(()=>{voiceClient.current=new VoiceClient({request,onAction:(name,args)=>dispatch(name,args),onState:value=>{setVoice(value);if(value.status!=='connected')visualClient.current?.stop()},onError:reportError});visualClient.current=new VoiceVisualClient({request,onState:setVisual,getVoice:()=>({...voiceClient.current?.state,sessionId:latest.current?.voice?.sessionId})});computerClient.current=new ComputerVisualClient({request,onState:setComputerVisual,getSession:()=>latest.current?.selectedSessionId});return()=>{computerClient.current?.dispose();visualClient.current?.dispose();voiceClient.current?.dispose()}},[]);
  useEffect(()=>{computerClient.current?.sync(null,connected,state?.computerVisual)},[connected,state?.computerVisual,state?.selectedSessionId]);
  useEffect(()=>{visualClient.current?.sync(voice,connected,state?.voice?.visual)},[voice,connected,state?.voice?.visual]);
+ useEffect(()=>{voiceClient.current?.sync(state?.voice,connected)},[state?.voice,connected,voice.id]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
  const open=p=>{if(p==='new-session'){newChat();return;}if(!latest.current?.view?.panel)panelReturnFocus.current=document.activeElement;setError('');act('view.update',{patch:{panel:p,toolbarMenuOpen:false,...(p==='settings'&&window.matchMedia('(max-width:959px)').matches?{settingsSection:'index',settingsExpanded:[]}: {})}})};
  useEffect(()=>{

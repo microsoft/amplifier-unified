@@ -11,7 +11,7 @@ try {
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{
-  class Peer extends EventTarget {constructor(){super();this.connectionState='new'} createDataChannel(){const channel=new EventTarget();channel.readyState='open';channel.close=()=>{};return channel}addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(value){this.localDescription=value}async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){}}
+  class Peer extends EventTarget {constructor(){super();this.connectionState='new';this.iceGatheringState='complete'} createDataChannel(){const channel=new EventTarget();channel.readyState='open';channel.close=()=>{};return channel}addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(value){this.localDescription=value}async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){}}
   window.RTCPeerConnection=Peer;
   navigator.mediaDevices.getUserMedia=async()=>new MediaStream();
   navigator.mediaDevices.getDisplayMedia=async()=>{

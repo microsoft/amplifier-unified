@@ -50,6 +50,24 @@ def aggregate(calls):
             result[key]['source'] = 'provider-reported or explicitly attributed estimate; no host price table'
         elif key in ('grossInputTokens', 'grossTotalTokens'):
             result[key]['source'] = 'Core input includes cache reads; add reported cache writes once' + (' and output' if key == 'grossTotalTokens' else '')
+    # Voice duration covers session receipts only. Backend model calls do not
+    # become missing voice measurements, and a numeric update is not finality.
+    voice = [row for row in calls if 'voiceSeconds' in row['usage'] or 'usageFinalized' in row['usage'] or
+             (row.get('provider') == 'OpenAI voice' and row.get('id', '').endswith(':session'))]
+    if voice:
+        known = [row for row in voice if number(row['usage'].get('voiceSeconds'))]
+        pending = sum(row.get('phase') in LIVE and not row.get('endedAt') for row in voice)
+        incomplete = sum(not (row.get('phase') in LIVE and not row.get('endedAt')) and
+                         row['usage'].get('usageFinalized') is not True for row in voice)
+        result['voiceSeconds'] = {
+            'value': sum(row['usage']['voiceSeconds'] for row in known) if known else None,
+            'unit': 'seconds', 'knownCalls': len(known), 'pendingCalls': pending,
+            'incompleteCalls': incomplete, 'unknownCalls': sum(not number(row['usage'].get('voiceSeconds')) and
+                not (row.get('phase') in LIVE and not row.get('endedAt')) for row in voice),
+            'status': 'partial' if incomplete or known and len(known) < len(voice) else
+                      'pending' if pending else 'known' if known else 'unknown',
+            'source': 'provider-reported voice session duration; incomplete sessions retain the last observed value',
+        }
     return result
 
 

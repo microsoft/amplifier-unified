@@ -19,6 +19,14 @@ export function usageMetrics(usage={}){
   if(input.value!=null&&output.value!=null)metrics.grossTotalTokens={value:input.value+output.value,status:[input,output].some(row=>row.status==='partial')?'partial':'known'};
   else if(total.value!=null)metrics.grossTotalTokens={...total,value:total.value+(metrics.cacheWriteTokens.value||0)};
  }
+ if(count(usage.voiceSeconds)||usage.voiceKnownCalls!=null||usage.voicePendingCalls!=null||usage.voiceIncompleteCalls!=null||usage.usageStatus!=null){
+  const value=count(usage.voiceSeconds)?usage.voiceSeconds:null;
+  const pendingCalls=usage.voicePendingCalls??(usage.usageStatus==='running'?1:0);
+  const incompleteCalls=usage.voiceIncompleteCalls??(usage.usageFinalized===false&&usage.usageStatus!=='running'?1:0);
+  const knownCalls=usage.voiceKnownCalls??(value==null?0:1);
+  metrics.voiceSeconds={value,unit:'seconds',knownCalls,pendingCalls,incompleteCalls,
+   status:incompleteCalls>0||value!=null&&knownCalls<(usage.voiceSessionCalls??1)?'partial':pendingCalls>0?'pending':value==null?'unknown':'known'};
+ }
  return metrics;
 }
 
@@ -41,6 +49,6 @@ export function compactBreakdown(usage){
 export function usageRows(metrics,costLabel='Cost (USD)',{includeUnavailable=false}={}){
  return [
   ['grossInputTokens','Input tokens'],['cacheReadTokens','Read from cache'],['cacheWriteTokens','Written to cache'],
-  ['outputTokens','Output tokens'],['reasoningTokens','Reasoning tokens'],['grossTotalTokens','Total tokens'],['costUsd',costLabel]
- ].map(([key,label])=>({key,label,metric:metrics[key]||{value:null,status:'unknown'}})).filter(row=>includeUnavailable||count(row.metric?.value));
+  ['outputTokens','Output tokens'],['reasoningTokens','Reasoning tokens'],['grossTotalTokens','Total tokens'],['voiceSeconds','Voice seconds'],['costUsd',costLabel]
+ ].filter(([key])=>key!=='voiceSeconds'||metrics.voiceSeconds).map(([key,label])=>({key,label,metric:metrics[key]||{value:null,status:'unknown'}})).filter(row=>includeUnavailable||row.key==='voiceSeconds'||count(row.metric?.value));
 }

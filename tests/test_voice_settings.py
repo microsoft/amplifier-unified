@@ -86,6 +86,10 @@ async def test_preview_protocol_uses_exact_model_voice_and_bounded_audio(model,v
     manager=SimpleNamespace(http=SimpleNamespace(ws_connect=connect),headers={'Authorization':'Bearer synthetic'})
     sample=await settings.render_sample(manager,model,voice)
     request=socket.sent[0]['session'];assert request['model']==model and request['audio']['output']['voice']==voice
+    if live:
+        assert request['input'][0]['role']=='developer'
+        assert settings.SAMPLE in request['input'][0]['content'][0]['text']
+        assert not any(event['type']=='session.instructions.append' for event in socket.sent)
     assert ('/live/sessions' in calls[0][0]) is live
     assert 'microphone' not in json.dumps(socket.sent) and 'conversation' not in json.dumps(socket.sent)
     with wave.open(io.BytesIO(base64.b64decode(sample))) as audio:

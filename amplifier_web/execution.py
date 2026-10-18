@@ -1,8 +1,56 @@
 """Deduplicated public execution tree and usage rollups (no reasoning payloads)."""
+import math
 import time
 from .token_usage import with_gross_tokens
 
 LIVE_PHASES={'running','working','starting','queued','pending','retrying','idle'}
+
+def voice_usage_node(node):
+    return node.get('lifecycle') == 'voice' or (node.get('kind') == 'llm'
+        and node.get('provider') == 'OpenAI voice' and str(node.get('id', '')).startswith('voice:'))
+
+
+def voice_usage_turns(tree):
+    identities = {turn['id'] for turn in tree.get('turns', []) if turn.get('lifecycle') == 'voice'}
+    # Older Live session receipts predate explicit lifecycle ownership.
+    identities.update(node['turnId'] for node in tree.get('nodes', []) if voice_usage_node(node)
+        and node.get('turnId') and node.get('id') == node['turnId'] + ':session')
+    return identities
+
+
+def pending_voice_usage(tree):
+    return any(voice_usage_node(node) and node.get('phase') in LIVE_PHASES and not node.get('endedAt')
+               for node in [*tree.get('nodes', []), *tree.get('retiredUsageNodes', [])]) or any(
+        turn.get('lifecycle') == 'voice' and turn.get('phase') in LIVE_PHASES
+        for turn in tree.get('turns', []))
+
+
+def restore_voice_usage(session):
+    """Only host restart/admission loses the provider observer, never manager idle."""
+    reference = dict.get(session, '_coldFields', {}).get('execution', {})
+    if (not dict.__contains__(session, 'execution') and
+            (reference.get('pendingVoice') is False or
+             'pendingVoice' not in reference and reference.get('pendingWork') is False)):
+        return False
+    tree = session.get('execution', {})
+    turns = voice_usage_turns(tree)
+    changed = False
+    ended = time.time()
+    for node in [*tree.get('nodes', []), *tree.get('retiredUsageNodes', [])]:
+        if not voice_usage_node(node) or node.get('phase') not in LIVE_PHASES or node.get('endedAt'):
+            continue
+        node.update(lifecycle='voice', phase='incomplete', endedAt=ended)
+        if str(node.get('id', '')).endswith(':session'):
+            node['usage'] = {**node.get('usage', {}), 'usageFinalized': False, 'usageStatus': 'incomplete'}
+        changed = True
+    for turn in tree.get('turns', []):
+        if turn['id'] in turns and turn.get('phase') in LIVE_PHASES:
+            turn.update(lifecycle='voice', phase='incomplete', endedAt=ended)
+            changed = True
+    if changed:
+        refresh_usage(tree)
+    return changed
+
 
 def interrupt_unfinished(session):
     """Settle lost execution without interpreting a later warm worker as success."""
@@ -13,8 +61,10 @@ def interrupt_unfinished(session):
                  and session.get('status') not in {'working', 'starting', 'ready', 'stopping'})
             and session.get('status') != 'working'):
         return False
-    live = any(turn.get('phase') in LIVE_PHASES
-               for turn in session.get('execution', {}).get('turns', []))
+    tree = session.get('execution', {})
+    independent = voice_usage_turns(tree)
+    live = any(turn.get('phase') in LIVE_PHASES and turn['id'] not in independent
+               for turn in tree.get('turns', []))
     if not live and session.get('status') != 'working':
         return False
     finish(session, 'interrupted')
@@ -72,6 +122,9 @@ def rollup(calls):
     result={key:0 for key in USAGE_KEYS}
     result['metricKnownCalls']={key:0 for key in USAGE_KEYS}
     result.update(calls=len(calls),costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
+    voice_calls=[node for node in calls if any(key in (node.get('usage') or {}) for key in ('voiceSeconds','usageFinalized'))]
+    if voice_calls:
+        result.update(voiceSessionCalls=len(voice_calls),voiceKnownCalls=0,voicePendingCalls=0,voiceIncompleteCalls=0)
     for node in calls:
         usage=with_gross_tokens(node.get('usage') or {})
         for key in USAGE_KEYS:
@@ -80,6 +133,12 @@ def rollup(calls):
                 result[key]+=value
                 result['metricKnownCalls'][key]+=1
         pending=node.get('phase',node.get('status')) in LIVE_PHASES and not node.get('endedAt')
+        if type(usage.get('voiceSeconds')) in (int,float) and math.isfinite(usage['voiceSeconds']) and usage['voiceSeconds'] >= 0:
+            result['voiceSeconds']=result.get('voiceSeconds',0)+usage['voiceSeconds']
+            result['voiceKnownCalls']+=1
+        if 'voiceSeconds' in usage or 'usageFinalized' in usage:
+            result['voicePendingCalls']+=int(pending)
+            result['voiceIncompleteCalls']+=int(not pending and usage.get('usageFinalized') is not True)
         if not usage or not any(k in usage for k in ('inputTokens','outputTokens','totalTokens')):
             result['tokenUnknownCalls']+=1
             result['tokenPendingCalls']+=int(pending)
@@ -231,13 +290,14 @@ def fail_generation(session, input_ids):
 def finish(session,status='completed'):
     tree=session.get('execution',{})
     ended=time.time()
+    independent = voice_usage_turns(tree)
     for turn in tree.get('turns',[]):
-        if turn.get('phase') in LIVE_PHASES:turn.update(phase=status,endedAt=ended)
+        if turn.get('phase') in LIVE_PHASES and turn['id'] not in independent:turn.update(phase=status,endedAt=ended)
     for node in tree.get('nodes',[]):
         # Foreground turn settlement cannot end separately scheduled naming
         # or delegated work. Background calls settle from their own provider
         # lifecycle, or after the host confirms their worker process exited.
-        if node.get('kind') != 'worker' and node.get('sessionId') == node.get('rootSessionId') and node.get('phase') in LIVE_PHASES and not node.get('endedAt') and node.get('lifecycle')!='background':
+        if node.get('kind') != 'worker' and node.get('sessionId') == node.get('rootSessionId') and node.get('phase') in LIVE_PHASES and not node.get('endedAt') and node.get('lifecycle')!='background' and not voice_usage_node(node):
             node.update(phase='interrupted' if status=='completed' else status,endedAt=ended)
     if 'nodes' in tree:refresh_usage(tree)
 

@@ -17,7 +17,7 @@ from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
 import tinycss2
-from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished
+from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
@@ -220,11 +220,11 @@ ACTION_DEFINITIONS = {
     "theme.export": ("Export the applied skin", schema()),
     "state.export": ("Export app state and attached device views", schema()),
     "notification.request": ("Request notification permission on this device", schema()),
-    "call.start": ("Start a realtime voice call on the connected browser", schema()),
-    "call.mute": ("Mute or unmute the call microphone", schema({"muted": {"type": "boolean"}})),
+    "call.start": ("Start a realtime voice call on the connected browser", schema({"attemptId": string(200)}, [])),
+    "call.mute": ("Mute or unmute the call microphone", schema({"muted": {"type": "boolean"}, "callId": string(200), "attemptId": string(200), "controlId": string(200)}, ["muted"])),
     "call.keepAwake": ("Keep the calling browser screen awake while its voice call is active; does not grant background execution.", schema({"enabled": {"type": "boolean"}}, ["enabled"])),
     "call.resumeAudio": ("Retry speaker playback on the calling browser without starting a new call or microphone capture.", schema()),
-    "call.end": ("End audio while leaving the work running", schema()),
+    "call.end": ("End audio while leaving the work running", schema({"callId": string(200), "attemptId": string(200), "controlId": string(200)}, [])),
 }
 
 
@@ -598,6 +598,7 @@ class AppService:
             if session.get("bundleChange", {}).get("phase") == "working":
                 session["bundleChange"] = {"phase":"error", "error":"The app restarted during a bundle change. Load the conversation and preview again; work was not replayed."}
             session.pop("bundlePreview", None)
+            restore_voice_usage(session)
             interrupt_unfinished(session)
             if session["status"] in {"working", "starting", "ready", "stopping"}:
                 session["status"] = "interrupted"
@@ -1441,6 +1442,7 @@ class AppService:
                 restore_observation(session)
                 restore(session)
                 settle_stream(session)
+                restore_voice_usage(session)
                 interrupt_unfinished(session)
                 session['configurationBusy'] = False
                 if session.get('status') in {'working', 'starting', 'ready', 'stopping'}:
@@ -3304,9 +3306,20 @@ class AppService:
                 effects.append({"type": "notification.request"})
             elif action in {"call.start", "call.mute", "call.end", "call.keepAwake", "call.resumeAudio"}:
                 call_args = dict(args)
+                current_call = getattr(self.voice_service, 'call', None)
+                scoped = bool(args.get('callId') or args.get('attemptId'))
+                if (current_call and current_call.closed and args.get('attemptId')
+                        and not args.get('callId') and args['attemptId'] != getattr(current_call, 'attempt_id', None)):
+                    current_call = None  # A new local microphone setup owns no host call yet.
+                if action in {'call.mute', 'call.end'} and scoped and current_call:
+                    if (args.get('callId') and args['callId'] != current_call.id
+                            or args.get('attemptId') and args['attemptId'] != getattr(current_call, 'attempt_id', None)):
+                        raise AppError("This call is no longer active.", 409, code='stale_call')
                 if action == "call.start":
                     if self.state.get("voicePreviewBusy"):
                         raise AppError("Wait for the voice preview to finish before starting a call.", 409)
+                    if current_call and not current_call.closed:
+                        raise AppError("A call is already active. End it before starting another.", 409, code='call_active')
                     session = self._session(args.get("sessionId"))
                     if origin == "agent":
                         from .agent_canvas import target
@@ -3318,16 +3331,24 @@ class AppService:
                     if self.voice_service and not self.voice_service.api_key:
                         raise AppError("Add an OpenAI API key in Voice settings to enable calls.")
                     session["historyManaged"] = False
-                    self.state["voice"].update({"status": "connecting", "sessionId": session["id"]})
+                    # The browser owns microphone permission/setup. /connect
+                    # claims shared connecting state only after it owns a call.
                     call_args["sessionId"] = session["id"]
                 elif action == "call.mute":
-                    self.state["voice"]["muted"] = args["muted"]
+                    if current_call or not scoped:
+                        self.state["voice"]["muted"] = args["muted"]
                 elif action == "call.keepAwake":
                     self.state["voice"]["keepAwake"] = args["enabled"]
-                elif action == "call.end" and self.voice_service:
-                    pending.append((self._end_call, ()))
+                elif action == "call.end" and current_call:
+                    # Capture the owner now. Delayed reconciliation must never
+                    # close a replacement call, including explicit agent ends.
+                    pending.append((self._end_call, (current_call,)))
+                if action in {'call.end', 'call.mute'} and not scoped and current_call:
+                    call_args.update({key: value for key, value in {
+                        'callId': current_call.id, 'attemptId': getattr(current_call, 'attempt_id', None)
+                    }.items() if value})
                 self.state["voice"]["command"] = {"id": command_id or str(uuid.uuid4()), "type": action, "args": call_args}
-                effects.append({"type": action, "args": call_args, **args})
+                effects.append({"type": action, "args": call_args, **call_args})
             if action in {'session.create','session.fork','session.recover','message.edit'}:
                 from .naming import persist
                 persist(self.data_dir,session)
@@ -3883,11 +3904,14 @@ class AppService:
         if not preserve_draft and current.get('draft', '').strip() == text.strip():
             current['draft'] = ''
 
-    async def _end_call(self):
+    async def _end_call(self, call):
+        if getattr(self.voice_service, 'call', None) is not call:
+            return
         try:
-            await self.voice_service.end()
+            await self.voice_service.end(call.id, attempt_id=getattr(call, 'attempt_id', None), expected_call=call)
         except Exception as exc:
-            await self.set_voice_status({"status": "error", "error": str(exc)})
+            if getattr(self.voice_service, 'call', None) is call:
+                await self.set_voice_status({"status": "error", "id": call.id, "error": str(exc)})
 
     async def _stop(self, sid):
         # The Stop revision is already durable. Release invalidated inbox slots
@@ -3906,6 +3930,20 @@ class AppService:
             identity='voice:'+call_id+':'+response_id
             tree=session.get('execution',{})
             existing=next((n for n in tree.get('nodes',[]) if n['id']==identity),None)
+            # Live duration updates replace one session receipt. Completion is
+            # authoritative; a delayed running update cannot reopen it.
+            if existing and existing.get('phase') == 'completed' and phase != 'completed':
+                return
+            normalized=normalize_voice_usage(usage)
+            if response_id == 'session':
+                final_duration_reported=phase == 'completed' and 'voiceSeconds' in normalized
+                previous_usage=(existing or {}).get('usage', {})
+                if 'voiceSeconds' not in normalized and 'voiceSeconds' in previous_usage:
+                    normalized['voiceSeconds']=previous_usage['voiceSeconds']
+                if phase != 'completed' and 'voiceSeconds' in previous_usage and 'voiceSeconds' in normalized:
+                    normalized['voiceSeconds']=max(previous_usage['voiceSeconds'], normalized['voiceSeconds'])
+                normalized['usageFinalized']=final_duration_reported
+                normalized['usageStatus']='final' if final_duration_reported else 'running' if phase == 'running' else 'incomplete'
             if response_id != 'session' and (existing is None or existing.get('phase') != phase):
                 from .chat_navigation import touch_independent_activity
                 touch_independent_activity(session)
@@ -3914,17 +3952,22 @@ class AppService:
             if not any(t['id']==turn_id for t in tree.get('turns',[])):
                 previous=tree.get('currentTurnId')
                 ensure_turn(session,turn_id,'Voice call · session usage' if response_id=='session' else 'Voice call')
-                if previous:session['execution']['currentTurnId']=previous
+                session['execution']['currentTurnId']=previous
+            if turn_id == 'voice:'+call_id:
+                for turn in session['execution']['turns']:
+                    if turn['id'] == turn_id:
+                        turn['lifecycle'] = 'voice'
             ingest_execution(session,{'id':identity,'turnId':turn_id,'sessionId':session_id,'rootSessionId':session_id,
-                'kind':'llm','phase':phase,'label':model+' · voice','provider':'OpenAI voice','model':model,
+                'kind':'llm','phase':phase,'label':model+' · voice','provider':'OpenAI voice','model':model,'lifecycle':'voice',
                 'startedAt':existing.get('startedAt',time.time()) if existing else time.time(),
-                **({'endedAt':time.time(),'usage':normalize_voice_usage(usage)} if phase=='completed' else {})})
-            if phase=='completed' and session.get('status') not in {'working', 'starting', 'running', 'stopping'}:
+                'usage':normalized,
+                **({'endedAt':time.time()} if phase in {'completed','incomplete'} else {})})
+            if phase in {'completed','incomplete'} and session.get('status') not in {'working', 'starting', 'running', 'stopping'}:
                 from .chat_navigation import settle_activity
                 settle_activity(session)
-            if phase=='completed' and turn_id.startswith('voice:'):
+            if phase in {'completed','incomplete'} and turn_id == 'voice:'+call_id:
                 for turn in session['execution']['turns']:
-                    if turn['id']==turn_id:turn.update(phase='completed',endedAt=time.time())
+                    if turn['id']==turn_id:turn.update(phase=phase,endedAt=time.time())
             self._publish_changes(sessions={session['id']})
 
     async def _takeover(self, session):
@@ -4705,6 +4748,10 @@ class AppService:
 
     async def set_voice_status(self, payload):
         async with self.lock:
+            call=getattr(self.voice_service, 'call', None)
+            if call and (payload.get('id') and payload['id'] != getattr(call, 'id', None)
+                         or payload.get('attemptId') and payload['attemptId'] != getattr(call, 'attempt_id', None)):
+                return  # A late event cannot replace the currently owned call.
             self.state["voice"].update(payload)
             if self.state["voice"].get("status") != "connected":
                 self.voice_visual.revoke()
@@ -4768,11 +4815,14 @@ class AppService:
                 while True:
                     session = self._session(session_id)
                     for event in session.get("generations", []):
+                        if (event.get('sessionId') != session_id
+                                or event.get('rootSessionId', session_id) != session_id):
+                            continue
                         if input_id and input_id not in event.get("input_ids", []):
                             continue
                         if event["event"] == "generation.finished":
                             return {key: event.get(key) for key in
-                                ("text", "generation_id", "input_ids", "active_job_ids", "disposition")}
+                                ("text", "generation_id", "input_ids", "active_job_ids", "disposition", "sessionId", "rootSessionId")}
                         if event["event"] in {"generation.failed", "generation.detached"}:
                             raise AppError("The Amplifier turn ended without a completed response.")
                     if session["status"] == "read-only":

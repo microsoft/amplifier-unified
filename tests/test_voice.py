@@ -141,17 +141,21 @@ async def test_core_voice_requests_have_delegation_guidance_in_actual_voice_conf
         kwargs=manager.request.call_args.kwargs
         config=kwargs['json']['session'] if provider=='live' else json.loads(next(value for headers,_,value in kwargs['data']._fields if headers['name']=='session'))
         instructions=config['instructions']
-        assert 'Can you see my screen?' in instructions
-        assert 'delegate to Amplifier to check the current screen source and request one snapshot' in instructions
-        assert 'Do not claim screen access is unavailable before that check' in instructions
-        assert 'A selected source is not image evidence' in instructions
-        assert 'never grant permission or start background observation' in instructions
-        assert 'When the user asks to hang up or end this call, delegate immediately to Amplifier to invoke call.end' in instructions
-        assert 'delegate to Amplifier to use feedback.submit' in instructions
         if provider=='realtime':
+            assert 'Can you see my screen?' in instructions
+            assert 'delegate to Amplifier to check the current screen source and request one snapshot' in instructions
+            assert 'Do not claim screen access is unavailable before that check' in instructions
+            assert 'A selected source is not image evidence' in instructions
+            assert 'never grant permission or start background observation' in instructions
+            assert 'delegate immediately to Amplifier to invoke call.end' in instructions
+            assert 'delegate to Amplifier to use feedback.submit' in instructions
             assert [tool['name'] for tool in config['tools']]==['amplifier_delegate']
             assert 'shared screen' in config['tools'][0]['description']
         else:
+            assert 'authorized screen snapshots' in instructions
+            assert 'end the call' in instructions and 'submit feedback' in instructions
+            assert 'do not deny these capabilities before Amplifier checks them' in instructions
+            assert 'Amplifier owns permissions and confirmations' in instructions
             assert config['delegation']=={'type':'client'} and 'tools' not in config
         assert service.calls==[]
     finally:
@@ -282,8 +286,8 @@ async def test_background_generation_updates_are_not_replayed_or_treated_as_task
     call=VoiceCall(VoiceService(service),'main');call.id,call.socket='live',socket
     service.state['sessions'][0]['generations'] += [
         {'generation_id':'working','event':'generation.started'},
-        {'generation_id':'new','event':'generation.finished','text':'Result ready.','input_ids':['worker-observation'],'active_job_ids':[]},
-        {'generation_id':'voice','event':'generation.finished','text':'Direct answer.','input_ids':['voice:live:d1']},
+        {'sessionId':'main','generation_id':'new','event':'generation.finished','text':'Result ready.','input_ids':['worker-observation'],'active_job_ids':[]},
+        {'sessionId':'main','generation_id':'voice','event':'generation.finished','text':'Direct answer.','input_ids':['voice:live:d1']},
     ]
     await call.announce_generations(service.state);await call.announce_generations(service.state)
     spoken=[event['content'] for event in socket.sent if event['type']=='session.commentary.append']
@@ -309,7 +313,7 @@ async def test_realtime_result_waits_for_vad_response_before_narrating(interrupt
         await call.handle({'type': 'output_audio_buffer.started'})
     await call.handle({'type': 'input_audio_buffer.speech_started'})
     service.state['sessions'][0]['generations'] = [{
-        'event': 'generation.finished', 'generation_id': 'work-result',
+        'sessionId': 'main', 'event': 'generation.finished', 'generation_id': 'work-result',
         'text': 'The document is saved.', 'input_ids': ['worker-report'],
     }]
     await call.announce_generations(service.state)
@@ -374,7 +378,7 @@ async def test_observer_catches_generation_finished_during_call_handshake():
     service,socket=Service(),Socket();queue=asyncio.Queue()
     service.subscribe=lambda:queue;service.unsubscribe=lambda value:None
     call=VoiceCall(VoiceService(service),'main');call.id,call.socket='live',socket
-    service.state['sessions'][0]['generations']=[{'generation_id':'during-connect','event':'generation.finished','text':'Finished while connecting.','input_ids':['worker-report']}]
+    service.state['sessions'][0]['generations']=[{'sessionId':'main','generation_id':'during-connect','event':'generation.finished','text':'Finished while connecting.','input_ids':['worker-report']}]
     observer=asyncio.create_task(call.observe());await asyncio.sleep(0)
     assert any('Finished while connecting.' in event.get('content','') for event in socket.sent)
     observer.cancel();await asyncio.gather(observer,return_exceptions=True)
@@ -406,7 +410,7 @@ async def test_background_results_stay_pinned_when_user_selects_another_session(
     service,socket=Service(),Socket();call=VoiceCall(VoiceService(service),'main');call.id,call.socket='live',socket
     service.state['selectedSessionId']='other'
     service.state['sessions'].append({'id':'other','generations':[{'generation_id':'foreign','event':'generation.finished','text':'Wrong conversation.'}]})
-    service.state['sessions'][0]['generations']=[{'generation_id':'pinned','event':'generation.finished','text':'Pinned answer.'}]
+    service.state['sessions'][0]['generations']=[{'sessionId':'main','generation_id':'pinned','event':'generation.finished','text':'Pinned answer.'}]
     await call.announce_generations(service.state)
     assert ''.join(row.get('content','') for row in socket.sent)=='Amplifier manager update. Pinned answer.'
 
@@ -486,7 +490,7 @@ async def test_already_shared_source_is_in_initial_provider_instructions(provide
         await call.create('synthetic-sdp', provider)
         kwargs = manager.request.call_args.kwargs
         config = kwargs['json']['session'] if provider == 'live' else json.loads(next(value for headers,_,value in kwargs['data']._fields if headers['name']=='session'))
-        context = json.loads(config['instructions'].split('Current context: ', 1)[1])
+        context = json.loads(config['input'][-1]['content'][0]['text'].split('request: ', 1)[1]) if provider == 'live' else json.loads(config['instructions'].split('Current context: ', 1)[1])
         assert context['screen_source'] == {'available':True, 'kind':'window'}
         assert seen == ['origin-browser']
         assert 'Private title' not in config['instructions']

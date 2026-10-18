@@ -100,6 +100,7 @@ async def render_sample(manager, model, voice):
         if live:
             await socket.send_json({'type':'session.start', 'session':{
                 'model':model, 'instructions':'You are demonstrating a voice. Never delegate.',
+                'input':[{'type':'message','role':'developer','content':[{'type':'input_text','text':instruction}]}],
                 'audio':{'format':{'type':'audio/pcm','rate':24000},'output':{'voice':voice}},
                 'delegation':{'type':'client'},'store':False}})
         else:
@@ -128,7 +129,6 @@ async def render_sample(manager, model, voice):
                         started = True
                         if live:
                             clock = asyncio.create_task(silence())
-                            await socket.send_json({'type':'session.instructions.append','event_id':'voice_sample','delegation_id':None,'content':instruction})
                         else:
                             await socket.send_json({'type':'response.create','response':{'instructions':instruction,'max_output_tokens':200}})
                     if kind == ('session.output_audio.delta' if live else 'response.output_audio.delta'):
