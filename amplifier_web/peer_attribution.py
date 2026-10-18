@@ -27,9 +27,9 @@ def derive(session, rows, resolver=None):
 
 def display_annotations(session):
     """Only supported reaction annotations may overlay a derived message."""
-    return {identity: {"reactions": value["reactions"]}
+    return {identity: {key: value[key] for key in ("reactions", "assistantReactions") if key in value}
             for identity, value in session.get("messageAnnotations", {}).items()
-            if isinstance(value, dict) and "reactions" in value}
+            if isinstance(value, dict) and any(key in value for key in ("reactions", "assistantReactions"))}
 
 
 def input_identity(row):

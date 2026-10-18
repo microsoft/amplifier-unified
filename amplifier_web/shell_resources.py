@@ -264,33 +264,56 @@ class ShellResources:
         workspace_revision = semantic.get('workspace', state.get('revision'))
         root_navigation_revision = semantic.get('root_navigation', state.get('revision'))
         from .shell_components import resolved
+        from .shell_modules import BUILTINS
+        instances = resolved(self._composition(client, registration['recovery']))
+        scoped_states = {item['id']: self.shell.scoped_state(client, item) for item in instances
+                         if item['package'] in {'builtin.chats', 'builtin.workspaces'}}
+        # The effective view also contains initial preferences and derives its
+        # chat scope from the selected resident row. Neither is represented by
+        # the composition revision or per-instance view revision alone.
+        scoped_views = tuple((name, scoped.get('selectedWorkspaceId'), encoded(scoped['view']))
+                             for name, scoped in scoped_states.items())
+        builtin_only = all(item['package'] in BUILTINS for item in instances)
         recent = tuple((item['id'], self.shell.recent_limits.get(self.shell.recent_key(client, item)))
-                       for item in resolved(self._composition(client, registration['recovery']))
+                       for item in instances
                        if item['slot'] == 'navigation')
         stamp = (bootstrap, nav, workspace_revision, root_navigation_revision, self._epochs(GLOBAL_KEYS), encoded(client.get('views', {})),
-                 tuple(registration['scope']), registration['wanted'],
-                 recent, self.total_bytes,
+                 scoped_views, tuple(registration['scope']), registration['wanted'], recent,
                  state.get('revision') if any(item['package'] not in ('builtin.chats', 'builtin.workspaces')
                      and not item['package'].startswith('builtin.')
                      for item in self._composition(client, registration['recovery'])['instances']) else None)
-        if registration.get('failed_stamp') == stamp:
+        budget_stamp = (stamp, self.total_bytes, MAX_CLIENT_BYTES, MAX_TOTAL_BYTES)
+        if registration.get('failed_stamp') == budget_stamp:
             return registration['error_envelope']
+        if builtin_only and registration.get('settled_stamp') == budget_stamp:
+            # Pending completion/retry owns an independent lifecycle. Only a
+            # completely settled envelope may bypass its per-resource path.
+            self.queries.prune()
+            count(self.shell.service, 'shell.resources.snapshot.hit')
+            return registration['envelope']
         try:
             result = self._snapshot(identity, state=state, client=client, bootstrap=bootstrap,
-                navigation_revision=nav, workspace_revision=workspace_revision, root_navigation_revision=root_navigation_revision)
+                navigation_revision=nav, workspace_revision=workspace_revision, root_navigation_revision=root_navigation_revision,
+                scoped_states=scoped_states)
         except ResourceLimit:
             result = {'hostInstanceId': self.shell.service.instance_id, 'clientId': identity,
                 'demandId': registration['demandId'], 'bootstrapKey': bootstrap,
                 'scope': list(registration['scope']), 'instances': {},
                 'error': {'code': 'shell_resource_limit',
                     'message': 'Requested navigation exceeds the resource budget. Narrow the requested pages or close unused clients.'}}
-            registration.update(failed_stamp=stamp, error_envelope=result)
+            registration.pop('settled_stamp', None)
+            registration.update(failed_stamp=budget_stamp, error_envelope=result)
             return result
         registration.pop('failed_stamp', None)
         registration.pop('error_envelope', None)
+        if builtin_only and not any(item['pending'] for item in registration['instances'].values()):
+            registration['settled_stamp'] = (stamp, self.total_bytes, MAX_CLIENT_BYTES, MAX_TOTAL_BYTES)
+        else:
+            registration.pop('settled_stamp', None)
         return result
 
-    def _snapshot(self, identity, *, state, client, bootstrap, navigation_revision, workspace_revision, root_navigation_revision):
+    def _snapshot(self, identity, *, state, client, bootstrap, navigation_revision, workspace_revision, root_navigation_revision,
+                  scoped_states):
         registration = self.clients[identity]
         from .shell_components import resolved
         from .shell_modules import BUILTINS
@@ -327,7 +350,7 @@ class ShellResources:
                             prior.get('versions', {}).get('customSnapshot', 0))
                 own['customSnapshot'], own_keys['customSnapshot'] = value, key
             else:
-                scoped = self.shell.scoped_state(client, instance)
+                scoped = scoped_states[name]
                 dirty = set()
                 for resource in registration['wanted']:
                     key = (bootstrap, self._page_key(resource, scoped, instance, navigation_revision, client, workspace_revision, root_navigation_revision))

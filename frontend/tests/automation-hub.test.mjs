@@ -1,0 +1,49 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React,{act} from 'react';
+import {create} from 'react-test-renderer';
+import {createServer} from 'vite';
+const server=await createServer({configFile:false,cacheDir:'/tmp/unified-automation-hub-vite',server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const {AutomationHub}=await server.ssrLoadModule('/src/automation-hub.jsx');
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+let root;test.afterEach(async()=>{await act(async()=>root?.unmount());root=null});test.after(()=>server.close());
+const row={id:'schedule',sessionId:'owner',revision:2,status:'needs_review',displayState:'needs_review',prompt:'Read the report',destination:'new_task',spec:{kind:'interval',intervalSeconds:60,timezone:'UTC'},nextDue:1800000060,owner:{id:'owner',title:'Stopped owner',status:'stopped'}};
+const page={items:[row],total:1,offset:0,limit:30,hasMore:false,readAt:1800000000};
+const review={binding:{prompt:row.prompt,spec:row.spec,newTaskConfiguration:{workspace:'/review',bundle:'work',selection:{model:'model'}},newTaskTitle:'Report',newTaskMaxTurns:1},occurrences:[{utc:'2027-01-15T08:01:00Z',dueAt:1800000060}],previewHash:'reviewed-hash',scheduleRevision:2,requiresStopAcknowledgement:true,ownerStatus:'stopped'};
+const view=(dispatch,isCurrent=()=>true)=>React.createElement(AutomationHub,{state:{selectedSessionId:'current'},dispatch,isCurrent});
+const button=name=>root.root.findAllByType('button').find(row=>row.children.join('')===name);
+const text=()=>JSON.stringify(root.toJSON());
+test('overview reads one bounded page on demand and ordinary rerenders do not poll',async()=>{
+ const calls=[];const dispatch=async(action,args)=>{calls.push({action,args});return {accepted:true,result:page}};
+ await act(async()=>{root=create(view(dispatch))});assert.deepEqual(calls,[{action:'schedule.overview',args:{offset:0,limit:30,status:'current'}}]);assert.match(text(),/Schedule snapshot/);
+ await act(async()=>root.update(view(dispatch)));assert.equal(calls.length,1);
+ await act(async()=>button('Refresh automations').props.onClick());assert.equal(calls.length,2);
+});
+test('human review requires Stop acknowledgement and lost resume response cannot be blindly repeated',async()=>{
+ const calls=[];let finish;
+ const dispatch=async(action,args)=>{calls.push({action,args});if(action==='schedule.repairResume')return new Promise(resolve=>finish=resolve);return {accepted:true,result:action==='schedule.repairPreview'?review:page}};
+ await act(async()=>{root=create(view(dispatch))});await act(async()=>button('Review future runs').props.onClick());
+ assert.ok(button('Resume future runs').props.disabled);await act(async()=>root.root.findByType('input').props.onChange({target:{checked:true}}));assert.equal(button('Resume future runs').props.disabled,false);
+ await act(async()=>{button('Resume future runs').props.onClick();button('Resume future runs')?.props.onClick()});
+ assert.equal(calls.filter(row=>row.action==='schedule.repairResume').length,1);assert.equal(button('Resume future runs'),undefined);
+ await act(async()=>finish({accepted:false,error:'Connection lost. Result unconfirmed.'}));assert.match(text(),/Result unconfirmed/);assert.equal(button('Resume future runs'),undefined);
+ assert.deepEqual(calls.at(-1).args,{sessionId:'owner',id:'schedule',expectedRevision:2,previewHash:'reviewed-hash',acknowledgeStop:true});
+});
+test('cancelled review and browsing never navigate; opening owner uses existing selected-chat controls',async()=>{
+ const calls=[];const dispatch=async(action,args)=>{calls.push({action,args});return {accepted:true,result:action==='schedule.repairPreview'?review:page}};
+ await act(async()=>{root=create(view(dispatch))});await act(async()=>button('Review future runs').props.onClick());await act(async()=>button('Not now').props.onClick());assert.ok(calls.every(row=>row.action.startsWith('schedule.')));
+ await act(async()=>button('Open owning chat').props.onClick());assert.deepEqual(calls.slice(-2),[{action:'session.select',args:{id:'owner'}},{action:'view.update',args:{patch:{panel:'chat-work'}}}]);
+});
+test('unmounted pending overview cannot publish or perform additional actions',async()=>{
+ let finish;const calls=[];const dispatch=(action,args)=>{calls.push({action,args});return new Promise(resolve=>finish=resolve)};
+ await act(async()=>{root=create(view(dispatch))});await act(async()=>root.unmount());root=null;
+ await act(async()=>finish({accepted:true,result:page}));assert.equal(calls.length,1);
+});
+
+for(const newer of ['other-chat','closed-panel'])test(`delayed owner selection cannot open controls after ${newer}`,async()=>{
+ const calls=[];let finish;let current=true;
+ const dispatch=async(action,args)=>{calls.push({action,args});if(action==='session.select')return new Promise(resolve=>finish=resolve);return {accepted:true,result:page}};
+ await act(async()=>{root=create(view(dispatch,()=>current))});
+ await act(async()=>{button('Open owning chat').props.onClick()});current=false;
+ await act(async()=>finish({accepted:true}));assert.deepEqual(calls.map(row=>row.action),['schedule.overview','session.select']);
+});

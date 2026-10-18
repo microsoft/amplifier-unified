@@ -3,6 +3,13 @@ import {Reply,Smile,X} from 'lucide-react';
 import './message-interactions.css';
 
 const reactions=[['👍','Thumbs up'],['❤️','Heart'],['😂','Laugh'],['🎉','Celebrate'],['😮','Surprised'],['😢','Sad'],['👎','Thumbs down'],['✅','Check']];
+
+export function AssistantReactions({message}){
+ const selected=reactions.filter(([emoji])=>message.assistantReactions?.includes(emoji));
+ if(!selected.length)return null;
+ return <div className="a-assistant-reactions" aria-label="Amplifier reactions">{selected.map(([emoji,label])=><span key={emoji} className="a-assistant-reaction" aria-label={`Amplifier reacted: ${label}`} title={`Amplifier reacted: ${label}`}><span aria-hidden="true">{emoji}</span><small>Amplifier</small></span>)}</div>;
+}
+
 const author=quote=>quote.role==='user'?'You':'Amplifier';
 
 export function QuoteCard({quote,sessionId,dispatch}){

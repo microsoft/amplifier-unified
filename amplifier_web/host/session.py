@@ -883,7 +883,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if runtime.observer:
             runtime.observer({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Preparing community modules (" + str(action).replace("_", " ")[:60] + ")."})
-    preparation_policy = {}
+    from ..provider_isolation import ProviderIsolation, UnavailableProvider, supported
+    isolation = ProviderIsolation() if supported() else None
+    preparation_policy = ({"provider_failure_policy": isolation.preparation_failed} if isolation else {})
     if refresh_dependencies:
         preparation_policy["refresh_dependencies"] = True
     if install_overrides is not None:
@@ -896,13 +898,20 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         progress_callback=progress)
     if getattr(prepared, "resolver", None) is not None:
         prepared.resolver = ComponentResolver(prepared.resolver, components)
-    await materialize_bundle_providers(loaded, prepared)
+    await materialize_bundle_providers(loaded, prepared, **({"isolation": isolation} if isolation else {}))
     # Bound child plans inherit an exact parent selection, including image
     # capability. Do not discover a new account outside that inherited plan.
     if not snapshot and not getattr(loaded, '_host_provider_credentials_bound', False):
         from ..image_defaults import apply_defaults
-        await apply_defaults(prepared.mount_plan, config.settings)
-    apply_provider_environment(prepared.mount_plan)
+        await apply_defaults(prepared.mount_plan, config.settings,
+                             **({"check_available": lambda row: not isolation.failure(row)} if isolation else {}))
+    environment_plan = prepared.mount_plan
+    if isolation:
+        environment_plan = copy.deepcopy(environment_plan)
+        for row in iter_provider_rows(environment_plan):
+            if isolation.failure(row):
+                row["enabled"] = False
+    apply_provider_environment(environment_plan)
     from ..session_files import project_slug
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,
         project_slug=project_slug(config.workspace),
@@ -929,6 +938,13 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         routing_policy = ({"before_initialize": partial(
             prepare_default_routing, automatic=getattr(loaded, "_host_automatic_routing", False))}
                           if not snapshot and any(row.get("module") == "hooks-routing" for row in loaded.hooks) else {})
+        if isolation:
+            routing_callback = routing_policy.get("before_initialize")
+            async def initialize_with_isolation(session):
+                await isolation.before_initialize(session)
+                if routing_callback:
+                    await routing_callback(session)
+            routing_policy["before_initialize"] = initialize_with_isolation
         session = await prepared.create_session(session_id=runtime.session_id,
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
             **routing_policy)
@@ -975,6 +991,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             defaults = getattr(info, "defaults", {}) or {}
             choices.append({"id": identity, "provider": getattr(info, "id", identity),
                 "display_name": getattr(info, "display_name", None),
+                **({"available": False, "failure": provider.failure} if isinstance(provider, UnavailableProvider) else {}),
                 "model": defaults.get("model"), "effort": defaults.get("reasoning_effort") or next((row.get("config",{}).get("reasoning_effort") for row in prepared.mount_plan.get("providers",[]) if (row.get("instance_id") or row.get("id") or row["module"].removeprefix("provider-"))==identity),None), "sharedCatalogKey":catalog_keys.get(identity), "models": []})
         # Keep public connection choices available even when a saved ID prevents
         # startup. Reading this receipt never chooses a connection or runs work.
@@ -988,6 +1005,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 from .model_selection import ProviderSelectionError
                 raise ProviderSelectionError("Root selection needs an available provider instance and model")
             loop.root_provider = SelectedProvider(providers[identity], selection)
+        from ..provider_isolation import require_selected
+        require_selected(coordinator)
         selected = loop._select_provider(providers)
         effective = selection or next((row for row in choices if providers[row["id"]] is selected), None)
         metadata = {**({key:saved[1][key] for key in ("fork","preserve_system") if key in saved[1]} if saved else {}),
@@ -1035,9 +1054,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_cleanup(cleanup_jobs)
         await checkpoint()
         failures = getattr(loop, "load_failures", [])
-        if failures:
+        fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
+        if fatal_failures:
             from ..module_failures import persist_failures
-            raise persist_failures(directory, failures)
+            raise persist_failures(directory, fatal_failures)
         from ..module_failures import clear_failures
         clear_failures(directory)
         # Stamp only explicit, local bundle resources actually consumed by this
@@ -1063,7 +1083,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "settings_file": str(config.settings_file),
             "capabilities": {name: coordinator.get_capability(name) is not None for name in
                 ("session.spawn", "session.resume", "mention_resolver", "model_role_resolver")},
-            "module_load_failures": failures}
+            "module_load_failures": fatal_failures,
+            "provider_failures": isolation.outcomes(coordinator) if isolation else []}
         report["config_inputs"] = config_inputs
         report["history_source"] = history_source
         report["execution_workspace"] = str(execution_workspace)

@@ -50,7 +50,7 @@ export function useConversationDetail(source,beforeApply){
  const extra=saved?.id===source?.id?saved:null;
  // Browser deltas preserve unchanged branches. Keep that identity through the
  // annotation/page overlay rather than rebuilding the transcript on draft ticks.
- const currentAnnotations=useMemo(()=>new Map((originalSource?.messages||[]).map(row=>[row.id,{...originalSource.messageAnnotations?.[row.id],reactions:originalSource.messageAnnotations?.[row.id]?.reactions||[],annotationRevision:originalSource.messageAnnotationRevision||0}])),[originalSource?.messages,originalSource?.messageAnnotations,originalSource?.messageAnnotationRevision]);
+ const currentAnnotations=useMemo(()=>new Map((originalSource?.messages||[]).map(row=>[row.id,{...originalSource.messageAnnotations?.[row.id],reactions:originalSource.messageAnnotations?.[row.id]?.reactions||[],assistantReactions:originalSource.messageAnnotations?.[row.id]?.assistantReactions||[],annotationRevision:originalSource.messageAnnotationRevision||0}])),[originalSource?.messages,originalSource?.messageAnnotations,originalSource?.messageAnnotationRevision]);
  const messages=useMemo(()=>source?.messages.map(row=>currentAnnotations.has(row.id)?{...row,...currentAnnotations.get(row.id)}:row),[source?.messages,currentAnnotations]);
  const projected=useMemo(()=>source?{...source,messages}:source,[source,messages]);
  const expandedMessages=useMemo(()=>extra?unique([...extra.messages,...(messages||[])]).map(row=>currentAnnotations.has(row.id)?{...row,...currentAnnotations.get(row.id)}:row):messages,[extra?.messages,currentAnnotations,messages]);

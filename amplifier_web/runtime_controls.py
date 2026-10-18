@@ -429,6 +429,9 @@ class RuntimeControls:
             loop.root_provider = None
             try:
                 providers = self.coordinator.get('providers') or {}
+                if providers:
+                    from .provider_isolation import require_selected
+                    require_selected(self.coordinator)
                 if self.max_output_tokens is not None and providers:
                     automatic = loop._select_provider(providers)
                     if automatic is not None:
@@ -448,6 +451,8 @@ class RuntimeControls:
             if args.get("instance") not in providers or not isinstance(args.get("model"), str) or not args["model"].strip():
                 from .host.model_selection import ProviderSelectionError
                 raise ProviderSelectionError("Select an available provider instance and model")
+            from .provider_isolation import require_available
+            require_available(self.coordinator, args["instance"])
             selected = {key:args[key] for key in ("instance","model","effort") if key in args}
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
             self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective,self.coordinator.get_capability('web.provider_transform'))
@@ -464,6 +469,7 @@ class RuntimeControls:
     async def provider_control(self, operation, args):
         providers = self.coordinator.get("providers") or {}
         if operation == "configuration.providers":
+            from .provider_isolation import UnavailableProvider
             rows = []
             for name,provider in providers.items():
                 info = provider.get_info()
@@ -482,7 +488,7 @@ class RuntimeControls:
                     from .provider_catalog import configuration_key
                     current=configuration_key(captured['workspace'],mounted['module'],mounted.get('config',{}),captured['sources'][name],home=captured['home'])
                     if current==captured['keys'][name]:shared['sharedCatalogKey']=current
-                rows.append({"id":name,"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info),"configSchema":public_config(schema),
+                rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info),"configSchema":public_config(schema),
                     "supports":{"models":callable(getattr(provider,"list_models",None)),
                                 "test":callable(getattr(provider,"list_models",None)),
                                 "login":callable(getattr(provider,"login",None))}})

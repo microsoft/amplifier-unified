@@ -42,6 +42,27 @@ for(const [phase,label] of [['stopped','Stopped'],['cancelled','Cancelled'],['in
  assert.doesNotMatch(grouped,/Worked for|aria-label="Completed"/);
 });
 
+test('live work timers advance without changing single or grouped interface report labels',()=>{
+ const originalNow=Date.now;
+ try{
+  const data={turns:[{id:'t',phase:'running',startedAt:1},{id:'earlier',phase:'completed',startedAt:0,endedAt:1}],nodes:[]};
+  const state={view:{executionExpanded:['closed:turn:t','closed:work:earlier']}};
+  for(const [Component,props] of [[TurnTimeline,{turnId:'t'}],[WorkTimeline,{items:[{turnId:'earlier'},{turnId:'t'}]}]]){
+   const render=()=>renderToStaticMarkup(React.createElement(Component,{data,state,act,...props}));
+   Date.now=()=>20000;const first=render();
+   Date.now=()=>25000;const later=render();
+   const report=html=>{const match=html.match(/data-view-label="([^"]+)"/);assert.ok(match,"Work control must have a stable interface-report label");return match[1]};
+   const visible=html=>html.match(/class="a-execution-label">([^<]+)/)[1];
+   assert.equal(report(first),'Working… · expand work details');
+   assert.equal(report(later),report(first));
+   assert.notEqual(visible(later),visible(first));
+   data.turns[0]={...data.turns[0],phase:'interrupted',endedAt:25};
+   assert.match(report(render()),/^Interrupted · /);
+   data.turns[0]={id:'t',phase:'running',startedAt:1};
+  }
+ }finally{Date.now=originalNow}
+});
+
 test('rejected follow-up is not labeled submitted and running worker is not completed',()=>{
  const worker={id:'w',kind:'worker',turnId:'t',sessionId:'child',label:'Review',phase:'running',exchange:{id:'d',phase:'running',delegateRequest:'Review'}};
  const data={turns:[{id:'t',phase:'running'}],nodes:[worker,

@@ -38,5 +38,12 @@ def counter_read() -> dict[str, int]:
     return {'count': prior[-1]['count'] if prior else 0}
 
 
+if mode.exists() and mode.read_text() == 'changed':
+    @apps.tool(resource_uri='ui://recovery/app', structured_output=True,
+               annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False))
+    def counter_extra() -> dict[str, int]:
+        """A newly added read-only action; never implicitly granted to old views."""
+        return {'extra': 1}
+
 apps.add_html_resource('ui://recovery/app', html.read_text())
 MCPServer('Recovery fixture', extensions=[apps]).run()

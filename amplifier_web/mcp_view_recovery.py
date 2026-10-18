@@ -102,7 +102,7 @@ def _inspect(service, canvas, row):
         return state('account_review_required', 'The saved view’s account cannot be confirmed. Review the account in Settings before using a tool view.')
     current = contract(service, binding)
     if not current:
-        return state('contract_changed', 'This tool’s available actions or app resource changed. The saved document is retained; open a new tool view to review the current contract.')
+        return state('contract_changed', 'This tool’s available actions or app resource changed. The saved document is retained; review tool changes before enabling live features.')
     if not binding.get('contractFingerprint'):
         # Legacy views did not record schemas or account identity. Never silently
         # convert a generation mismatch into approval of today's authority.
@@ -111,7 +111,7 @@ def _inspect(service, canvas, row):
         return {**state('review_required', 'This older view has no saved tool contract. Review its existing actions before reconnecting this tab.', True),
                 'review': current}
     if binding['contractFingerprint'] != current['fingerprint']:
-        return state('contract_changed', 'This tool’s action schemas changed. The saved document is retained; open a new tool view to review the current contract.')
+        return state('contract_changed', 'This tool’s action schemas changed. The saved document is retained; review tool changes before enabling live features.')
     if binding.get('catalogRevision') != server.get('catalogRevision'):
         return state('reconnect_required', 'Saved document available. Reconnect this tab to the verified current tool contract. Previous calls will not be replayed.', True)
     return state('ready', 'Tool view connected', True)

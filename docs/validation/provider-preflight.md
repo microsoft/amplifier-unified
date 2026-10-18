@@ -1,8 +1,11 @@
 # Provider preflight and endpoint constructors
 
 This change partially addresses [issue #182](https://github.com/microsoft/amplifier-unified/issues/182).
-It fixes the host discarding an explicitly saved endpoint during provider metadata
-construction. It does not implement isolation of arbitrary unavailable providers.
+It fixed the host discarding an explicitly saved endpoint during provider metadata
+construction. Provider isolation was added separately under the
+[accepted per-instance contract](../provider-failure-isolation.md); its
+[native qualification](provider-isolation-297.md) supersedes the prerequisite
+assessment below when the supported Core wheel is installed.
 
 ## Current behavior
 
@@ -15,14 +18,16 @@ construction. It does not implement isolation of arbitrary unavailable providers
   A new provider without a saved endpoint can still report missing configuration.
 - Model-list/test probes pass the materialized endpoint to the same constructor
   parameter. These actions continue to perform their requested model-list call.
-- Bundle preflight gathers schema/configuration failures for root and nested
-  instances before updating either the bundle or its prepared mount plan. Failure
-  preserves every provider, priority, role, and account choice and prevents mount.
+- Strict preflight gathers schema/configuration failures for root and nested
+  instances before updating either the bundle or its prepared mount plan. With
+  the supported native Core wheel, the explicit host isolation policy instead
+  retains failed entries as non-executable instance outcomes. Both paths preserve
+  configured provider, priority, role, and account choices.
 - Allowlisted diagnostics identify the module and optional instance, with distinct
   schema/configuration reasons. Raw exceptions and configuration values are not
   included. Feedback exports reason counts, not account identities.
 
-## Remaining isolation contract
+## Original isolation prerequisite assessment (historical)
 
 A missing required secret on an enabled, otherwise unselected provider still stops
 bundle preparation. Removing that row would let priority or model-role resolution

@@ -21,7 +21,7 @@ export function useVisibleMessageAnnotations(session,enabled){
     const value=await request('/api/conversation/annotations',{method:'POST',body:{sessionId:id,messageIds},signal:controller.signal});
     if(disposed||controller.signal.aborted||owner.current!==id)return;
     if(value.sessionId!==id||!Number.isSafeInteger(value.revision)||value.revision<revision||!value.items||messageIds.some(messageId=>!Array.isArray(value.items[messageId]?.reactions)))throw Error('Message reactions could not be refreshed.');
-    setSaved({id,revision:value.revision,items:Object.fromEntries(messageIds.map(messageId=>[messageId,{reactions:[...value.items[messageId].reactions],annotationRevision:value.revision}]))});setError(null);
+    setSaved({id,revision:value.revision,items:Object.fromEntries(messageIds.map(messageId=>[messageId,{reactions:[...value.items[messageId].reactions],assistantReactions:[...(value.items[messageId].assistantReactions||[])],annotationRevision:value.revision}]))});setError(null);
    }catch(e){if(!disposed&&!controller.signal.aborted&&owner.current===id)setError({id,message:e.message||'Message reactions could not be refreshed.'})}
   };
   const observer=new IntersectionObserver(entries=>{

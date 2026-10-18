@@ -87,6 +87,8 @@ class ClientViews:
                 record = copy.deepcopy(previous)
                 if additions := getattr(getattr(self.service, "feedback", None), "additions", None):
                     additions.capture_on_attach(resume, previous, record)
+                if handoffs := getattr(self.service, "handoffs", None):
+                    handoffs.capture_on_attach(resume, previous, record)
             else:
                 shared = self.service._state
                 record = {key: copy.deepcopy(shared.get(key)) for key in LOCAL_KEYS}
@@ -250,6 +252,8 @@ class ClientViews:
         record = self.record()
         if record is None:
             return snapshot
+        if handoffs := getattr(self.service, "handoffs", None):
+            snapshot["handoffs"] = handoffs.project()
         if feedback := getattr(self.service, "feedback", None):
             snapshot["feedback"] = feedback.followups.project(snapshot.get("feedback", {}))
         snapshot.pop("canvasTabs", None)

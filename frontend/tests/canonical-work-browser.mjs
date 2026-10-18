@@ -165,7 +165,15 @@ try{
  console.log('Collapsed one-line actions and richer grouped model details pass; raw requests and responses are click-only, collapsible, paged, retryable and copyable; 15/10 previews, ordering, shared expansion, reload and mobile pass.');
 }catch(error){
  if(page){
-  await writeFile(join(outputDir,'failure-groups.json'),JSON.stringify(await page.evaluate(()=>({groups:[...document.querySelectorAll('[data-group-id]')].map(n=>n.dataset.groupId),workProjection:document.querySelector('.a-messages')?.dataset.workProjection})),null,2)).catch(()=>{});
+  await writeFile(join(outputDir,'failure-groups.json'),JSON.stringify(await page.evaluate(()=>{
+   const state=window.amplifier?.getState(),session=state?.sessions.find(row=>row.id===state.selectedSessionId);
+   return {groups:[...document.querySelectorAll('[data-group-id]')].map(n=>n.dataset.groupId),
+    workProjection:document.querySelector('.a-messages')?.dataset.workProjection,
+    selectedSessionId:state?.selectedSessionId,hostInstanceId:state?.client?.hostInstanceId,
+    publicWorkProjection:session?.workProjection,historyLoading:session?.historyLoading,
+    readingControls:[...document.querySelectorAll('.a-history-window-controls button')].map(node=>node.textContent),
+    workStatus:document.querySelector('[data-part="work-projection-status"]')?.textContent};
+  }),null,2)).catch(()=>{});
   await page.screenshot({path:join(outputDir,'failure.png')}).catch(()=>{});
  }
  console.error(log);throw error
