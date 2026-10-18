@@ -1,5 +1,22 @@
 # Standard UX inventory and execution plan
 
+## Completion-hook response follow-up (October 18)
+
+**RESPONSE-833** covers two ordinary answers with an internal completion check
+after each. Keep exactly the two user-facing answers, with no verification JSON
+or false interrupted response. Record all four model calls and their usage.
+Normal streaming must resume after the hook; error/cancellation restores prior
+context, and a background check cannot become another chat's public response.
+
+The six cases in `tests/test_prompt_completion_scope.py` belong to Full Python
+checks. The optional `tests/fixtures/prompt_completion_runtime_probe.py` exercises
+actual Core, loop-live and the canonical shell hook with a deterministic local
+provider. Both controls fail on unchanged main and pass with the scoped fix;
+[the qualification receipt](prompt-completion-scope833-20261018.json) records
+46 focused passes, dependency identities and limits. This adds a regression
+witness without changing the frozen inventory counts or claiming the original
+reporter's Mac configuration, live provider, or browser acceptance.
+
 ## Scale follow-up coverage (October 17)
 
 The original inventory and frozen outcome counts remain unchanged. The additive
@@ -603,6 +620,17 @@ replacement. The existing `execution-inspection` extended browser scenario remai
 the sole browser owner for a current recent-events receipt, live/terminal Work,
 retry, copy and reload. See [qualification and limits](work-receipt832.md).
 No frozen inventory or 65-scenario migration hash changes.
+
+**WORK-836** adds the reload-before-shell-registration boundary to the existing
+WorkWindows Python owner and `canonical-work` extended-browser acceptance.
+Hold real source revalidation and delay the new document's shell registration;
+after completion, require its current recent-events receipt without an unrelated
+command or view report repairing the cache. Verify selected connected/current
+web readers receive the notice while unrelated, dormant and non-web clients do
+not. The controlled old-source browser fails the unchanged final 15-second
+receipt assertion; the narrow notification correction passes the same sequence.
+Keep historical failures distinct from this controlled cause. See
+[qualification and retained uncertainty](work-readiness836.md).
 
 **INTERIM-832** strengthens the existing extended `interim-replies` owner. Before
 testing long-scrollback completion and the explicit Jump to latest transition,
