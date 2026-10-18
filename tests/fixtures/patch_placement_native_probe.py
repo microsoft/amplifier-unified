@@ -220,6 +220,28 @@ async def reap_owned(process, fallback):
     assert process.returncode is not None, 'Owned worker exit not confirmed'
 
 
+def require_next_success(owner):
+    """A parked terminal generation alone is not a successful next response."""
+    identity = 'placement-next-input'
+    generation = owner['collaborationGeneration']
+    assert generation['terminal']
+    outcomes = [event for event in owner.get('generations', [])
+                if event.get('generation_id') == generation['id']
+                and event.get('sessionId') == event.get('rootSessionId') == owner['id']
+                and event.get('event') in {'generation.finished', 'generation.failed', 'generation.detached'}]
+    assert len(outcomes) == 1 and outcomes[0]['event'] == 'generation.finished', 'Next generation did not succeed'
+    assert identity in outcomes[0].get('input_ids', []), 'Completion belongs to another input'
+    final = [message for message in owner['messages']
+             if message.get('role') == 'assistant' and message.get('inputId') == identity
+             and message.get('generationId') == generation['id']
+             and message.get('text') == 'placement-finite-turn-complete'
+             and message.get('response', {}).get('status') == 'completed'
+             and message.get('response', {}).get('phase') == 'final']
+    assert len(final) == 1, 'Missing exact successful final response for placement-next-input'
+    return {'generationId':generation['id'], 'inputId':identity, 'outcome':outcomes[0]['event'],
+            'messageId':final[0]['id'], 'text':final[0]['text']}
+
+
 async def probe(root, variant):
     root.mkdir(parents=True, exist_ok=False)
     home, workspace, checkout, shared = (root / x for x in ('app','history','checkout','shared'))
@@ -488,6 +510,8 @@ async def probe(root, variant):
             assert duplicate['receipt'] == report['admittedReceipt']
             assert duplicate['generation']['id'] != report['generationAtBind']['id']
             report['stages'].append('exact-duplicate-no-effect')
+        else:
+            report['nextSuccessfulResponse'] = require_next_success(owner)
         report['stages'].append('next-generation-and-park-usable')
     except BaseException as exc:
         primary=exc

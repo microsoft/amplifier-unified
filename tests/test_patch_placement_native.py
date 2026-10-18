@@ -135,6 +135,9 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
             assert 'remount' in methods
         if variant != 'when-idle':
             assert report['noBindingProviderReplay']
+            assert report['nextSuccessfulResponse']['inputId'] == 'placement-next-input'
+            assert report['nextSuccessfulResponse']['outcome'] == 'generation.finished'
+            assert report['nextSuccessfulResponse']['text'] == 'placement-finite-turn-complete'
         if variant=='when-idle':
             assert 'actual-generation-queued-binding' in report['stages']
             assert report['originalInputCount']==report['originalBindToolCount']==1
@@ -152,3 +155,28 @@ def test_native_placement_cleanup_fallback_is_not_qualification(source):
     if source=='child-error': report['cleanupErrors'].append('Synthetic ordinary close failure')
     with pytest.raises(AssertionError):
         require_normal_cleanup(report,parent)
+
+
+@pytest.mark.parametrize('case', ['success','failed-but-parked','previous-input','wrong-response'])
+def test_native_placement_next_response_requires_bound_success(case):
+    from fixtures.patch_placement_native_probe import require_next_success
+    owner = {'id':'synthetic-root', 'status':'idle',
+        'collaborationGeneration':{'id':'next-generation','terminal':True},
+        'generations':[{'event':'generation.finished','generation_id':'next-generation',
+            'sessionId':'synthetic-root','rootSessionId':'synthetic-root','input_ids':['placement-next-input']}],
+        'messages':[{'id':'next-final','role':'assistant','inputId':'placement-next-input',
+            'generationId':'next-generation','text':'placement-finite-turn-complete',
+            'response':{'status':'completed','phase':'final'}}]}
+    parked = True  # The old terminal/input/park predicate permits every case.
+    if case == 'failed-but-parked':
+        owner['generations'][0]['event'] = 'generation.failed'
+    elif case == 'previous-input':
+        owner['messages'][0]['inputId'] = 'placement-warm-input'
+    elif case == 'wrong-response':
+        owner['messages'][0]['text'] = 'unrelated response'
+    assert parked and owner['collaborationGeneration']['terminal']
+    if case == 'success':
+        assert require_next_success(owner)['messageId'] == 'next-final'
+    else:
+        with pytest.raises(AssertionError, match='Next generation did not succeed|Missing exact successful final response'):
+            require_next_success(owner)
