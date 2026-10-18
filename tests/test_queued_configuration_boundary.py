@@ -802,6 +802,49 @@ async def test_unchanged_plan_readback_is_not_a_confirmed_mount(boundary):
     assert "does not match" in boundary.owner["pendingConfiguration"]["error"]
 
 
+@pytest.mark.parametrize("loaded_limit", [1, 2])
+async def test_wrong_saved_ack_cannot_replace_the_immutable_request(boundary, loaded_limit):
+    await queue(boundary)
+    original = copy.deepcopy(operation(boundary)["request"])
+    await reach_apply(boundary)
+    control = boundary.runtime.control
+    observed = {}
+
+    async def wrong_ack(sid, name, args, **kwargs):
+        result = await control(sid, name, args, **kwargs)
+        if name == "configuration.apply":
+            observed["saved"] = plan(1)
+            return {**result, "configuration": plan(1)}
+        if name == "configuration.inspect":
+            observed["loaded"] = plan(loaded_limit)
+            return {**result, "plan": plan(loaded_limit)}
+        return result
+
+    boundary.runtime.control = wrong_ack
+    await settle(boundary)
+    # loaded_limit=1 is the discriminator: both reports agree with each other,
+    # but neither is the authorized plan(2). The correct readback variant also
+    # requires checking the saved acknowledgement, not silently ignoring it.
+    assert observed == {"saved": plan(1), "loaded": plan(loaded_limit)}
+    record = operation(boundary)
+    assert record["request"] == original
+    assert original["config"] == plan(2)
+    assert original["authority"] == boundary.authority
+    assert record["state"]["phase"] == "error"
+    assert record["state"]["effect"] == "saved_not_mounted"
+    assert boundary.owner["configurationBusy"]
+    assert "acknowledgement does not match" in record["state"]["error"]
+    assert boundary.app.management.queued_path(boundary.owner["id"]).read_bytes() == boundary.payload
+    calls = list(boundary.runtime.calls)
+    duplicate = await agent(boundary.app, boundary.owner, "configuration.apply",
+                            boundary.args, "original-apply")
+    assert duplicate["duplicate"]
+    await scheduler_barrier()
+    assert boundary.runtime.calls == calls
+    assert boundary.runtime.calls.count("configuration.apply") == 1
+    assert operation(boundary) == record
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_keyed_cold_owner_restores_unresolved_admission_fence(boundary, legacy):
     app, owner = boundary.app, boundary.owner

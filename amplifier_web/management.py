@@ -1136,7 +1136,13 @@ class Management:
                     if configuration_operation is not None and not isinstance(inspected.get('plan'), dict):
                         raise ValueError('Saved configuration has no confirmed loaded-plan readback.')
                     if configuration_operation is not None:
-                        expected = result.get('configuration', args['args']['config'])
+                        # The worker acknowledgement is evidence to check, not
+                        # authority to replace the immutable requested plan.
+                        expected = self.configuration_record(session['id'], configuration_operation)['request']['config']
+                        if 'configuration' in result and (
+                                not isinstance(result['configuration'], dict)
+                                or not self.configuration_readback_matches(expected, result['configuration'])):
+                            raise ValueError('Saved configuration acknowledgement does not match the original request. Its operation remains unresolved.')
                         if not self.configuration_readback_matches(expected, inspected['plan']):
                             raise ValueError('Saved configuration does not match loaded-plan readback. Its operation remains unresolved.')
                     result['configuration']=inspected
