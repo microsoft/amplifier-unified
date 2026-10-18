@@ -9,6 +9,7 @@ import asyncio
 import copy
 import json
 from pathlib import Path
+import re
 import sys
 import time
 from types import SimpleNamespace
@@ -26,6 +27,9 @@ READ = 'configuration.patchPlacement.read'
 BIND = 'configuration.patchPlacement.bind'
 MODULE = 'patch-fixture'
 SECRET = 'synthetic-secret-must-never-enter-placement-projection'
+PEER_REFUSAL = ('A user must explicitly perform this peer mutation; collaboration '
+                'does not grant stop, worker or settings authority.')
+CHILD_REFUSAL = "A child cannot borrow its root's collaboration authority."
 
 
 def require_contract():
@@ -252,9 +256,12 @@ async def test_placement_read_cannot_inspect_other_principals(placement, case):
     b = placement
     args = {'sessionId': b.peer['id'] if case == 'peer' else b.owner['id'], 'moduleId': MODULE}
     transport = {'_runtimeSessionId': 'synthetic-child' if case == 'child' else b.native}
-    with pytest.raises(AppError, match='(?i)root|own|caller|child|another'):
+    before, controls = b.path.read_bytes(), b.controls.read_bytes()
+    expected = PEER_REFUSAL if case == 'peer' else CHILD_REFUSAL
+    with pytest.raises(AppError, match='^' + re.escape(expected) + '$'):
         await agent(b.app, b.owner, READ, args, 'wrong-read-' + case, **transport)
     assert stages(b) == [] and not b.runtime.workers
+    assert b.path.read_bytes() == before and b.controls.read_bytes() == controls
 
 
 @pytest.mark.parametrize('engine', ['native', 'function'])
@@ -665,3 +672,157 @@ async def test_placement_controls_preserve_bytes_until_ordinary_persistence(plac
     finally:
         await controls.close()
         await session.coordinator.cleanup()
+
+
+@pytest.mark.parametrize('change', ['terminal', 'revoked', 'stopped'])
+async def test_completed_root_can_read_and_retrieve_exact_receipt_without_admission(placement, monkeypatch, change):
+    b = placement
+    snapshot = await read_placement(b)
+    authorized = await authorize(b)
+    args = bind_args(b, snapshot)
+    accepted = await submit(b, args)
+    assert (await finished(b.app, 'bind-placement'))['phase'] == 'ready'
+    await settle_submitted_commands(b)
+    # This must be the terminal generation produced by the real worker exit,
+    # not a fixture reset to manufacture new mutation authority.
+    assert b.owner['collaborationGeneration']['terminal'] is True
+    if change == 'revoked':
+        await revoke(b.app, authorized)
+    elif change == 'stopped':
+        b.owner['interruptionRevision'] = b.owner.get('interruptionRevision', 0) + 1
+    generation = copy.deepcopy(b.owner['collaborationGeneration'])
+    retained = await operation(b)
+    record_path = b.app.management.configuration_record_path(b.owner['id'], retained['operationId'])
+    record_bytes = record_path.read_bytes()
+    before, stamp, trace = b.path.read_bytes(), b.path.stat().st_mtime_ns, stages(b)
+    commands = b.app.db.execute('SELECT count(*) FROM commands').fetchone()[0]
+
+    def no_new_admission(*args, **kwargs):
+        pytest.fail('A passive placement observation or exact receipt retry invoked new authority capture')
+    monkeypatch.setattr(b.app.configuration_authority, 'capture', no_new_admission)
+    observed = await read_placement(b, 'terminal-observation')
+    assert observed['saved'] == {'workingDirectory': str(b.checkout), 'origin': 'explicit'}
+    assert observed['mounted'] == {'status': 'observed', 'workingDirectory': str(b.checkout)}
+    duplicate = await submit(b, args)
+    assert duplicate['duplicate'] and duplicate['accepted'] == accepted['accepted']
+    assert duplicate['result'] == accepted['result']
+    assert_safe(duplicate['result'])
+    await settle_submitted_commands(b)
+    assert await operation(b) == retained
+    assert record_path.read_bytes() == record_bytes
+    assert b.path.read_bytes() == before and b.path.stat().st_mtime_ns == stamp
+    assert stages(b) == trace and b.controls.read_bytes() == b.original_controls
+    assert b.app.db.execute('SELECT count(*) FROM commands').fetchone()[0] == commands
+    assert b.owner['collaborationGeneration'] == generation
+
+
+@pytest.mark.parametrize('change', ['terminal', 'stale-generation'])
+async def test_passive_read_never_admits_new_binding_from_stale_generation(placement, change):
+    b = placement
+    await authorize(b)
+    if change == 'terminal':
+        b.app.collaboration.observe(b.owner, 'runtime.ended', {'sessionId': b.owner['id']})
+    snapshot = await read_placement(b)
+    transport = {'_generationId': 'stale-generation'} if change == 'stale-generation' else {}
+    before = b.path.read_bytes()
+    with pytest.raises(AppError, match='current transport-bound root generation'):
+        await submit(b, bind_args(b, snapshot), 'new-stale-operation', **transport)
+    assert not b.owner.get('pendingConfiguration') and not b.runtime.workers
+    assert stages(b) == [] and b.path.read_bytes() == before
+    assert b.controls.read_bytes() == b.original_controls
+
+
+@pytest.mark.parametrize('change', ['revoke', 'stop'])
+async def test_retained_no_effect_receipt_does_not_borrow_authority_for_new_request(placement, change):
+    b = placement
+    snapshot = await read_placement(b)
+    authorized = await authorize(b)
+    args = bind_args(b, snapshot)
+    before = b.path.read_bytes()
+    await b.app.management.lock.acquire()
+    try:
+        accepted = await submit(b, args)
+        if change == 'revoke':
+            await revoke(b.app, authorized)
+        else:
+            b.owner['interruptionRevision'] = b.owner.get('interruptionRevision', 0) + 1
+    finally:
+        b.app.management.lock.release()
+    assert (await finished(b.app, 'bind-placement'))['phase'] == 'error'
+    await settle_submitted_commands(b)
+    assert b.owner['collaborationGeneration']['terminal'] is False
+    retained = await operation(b)
+    assert retained['state']['effect'] == 'none' and retained['attempts'] == 0
+    duplicate = await submit(b, args)
+    assert duplicate['duplicate'] and duplicate['result'] == accepted['result']
+    fresh = await read_placement(b, 'after-authority-ended')
+    with pytest.raises(AppError, match='Configuration authority'):
+        await submit(b, bind_args(b, fresh), 'different-new-request')
+    await settle_submitted_commands(b)
+    assert await operation(b) == retained
+    assert stages(b) == [] and not b.runtime.workers
+    assert b.path.read_bytes() == before and b.controls.read_bytes() == b.original_controls
+
+
+@pytest.mark.parametrize('action', [READ, BIND])
+@pytest.mark.parametrize('actor', ['foreign-root', 'child', 'missing-principal'])
+async def test_terminal_observation_and_receipt_remain_transport_root_bound(placement, action, actor):
+    b = placement
+    snapshot = await read_placement(b)
+    await authorize(b)
+    args = bind_args(b, snapshot)
+    await submit(b, args)
+    assert (await finished(b.app, 'bind-placement'))['phase'] == 'ready'
+    await settle_submitted_commands(b)
+    assert b.owner['collaborationGeneration']['terminal'] is True
+    retained = await operation(b)
+    before, stamp, trace = b.path.read_bytes(), b.path.stat().st_mtime_ns, stages(b)
+    source = b.peer if actor == 'foreign-root' else b.owner
+    principal = b.peer['runtimeSessionId'] if actor == 'foreign-root' else 'synthetic-child' if actor == 'child' else None
+    request = args if action == BIND else {'sessionId': b.owner['id'], 'moduleId': MODULE}
+    expected = PEER_REFUSAL if actor == 'foreign-root' else CHILD_REFUSAL if actor == 'child' else 'Patch placement requires its authenticated transport root.'
+    with pytest.raises(AppError, match='^' + re.escape(expected) + '$'):
+        await agent(b.app, source, action, request, 'bind-placement', _runtimeSessionId=principal)
+    await settle_submitted_commands(b)
+    assert await operation(b) == retained
+    assert b.path.read_bytes() == before and b.path.stat().st_mtime_ns == stamp
+    assert stages(b) == trace and b.controls.read_bytes() == b.original_controls
+
+
+@pytest.mark.parametrize('mismatch', ['payload', 'root'])
+async def test_terminal_binding_receipt_rejects_same_id_with_changed_identity(placement, mismatch):
+    b = placement
+    snapshot = await read_placement(b)
+    await authorize(b)
+    args = bind_args(b, snapshot)
+    await submit(b, args)
+    assert (await finished(b.app, 'bind-placement'))['phase'] == 'ready'
+    await settle_submitted_commands(b)
+    assert b.owner['collaborationGeneration']['terminal'] is True
+    retained = await operation(b)
+    before, stamp, trace = b.path.read_bytes(), b.path.stat().st_mtime_ns, stages(b)
+    if mismatch == 'root':
+        source, principal = b.peer, b.peer['runtimeSessionId']
+        args = {**args, 'sessionId': b.peer['id'], 'sourceMessageId': 'peer-choice'}
+    else:
+        source, principal = b.owner, b.native
+        args = {**args, 'moduleId': 'different-instance'}
+    with pytest.raises(AppError, match='This command ID was already used with different contents'):
+        await agent(b.app, source, BIND, args, 'bind-placement', _runtimeSessionId=principal)
+    await settle_submitted_commands(b)
+    assert await operation(b) == retained
+    assert b.path.read_bytes() == before and b.path.stat().st_mtime_ns == stamp
+    assert stages(b) == trace
+
+
+async def test_binding_receipt_lookup_rejects_a_command_from_another_action(placement):
+    b = placement
+    snapshot = await read_placement(b)
+    await b.app.dispatch('session.rename', {'id': b.owner['id'], 'title': 'Synthetic renamed owner'},
+        command_id='not-a-binding-command')
+    b.app.collaboration.observe(b.owner, 'runtime.ended', {'sessionId': b.owner['id']})
+    before = b.path.read_bytes()
+    with pytest.raises(AppError, match='This command ID was already used with different contents'):
+        await submit(b, bind_args(b, snapshot), 'not-a-binding-command')
+    assert b.path.read_bytes() == before and stages(b) == []
+    assert not b.runtime.workers and not b.owner.get('pendingConfiguration')
