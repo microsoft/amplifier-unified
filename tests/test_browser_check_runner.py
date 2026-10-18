@@ -272,8 +272,26 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     steps = browser['jobs']['browser']['steps']
     assert any('browser_check_runner.py' in step.get('run', '') for step in steps)
     uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
-    assert len(uploads) == 1 and uploads[0]['if'] == 'always()'
-    assert 'output/browser-checks/' in uploads[0]['with']['path']
+    assert len(uploads) == 2
+    by_name = {step['with']['name']: step for step in uploads}
+    diagnostics_name = 'extended-browser-evidence-${{ github.run_attempt }}'
+    static_name = 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}'
+    assert set(by_name) == {diagnostics_name, static_name}
+    diagnostics, static = by_name[diagnostics_name], by_name[static_name]
+    assert diagnostics['if'] == 'always()'
+    assert diagnostics['with'] == {
+        'name': diagnostics_name,
+        'path': 'output/browser-checks/\noutput/active-client-performance/\noutput/state-transport-browser/\noutput/scoped-navigation/\noutput/selected-context/\n',
+        'if-no-files-found': 'warn',
+    }
+    assert static['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
+    assert static['with'] == {
+        'name': static_name, 'path': 'amplifier_web/static/',
+        'include-hidden-files': 'true', 'if-no-files-found': 'error',
+    }
+    assert set(diagnostics['with']['path'].splitlines()).isdisjoint({static['with']['path']})
+    # Never replace failed-run diagnostics with a successful-build-only upload.
+    # Exact names, count and paths also reject additional or overlapping uploads.
     readiness = (workflows / 'public-readiness.yml').read_text()
     files = re.findall(r'tests/test_\w+\.py', readiness)
     assert len(files) == len(set(files)) == 98
