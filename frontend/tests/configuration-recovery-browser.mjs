@@ -91,9 +91,26 @@ try{
  assert.equal(final.calls.filter(c=>c.operation==='configuration.apply').length,1);
  assert.equal(actions.filter(a=>a.action==='configuration.inspect').length,0);
  assert.equal(actions.filter(a=>a.action==='configuration.operation.resume').length,1);
+ const captureFrames=[];
  for(const [index,page] of pages.entries()){
   await expect(panel(page)).toBeVisible();
   assert.equal(await panel(page).evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  const target=panel(page);
+  await target.scrollIntoViewIfNeeded();
+  const required=[
+   ['heading',target.getByRole('heading',{name:'Original configuration change',exact:true})],
+   ['status',target.getByText(index?'The original change remains held until its evidence can be verified.':'Changes are applied to the loaded session.',{exact:true})],
+   ...['Refresh status','Check saved outcome','Resume original change'].map(name=>[name,target.getByRole('button',{name,exact:true})]),
+  ];
+  if(index)required.push(['heldReason',target.getByText('The original operation or its evidence cannot be verified. Changes remain held; nothing was retried.',{exact:true})]);
+  const rectangles={};
+  for(const [name,locator] of required)rectangles[name]=await locator.boundingBox();
+  captureFrames.push({browser:index,viewport:page.viewportSize(),target:await target.boundingBox(),rectangles});
+  await writeFile(resolve(output,'capture-framing.json'),JSON.stringify(captureFrames,null,2));
+  for(const [,locator] of required){
+   await expect(locator).toBeVisible();
+   await expect(locator).toBeInViewport({ratio:1});
+  }
   await page.screenshot({animations:'disabled',path:resolve(output,index?'recovery-held-mobile.png':'recovery-mounted-desktop.png')});
  }
  assert.deepEqual(errors,[]);
