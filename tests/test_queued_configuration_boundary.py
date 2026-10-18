@@ -1751,3 +1751,114 @@ async def test_nonterminal_none_receipt_never_releases_interrupted_operation(bou
     with pytest.raises(AppError, match="not terminal"):
         await recovery(boundary, "reconcile")
     assert operation(boundary) == current and boundary.owner["configurationBusy"]
+
+
+@pytest.mark.parametrize("variant", ["original", "skip-save-regression"])
+async def test_real_native_recovery_and_deliberately_regressed_save_witness(tmp_path, variant):
+    """No importorskip: the admitted fixed workflow owns native prerequisites."""
+    import os
+    from pathlib import Path
+    import signal
+    import sys
+    fixture = Path(__file__).parent / "fixtures/queued_configuration_native_probe.py"
+    root = tmp_path / variant
+    command = [sys.executable, "-u", str(fixture), str(root)]
+    mutant = variant == "skip-save-regression"
+    if mutant:
+        command.append("--skip-save")
+    # Retain finite structured proof and logs in the existing workflow artifact.
+    # No homes, provider scenario, grants, native transcript or receipt keys.
+    output = (Path(os.environ["GITHUB_WORKSPACE"]) / "output/python-checks"
+        if os.environ.get("GITHUB_ACTIONS") == "true" else tmp_path) / ("native-recovery-" + variant)
+    output.mkdir(parents=True, exist_ok=False)
+    fallback = []
+    async def cleanup_recorded_workers():
+        # Only this probe's exact PID/start-tick/argv/group identities may be
+        # signalled. Missing or reused identities are never guessed.
+        for path in root.glob("worker-source-*.json"):
+            row = json.loads(path.read_text())
+            assert row["probePid"] == process.pid
+            pid = row["pid"]
+            def alive():
+                try:
+                    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+                    assert fields[19] == row["startTicks"], "PID was reused; never signal it."
+                    if fields[0] == "Z":
+                        return False
+                    args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                    assert str(root).encode() in args and b"--worker" in args
+                    assert row["processGroup"] == os.getpgid(pid) == pid
+                    return True
+                except FileNotFoundError:
+                    return False
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                if not alive():
+                    break
+                fallback.append({"pid": pid, "startTicks": row["startTicks"], "signal": sig.name})
+                try:
+                    os.killpg(pid, sig)
+                except ProcessLookupError:
+                    break
+                try:
+                    async with asyncio.timeout(6):
+                        while alive():
+                            await asyncio.sleep(.05)
+                except TimeoutError:
+                    continue
+            assert not alive(), "Exact owned worker termination remains unconfirmed."
+
+    with (output / "stdout.log").open("wb") as stdout_file, (output / "stderr.log").open("wb") as stderr_file:
+        process = await asyncio.create_subprocess_exec(*command, stdout=stdout_file, stderr=stderr_file)
+        try:
+            await asyncio.wait_for(process.wait(), 240)
+        except BaseException:
+            if process.returncode is None:
+                process.terminate()  # Probe handler cancels once and owns normal cleanup.
+                try:
+                    await asyncio.wait_for(process.wait(), 65)
+                except TimeoutError:
+                    # Workers have their own sessions. Do not assume killing the
+                    # probe kills them; verify its exact recorded start identity.
+                    await cleanup_recorded_workers()
+                    process.kill()
+                    await asyncio.wait_for(process.wait(), 5)
+            raise
+        finally:
+            # Partial evidence survives timeout/cancellation, not just a passing
+            # probe. Missing evidence is a failing prerequisite, never success.
+            try:
+                if process.returncode is not None:
+                    await cleanup_recorded_workers()
+            finally:
+                if (root / "evidence.json").exists():
+                    (output / "evidence.json").write_bytes((root / "evidence.json").read_bytes())
+                (output / "parent-cleanup.json").write_text(json.dumps({
+                    "probePid": process.pid, "returncode": process.returncode,
+                    "fallbackSignals": fallback}, indent=2) + "\n")
+    stderr = (output / "stderr.log").read_bytes()
+    assert not fallback, "Fallback cleanup occurred; this cannot qualify normal native cleanup."
+    evidence_path = root / "evidence.json"
+    assert evidence_path.is_file(), stderr.decode(errors="replace")[-3000:]
+    report = json.loads(evidence_path.read_text())
+    (output / "evidence.json").write_text(json.dumps(report, indent=2) + "\n")
+    assert report["prewriteRefusal"] and report["originalAuthorityPreserved"]
+    assert report["resumedSaveAcknowledged"] and report["actualWorkerRemounted"]
+    assert report["attempts"] == 2 and report["noRecoveryProviderCalls"]
+    assert len(report["processes"]) == 2
+    assert all(row["returncode"] is not None for row in report["processes"])
+    assert not report["cleanupErrors"] and report["runtimeRowsAfterClose"] == 0
+    assert report["heldWriterControl"] and report["writerAvailableAfterClose"] is True
+    assert len(report["workerSources"]) == 2
+    assert all(row["mutant"] is mutant for row in report["workerSources"])
+    assert all((row["originalFunction"] != row["executedFunction"]) is mutant
+        for row in report["workerSources"])
+    if mutant:
+        assert process.returncode != 0, "Deliberately skipped product save escaped the same acceptance oracle."
+        assert report["negativeWitness"] == "resumed_save_skipped_loaded_plan_mismatch"
+        assert report["state"]["phase"] == "error" and report["state"]["effect"] == "saved_not_mounted"
+        assert "Native recovery did not mount the original requested plan" in stderr.decode()
+    else:
+        assert process.returncode == 0, stderr.decode(errors="replace")[-3000:]
+        assert report["mountedPlanVerified"] and report["nextInputUsable"]
+        assert report["originalInputCount"] == report["originalToolResultCount"] == 1
+        assert report["duplicateResumePassive"] and report["writerReleasedWhileParked"]
