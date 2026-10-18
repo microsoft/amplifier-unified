@@ -1043,10 +1043,11 @@ class WorkWindows:
         row = next((r for r in page['_boundNodes'][key[2]] if r['id'] == args.get('id')), None)
         if row is None:
             raise ValueError('This Work field membership expired.')
+        accepted = deepcopy(row)
         result = await self.read_proven_field(identity, entry['proof'], row['id'], args)
         if (self.live_pages._client() != client or self._cold_reads.get(key) is not entry
                 or self._page(identity, key[2]) is not page or args['id'] not in entry['ids']
-                or not any(r is row for r in page['_boundNodes'][key[2]])):
+                or row != accepted or not any(r is row for r in page['_boundNodes'][key[2]])):
             raise ValueError('This Work field window expired.')
         return result
 
