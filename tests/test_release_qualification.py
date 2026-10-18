@@ -407,7 +407,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
@@ -438,6 +438,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     ('queued-configuration', ['tests/test_queued_configuration_boundary.py']),
     ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
     ('patch-placement-recovery', ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py']),
+    ('patch-placement-native', ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
 def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):
