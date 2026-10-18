@@ -1,5 +1,8 @@
 """Exact-owner read-only recovery keeps uncertain effects and backend boundaries."""
 import asyncio
+import copy
+import json
+from pathlib import Path
 import threading
 
 from filelock import FileLock
@@ -12,6 +15,7 @@ from test_configuration_authority import app, grant, revoke
 from test_coordination_generation import agent
 from test_task_environments import backend, scope, start, act
 from test_test_queue import queue, submit, drive, record
+from test_test_environment_worker import library, Failure, worker
 
 
 def observation(row, status='absent', **changes):
@@ -401,3 +405,152 @@ def test_real_helper_receives_identity_and_retention_override_only_for_remove(tm
                           home, row, action, {'requestId': 'exact-request', 'retentionMode': 'full'})
     assert result == {'ok': True, 'mode': expected, 'identity': row['backendIdentity'],
                       'owner': row['sessionId'], 'operationId': row['launchOperationId']}
+
+
+@pytest.mark.parametrize('evidence', ['missing', 'forged', 'stale'])
+async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files(app, backend, library, monkeypatch, evidence):
+    """Host preservation only, NOT a phase-proof consumer/validator test."""
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'legacy-stop'))['resource']
+    lib, effects = library
+    folder = Path(row['retention']['path'])
+    (folder / 'source.tar').write_bytes(b'synthetic snapshot')
+    original = owner.invoke
+    destroyed = []
+    def lost_destroy(identity, **kwargs):
+        destroyed.append(identity)  # External effect may have happened.
+        raise Failure('lost acknowledgement')
+    lib.destroy = lost_destroy
+    monkeypatch.setattr(worker, 'docker_json', lambda *args: {'ID':'owned-daemon'})
+    def invoke(config, home, raw, action, args):
+        if action == 'remove':
+            value = worker.execute_call({
+                'action':'remove', 'root':str(folder), 'rootOwner':raw['sessionId'],
+                'operationId':raw['launchOperationId'], 'universeId':raw['universeId'],
+                'expectedBackendIdentity':raw['backendIdentity'],
+                'dockerHost':config['dockerHost'], 'requestId':args['requestId']})
+            # Model the older helper's published envelope, not a new phase proof.
+            return {key:item for key, item in value.items() if key != 'removal'}
+        if action == 'reconcile':
+            return observation(raw, 'stopped')  # Presence is not effect history.
+        return original(config, home, raw, action, args)
+    monkeypatch.setattr(owner, 'invoke', invoke)
+    failed = await act(app, 'remove', row, 'legacy-remove')
+    unknown = copy.deepcopy(failed['request'])
+    assert unknown['state'] == 'outcome_unknown' and destroyed == ['owned-universe']
+    directory, = folder.glob('retained-*')
+    if evidence != 'missing':
+        (directory / 'untrusted-phase.json').write_text(json.dumps({
+            'phase':'manifest-complete', 'destroyEffect':'not_dispatched', 'verified':True,
+            'requestId':'legacy-remove' if evidence == 'forged' else 'older-request',
+            'resourceRevision':row['revision'] if evidence == 'forged' else 1}))
+    before = {p.name:(p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir()}
+    assert len(list(directory.glob('*.tar'))) == 2
+    result = await act(app, 'reconcile', failed['resource'], 'legacy-observe')
+    assert result['request']['state'] == 'completed' and result['resource']['status'] == 'stopped'
+    assert result['resource']['lastOperation'] == unknown
+    assert 'accounting' not in result['resource']['retention']
+    assert app.operations.requests.read(row['sessionId'], 'legacy-remove') == unknown
+    assert (await act(app, 'remove', row, 'legacy-remove'))['request'] == unknown
+    assert destroyed == ['owned-universe'] and sum(c[0] == 'export' for c in effects) == 2
+    assert before == {p.name:(p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir()}
+    assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'
+    with pytest.raises(AppError, match='already owns an environment'):
+        await start(app, 'not-a-new-removal-attempt')
+
+
+@pytest.mark.parametrize('change', ['root', 'launch', 'physical', 'backend', 'revision'])
+async def test_legacy_remove_reconciliation_cannot_change_bound_owner(app, backend, monkeypatch, change):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'bound-stop'))['resource']
+    def lost(*args):
+        raise TimeoutError('synthetic original removal unknown')
+    monkeypatch.setattr(owner, 'invoke', lost)
+    failed = await act(app, 'remove', row, 'bound-remove')
+    unknown = copy.deepcopy(failed['request'])
+    changes = {
+        'root': {'rootOwner':'other-root'}, 'launch': {'operationId':'other-launch'},
+        'physical': {'universeId':'other-guest'},
+        'backend': {'backendIdentity':{'backend':'docker', 'daemon':'other-daemon'}},
+        'revision': {},
+    }[change]
+    calls = observer(monkeypatch, 'stopped', **changes)
+    if change == 'revision':
+        with pytest.raises(AppError, match='changed'):
+            await act(app, 'reconcile', row, 'stale-remove-observation')
+        assert calls == []
+    else:
+        result = await act(app, 'reconcile', failed['resource'], 'wrong-remove-observation')
+        assert result['request']['state'] == 'failed' and calls == ['reconcile']
+    assert app.operations.requests.read(row['sessionId'], 'bound-remove') == unknown
+    assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'
+
+
+async def test_duplicate_concurrent_remove_and_reconcile_do_not_repeat_destroy(app, backend, library, monkeypatch):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'concurrent-stop'))['resource']
+    entered, release = threading.Event(), threading.Event()
+    lib, effects = library
+    folder = Path(row['retention']['path'])
+    (folder / 'source.tar').write_bytes(b'synthetic snapshot')
+    calls, destroyed = [], []
+    def destroy(identity, **kwargs):
+        destroyed.append(identity)
+        entered.set()
+        assert release.wait(5)
+        raise Failure('synthetic lost destroy acknowledgement')
+    lib.destroy = destroy
+    monkeypatch.setattr(worker, 'docker_json', lambda *args: {'ID':'owned-daemon'})
+    def invoke(config, home, raw, action, args):
+        calls.append((action, args['requestId']))
+        assert action == 'remove'
+        return worker.execute_call({
+            'action':'remove', 'root':str(folder), 'rootOwner':raw['sessionId'],
+            'operationId':raw['launchOperationId'], 'universeId':raw['universeId'],
+            'expectedBackendIdentity':raw['backendIdentity'], 'dockerHost':config['dockerHost'],
+            'requestId':args['requestId'], 'resourceId':raw['id'],
+            'resourceRevision':raw['revision'], 'admissionRevision':args['expectedRevision'],
+            'backendKey':raw['backendKey'], 'snapshot':raw['snapshot']})
+    monkeypatch.setattr(owner, 'invoke', invoke)
+    task = asyncio.create_task(act(app, 'remove', row, 'once-remove'))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        duplicate = await act(app, 'remove', row, 'once-remove')
+        assert duplicate['request']['state'] == 'admitting'
+        current = owner.get(app.data_dir, row['sessionId'], row['id'])
+        competing = await act(app, 'reconcile', owner.public(app.data_dir, current), 'competing-observation')
+        assert competing['request']['state'] == 'failed'
+        assert owner.get(app.data_dir, row['sessionId'], row['id']) == current
+        competing_remove = await act(app, 'remove', owner.public(app.data_dir, current), 'competing-remove')
+        assert competing_remove['request']['state'] == 'failed'
+        assert owner.get(app.data_dir, row['sessionId'], row['id']) == current
+    finally:
+        release.set()
+        settled = await task
+    unknown = settled['request']
+    assert unknown['state'] == 'outcome_unknown'
+    assert (await act(app, 'remove', row, 'once-remove'))['request'] == unknown
+    assert calls == [('remove', 'once-remove')]
+    assert destroyed == ['owned-universe'] and sum(c[0] == 'export' for c in effects) == 2
+    assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'
+
+
+async def test_new_remove_identity_cannot_bypass_a_legacy_unknown_removal(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'held-stop'))['resource']
+    def lost(*args):
+        raise TimeoutError('synthetic removal may have run')
+    monkeypatch.setattr(owner, 'invoke', lost)
+    failed = await act(app, 'remove', row, 'held-original-remove')
+    unknown = copy.deepcopy(failed['request'])
+    observed = observer(monkeypatch, 'stopped')
+    reconciled = await act(app, 'reconcile', failed['resource'], 'held-inspection')
+    assert reconciled['resource']['status'] == 'stopped' and observed == ['reconcile']
+    before = owner.get(app.data_dir, row['sessionId'], row['id'])
+    def no_effect(*args):
+        pytest.fail('A new request identity bypassed an unresolved original removal')
+    monkeypatch.setattr(owner, 'invoke', no_effect)
+    with pytest.raises(AppError, match='original removal'):
+        await act(app, 'remove', reconciled['resource'], 'not-a-recovery-token')
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == before
+    assert app.operations.requests.read(row['sessionId'], 'held-original-remove') == unknown
