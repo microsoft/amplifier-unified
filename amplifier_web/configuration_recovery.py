@@ -196,7 +196,10 @@ def command(management, action, args, origin, caller):
         return public(record, observed)
     if pending.get("operationId") != operation or args["expectedRevision"] != record["revision"]:
         raise ValueError("The original configuration operation revision changed.")
-    if record["state"]["phase"] != "error":
+    interrupted = (action.endswith(".reconcile")
+        and record["state"]["phase"] == "applying"
+        and record["state"]["stage"] == "interrupted")
+    if record["state"]["phase"] != "error" and not interrupted:
         raise ValueError("Only a settled failed configuration operation can be reconciled or resumed.")
     if origin not in {"ui", "user"} and record["request"]["authorization"] != "grant":
         raise ValueError("Agent recovery requires the original retained agent authority, not a UI or internal origin.")
@@ -216,13 +219,18 @@ def command(management, action, args, origin, caller):
         if attempt:
             if not observed:
                 raise ValueError("Native evidence is absent; the operation remains unknown.")
+            if observed["effect"] == "none" and observed.get("terminal") is not True:
+                raise ValueError("Native no-effect evidence is not terminal; the operation remains held.")
             # Never downgrade acknowledged save/mount to an older no-effect receipt.
             if effect in {"saved_not_mounted", "mounted"} and observed["effect"] != effect:
                 raise ValueError("Native evidence conflicts with retained saved-state evidence.")
             effect = observed["effect"]
         elif effect != "none":
             raise ValueError("Legacy operation lacks native binding; its outcome remains unknown.")
-        record = management.configuration_transition(session, operation, stage="reconciled",
+        # Cancellation leaves its original applying/interrupted evidence intact
+        # until the host task settles and an explicit reconciliation observes
+        # this attempt. Classification is not permission to replay the write.
+        record = management.configuration_transition(session, operation, phase="error", stage="reconciled",
             effect=effect, recoveryRequired=False)
         management.settle_configuration_fence(session, operation)
     elif action.endswith(".resume"):

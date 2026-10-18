@@ -1422,3 +1422,332 @@ async def test_readback_rejects_retained_or_reordered_configuration(boundary, ch
     assert operation(boundary)["state"]["effect"] == "saved_not_mounted"
     assert boundary.owner["pendingConfiguration"]["phase"] == "error"
     assert boundary.owner["configurationBusy"]
+
+
+@pytest.fixture
+async def recovery_http_boundary(tmp_path, monkeypatch, aiohttp_client):
+    """Real authenticated HTTP entry; synthetic native mount, no model calls."""
+    from amplifier_web.auth import new_session, SESSION_COOKIE
+    from amplifier_web.server import create_app
+
+    class UnstartedRuntime:
+        async def close(self):
+            pass
+
+    home = tmp_path / "http-recovery"
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(home))
+    monkeypatch.setenv("AMPLIFIER_HOME", str(tmp_path / "http-native"))
+    web_app = await create_app(home, workspace=tmp_path, runtime=UnstartedRuntime(),
+        voice=False, background_updates=False, preload_providers=False)
+    app, client = web_app["service"], None
+    try:
+        owner, peer = [app._new_session({"title": title}) for title in ("Recovery owner", "Selected other chat")]
+        app.state["sessions"] = [owner, peer]
+        app.state["selectedSessionId"] = peer["id"]
+        owner["collaborationGeneration"] = {
+            "id": "original-http-generation", "inputIds": ["synthetic-human"], "terminal": False}
+        peer["collaborationGeneration"] = {
+            "id": "peer-http-generation", "inputIds": ["synthetic-peer"], "terminal": False}
+        runtime = ControlsTransport(home, owner["id"])
+        runtime.app = app
+        await app.install_runtime(runtime)
+        app._publish()
+        client = await aiohttp_client(web_app)
+        # A signed browser session cookie exercises auth_required, not a test
+        # override of dispatch origin or a model-supplied caller identity.
+        headers = {"Cookie": SESSION_COOKIE + "=" + new_session(web_app["session_secret"]),
+                   "X-Amplifier-State-Transport": "delta-v1"}
+        yield SimpleNamespace(app=app, owner=owner, peer=peer, runtime=runtime,
+            client=client, headers=headers)
+    finally:
+        if client is not None:
+            await asyncio.wait_for(client.close(), 5)
+        else:
+            await asyncio.wait_for(app.close(), 5)
+
+
+async def http_recovery(boundary, verb, *, identity=None, revision=None):
+    saved = operation(boundary)
+    args = {"sessionId": boundary.owner["id"], "operationId": saved["id"]}
+    if verb != "read":
+        args["expectedRevision"] = saved["revision"] if revision is None else revision
+    return await boundary.client.post("/api/actions", headers=boundary.headers, json={
+        "action": "configuration.operation." + verb, "args": args,
+        "id": identity or "http-" + verb + "-" + str(saved["revision"])})
+
+
+async def terminal_refusal(boundary):
+    await queue(boundary)
+    # The original turn really is over before deferred application begins.
+    boundary.owner["collaborationGeneration"]["terminal"] = True
+    boundary.runtime.native.queued_inputs = 1
+    await reach_apply(boundary)
+    await settle(boundary)
+    saved = operation(boundary)
+    assert saved["state"]["effect"] == "unknown"
+    assert boundary.owner["configurationBusy"]
+    assert boundary.owner["collaborationGeneration"]["terminal"]
+    return saved
+
+
+async def test_terminal_owner_recovers_via_authenticated_ui_entry_not_new_agent_turn(recovery_http_boundary, monkeypatch):
+    from amplifier_web import configuration_recovery
+    b = recovery_http_boundary
+    saved = await terminal_refusal(b)
+    before_grants = copy.deepcopy(b.app.configuration_authority.rows(b.owner["id"]))
+    calls, origin_calls = list(b.runtime.calls), []
+    original = configuration_recovery.command
+    def observed(management, action, args, origin, caller):
+        result = original(management, action, args, origin, caller)
+        origin_calls.append((action, args["sessionId"], origin, caller))
+        return result
+    monkeypatch.setattr(configuration_recovery, "command", observed)
+    args = {"sessionId": b.owner["id"], "operationId": saved["id"]}
+    unauthenticated = await b.client.post("/api/actions", json={
+        "action": "configuration.operation.read", "args": args})
+    assert unauthenticated.status == 401
+    cross_origin = await b.client.post("/api/actions",
+        headers={**b.headers, "Origin": "https://untrusted.example"},
+        json={"action": "configuration.operation.read", "args": args})
+    assert cross_origin.status == 403
+    catalog_response = await b.client.get("/api/actions", headers=b.headers)
+    assert catalog_response.status == 200
+    catalog = {row["name"] for row in await catalog_response.json()}
+    assert {"configuration.operation." + verb for verb in ("read", "reconcile", "resume")} <= catalog
+    # An active grant is not a live agent generation or permission to wake one.
+    with pytest.raises(AppError, match="transport-bound"):
+        await recovery(b, "reconcile")
+    blocked_input = await b.client.post("/api/actions", headers=b.headers, json={
+        "action": "conversation.send", "args": {"sessionId": b.owner["id"], "text": "Do not wake"},
+        "id": "blocked-owner-input"})
+    assert blocked_input.status == 409
+    assert b.runtime.calls == calls
+    observed_read = await http_recovery(b, "read")
+    assert observed_read.status == 200
+    assert (await observed_read.json())["result"]["nativeEffect"] == "none"
+    assert operation(b) == saved and b.owner["configurationBusy"]
+    reconciled_response = await http_recovery(b, "reconcile")
+    assert reconciled_response.status == 200
+    reconciled = (await reconciled_response.json())["result"]
+    await scheduler_barrier()
+    assert reconciled["state"]["effect"] == "none" and not b.owner["configurationBusy"]
+    assert b.runtime.calls == calls and not b.runtime.inputs
+    assert b.owner["collaborationGeneration"]["terminal"]
+    # Only an explicit UI resume now schedules application under the original
+    # request. Neither read nor reconcile starts an agent/provider generation.
+    b.runtime.native.queued_inputs = 0
+    resumed_response = await http_recovery(b, "resume", identity="ui-owner-resume")
+    assert resumed_response.status == 200
+    resumed = (await resumed_response.json())["result"]
+    task = b.app.management.pending_config_tasks.get(b.owner["id"])
+    if task is not None:
+        await asyncio.wait_for(task, 3)
+    final = operation(b)
+    assert final["id"] == saved["id"] and final["request"] == saved["request"]
+    assert final["state"]["effect"] == "mounted" and len(final["attempts"]) == 2
+    assert b.app.configuration_authority.rows(b.owner["id"]) == before_grants
+    assert b.app.state["selectedSessionId"] == b.peer["id"]  # Explicit owner target, not selection.
+    assert b.owner["collaborationGeneration"]["terminal"]
+    assert origin_calls == [
+        ("configuration.operation." + name, b.owner["id"], "ui", None)
+        for name in ("read", "reconcile", "resume")]
+    calls = list(b.runtime.calls)
+    duplicate_response = await http_recovery(b, "resume", identity="ui-owner-resume",
+        revision=reconciled["revision"])
+    duplicate = await duplicate_response.json()
+    assert duplicate_response.status == 200 and duplicate["duplicate"]
+    assert duplicate["result"] == resumed
+    await scheduler_barrier()
+    assert b.runtime.calls == calls
+
+
+@pytest.mark.parametrize("invalidated", ["revoked", "expired", "stop", "execution"])
+async def test_terminal_ui_recovery_still_requires_original_authority(recovery_http_boundary, invalidated):
+    b = recovery_http_boundary
+    saved = await terminal_refusal(b)
+    calls = list(b.runtime.calls)
+    if invalidated == "revoked":
+        await revoke(b.app, b.authorized)
+        await grant(b.app, ["runtime_configuration"], ["session"], "new-not-substitute-grant")
+    elif invalidated == "expired":
+        expired = b.app.configuration_authority.record(b.authorized["id"])
+        expired["expiresAt"] = time.time() - 1
+        b.app.configuration_authority.save(expired)
+        b.app.db.commit()
+    elif invalidated == "stop":
+        stopped = asyncio.Event()
+        original_stop = b.runtime.stop
+        async def observed_stop(sid, *, reason="stopped"):
+            await original_stop(sid, reason=reason)
+            stopped.set()
+        b.runtime.stop = observed_stop
+        await b.app.dispatch("conversation.stop", {"sessionId": b.owner["id"]})
+        await asyncio.wait_for(stopped.wait(), 3)
+        calls = list(b.runtime.calls)  # Explicit Stop is not recovery warmup.
+    else:
+        b.owner["executionRevision"] = b.owner.get("executionRevision", 0) + 1
+    assert (await http_recovery(b, "read")).status == 200
+    for verb in ("reconcile", "resume"):
+        response = await http_recovery(b, verb)
+        assert response.status == (403 if invalidated in {"revoked", "expired"} else 409)
+        refusal = await response.json()
+        assert not refusal["accepted"]
+        assert ("authority expired" if invalidated in {"revoked", "expired"}
+                else "target was stopped or moved") in refusal["error"]
+    assert operation(b)["request"] == saved["request"]
+    assert len(operation(b)["attempts"]) == 1
+    assert b.owner["configurationBusy"] and b.runtime.calls == calls
+
+
+@pytest.mark.parametrize("outcome", ["none", "unknown", "saved_not_mounted"])
+async def test_settled_cancelled_dispatch_reconciles_late_native_evidence_without_restart(
+        recovery_http_boundary, monkeypatch, outcome):
+    from amplifier_web import runtime_controls
+    from amplifier_web.configuration_recovery import native_apply, evidence
+    b = recovery_http_boundary
+    entered, release = asyncio.Event(), asyncio.Event()
+    native_tasks = []
+    original_control = b.runtime.control
+    original_write = runtime_controls.write_private
+    if outcome == "unknown":
+        def partial_write(path, text):
+            if path == b.runtime.controls.state_path():
+                raise OSError("Synthetic failure between settings writes")
+            return original_write(path, text)
+        monkeypatch.setattr(runtime_controls, "write_private", partial_write)
+
+    async def authorize(value):
+        if outcome == "none":
+            entered.set()
+            await release.wait()
+        return await b.app._app_bridge("configuration.effect.admit", value, b.owner["id"])
+
+    async def native_work(args):
+        try:
+            result = await native_apply(b.runtime.controls, args["config"], args["_configurationAttempt"],
+                authorize, lambda: b.owner.get("interruptionRevision", 0))
+        except Exception:
+            if outcome != "none":
+                entered.set()
+                await release.wait()
+            raise
+        entered.set()
+        await release.wait()
+        return result
+
+    async def delayed_control(sid, name, args, *, guard=None):
+        if name != "configuration.apply" or native_tasks:
+            return await original_control(sid, name, args, guard=guard)
+        if guard:
+            guard()
+        task = asyncio.create_task(native_work(args))
+        native_tasks.append(task)
+        # Cancellation of the host waiter cannot cancel a command already sent.
+        return await asyncio.shield(task)
+
+    b.runtime.control = delayed_control
+    try:
+        await queue(b)
+        b.owner["collaborationGeneration"]["terminal"] = True
+        await reach_apply(b)
+        b.runtime.release.set()
+        await asyncio.wait_for(entered.wait(), 3)
+        assert operation(b)["state"]["stage"] == "dispatching"
+        assert not native_tasks[0].done()
+        b.queued_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(b.queued_task, 3)
+        saved = operation(b)
+        assert saved["state"]["phase"] == "applying"
+        assert saved["state"]["stage"] == "interrupted" and saved["state"]["effect"] == "unknown"
+        assert b.owner["configurationBusy"] and not b.app.management.lock.locked()
+        assert b.queued_task.done() and not native_tasks[0].done()
+        assert (await http_recovery(b, "resume", identity="before-proof-resume")).status == 409
+        calls = list(b.runtime.calls)
+        release.set()
+        returned = (await asyncio.wait_for(asyncio.gather(*native_tasks, return_exceptions=True), 3))[0]
+        if outcome == "saved_not_mounted":
+            assert isinstance(returned, dict) and returned["requiresRestart"]
+        else:
+            assert isinstance(returned, ValueError if outcome == "none" else OSError)
+        proof = evidence(saved["attempts"][-1], home=b.app.data_dir)
+        assert proof["effect"] == outcome
+        if outcome == "none":
+            assert proof["terminal"] and not override_path(b.owner["id"]).exists()
+        else:
+            assert json.loads(override_path(b.owner["id"]).read_text()) == plan(2)
+        response = await http_recovery(b, "reconcile")
+        assert response.status == 200
+        classified = (await response.json())["result"]
+        assert classified["state"]["phase"] == "error"
+        assert classified["state"]["stage"] == "reconciled"
+        assert classified["state"]["effect"] == outcome
+        assert operation(b)["request"] == saved["request"]
+        assert operation(b)["history"][:len(saved["history"])] == saved["history"]
+        await scheduler_barrier()
+        assert b.runtime.calls == calls and len(operation(b)["attempts"]) == 1
+        assert b.owner["configurationBusy"] is (outcome != "none")
+        assert b.owner["collaborationGeneration"]["terminal"]
+        if outcome == "none":
+            response = await http_recovery(b, "resume")
+            assert response.status == 200
+            task = b.app.management.pending_config_tasks.get(b.owner["id"])
+            if task is not None:
+                await asyncio.wait_for(task, 3)
+            assert operation(b)["state"]["effect"] == "mounted"
+            assert len(operation(b)["attempts"]) == 2
+        else:
+            assert (await http_recovery(b, "resume", identity="after-proof-resume")).status == 409
+            assert b.owner["configurationBusy"] and len(operation(b)["attempts"]) == 1
+    finally:
+        release.set()
+        for task in native_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.wait_for(asyncio.gather(*native_tasks, return_exceptions=True), 3)
+
+
+@pytest.mark.parametrize("stage", ["preparing", "dispatching", "saved", "readback"])
+async def test_only_interrupted_applying_state_can_enter_reconciliation(boundary, stage):
+    await native_refusal(boundary)
+    saved = operation(boundary)
+    async with boundary.app.lock:
+        boundary.app.management.configuration_transition(boundary.owner, saved["id"],
+            phase="applying", stage=stage)
+    current = operation(boundary)
+    with pytest.raises(AppError, match="settled failed"):
+        await recovery(boundary, "reconcile")
+    assert operation(boundary) == current and boundary.owner["configurationBusy"]
+
+
+async def test_interrupted_state_still_refuses_while_original_task_is_unsettled(boundary):
+    await native_refusal(boundary)
+    saved = operation(boundary)
+    async with boundary.app.lock:
+        boundary.app.management.configuration_transition(boundary.owner, saved["id"],
+            phase="applying", stage="interrupted")
+    blocked = asyncio.create_task(asyncio.Event().wait())
+    boundary.app.management.pending_config_tasks[boundary.owner["id"]] = blocked
+    try:
+        with pytest.raises(AppError, match="task has not settled"):
+            await recovery(boundary, "reconcile")
+        assert boundary.owner["configurationBusy"]
+    finally:
+        blocked.cancel()
+        await asyncio.gather(blocked, return_exceptions=True)
+        boundary.app.management.pending_config_tasks.pop(boundary.owner["id"], None)
+
+
+async def test_nonterminal_none_receipt_never_releases_interrupted_operation(boundary):
+    from amplifier_web.configuration_recovery import receipt_path, seal
+    await native_refusal(boundary)
+    saved = operation(boundary)
+    attempt = saved["attempts"][-1]
+    receipt_path(attempt).write_text(json.dumps(seal(attempt, "none")))
+    async with boundary.app.lock:
+        boundary.app.management.configuration_transition(boundary.owner, saved["id"],
+            phase="applying", stage="interrupted")
+    current = operation(boundary)
+    with pytest.raises(AppError, match="not terminal"):
+        await recovery(boundary, "reconcile")
+    assert operation(boundary) == current and boundary.owner["configurationBusy"]
