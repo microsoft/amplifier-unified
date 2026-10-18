@@ -1,0 +1,58 @@
+name: Installed default capability qualification
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      LOOP_LIVE_CI_READ_KEY:
+        required: true
+permissions:
+  contents: read
+jobs:
+  default-installed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Resolve exact private source from the committed pin manifest
+        id: pins
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, re
+          from pathlib import Path
+          p = json.loads(Path('scripts/default-installed-pins.json').read_text())
+          rows = [r for r in p['repositories'] if r.get('private')]
+          assert len(rows) == 1 and rows[0]['name'] == 'amplifier-module-loop-live'
+          assert re.fullmatch('[a-f0-9]{40}', rows[0]['commit'])
+          print('loop=' + rows[0]['commit'])
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ${{ steps.pins.outputs.loop }}
+          path: .ci/default-loop
+          fetch-depth: 0
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - name: Run the manual installed-wheel owner, never the live host runtime
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/qualify_default_installed.py run \
+            --loop-source "$GITHUB_WORKSPACE/.ci/default-loop" \
+            --work "$RUNNER_TEMP/default-installed-inputs" \
+            --output "$RUNNER_TEMP/default-installed-evidence" \
+            2>&1 | tee "$RUNNER_TEMP/default-installed-adapter.log"
+      - name: Retain finite evidence, not private checkout or runtime state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: default-installed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/default-installed-evidence/
+            ${{ runner.temp }}/default-installed-adapter.log
+          if-no-files-found: error

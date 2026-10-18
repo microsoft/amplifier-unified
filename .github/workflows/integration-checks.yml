@@ -2,6 +2,11 @@ name: Owned integration checks
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      default_installed:
+        description: Run only the manual installed-default owner (no automatic matrix)
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -13,7 +18,13 @@ on:
 permissions:
   contents: read
 jobs:
+  default-installed:
+    if: github.event_name == 'workflow_dispatch' && inputs.default_installed
+    uses: ./.github/workflows/default-installed.yml
+    secrets:
+      LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
   plan:
+    if: github.event_name != 'workflow_dispatch' || !inputs.default_installed
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
