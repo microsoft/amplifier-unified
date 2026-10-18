@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/generated_images_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
+const swapDiagnostic={schema:1,kind:'generated-image-preview-swap',records:[],dropped:0};
+let swapPhase=null;
 try{
  const boot=await new Promise((resolve,reject)=>{
   let output='';const timer=setTimeout(()=>reject(Error('Image fixture timeout')),20000);
@@ -25,7 +27,31 @@ try{
  await control('start','first');
  const gallery=page.locator('.a-inline-gallery');
  const frame=gallery.locator('.a-gallery-image-frame');
- const geometry=async()=>({box:await gallery.boundingBox(),frame:await frame.boundingBox(),scroll:await page.locator('.a-messages').evaluate(node=>node.scrollTop)});
+ const geometry=async()=>{
+  const box=await gallery.boundingBox(),frameBox=await frame.boundingBox();
+  const measured=await page.locator('.a-messages').evaluate((node,observe)=>{
+   const scroll=node.scrollTop;
+   if(!observe)return{scroll,observation:{available:false}};
+   // One synchronous observation, in the existing scroll-read call. No text,
+   // resource URLs, state payloads, extra readiness wait or decode request.
+   let observation={available:false};
+   try{
+    const selected=node.querySelector('.a-inline-gallery');
+    const main=selected?.querySelector('.a-gallery-image-frame');
+    const image=selected?.querySelector('.a-inline-image img');
+    const pane=node.getBoundingClientRect();
+    const rect=element=>{if(!element)return null;const r=element.getBoundingClientRect();return{top:r.top,height:r.height,paneRelativeTop:r.top-pane.top}};
+    const notices=[...node.querySelectorAll('[data-part="work-projection-status"]')];
+    observation={available:true,pane:{top:pane.top,height:pane.height,scrollTop:node.scrollTop,clientHeight:node.clientHeight,scrollHeight:node.scrollHeight},gallery:rect(selected),frame:rect(main),workNotice:{count:notices.length,heights:notices.slice(0,4).map(element=>element.getBoundingClientRect().height),truncated:notices.length>4},selectedImage:image?{complete:image.complete,naturalWidth:image.naturalWidth,naturalHeight:image.naturalHeight}:null};
+   }catch{}
+   return{scroll,observation};
+  },swapPhase!==null);
+  if(swapPhase){
+   if(swapDiagnostic.records.length<3)swapDiagnostic.records.push({phase:swapPhase,original:{scroll:measured.scroll,galleryTop:box?.y??null,galleryHeight:box?.height??null,frameTop:frameBox?.y??null,frameHeight:frameBox?.height??null},observation:measured.observation});
+   else swapDiagnostic.dropped++;
+  }
+  return{box,frame:frameBox,scroll:measured.scroll};
+ };
  await expect(gallery).toBeVisible();
  const single=await frame.boundingBox();assert.ok(single.width<=320);
  await control('start','second');await control('start','third');
@@ -83,17 +109,23 @@ try{
  const waiting=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{release=resolve});
  await page.route('**/api/canvas/views/*/resource?*',async route=>{entered();await gate;await route.continue()});
  await gallery.scrollIntoViewIfNeeded();
+ swapPhase='before';
  const before=await geometry();
+ swapPhase=null;
  assert.ok(before.scroll>100,'Exercise image swapping from a scrolled reading position');
  await gallery.getByRole('button',{name:'Image 2: Second concept',exact:true}).click();
  await waiting;
  await expect(gallery.getByText('Loading preview…')).toBeVisible();
+ swapPhase='held';
  const during=await geometry();
+ swapPhase=null;
  assert.equal(during.box.height,before.box.height,'No collapse during delayed loading');
  assert.ok(Math.abs(during.scroll-before.scroll)<1,'No scroll jump during delayed loading');
  release();await page.unrouteAll({behavior:'wait'});
  await expect(gallery.locator('.a-inline-image img')).toBeVisible();
+ swapPhase='released';
  const after=await geometry();
+ swapPhase=null;
  assert.equal(after.box.height,before.box.height,'Landscape uses the same frame');
  assert.ok(Math.abs(after.scroll-before.scroll)<1,'No scroll jump when loading completes');
  await page.route('**/api/canvas/views/*/resource?*',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Preview temporarily unavailable'})}));
@@ -135,4 +167,4 @@ try{
  await control('stop');await page.reload();await expect(generating).toHaveCount(0);
  assert.deepEqual(errors,[]);
  console.log('Generated images passed: stable pending/result gallery slots, out-of-order completion, delayed landscape/portrait swaps without scroll movement, older saved appearance, automatic native receipt display without a model attach action, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
-}finally{await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)resolve();else{fixture.once('exit',resolve);setTimeout(resolve,5000)}})}
+}finally{try{console.log('GENERATED_IMAGE_SWAP_DIAGNOSTIC '+JSON.stringify(swapDiagnostic))}catch{try{console.error('GENERATED_IMAGE_SWAP_DIAGNOSTIC unavailable')}catch{}}await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)resolve();else{fixture.once('exit',resolve);setTimeout(resolve,5000)}})}
