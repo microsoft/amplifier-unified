@@ -5,6 +5,8 @@ are emitted by ExecutionEvents -> Diagnostics -> its actual append/index path.
 The separate native-producer baseline covers actual kernel/capture production.
 """
 from types import SimpleNamespace
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 import asyncio
 import copy
 import json
@@ -488,32 +490,7 @@ async def test_real_persisted_projection_and_new_window_owner_preserve_proven_gr
 
 @pytest.mark.asyncio
 async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(source, authenticated_client, monkeypatch):
-    from amplifier_web.server import create_app
-    from amplifier_web.session_projection import stored_execution
-    source.call('one')
-    await source.diagnostics.flush()
-    class Runtime:
-        async def start(self, *args, **kwargs):
-            raise AssertionError('A history read must not start a runtime')
-        async def close(self):
-            pass
-    app = await create_app(source.service.data_dir, workspace=source.workspace,
-        runtime=Runtime(), voice=False, background_updates=False, preload_providers=False)
-    service = app['service']
-    row = copy.deepcopy(source.session)
-    row['execution'] = stored_execution(row['execution'])
-    service.state['sessions'].append(row)
-    service.clients.attach('cold-web', kind='web')
-    with service.clients.bind('cold-web'):
-        await service.dispatch('session.select', {'id': row['id']})
-    client = await authenticated_client(app)
-    stream = None
-    try:
-        client.session.headers['X-Amplifier-Client'] = 'cold-web'
-        # Registration alone does not keep selected Work interest alive.
-        stream = await client.ws_connect('/api/events/ws?transport=delta-v1')
-        initial = await stream.receive_json(timeout=5)
-        assert initial['event'] == 'state'
+    async with _ready_cold_web(source, authenticated_client, monkeypatch) as (service, client):
         trace = _ColdReadTrace(service.event_log_view.windows, 'root')
         with monkeypatch.context() as observation:
             trace.install(observation)
@@ -522,35 +499,307 @@ async def test_registered_web_routes_bound_group_nodes_sync_and_full_field(sourc
             finally:
                 trace.emit()
         assert response.status == 200, {'body': await response.text(), 'fence': trace.evidence}
-        page = await response.json()
-        group = next(g for g in page['items'] if g.get('bindingProvenance'))
-        response = await client.get('/api/conversation/detail', params={
-            'sessionId': 'root', 'part': 'nodes', 'group': group['id'], 'revision': group['detailRevision']})
-        assert response.status == 200, await response.text()
-        node = (await response.json())['items'][0]
-        assert node['rootSessionId'] == node['sessionId'] == 'root'
-        reference = node['outputDetail']
-        chunks, offset = [], 0
-        while True:
-            response = await client.get('/api/conversation/detail', params={**reference, 'offset': offset, 'limit': 4096})
-            assert response.status == 200, await response.text()
-            field = await response.json()
-            assert len(field['value']) <= 4096
-            chunks.append(field['value'])
-            offset = field['nextOffset']
-            if offset is None:
-                break
-        assert json.loads(''.join(chunks)) == source.calls[0][3]
-        response = await client.post('/api/conversation/work-sync', json={
-            'sessionId': 'root', 'group': group['id'], 'known': {node['id']: node['detailVersion']}})
-        assert response.status == 200, await response.text()
-        assert (await response.json())['order'] == [node['id']]
-    finally:
+        await _assert_cold_web_details(client, await response.json(), source)
+
+
+class _InitialCatalogCompletion:
+    """Observe the first scheduled refresh; never start another refresh."""
+    def __init__(self, refresh, home=None):
+        self.refresh = refresh
+        self.home = home
+        self.owner = None
+        self.entry = self.completion = None
+        self.finished = asyncio.get_running_loop().create_future()
+
+    @staticmethod
+    def _snapshot(owner):
+        service = owner.service
+        history = service._state.get('sharedHistory', {})
+        phase = (history.get('reconciliation') or {}).get('phase')
+        return {'loading': history.get('loading'), 'hasError': bool(history.get('error')),
+                'hasIssues': bool(history.get('issues') or history.get('issueCount')),
+                'phase': phase if phase in {'ready', 'complete', 'reconciling', 'recovering'} else 'other',
+                'closed': service.closed,
+                'rootCount': sum(row.get('id') == 'root' for row in service._state.get('sessions', []))}
+
+    async def observe(self, owner, *args, **kwargs):
+        first = self.owner is None and (self.home is None or owner.service.data_dir == self.home)
+        if first:
+            self.owner = owner
+            try:
+                self.entry = self._snapshot(owner)
+            except Exception:
+                self.entry = {'observationError': True}
+        failure = None
         try:
-            if stream is not None:
-                await stream.close()
+            return await self.refresh(owner, *args, **kwargs)
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            await client.close()
+            if first:
+                try:
+                    self.completion = self._snapshot(owner)
+                except Exception:
+                    self.completion = {'observationError': True}
+                self.finished.set_result(failure)
+
+    async def wait(self, owner, timeout=10):
+        failure = await asyncio.wait_for(asyncio.shield(self.finished), timeout)
+        if failure is not None:
+            raise failure
+        assert self.owner is owner, 'The observed refresh belongs to another history owner'
+        assert not self.entry.get('observationError') and not self.completion.get('observationError')
+        assert self.entry['rootCount'] == self.completion['rootCount'] == 1
+        assert self.completion['loading'] is False and not self.completion['hasError'], self.completion
+        assert not self.completion['closed'] and not self.completion['hasIssues'], self.completion
+        assert not owner.service.closed and self._snapshot(owner)['rootCount'] == 1
+
+
+@asynccontextmanager
+async def _ready_cold_web(source, authenticated_client, monkeypatch):
+    from amplifier_web.server import create_app
+    from amplifier_web.session_projection import stored_execution
+    from amplifier_web.automatic_history import AutomaticHistory
+    source.call('one')
+    await source.diagnostics.flush()
+    class Runtime:
+        async def start(self, *args, **kwargs):
+            raise AssertionError('A history read must not start a runtime')
+        async def close(self):
+            pass
+    completion = _InitialCatalogCompletion(AutomaticHistory.refresh, home=source.service.data_dir)
+    with monkeypatch.context() as observation:
+        async def refresh(owner, *args, **kwargs):
+            return await completion.observe(owner, *args, **kwargs)
+        observation.setattr(AutomaticHistory, 'refresh', refresh)
+        app = await create_app(source.service.data_dir, workspace=source.workspace,
+            runtime=Runtime(), voice=False, background_updates=False, preload_providers=False)
+        service, client, stream = app['service'], None, None
+        try:
+            row = copy.deepcopy(source.session)
+            row['execution'] = stored_execution(row['execution'])
+            service.state['sessions'].append(row)
+            service.clients.attach('cold-web', kind='web')
+            with service.clients.bind('cold-web'):
+                await service.dispatch('session.select', {'id': row['id']})
+            client = await authenticated_client(app)
+            client.session.headers['X-Amplifier-Client'] = 'cold-web'
+            stream = await client.ws_connect('/api/events/ws?transport=delta-v1')
+            initial = await stream.receive_json(timeout=5)
+            assert initial['event'] == 'state'
+            # create_app starts this refresh. Await its actual return, not the
+            # perpetual history loop or a repeated test-initiated refresh.
+            await completion.wait(service.history)
+            assert not service.closed
+            print('COLD-INITIAL-REFRESH-COMPLETED', completion.completion)
+            yield service, client
+        finally:
+            try:
+                if stream is not None:
+                    await stream.close()
+            finally:
+                if client is not None:
+                    await client.close()
+                else:
+                    await service.close()
+
+
+async def _assert_cold_web_details(client, page, source):
+    group = next(g for g in page['items'] if g.get('bindingProvenance'))
+    assert group['turnId'] == 'turn' and group['anchorMessageId'] == source.calls[0][1]
+    response = await client.get('/api/conversation/detail', params={
+        'sessionId': 'root', 'part': 'nodes', 'group': group['id'], 'revision': group['detailRevision']})
+    assert response.status == 200, await response.text()
+    nodes = (await response.json())['items']
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node['rootSessionId'] == node['sessionId'] == 'root'
+    assert node['turnId'] == 'turn' and node['toolCallId'] == source.calls[0][0]
+    reference = node['outputDetail']
+    chunks, offset = [], 0
+    for _ in range(64):
+        response = await client.get('/api/conversation/detail', params={**reference, 'offset': offset, 'limit': 4096})
+        assert response.status == 200, await response.text()
+        field = await response.json()
+        assert len(field['value']) <= 4096
+        chunks.append(field['value'])
+        next_offset = field['nextOffset']
+        if next_offset is None:
+            break
+        assert next_offset > offset
+        offset = next_offset
+    else:
+        pytest.fail('Full output did not terminate within64 bounded field reads')
+    assert json.loads(''.join(chunks)) == source.calls[0][3]
+    response = await client.post('/api/conversation/work-sync', json={
+        'sessionId': 'root', 'group': group['id'], 'known': {node['id']: node['detailVersion']}})
+    assert response.status == 200, await response.text()
+    assert (await response.json())['order'] == [node['id']]
+    return group, node
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['root-publication', 'source-and-root-publication'])
+async def test_obsolete_cold_http_refuses_then_one_current_request_reads_full_work(
+        source, authenticated_client, monkeypatch, change):
+    async with _ready_cold_web(source, authenticated_client, monkeypatch) as (service, client):
+        windows = service.event_log_view.windows
+        original_read, worker = windows.read, windows._worker()
+        original_project = worker.project
+        original_check = windows._check_current
+        foreground = ContextVar('held-cold-http', default=False)
+        entered, release, read_settled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        evidence = {}
+        async def observed_read(*args, **kwargs):
+            is_foreground = not kwargs.get('_initial', False)
+            token = foreground.set(is_foreground)
+            if is_foreground:
+                evidence['readStarted'] = True
+            try:
+                return await original_read(*args, **kwargs)
+            finally:
+                if is_foreground:
+                    read_settled.set()
+                foreground.reset(token)
+        async def held_project(inputs, *, key):
+            result = await original_project(inputs, key=key)
+            if foreground.get() and inputs.get('operation') == 'window':
+                assert result['status'] == 'complete', result.get('reason')
+                evidence.update(epoch=windows.epochs.get('root'),
+                                revision=result['page']['generation'])
+                entered.set()
+                await asyncio.wait_for(release.wait(), 5)
+            return result
+        def checked(identity, owner, source_identity, fence):
+            if foreground.get() and identity == 'root':
+                evidence.update(readFence=fence, checkedEpoch=windows.epochs.get('root'))
+            return original_check(identity, owner, source_identity, fence)
+        pending = barrier = None
+        with monkeypatch.context() as observation:
+            observation.setattr(windows, 'read', observed_read)
+            observation.setattr(worker, 'project', held_project)
+            observation.setattr(windows, '_check_current', checked)
+            try:
+                pending = asyncio.create_task(client.get('/api/conversation/detail',
+                    params={'sessionId': 'root', 'part': 'groups'}))
+                barrier = asyncio.create_task(entered.wait())
+                done, _ = await asyncio.wait({pending, barrier}, timeout=5,
+                                            return_when=asyncio.FIRST_COMPLETED)
+                if pending in done:
+                    early = await pending  # Preserve actual transport errors.
+                    pytest.fail(f'Read finished before controlled publication: {early.status} {await early.text()}')
+                assert barrier in done and entered.is_set(), 'Physical read never reached the publication barrier'
+                row = service._session('root', hydrate=False)
+                turn = next(t for t in row['execution']['turns'] if t['id'] == 'turn')
+                previous_end = turn['endedAt']
+                turn['endedAt'] = previous_end + 1  # A real relevant owner fact.
+                path, _, _ = event_window._source(row)
+                source_before = path.stat().st_size
+                if change == 'source-and-root-publication':
+                    append_event(source.workspace, 'root', 'prompt:submit', {
+                        'session_id': 'root', 'timestamp': time.time(), 'input_id': 'later-input'})
+                    assert path.stat().st_size > source_before
+                # Synchronous return means this actual save/publication settled.
+                service._publish_changes(sessions={'root'}, detail_only=True)
+                assert turn['endedAt'] == previous_end + 1
+                assert windows.epochs['root'] > evidence['epoch']
+                published_epoch = windows.epochs['root']
+                release.set()
+                refused = await asyncio.wait_for(asyncio.shield(pending), 5)
+                assert refused.status == 400, await refused.text()
+                assert await refused.json() == {
+                    'error': 'Invalid request: The requested conversation changed. Open it again.',
+                    'accepted': False}
+                assert evidence['readFence'] == evidence['epoch'], evidence
+                assert evidence['checkedEpoch'] == published_epoch, evidence
+                assert windows.epochs['root'] >= published_epoch
+            finally:
+                release.set()
+                for task in (pending, barrier):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(*(t for t in (pending, barrier) if t is not None),
+                                     return_exceptions=True)
+                if evidence.get('readStarted'):
+                    await asyncio.wait_for(read_settled.wait(), 5)
+        # Exactly one new request after the completed publication. Never reuse
+        # old group/detail receipts or retry an arbitrary refused response.
+        response = await client.get('/api/conversation/detail', params={'sessionId': 'root', 'part': 'groups'})
+        assert response.status == 200, await response.text()
+        current = await response.json()
+        assert windows.epochs['root'] >= published_epoch
+        assert windows.status['root']['current'] is True
+        group, node = await _assert_cold_web_details(client, current, source)
+        assert group['turnId'] == node['turnId'] == 'turn'
+        assert group['anchorMessageId'] == source.calls[0][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['returned', 'raised', 'reported-error', 'loading', 'timeout',
+                                    'cancelled', 'wrong-owner', 'later-success', 'pending'])
+async def test_catalog_completion_gate_requires_actual_success_without_extra_refresh(outcome):
+    state = {'sharedHistory': {'loading': outcome == 'loading',
+                               'error': 'synthetic failure' if outcome in {'reported-error', 'later-success'} else None},
+             'sessions': [{'id': 'root'}]}
+    owner = SimpleNamespace(service=SimpleNamespace(_state=state, closed=False))
+    calls, expected = [], object()
+    entered, release = asyncio.Event(), asyncio.Event()
+    failure = asyncio.CancelledError() if outcome == 'cancelled' else ValueError('synthetic original')
+    async def refresh(actual, *, force=False):
+        calls.append((actual, force))
+        if outcome == 'pending':
+            entered.set()
+            await release.wait()
+        if outcome in {'raised', 'cancelled'}:
+            raise failure
+        return expected
+    completion = _InitialCatalogCompletion(refresh)
+    if outcome == 'pending':
+        task = asyncio.create_task(completion.observe(owner, force=False))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            assert not completion.finished.done()
+            release.set()
+            assert await asyncio.wait_for(asyncio.shield(task), 1) is expected
+            await completion.wait(owner)
+            assert calls == [(owner, False)]
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return
+    if outcome == 'timeout':
+        with pytest.raises(TimeoutError):
+            await completion.wait(owner, timeout=.01)
+        assert not calls and not completion.finished.done()
+        completion.finished.cancel()
+        return
+    if outcome in {'raised', 'cancelled'}:
+        with pytest.raises(type(failure)) as original:
+            await completion.observe(owner, force=False)
+        assert original.value is failure
+        with pytest.raises(type(failure)) as observed:
+            await completion.wait(owner)
+        assert observed.value is failure
+    else:
+        assert await completion.observe(owner, force=False) is expected
+        if outcome == 'later-success':
+            state['sharedHistory']['error'] = None
+            assert await completion.observe(owner, force=False) is expected
+            assert completion.completion['hasError'] is True
+            with pytest.raises(AssertionError):
+                await completion.wait(owner)
+        elif outcome == 'wrong-owner':
+            with pytest.raises(AssertionError, match='another history owner'):
+                await completion.wait(SimpleNamespace(service=owner.service))
+        elif outcome in {'reported-error', 'loading'}:
+            with pytest.raises(AssertionError):
+                await completion.wait(owner)
+        else:
+            await completion.wait(owner)
+    assert calls == [(owner, False)] * (2 if outcome == 'later-success' else 1)
 
 
 class _ColdReadTrace:
