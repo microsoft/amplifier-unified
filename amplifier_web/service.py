@@ -45,6 +45,11 @@ def schema(properties=None, required=None):
     return {"type": "object", "properties": properties, "required": list(properties) if required is None else required, "additionalProperties": False}
 
 
+def command_fingerprint(action, args, origin, client_id):
+    # One ledger identity for admission and passive receipt retrieval.
+    return hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+
+
 ACTION_DEFINITIONS = {
     "desktop.readiness": ("Inspect the serving host's native observation preflight and already-mounted conversation tools. No activation, capture, permission prompt, worker startup or provider change. Browser account/tab context is reported only when the owning transport exposes it.", schema({"sessionId": string(200)}, [])),
     "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Set verifyImports to probe the six public authoring libraries in isolated child processes. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200), "verifyImports": {"type": "boolean"}}, [])),
@@ -372,6 +377,8 @@ from .profiling_host import DEFINITIONS as PROFILING_DEFINITIONS
 ACTION_DEFINITIONS.update(PROFILING_DEFINITIONS)
 from .configuration_recovery import definitions as configuration_recovery_definitions
 ACTION_DEFINITIONS.update(configuration_recovery_definitions(schema, string))
+from .patch_placement import definitions as patch_placement_definitions
+ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -383,6 +390,7 @@ for _access, _actions in {
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
         *configuration_recovery_definitions(schema, string),
+        *patch_placement_definitions(schema, string),
         "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
         "call.start", "permissions.save", "permissions.reset", "providers.save", "providers.finishSetup", "providers.configureImages",
         "providers.remove", "providers.move", "providers.reorder", "providers.login",
@@ -1857,6 +1865,12 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action == 'configuration.patchPlacement.read':
+            from .patch_placement import read
+            try:
+                return {'accepted': True, 'result': await read(self.management, args, origin, caller_session_id)}
+            except (ValueError, OSError, KeyError, TypeError):
+                raise AppError('Patch placement cannot be verified for this calling root. No worker was started.', 409) from None
         if action == 'configuration.operation.read':
             from .configuration_recovery import command as recovery_command
             async with self.lock:
@@ -1870,6 +1884,18 @@ class AppService:
                 include_state=include_state, admission_check=admission_check)
         if action.startswith("capability."):
             return await self.configuration_authority.dispatch(action, args, origin, command_id, caller_session_id)
+        if action == 'configuration.patchPlacement.bind' and command_id:
+            from .patch_placement import retained_receipt
+            async with self.lock:
+                if admission_check is not None:
+                    admission_check()
+                try:
+                    retained = retained_receipt(self.management, args, origin, caller_session_id,
+                        command_id, command_fingerprint(action, args, origin, client_id))
+                except (ValueError, OSError, KeyError, TypeError):
+                    raise AppError('The retained patch binding cannot be verified for this root. No effect was admitted.', 409) from None
+            if retained is not None:
+                return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
         if action in test_queue_definitions(schema, string):
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
@@ -2144,7 +2170,7 @@ class AppService:
                     current=self._session(sid)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
-        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        fingerprint = command_fingerprint(action, args, origin, client_id)
         prepared_workspace = None
         prepared_identity = None
         from .managed_chats import is_managed, allocate, creation_identity
@@ -3227,6 +3253,15 @@ class AppService:
                     SettingsStore(self.data_dir).update(workspace, 'local' if args['scope']=='workspace' else 'global', update_default)
                 self._shared_preferences_stamp = None
                 self._refresh_shared_preferences()
+            elif action == 'configuration.patchPlacement.bind':
+                from .patch_placement import admit
+                try:
+                    diagnostic_result = admit(self.management, args, origin, caller_session_id,
+                        command_id, configuration_authority)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                except (OSError, KeyError, TypeError):
+                    raise AppError('Patch configuration cannot be verified; no binding was admitted.', 409) from None
             elif action in {'configuration.operation.reconcile', 'configuration.operation.resume'}:
                 from .configuration_recovery import command as recovery_command
                 try:

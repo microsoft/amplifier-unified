@@ -12,6 +12,8 @@ on:
           - inline-chat-card
           - queued-configuration
           - security-redaction
+          - patch-placement-recovery
+          - patch-placement-native
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -47,6 +49,8 @@ jobs:
               'inline-chat-card': ['tests/test_chat_references.py'],
               'queued-configuration': ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py'],
               'security-redaction': ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py'],
+              'patch-placement-recovery': ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py'],
+              'patch-placement-native': ['tests/test_patch_placement_native.py', 'tests/test_patch_placement_recovery.py', 'tests/test_configuration_authority.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_runtime_controls.py'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
@@ -102,6 +106,9 @@ jobs:
               if not callable(mount) or mount is not module.mount:
                   raise RuntimeError('Native module entry point is not its canonical mount: ' + name)
           PY
+      - name: Select the prepared native-controls interpreter
+        if: ${{ env.CHECK_SUITE == 'patch-placement-native' }}
+        run: echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
       - name: Run the complete Python suite
         if: ${{ env.CHECK_SUITE == 'full' }}
         run: |
