@@ -175,10 +175,13 @@ async def test_running_mount_plan_changes_queue_then_remount_same_conversation(a
     plan={'session':{'orchestrator':{'module':'loop-live'},'context':{'module':'context-simple'}},'providers':[{'module':'provider-fixture'}],'tools':[{'module':'tool-fixture','enabled':False,'config':{'limit':2}}]}
     calls=[]
     class LiveRuntime:
-        async def start(self,session,emit):calls.append(('start',session['id']))
+        async def start(self,session,emit,**kwargs):
+            if kwargs.get('guard'):kwargs['guard']()
+            calls.append(('start',session['id']))
         async def stop(self,sid,*,reason="stopped"):calls.append(('stop',sid))
         async def close(self):pass
-        async def control(self,sid,op,args):
+        async def control(self,sid,op,args,*,guard=None):
+            if guard:guard()
             calls.append((op,sid))
             if op=='configuration.apply':assert args['config']==plan;return {'requiresRestart':True}
             return {'plan':copy.deepcopy(plan)}
@@ -212,13 +215,17 @@ async def test_ui_stop_during_configuration_shutdown_does_not_restart(app, monke
     calls = []
     async def stop(sid, *, reason='stopped'):
         calls.append(('stop', reason)); entered.set(); await finish.wait()
-    async def start(*args): calls.append(('start', None))
+    async def start(*args, **kwargs):
+        if kwargs.get('guard'):kwargs['guard']()
+        calls.append(('start', None))
     monkeypatch.setattr(app.management, 'ensure_runtime', AsyncMock())
     app.runtime.stop = stop
     app.runtime.start = start
     app.runtime.control = AsyncMock(return_value={'requiresRestart': True})
+    plan = {'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}},
+            'providers': [{'module': 'provider-fixture'}]}
     applying = asyncio.create_task(app.management.perform('runtime.control',
-        {'sessionId': session['id'], 'operation': 'configuration.apply', 'args': {'config': {}}}))
+        {'sessionId': session['id'], 'operation': 'configuration.apply', 'args': {'config': plan}}))
     await entered.wait()
     await app.dispatch('conversation.stop', {'sessionId': session['id']})
     finish.set()

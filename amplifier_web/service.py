@@ -1442,7 +1442,8 @@ class AppService:
                 restore(session)
                 settle_stream(session)
                 interrupt_unfinished(session)
-                session['configurationBusy'] = False
+                from .management import Management
+                session['configurationBusy'] = Management.unresolved_configuration(session)
                 if session.get('status') in {'working', 'starting', 'ready', 'stopping'}:
                     session['status'] = 'interrupted'
                     session['activity'] = {'phase': 'interrupted', 'label': 'Previous work was interrupted; it has not been replayed.',
@@ -2350,7 +2351,8 @@ class AppService:
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
-                if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+                if (current.get('configurationBusy') or self.management and self.management.unresolved_configuration(current)) and action != 'question.answer':
+                    raise AppError('Applying or reconciling conversation settings; new input must wait.',409)
                 if action != 'question.answer' and current.get('fileAccessPending'):
                     from .chat_permissions import PENDING_DETAIL
                     raise AppError(PENDING_DETAIL, 409)
@@ -3214,7 +3216,15 @@ class AppService:
                 self._refresh_shared_preferences()
             elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
-                pending.append((self.management.command,(action,copy.deepcopy(args),command_id,configuration_authority)))
+                values = (action, copy.deepcopy(args), command_id, configuration_authority)
+                if action == 'configuration.apply' or action == 'runtime.control' and args.get('operation') == 'configuration.apply':
+                    target = self._session(args.get('id') or args.get('sessionId'))
+                    # Host-only provenance, captured before the background wait;
+                    # never accept origin or caller identity from model arguments.
+                    values += ({'origin': origin, 'callerSessionId': caller_session_id,
+                        'generation': copy.deepcopy(target.get('collaborationGeneration')),
+                        'target': self.management.configuration_target_binding(target)},)
+                pending.append((self.management.command, values))
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
                 if action == 'updates.forceRestart':

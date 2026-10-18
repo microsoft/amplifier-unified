@@ -66,6 +66,8 @@ class ControlsTransport:
             self.block_start = False
             self.entered.set()
             await self.release.wait()
+        if kwargs.get("guard"):
+            kwargs["guard"]()
         if self.needs_mount:
             # Model only the saved-vs-loaded distinction, not a native mount.
             self.coordinator.config = json.loads(override_path(self.sid).read_text())
@@ -79,7 +81,9 @@ class ControlsTransport:
             if self.fault == "stop-after-save":
                 raise RuntimeError("Synthetic retirement failure after settings save")
 
-    async def control(self, sid, operation, args):
+    async def control(self, sid, operation, args, *, guard=None):
+        if guard is not None:
+            guard()
         assert sid == self.sid
         self.calls.append(operation)
         if operation == "configuration.providers":
@@ -428,3 +432,474 @@ async def test_cancel_before_admission_clears_pending_without_native_effect(boun
     assert not boundary.app.management.queued_path(boundary.owner["id"]).exists()
     assert "pendingConfiguration" not in boundary.owner
     assert not boundary.runtime.calls
+
+
+# Additional repair contracts. The original 22 baseline cases above remain
+# unchanged, including their assertions that produced the retained hosted RED.
+def operation(boundary):
+    pending = boundary.owner["pendingConfiguration"]
+    return boundary.app.management.configuration_record(boundary.owner["id"], pending["operationId"])
+
+
+async def test_private_original_record_survives_success_with_ordered_effect_stages(boundary):
+    await queue(boundary)
+    original = operation(boundary)
+    assert original["request"]["commandId"] == "original-apply"
+    assert original["request"]["config"] == plan(2)
+    assert original["request"]["authority"] == boundary.authority
+    assert original["request"]["source"]["origin"] == "agent"
+    assert original["request"]["source"]["callerSessionId"] == boundary.owner["id"]
+    assert "config" not in boundary.owner["pendingConfiguration"]
+    private = boundary.app.management.configuration_record_path(boundary.owner["id"], original["id"])
+    assert private.stat().st_mode & 0o777 == 0o600
+    await reach_apply(boundary)
+    await settle(boundary)
+    saved = operation(boundary)
+    assert saved["request"] == original["request"]
+    assert saved["requestHash"] == original["requestHash"]
+    assert saved["history"][:len(original["history"])] == original["history"]
+    assert [row["revision"] for row in saved["history"]] == list(range(1, saved["revision"] + 1))
+    stages = [row["stage"] for row in saved["history"]]
+    assert stages.index("preparing") < stages.index("dispatching") < stages.index("saved") < stages.index("readback")
+    assert saved["state"]["phase"] == "ready"
+    assert saved["state"]["effect"] == "mounted"
+    assert private.exists()
+
+
+async def test_ui_origin_and_internal_no_command_identity_are_explicit(boundary):
+    app, owner = boundary.app, boundary.owner
+    owner["status"] = "working"
+    await app.dispatch("configuration.apply", {"id": owner["id"], "config": plan(2), "whenIdle": True},
+                       command_id="user-apply")
+    assert (await finished(app, "user-apply"))["phase"] == "ready"
+    original = operation(boundary)
+    assert original["request"]["authorization"] == "ui"
+    assert original["request"]["authority"] is None
+    await app.management.perform("configuration.cancel", {"id": owner["id"]})
+    await app.management.perform("configuration.apply",
+                                {"id": owner["id"], "config": plan(3), "whenIdle": True})
+    internal = operation(boundary)
+    assert internal["request"]["authorization"] == "internal"
+    assert internal["request"]["commandId"] == internal["id"]
+    assert app.management.configuration_record(owner["id"], original["id"])["state"]["phase"] == "cancelled"
+
+
+async def test_ambient_callback_cannot_replace_a_missing_queued_grant(boundary):
+    from amplifier_web.configuration_authority import CURRENT
+    boundary.owner["status"] = "working"
+    token = CURRENT.set(lambda **kwargs: None)
+    try:
+        with pytest.raises(ValueError, match="original configuration authority"):
+            await boundary.app.management.perform("configuration.apply",
+                {"id": boundary.owner["id"], "config": plan(2), "whenIdle": True})
+    finally:
+        CURRENT.reset(token)
+    assert "pendingConfiguration" not in boundary.owner
+    assert not boundary.runtime.calls
+
+
+@pytest.mark.parametrize("change", ["executionRevision", "workingDirectory"])
+async def test_original_placement_binding_is_checked_before_dispatch(boundary, change):
+    await queue(boundary)
+    if change == "executionRevision":
+        boundary.owner[change] = 1
+    else:
+        boundary.owner[change] = boundary.owner["workspace"] + "/different-placement"
+    boundary.owner["status"] = "idle"
+    await asyncio.wait_for(boundary.queued_task, 3)
+    assert not boundary.runtime.calls
+    assert boundary.owner["pendingConfiguration"]["phase"] == "error"
+    assert operation(boundary)["state"]["effect"] == "none"
+    assert boundary.app.management.queued_path(boundary.owner["id"]).read_bytes() == boundary.payload
+
+
+@pytest.mark.parametrize("change", ["raw-payload", "private-request", "missing-record"])
+async def test_corrupt_operation_binding_never_reaches_runtime(boundary, change):
+    await queue(boundary)
+    record = operation(boundary)
+    path = boundary.app.management.configuration_record_path(boundary.owner["id"], record["id"])
+    if change == "raw-payload":
+        boundary.app.management.queued_path(boundary.owner["id"]).write_text(json.dumps(plan(9)))
+    elif change == "private-request":
+        altered = copy.deepcopy(record)
+        altered["request"]["authority"] = None
+        altered["request"]["authorization"] = "ui"
+        path.write_text(json.dumps(altered))
+    else:
+        path.unlink()
+    boundary.owner["status"] = "idle"
+    await asyncio.wait_for(boundary.queued_task, 3)
+    assert not boundary.runtime.calls
+    assert boundary.owner["pendingConfiguration"]["phase"] == "error"
+    assert not override_path(boundary.owner["id"]).exists()
+    # No corruption repair rewrites the private request as a trusted user action.
+    if change == "private-request":
+        assert json.loads(path.read_text()) == altered
+
+
+@pytest.mark.parametrize("has_authority", [False, True])
+async def test_legacy_pending_without_operation_binding_is_not_resumed(boundary, has_authority):
+    app, owner = boundary.app, boundary.owner
+    if has_authority:
+        await queue(boundary)
+        legacy = {"phase": "queued", "authority": boundary.authority}
+    else:
+        legacy = {"phase": "queued"}
+        app.management.queued_path(owner["id"]).write_text(json.dumps(plan(2)))
+    owner["pendingConfiguration"] = legacy
+    owner["status"] = "working"
+    app._publish()
+    await app.close()
+    fresh = ControlsTransport(app.data_dir, owner["id"])
+    restored = AppService(app.data_dir, fresh, workspace=app.default_workspace)
+    fresh.app = restored
+    try:
+        restored.management = Management(restored)
+        await scheduler_barrier()
+        pending = restored._session(owner["id"])["pendingConfiguration"]
+        assert pending["phase"] == "error" and pending["recoveryRequired"]
+        assert pending.get("authority") == legacy.get("authority")
+        assert not fresh.calls
+        assert owner["id"] not in restored.management.pending_config_tasks
+        assert json.loads(restored.management.queued_path(owner["id"]).read_text()) == plan(2)
+    finally:
+        await restored.close()
+
+
+async def test_new_request_cannot_replace_pending_or_unknown_original(boundary):
+    await queue(boundary)
+    before = operation(boundary)
+    with pytest.raises(ValueError, match="original pending"):
+        await boundary.app.management.perform("configuration.apply",
+            {"id": boundary.owner["id"], "config": plan(3), "whenIdle": True},
+            command_id="replacement")
+    assert operation(boundary) == before
+    assert boundary.app.management.queued_path(boundary.owner["id"]).read_bytes() == boundary.payload
+    await reach_apply(boundary)
+    boundary.runtime.native.queued_inputs = 1
+    await settle(boundary)
+    failed = operation(boundary)
+    assert failed["state"]["effect"] == "unknown"  # Native error text is not a no-effect receipt.
+    with pytest.raises(ValueError, match="unresolved"):
+        await boundary.app.management.perform("configuration.cancel", {"id": boundary.owner["id"]})
+    with pytest.raises(ValueError, match="original pending"):
+        await boundary.app.management.perform("configuration.apply",
+            {"id": boundary.owner["id"], "config": plan(3), "whenIdle": True})
+    assert operation(boundary) == failed
+
+
+async def test_cancel_and_next_operation_retain_old_record_and_new_task(boundary):
+    await queue(boundary)
+    original = operation(boundary)
+    await boundary.app.management.perform("configuration.cancel", {"id": boundary.owner["id"]})
+    cancelled = boundary.app.management.configuration_record(boundary.owner["id"], original["id"])
+    assert cancelled["request"] == original["request"]
+    assert cancelled["history"][:1] == original["history"]
+    assert cancelled["state"]["phase"] == "cancelled"
+    await boundary.app.management.perform("configuration.apply",
+        {"id": boundary.owner["id"], "config": plan(3), "whenIdle": True}, command_id="next-apply")
+    next_record = operation(boundary)
+    assert next_record["id"] != original["id"]
+    next_task = boundary.app.management.pending_config_tasks[boundary.owner["id"]]
+    await scheduler_barrier()
+    assert boundary.app.management.pending_config_tasks[boundary.owner["id"]] is next_task
+    assert not next_task.done()
+    assert boundary.app.management.configuration_record(boundary.owner["id"], original["id"]) == cancelled
+
+
+async def test_claim_waits_for_peer_already_submitting_without_retracting_it(boundary):
+    from test_coordination_generation import until
+    app, owner, peer, runtime = boundary.app, boundary.owner, boundary.peer, boundary.runtime
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_input = runtime.collaboration_input
+
+    async def held_input(*args):
+        entered.set()
+        await release.wait()
+        return await original_input(*args)
+
+    runtime.collaboration_input = held_input
+    incoming = await agent(app, peer, "coordination.send",
+                           {"sessionId": owner["id"], "text": "In-flight admission", "mode": "queue"},
+                           "submitting-peer")
+    draining = asyncio.create_task(app.collaboration.drain(owner["id"]))
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        assert app.collaboration.receipt(incoming["requestId"])["delivery"] == "submitting"
+        await queue(boundary)
+        owner["status"] = "idle"
+        assert not app.management.configuration_idle(owner)
+        await scheduler_barrier()
+        assert not runtime.entered.is_set()
+        assert app.collaboration.receipt(incoming["requestId"])["delivery"] == "submitting"
+    finally:
+        release.set()
+        await asyncio.wait_for(draining, 3)
+    await until(lambda: app.collaboration.receipt(incoming["requestId"])["delivery"] == "accepted")
+    await reach_apply(boundary)
+    await settle(boundary)
+    assert runtime.inputs == ["submitting-peer"]
+    assert runtime.native.queued_inputs == 1
+    assert not override_path(owner["id"]).exists()
+
+
+async def test_confirmed_application_automatically_releases_waiting_peer(boundary):
+    from test_coordination_generation import until
+    await queue(boundary)
+    await agent(boundary.app, boundary.peer, "coordination.send",
+        {"sessionId": boundary.owner["id"], "text": "Wait for configuration", "mode": "queue"},
+        "automatically-released")
+    await reach_apply(boundary)
+    assert not boundary.runtime.inputs
+    await settle(boundary)
+    await until(lambda: boundary.runtime.inputs == ["automatically-released"])
+    assert boundary.owner["pendingConfiguration"]["phase"] == "ready"
+    assert not boundary.owner["configurationBusy"]
+
+
+@pytest.mark.parametrize("fault", ["lost-after-save", "stop-after-save"])
+async def test_unresolved_mount_keeps_admission_and_never_warms_on_inspection(boundary, fault):
+    await queue(boundary)
+    await reach_apply(boundary)
+    boundary.runtime.fault = fault
+    await settle(boundary)
+    calls = list(boundary.runtime.calls)
+    assert boundary.owner["configurationBusy"]
+    with pytest.raises(ValueError, match="unresolved"):
+        await boundary.app.management.perform("configuration.inspect", {"id": boundary.owner["id"]})
+    assert boundary.runtime.calls == calls
+    # Stop remains an available supported action; it never clears an unknown effect.
+    await boundary.app.dispatch("conversation.stop", {"sessionId": boundary.owner["id"]})
+    assert operation(boundary)["state"]["effect"] in {"unknown", "saved_not_mounted"}
+
+
+async def test_raw_apply_route_uses_the_same_original_operation_and_unknown_fence(boundary):
+    app, owner, runtime = boundary.app, boundary.owner, boundary.runtime
+    await grant(app, ["runtime_configuration"], ["session"])
+    owner["status"] = "idle"
+    runtime.fault = "lost-after-save"
+    await agent(app, owner, "runtime.control",
+        {"sessionId": owner["id"], "operation": "configuration.apply", "args": {"config": plan(2)}},
+        "raw-original")
+    await asyncio.wait_for(runtime.entered.wait(), 3)
+    runtime.release.set()
+    assert (await finished(app, "raw-original"))["phase"] == "error"
+    saved = operation(boundary)
+    assert saved["request"]["commandId"] == "raw-original"
+    assert saved["request"]["source"]["origin"] == "agent"
+    assert saved["state"]["effect"] == "unknown"
+    assert owner["configurationBusy"]
+    assert json.loads(override_path(owner["id"]).read_text()) == plan(2)
+
+
+@pytest.mark.parametrize("route", ["configuration.apply", "runtime.control"])
+@pytest.mark.parametrize("change", ["stop", "executionRevision", "workingDirectory"])
+async def test_ui_admission_binds_target_before_management_lock_wait(boundary, route, change):
+    app, owner = boundary.app, boundary.owner
+    values = ({"id": owner["id"], "config": plan(2)} if route == "configuration.apply" else
+              {"sessionId": owner["id"], "operation": "configuration.apply", "args": {"config": plan(2)}})
+    await app.management.lock.acquire()
+    try:
+        await app.dispatch(route, values, command_id="before-wait")
+        if change == "stop":
+            await app.dispatch("conversation.stop", {"sessionId": owner["id"]})
+        elif change == "executionRevision":
+            owner[change] = 1
+        else:
+            owner[change] = owner["workspace"] + "/moved"
+    finally:
+        app.management.lock.release()
+    assert (await finished(app, "before-wait"))["phase"] == "error"
+    assert "configuration.apply" not in boundary.runtime.calls
+    assert not override_path(owner["id"]).exists()
+    assert "pendingConfiguration" not in owner
+
+
+@pytest.mark.parametrize("action", ["absent-cancel", "queued-cancel", "queued-revoke"])
+async def test_mount_plan_cleanup_does_not_release_an_independent_refresh(boundary, action):
+    if action != "absent-cancel":
+        await queue(boundary)
+    owner = boundary.owner
+    owner.update(configurationBusy=True, configurationRefresh={"phase": "applying"})
+    if action == "queued-revoke":
+        await revoke(boundary.app, boundary.authorized)
+        await asyncio.wait_for(boundary.queued_task, 3)
+        assert boundary.app.state["managementResults"]["original-apply"]["phase"] == "error"
+    else:
+        await boundary.app.management.perform("configuration.cancel", {"id": owner["id"]})
+        await scheduler_barrier()
+    assert owner["configurationBusy"]
+    assert owner["configurationRefresh"]["phase"] == "applying"
+    assert not boundary.runtime.inputs
+
+
+async def test_cancelled_preparation_is_cancellable_without_erasing_original(boundary):
+    await queue(boundary)
+    await reach_apply(boundary)
+    original = operation(boundary)["request"]
+    boundary.queued_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(boundary.queued_task, 3)
+    current = operation(boundary)
+    assert current["state"]["phase"] == "error"
+    assert current["state"]["effect"] == "none"
+    assert not boundary.owner["configurationBusy"]
+    await boundary.app.management.perform("configuration.cancel", {"id": boundary.owner["id"]})
+    record = boundary.app.management.configuration_record(boundary.owner["id"], current["id"])
+    assert record["request"] == original
+    assert record["state"]["phase"] == "cancelled"
+
+
+@pytest.mark.parametrize("stage", ["prepare", "restart"])
+@pytest.mark.parametrize("invalidation", ["stop", "revoke"])
+async def test_runtime_start_receives_original_guard_across_its_wait(boundary, stage, invalidation):
+    runtime = boundary.runtime
+    entered, release = asyncio.Event(), asyncio.Event()
+    start = runtime.start
+    runtime.block_start = False
+
+    async def guarded_start(session, emit, **kwargs):
+        assert callable(kwargs.get("guard"))
+        if runtime.needs_mount == (stage == "restart"):
+            entered.set()
+            await release.wait()
+            kwargs["guard"]()
+        await start(session, emit, **kwargs)
+
+    runtime.start = guarded_start
+    await queue(boundary)
+    boundary.owner["status"] = "idle"
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        if invalidation == "stop":
+            await boundary.app.dispatch("conversation.stop", {"sessionId": boundary.owner["id"]})
+        else:
+            await revoke(boundary.app, boundary.authorized)
+    finally:
+        release.set()
+    await asyncio.wait_for(boundary.queued_task, 3)
+    assert boundary.owner["pendingConfiguration"]["phase"] == "error"
+    assert "fixture-mounted" not in runtime.calls
+    assert override_path(boundary.owner["id"]).exists() == (stage == "restart")
+    assert operation(boundary)["state"]["effect"] == ("saved_not_mounted" if stage == "restart" else "none")
+
+
+async def test_unchanged_plan_readback_is_not_a_confirmed_mount(boundary):
+    await queue(boundary)
+    await reach_apply(boundary)
+    control = boundary.runtime.control
+
+    async def stale(sid, name, args, **kwargs):
+        if name == "configuration.inspect":
+            return {"plan": plan(1)}
+        return await control(sid, name, args, **kwargs)
+
+    boundary.runtime.control = stale
+    await settle(boundary)
+    assert operation(boundary)["state"]["effect"] == "saved_not_mounted"
+    assert boundary.owner["pendingConfiguration"]["phase"] == "error"
+    assert boundary.owner["configurationBusy"]
+    assert "does not match" in boundary.owner["pendingConfiguration"]["error"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_keyed_cold_owner_restores_unresolved_admission_fence(boundary, legacy):
+    app, owner = boundary.app, boundary.owner
+    await queue(boundary)
+    await reach_apply(boundary)
+    boundary.runtime.fault = "lost-after-save"
+    await settle(boundary)
+    if legacy:
+        owner["pendingConfiguration"] = {"phase": "error", "error": "Old unclassified failure"}
+    app.state["selectedSessionId"] = boundary.peer["id"]
+    app._publish()
+    await app.close()
+    fresh = ControlsTransport(app.data_dir, owner["id"])
+    restored = AppService(app.data_dir, fresh, workspace=app.default_workspace)
+    fresh.app = restored
+    try:
+        # Exercise keyed hydration directly if startup's working set already
+        # included this owner; evict only the in-memory view, not saved evidence.
+        restored._state["sessions"] = [s for s in restored._state["sessions"] if s["id"] != owner["id"]]
+        restored.projections.invalidate(state=restored._state)
+        restored.management = Management(restored)
+        current = restored._session(owner["id"])
+        assert current["configurationBusy"]
+        assert not restored.warmup.allowed(current)
+        with pytest.raises(AppError, match="settings"):
+            await restored.dispatch("conversation.send", {"sessionId": owner["id"], "text": "Do not start"})
+        assert not fresh.calls
+    finally:
+        await restored.close()
+
+
+@pytest.mark.parametrize("invalidated", [False, True])
+async def test_real_transport_admission_rechecks_grant_without_serializing_callback(boundary, invalidated, monkeypatch):
+    from amplifier_web.runtime import RuntimeManager
+    await queue(boundary)
+    manager = RuntimeManager()
+    sid = boundary.owner["id"]
+    row = {"process": SimpleNamespace(returncode=None), "pending": {}, "inflight": set()}
+    manager.workers[sid] = row
+    writes = []
+
+    async def write(target, payload):
+        writes.append(payload)
+        target["pending"][payload["id"]].set_result({"fixture": True})
+
+    monkeypatch.setattr(manager, "_write", write)
+    def guard():
+        boundary.app.configuration_authority.check(boundary.authority)
+
+    try:
+        async with manager._admission(sid):
+            pending = asyncio.create_task(manager.control(sid, "configuration.apply", {"config": plan(2)}, guard=guard))
+            await scheduler_barrier()
+            assert not writes
+            if invalidated:
+                await revoke(boundary.app, boundary.authorized)
+        if invalidated:
+            with pytest.raises(AppError, match="revoked"):
+                await asyncio.wait_for(pending, 3)
+            assert not writes and not row["inflight"]
+        else:
+            assert await asyncio.wait_for(pending, 3) == {"fixture": True}
+            assert len(writes) == 1 and "guard" not in writes[0]
+    finally:
+        manager.workers.pop(sid, None)
+        await manager.close()
+
+
+@pytest.mark.parametrize("change", ["removed-agent", "removed-config-key", "nested-step-order", "provider-order"])
+async def test_readback_rejects_retained_or_reordered_configuration(boundary, change):
+    desired = plan(2)
+    stale = copy.deepcopy(desired)
+    if change == "removed-agent":
+        desired["agents"] = {}
+        stale["agents"] = {"old-agent": {"module": "agent-fixture"}}
+    elif change == "removed-config-key":
+        stale["tools"][0]["config"]["removed"] = "old-value"
+    elif change == "nested-step-order":
+        desired["tools"][0]["config"]["steps"] = [{"id": "validate"}, {"id": "execute"}]
+        stale["tools"][0]["config"]["steps"] = [{"id": "execute"}, {"id": "validate"}]
+    else:
+        desired["providers"] = [{"module": "provider-fixture", "id": "first"},
+                                {"module": "provider-fixture", "id": "second"}]
+        stale["providers"] = list(reversed(copy.deepcopy(desired["providers"])))
+    assert not Management.configuration_readback_matches(desired, stale)
+    # Full mutation path must retain the same unconfirmed saved state.
+    boundary.owner["status"] = "working"
+    await boundary.app.management.perform("configuration.apply",
+        {"id": boundary.owner["id"], "config": desired, "whenIdle": True})
+    boundary.queued_task = boundary.app.management.pending_config_tasks[boundary.owner["id"]]
+    control = boundary.runtime.control
+    async def stale_control(sid, name, args, **kwargs):
+        if name == "configuration.inspect":
+            return {"plan": stale}
+        return await control(sid, name, args, **kwargs)
+    boundary.runtime.control = stale_control
+    await reach_apply(boundary)
+    await settle(boundary)
+    assert operation(boundary)["state"]["effect"] == "saved_not_mounted"
+    assert boundary.owner["pendingConfiguration"]["phase"] == "error"
+    assert boundary.owner["configurationBusy"]
