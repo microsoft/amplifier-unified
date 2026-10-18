@@ -208,3 +208,15 @@ def test_forged_verified_bit_never_replaces_archive_verification(tmp_path):
         retention.verify_retention(tmp_path, archives)
     assert path.read_bytes() == b'not a tar archive'
     assert not (tmp_path / 'retention.json').exists()
+
+
+def test_complete_retention_publication_never_overwrites_prior_receipt(tmp_path):
+    archives = retention.filter_incus_stream(backup(ROOTS), tmp_path, 'owned')
+    (tmp_path / 'source.tar').write_bytes(b'source')
+    first = retention.verify_retention(tmp_path, archives)
+    before = (tmp_path / 'retention.json').read_bytes()
+    with pytest.raises(FileExistsError):
+        retention.verify_retention(tmp_path, archives)
+    assert (tmp_path / 'retention.json').read_bytes() == before
+    assert retention.verify_retention(tmp_path, archives, publish=False) == first
+    assert not list(tmp_path.glob('.retention-*'))

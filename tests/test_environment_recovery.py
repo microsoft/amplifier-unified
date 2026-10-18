@@ -428,7 +428,10 @@ async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files
                 'action':'remove', 'root':str(folder), 'rootOwner':raw['sessionId'],
                 'operationId':raw['launchOperationId'], 'universeId':raw['universeId'],
                 'expectedBackendIdentity':raw['backendIdentity'],
-                'dockerHost':config['dockerHost'], 'requestId':args['requestId']})
+                'dockerHost':config['dockerHost'], 'requestId':args['requestId'],
+                'resourceId':raw['id'], 'resourceRevision':raw['revision'],
+                'admissionRevision':args['expectedRevision'],
+                'backendKey':raw['backendKey'], 'snapshot':raw['snapshot']})
             # Model the older helper's published envelope, not a new phase proof.
             return {key:item for key, item in value.items() if key != 'removal'}
         if action == 'reconcile':
@@ -547,10 +550,125 @@ async def test_new_remove_identity_cannot_bypass_a_legacy_unknown_removal(app, b
     reconciled = await act(app, 'reconcile', failed['resource'], 'held-inspection')
     assert reconciled['resource']['status'] == 'stopped' and observed == ['reconcile']
     before = owner.get(app.data_dir, row['sessionId'], row['id'])
+    helpers = []
     def no_effect(*args):
-        pytest.fail('A new request identity bypassed an unresolved original removal')
+        helpers.append(args)
+        return {'ok':False, 'status':'unknown'}
     monkeypatch.setattr(owner, 'invoke', no_effect)
     with pytest.raises(AppError, match='original removal'):
         await act(app, 'remove', reconciled['resource'], 'not-a-recovery-token')
+    assert helpers == []
     assert owner.get(app.data_dir, row['sessionId'], row['id']) == before
     assert app.operations.requests.read(row['sessionId'], 'held-original-remove') == unknown
+    with pytest.raises(ValueError, match='not found'):
+        app.operations.requests.read(row['sessionId'], 'not-a-recovery-token')
+
+
+@pytest.mark.parametrize('later_receipts', [0, 105])
+async def test_original_unknown_survives_later_stop_and_bounded_history_page(app, backend, monkeypatch, later_receipts):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'original-stop'))['resource']
+    original_invoke = owner.invoke
+    def lost(*args):
+        raise TimeoutError('synthetic uncertain removal')
+    monkeypatch.setattr(owner, 'invoke', lost)
+    failed = await act(app, 'remove', row, 'original-unknown-remove')
+    unknown = copy.deepcopy(failed['request'])
+    observer(monkeypatch, 'stopped')
+    observed = await act(app, 'reconcile', failed['resource'], 'original-observe')
+    monkeypatch.setattr(owner, 'invoke', original_invoke)
+    later = await act(app, 'stop', observed['resource'], 'later-stop')
+    assert later['resource']['lastOperation']['action'] == 'workspace.environments.stop'
+    for index in range(later_receipts):
+        request, _ = app.operations.requests.begin(row['sessionId'], 'fixture.observation',
+            {'requestId':f'later-{index}'}, {})
+        app.operations.requests.finish(request, 'completed')
+    if later_receipts:
+        assert all(r['requestId'] != unknown['requestId'] for r in app.operations.requests.list(row['sessionId']))
+    before = owner.get(app.data_dir, row['sessionId'], row['id'])
+    helpers = []
+    monkeypatch.setattr(owner, 'invoke', lambda *args: helpers.append(args))
+    with pytest.raises(AppError, match='original removal'):
+        await act(app, 'remove', later['resource'], 'new-id-cannot-escape')
+    assert not helpers and owner.get(app.data_dir, row['sessionId'], row['id']) == before
+    assert app.operations.requests.read(row['sessionId'], unknown['requestId']) == unknown
+    with pytest.raises(ValueError, match='not found'):
+        app.operations.requests.read(row['sessionId'], 'new-id-cannot-escape')
+    assert (await act(app, 'remove', row, 'original-unknown-remove'))['request'] == unknown
+
+
+async def test_late_stop_before_removal_effect_keeps_resource_and_calls_unchanged(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'before-late-stop'))['resource']
+    before = owner.get(app.data_dir, row['sessionId'], row['id'])
+    entered, release = threading.Event(), threading.Event()
+    original = recovery.bind_configuration
+    def pause(*args):
+        result = original(*args)
+        entered.set()
+        assert release.wait(5)
+        return result
+    monkeypatch.setattr(recovery, 'bind_configuration', pause)
+    calls = []
+    monkeypatch.setattr(owner, 'invoke', lambda *args: calls.append(args))
+    task = asyncio.create_task(act(app, 'remove', row, 'late-stopped-remove'))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        source = app.state['sessions'][0]
+        source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    finally:
+        release.set()
+        result = await task
+    assert result['request']['state'] == 'failed' and calls == []
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == before
+
+
+async def test_direct_effect_route_cannot_bypass_original_unknown(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'direct-stop'))['resource']
+    config = owner.configuration(app)[0]
+    def lost(*args):
+        raise TimeoutError('synthetic uncertain removal')
+    monkeypatch.setattr(owner, 'invoke', lost)
+    failed = await act(app, 'remove', row, 'direct-original')
+    observer(monkeypatch, 'stopped')
+    observed = await act(app, 'reconcile', failed['resource'], 'direct-observe')
+    raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+    args = {**scope(app), 'id':row['id'], 'expectedRevision':raw['revision'], 'requestId':'direct-new'}
+    request, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.remove', args, {})
+    request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'])
+    calls = []
+    monkeypatch.setattr(owner, 'invoke', lambda *args: calls.append(args))
+    result = await asyncio.to_thread(owner.effect, app, raw, 'remove', args, config, request, lambda: None)
+    assert result['request']['state'] == 'failed' and not calls
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == raw
+    assert app.operations.requests.read(row['sessionId'], 'direct-original') == failed['request']
+
+
+async def test_confirmed_destroy_survives_host_guest_removed_persistence_failure(app, backend, monkeypatch):
+    row = (await start(app))['resource']
+    row = (await act(app, 'stop', row, 'metadata-stop'))['resource']
+    original_invoke, original_save = owner.invoke, owner.save
+    calls, injected = [], []
+    def invoke(config, home, raw, action, args):
+        calls.append(action)
+        result = original_invoke(config, home, raw, action, args)
+        if action == 'remove':
+            result['removal'] = {'version':1, 'phase':'settle', 'code':'complete', 'destroyEffect':'confirmed'}
+        return result
+    def save(home, raw, **changes):
+        if changes.get('guestRemoved'):
+            injected.append(True)
+            raise OSError('private synthetic metadata failure')
+        return original_save(home, raw, **changes)
+    monkeypatch.setattr(owner, 'invoke', invoke)
+    monkeypatch.setattr(owner, 'save', save)
+    result = await act(app, 'remove', row, 'metadata-remove')
+    assert injected == [True] and calls == ['remove']
+    assert result['request']['state'] == 'outcome_unknown'
+    assert result['request']['result']['removal'] == {
+        'version':1, 'phase':'host-persistence', 'code':'metadata_unconfirmed', 'destroyEffect':'confirmed'}
+    assert 'private' not in json.dumps(result['request'])
+    assert owner.get(app.data_dir, row['sessionId'], row['id'])['status'] != 'retired'
+    duplicate = await act(app, 'remove', row, 'metadata-remove')
+    assert duplicate['request'] == result['request'] and calls == ['remove']

@@ -225,6 +225,8 @@ def invoke(config, home, row, action, args):
                'operationId': row.get('launchOperationId'), 'universeId': row.get('universeId'),
                'dockerHost': config.get('dockerHost'), 'image': config.get('image'),
                'rootOwner': row.get('sessionId'),
+               'resourceId': row.get('id'), 'resourceRevision': row.get('revision'),
+               'admissionRevision': args.get('expectedRevision'),
                'requestId': args.get('requestId'), 'command': args.get('command'),
                'jobId': args.get('jobId', args.get('requestId')),
                'profileId': row.get('profileId', PROFILE),
@@ -302,6 +304,47 @@ def confirmed_result(row, request):
             and isinstance(request.get('result'), dict))
 
 
+def require_resolved_removal(app, row, exclude_request_id=None):
+    """A new identity cannot escape any retained unresolved removal.
+
+    lastOperation can be a later stop/read; the bounded request-list page is not
+    the history. Query the existing journal for this root/resource only.
+    """
+    journal = app.operations.requests.journal
+    with journal.lock:
+        found = journal.db.execute(
+            "SELECT id,value FROM operation_requests WHERE session_id=? "
+            "AND json_extract(value,'$.resourceId')=? "
+            "AND json_extract(value,'$.action')='workspace.environments.remove' "
+            "AND COALESCE(json_extract(value,'$.state'),'outcome_unknown') NOT IN ('completed','failed') "
+            "AND (? IS NULL OR id!=?) ORDER BY rowid LIMIT 1",
+            (row['sessionId'], row['id'], exclude_request_id, exclude_request_id)).fetchone()
+    if found:
+        raise ValueError('The original removal remains unresolved. Inspect its retained evidence; a new request cannot repeat it.')
+
+
+def begin_removal(app, row, action, args, actor):
+    """Serialize fresh admission with the physical owner without awaiting."""
+    lock = FileLock(str(app.data_dir / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
+    try:
+        lock.acquire()
+    except LockTimeout:
+        # Preserve existing concurrent-admission receipts: effect() will refuse
+        # under the same lock without modifying the active owner's resource.
+        return app.operations.requests.begin(row['sessionId'], action, args, actor)
+    try:
+        current = get(app.data_dir, row['sessionId'], row['id'])
+        if current['revision'] != args['expectedRevision']:
+            raise ValueError('The environment changed. Inspect its current revision.')
+        require_resolved_removal(app, current, args['requestId'])
+        request, fresh = app.operations.requests.begin(row['sessionId'], action, args, actor)
+        if fresh:
+            request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'])
+        return request, fresh
+    finally:
+        lock.release()
+
+
 def project_result(home, row, request):
     """Rebuild resource metadata from its exact receipt without another effect."""
     result = request['result']
@@ -360,6 +403,7 @@ def effect(app, row, action, args, config, request, admit):
     home, sid = app.data_dir, row['sessionId']
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
     locked = admitted = False
+    result = None
     try:
         lock.acquire()
         locked = True
@@ -367,6 +411,10 @@ def effect(app, row, action, args, config, request, admit):
         row = get(home, sid, row['id'])
         if action != 'start' and row['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
+        if action == 'remove':
+            # Also covers the queue's existing direct effect route. Refuse before
+            # projection/configuration writes or an external helper call.
+            require_resolved_removal(app, row, request['requestId'])
         if row.get('pendingRequest') and row['pendingRequest'] != request['requestId']:
             prior = app.operations.requests.read(sid, row['pendingRequest'])
             if confirmed_result(row, prior):
@@ -474,9 +522,15 @@ def effect(app, row, action, args, config, request, admit):
             row = get(home, sid, row['id'])
             if row.get('preparationPending'):
                 row, preparation_cleanup = cleanup_preparation(home, row, config)
+        confirmation = (action == 'remove' and isinstance(result, dict) and (
+            result.get('ok') is True and result.get('status') == 'removed'
+            or isinstance(result.get('removal'), dict) and result['removal'].get('destroyEffect') == 'confirmed'))
         request = app.operations.requests.finish(request, 'outcome_unknown' if admitted or row.get('preparationPending') else 'failed', resourceId=row['id'],
             result={'ok': False, 'status': 'not-started' if not admitted else 'unknown',
-                    'preparationCleanup': preparation_cleanup, 'message': str(exc)[:500]},
+                    'preparationCleanup': preparation_cleanup,
+                    **({'removal': {'version': 1, 'phase': 'host-persistence',
+                                    'code': 'metadata_unconfirmed', 'destroyEffect': 'confirmed'}} if confirmation else {}),
+                    'message': 'Removal did not complete; inspect the original retained evidence.' if action == 'remove' else str(exc)[:500]},
             message=('The operation did not finish with a confirmed result. Inspect retained state; do not repeat it automatically.'
                      if admitted else 'The operation was not admitted. Read the current environment and authority before trying a new request.'))
         if locked and (admitted or action == 'start'):
@@ -711,7 +765,8 @@ async def dispatch(app, action, args, origin, caller, authority):
         if action.endswith('.remove') and args.get('retentionMode') == 'full' and config.get('backend', 'docker') != 'incus':
             raise AppError('Full environment retention is available only for this environment’s original Incus backend.', 409)
         guard()
-        request, fresh = app.operations.requests.begin(sid, action, args, actor)
+        request, fresh = (begin_removal(app, row, action, args, actor) if action.endswith('.remove')
+                          else app.operations.requests.begin(sid, action, args, actor))
         if not fresh:
             return {'accepted': True, 'duplicate': True, 'result': {'request': request, 'resource': None}}
         try:
