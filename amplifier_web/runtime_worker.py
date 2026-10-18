@@ -545,7 +545,8 @@ class Worker:
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
-            self.controls = RuntimeControls(self.session, self.runtime, self.telemetry)
+            self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
+                preserve_configuration=config.get('_preserveConfiguration') is True)
             self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {"call": row})
             self.telemetry.admission_guard = self.controls.capacity.guard
             # Preserve app controls on native mounts. A legacy common snapshot
@@ -557,6 +558,7 @@ class Worker:
                     await self.controls.restore()
             self.start_config.pop('replaceSavedSelection', None)
             self.start_config.pop('bundleReplacement', None)
+            self.start_config.pop('_preserveConfiguration', None)
             self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
                 # Fork conversational context without tool receipts or runtime
@@ -891,6 +893,12 @@ class Worker:
                         "reason": "No active native owner is available for anchored steering."}})
                     return
                 await self.acquire_for_mutation()
+                if self.controls:
+                    # Placement controls and their settled checkpoint preserve
+                    # unrelated saved controls. The next ordinary mutation
+                    # resumes normal persistence; observations never change it.
+                    self.controls.preserve_configuration = (
+                        op == 'control' and data.get('operation') == 'configuration.patchPlacement.bind')
                 token = self.bind_activation()
                 detached_cancel = memory_control or naming_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
                 if detached_cancel:
@@ -982,7 +990,16 @@ class Worker:
                     self.shutdown.set()
                 return
             elif op == "dependencies":
-                if data.get('resourceAccess') is True:
+                if 'patchPlacement' in data:
+                    from amplifier_web.patch_placement import engine_observation
+                    try:
+                        result = (engine_observation(self.controls, data['patchPlacement']['moduleId'])
+                            if self.controls else {'status': 'unobserved', 'workingDirectory': None})
+                    except Exception:
+                        # Passive and secret-free: no arbitrary module exception
+                        # text, writer acquisition, checkpoint or remount.
+                        result = {'status': 'unknown', 'workingDirectory': None}
+                elif data.get('resourceAccess') is True:
                     from amplifier_web.resource_access import observe
                     inspected_session = self.session
                     result = await observe(inspected_session, data.get('paths', []))
@@ -1000,7 +1017,7 @@ class Worker:
                     from .artifact_runtime import discover
                 else:
                     from artifact_runtime import discover
-                if data.get('provenance') is not True and data.get('resourceAccess') is not True and data.get('integrationValidation') is not True:
+                if 'patchPlacement' not in data and data.get('provenance') is not True and data.get('resourceAccess') is not True and data.get('integrationValidation') is not True:
                     result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif op == 'handoff.boundary':
                 from amplifier_web.handoff_boundary import inspect
@@ -1034,7 +1051,7 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
-                if data['operation'] == 'configuration.apply':
+                if data['operation'] in {'configuration.apply', 'configuration.patchPlacement.bind'}:
                     from amplifier_web.configuration_recovery import native_apply
                     # This envelope is supplied only by the host's retained
                     # operation. The public raw route strips all but config.
@@ -1044,7 +1061,7 @@ class Worker:
                     async with self.controls.lock:
                         result = await native_apply(self.controls, arguments.get('config'), attempt,
                             lambda value: self.bridge('configuration.effect.admit', value),
-                            lambda: self.stop_revision)
+                            lambda: self.stop_revision, operation=data['operation'])
                 elif data['operation'] == 'conversation.steer':
                     from amplifier_web.conversation_steering import submit
                     self.context_bindings[arguments['inputId']] = arguments.get('context_binding', {'clientId': None, 'targets': []})

@@ -90,8 +90,9 @@ def validate_plan(plan):
 
 
 class RuntimeControls:
-    def __init__(self, session, runtime, telemetry=None):
+    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False):
         self.session, self.runtime, self.telemetry = session, runtime, telemetry
+        self.preserve_configuration = preserve_configuration
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")
@@ -167,6 +168,8 @@ class RuntimeControls:
             await self.mode("mode.set", {"name":saved["mode"]})
 
     def persist(self, *, task_only=False):
+        if self.preserve_configuration:
+            return  # A scoped placement mount restores controls without rewriting them.
         snapshot = self.configurator.snapshot() if self.configurator else {}
         loop, context = self.coordinator.get("orchestrator"), self.coordinator.get("context")
         budget = {key:getattr(target, attr) for key,target,attr in
@@ -302,6 +305,15 @@ class RuntimeControls:
             for section in SECTIONS:
                 disabled.pop(section, None)
             write_private(self.state_path(), json.dumps(controls))
+
+    def prepare_patch_placement(self, payload):
+        from .patch_placement import prepare
+        return prepare(self, payload)
+
+    def save_patch_placement(self, plan):
+        # Field-only repair must not clear toggles, provider selection or other
+        # control-state. The existing operation receipt owns save uncertainty.
+        write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
 
     async def _perform(self, operation, args):
         if operation == 'memory.consolidate':

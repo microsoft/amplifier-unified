@@ -24,6 +24,7 @@ class Management:
         self.global_setup_manager=None
         self.workspace_setup_managers={}
         self.pending_config_tasks={}
+        self.placement_snapshots={}
         self.draft_default_tasks={}
         self.after_publication=[]
         pending_refresh=[session['id'] for session in service.state.get('sessions',[]) if session.get('configurationPending')]
@@ -292,7 +293,7 @@ class Management:
                 # Host-controlled validation text only; provider/transport errors
                 # are converted before reaching this boundary.
                 phase,error='error',str(exc)[:1000]
-                if action == 'configuration.apply' and args.get('whenIdle') and self.queued_path(args['id']).exists():
+                if action in {'configuration.apply', 'configuration.patchPlacement.bind'} and args.get('whenIdle') and self.queued_path(args['id']).exists():
                     async with self.service.lock:
                         current = self.service._session(args['id'])
                         if configuration_operation and current.get('pendingConfiguration', {}).get('operationId') == configuration_operation:
@@ -575,6 +576,9 @@ class Management:
     def check_configuration_operation(self, session, record):
         from .configuration_authority import fingerprint
         request = record['request']
+        if request['source'].get('action') == 'configuration.patchPlacement.bind':
+            from .patch_placement import check_request
+            check_request(self, session, record)
         if (request['sessionId'] != session['id'] or request['workspace'] != session['workspace']
                 or request['workingDirectory'] != session.get('workingDirectory')
                 or request['executionRevision'] != session.get('executionRevision', 0)
@@ -602,6 +606,7 @@ class Management:
 
     async def apply_queued(self,identity):
         operation = None
+        operation_action = 'configuration.apply'
         try:
             while not self.service.closed:
                 async with self.service.lock:
@@ -611,6 +616,7 @@ class Management:
                         return
                     operation = pending.get('operationId')
                     record = self.configuration_record(identity, operation)
+                    operation_action = record['request']['source'].get('action', 'configuration.apply')
                     if record['state']['stage'] != 'queued' or record['state']['effect'] != 'none':
                         raise ValueError('This configuration operation already entered application; it was not repeated.')
                     self.check_configuration_operation(session, record)
@@ -626,7 +632,7 @@ class Management:
             else:
                 return
             request = record['request']
-            await self.command('configuration.apply',
+            await self.command(request['source'].get('action', 'configuration.apply'),
                 {'id': identity, 'config': request['config'], 'whenIdle': True},
                 request['commandId'], request['authority'], request['source'], configuration_operation=operation)
         except asyncio.CancelledError:
@@ -640,14 +646,16 @@ class Management:
             raise
         except Exception as exc:
             failed_command = None
+            message = ('Patch placement admission failed; the retained operation was not replayed.'
+                if operation_action == 'configuration.patchPlacement.bind' else str(exc)[:1000])
             async with self.service.lock:
                 session = self.service._session(identity)
                 if operation and session.get('pendingConfiguration', {}).get('operationId') == operation:
-                    self.configuration_error(session, operation, str(exc)[:1000])
+                    self.configuration_error(session, operation, message)
                     failed_command = session['pendingConfiguration'].get('commandId')
                 self.service._publish_changes(sessions={identity})
             if failed_command:
-                await self.command_transition('configuration.apply', {'id': identity}, failed_command, 'error', str(exc)[:1000])
+                await self.command_transition(operation_action, {'id': identity}, failed_command, 'error', message)
         finally:
             if self.pending_config_tasks.get(identity) is asyncio.current_task():self.pending_config_tasks.pop(identity,None)
             async with self.service.lock:
@@ -661,7 +669,7 @@ class Management:
                     if not session.get('configurationBusy'):
                         self.background(self.service.collaboration.drain(identity))
 
-    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None):
+    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None,preserve_configuration=False):
         if self.unresolved_configuration(self.service._session(session['id'])):
             raise ValueError('The original configuration application is unresolved. Runtime preparation cannot reconcile or repeat it.')
         if session.get('nativeProject'):
@@ -693,7 +701,8 @@ class Management:
         from .configuration_authority import check_current
         check_current()
         await self.service.runtime.start(session,self.service.on_runtime_event,
-            **({'guard': restart_guard} if restart_guard is not None else {}))
+            **({'guard': restart_guard} if restart_guard is not None else {}),
+            **({'preserve_configuration': True} if preserve_configuration else {}))
 
     async def recover_provider_catalog(self, session, operation, args):
         if operation not in {'configuration.providers', 'configuration.providerModels'}:
@@ -978,8 +987,11 @@ class Management:
                 current.pop('pendingConfiguration',None)
                 self.service._publish_changes(sessions={identity})
             self.background(self.service.collaboration.drain(identity))
-        elif action in {'configuration.inspect','configuration.apply'}:
+        elif action in {'configuration.inspect','configuration.apply','configuration.patchPlacement.bind'}:
             session=self.session({'sessionId':args['id']})
+            applying = action != 'configuration.inspect'
+            if action == 'configuration.patchPlacement.bind' and configuration_operation is None:
+                raise ValueError('Placement binding requires its retained scoped operation.')
             if action == 'configuration.apply' and configuration_operation is None:
                 from .runtime_controls import validate_plan
                 validate_plan(args['config'])
@@ -1000,24 +1012,28 @@ class Management:
                     return
             forwarded={'sessionId':args['id'],'operation':action,'args':{'config':args['config']} if 'config' in args else {}}
             try:
-                if action == 'configuration.apply':
+                if applying:
                     record = self.configuration_record(session['id'], configuration_operation)
                     self.check_configuration_operation(self.service._session(session['id']), record)
                     if args['config'] != record['request']['config']:
                         raise ValueError('The requested plan is not the original operation payload.')
                 await self.perform('runtime.control',forwarded,configuration_operation=configuration_operation)
             except Exception as exc:
-                if action=='configuration.apply':
+                if applying:
+                    message = ('Patch placement was not confirmed. Inspect the retained operation; no automatic retry.'
+                        if action == 'configuration.patchPlacement.bind' else str(exc)[:1000])
                     async with self.service.lock:
                         current = self.service._session(session['id'])
-                        record = self.configuration_error(current, configuration_operation, str(exc)[:1000])
+                        record = self.configuration_error(current, configuration_operation, message)
                         self.settle_configuration_fence(current, configuration_operation)
                         self.service._publish_changes(sessions={session['id']})
                         if not current['configurationBusy']:
                             self.background(self.service.collaboration.drain(session['id']))
+                    if action == 'configuration.patchPlacement.bind':
+                        raise ValueError(message) from None
                 raise
             except asyncio.CancelledError:
-                if action == 'configuration.apply':
+                if applying:
                     async with self.service.lock:
                         current = self.service._session(session['id'])
                         before = self.configuration_record(current['id'], configuration_operation)
@@ -1027,7 +1043,7 @@ class Management:
                         self.settle_configuration_fence(current, configuration_operation)
                         self.service._publish_changes(sessions={session['id']})
                 raise
-            if action=='configuration.apply':
+            if applying:
                 async with self.service.lock:
                     current = self.service._session(session['id'])
                     self.configuration_transition(current, configuration_operation, phase='ready', stage='readback',
@@ -1037,6 +1053,9 @@ class Management:
                     self.service._publish_changes(sessions={session['id']})
                 self.background(self.service.collaboration.drain(session['id']))
         elif action=='runtime.control':
+            placement = args['operation'] == 'configuration.patchPlacement.bind'
+            if args['operation'].startswith('configuration.patchPlacement.') and configuration_operation is None:
+                raise ValueError('Use the scoped patch placement actions, not raw runtime control.')
             if args['operation'].startswith('bundle.'):
                 raise ValueError('Use the bundle actions to preview, switch, or fork a root bundle.')
             if args['operation'] == 'configuration.apply' and configuration_operation is None:
@@ -1061,11 +1080,11 @@ class Management:
                 return
             if await self.recover_provider_catalog(session, args['operation'], args.get('args', {})):
                 return
-            mutating=args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset','native.compact'}
+            mutating=placement or args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset','native.compact'}
             if mutating:
                 async with self.service.lock:
                     current=self.service._session(session['id'])
-                    owns_fence = (args['operation'] == 'configuration.apply' and configuration_operation is not None
+                    owns_fence = (args['operation'] in {'configuration.apply', 'configuration.patchPlacement.bind'} and configuration_operation is not None
                         and current.get('pendingConfiguration', {}).get('operationId') == configuration_operation
                         and current.get('configurationBusy')
                         and current.get('configurationOperationFence') == configuration_operation
@@ -1087,7 +1106,8 @@ class Management:
                     await self.ensure_runtime(session, selection_override=selected)
                 else:
                     await self.ensure_runtime(session,
-                        **({'restart_guard': operation_guard} if configuration_operation is not None else {}))
+                        **({'restart_guard': operation_guard} if configuration_operation is not None else {}),
+                        **({'preserve_configuration': True} if placement else {}))
                 if args['operation']=='configuration.providerModels':
                     provider_id=args.get('args',{}).get('instance') or args.get('args',{}).get('provider')
                     mounted=await self.service.runtime.control(session['id'],'configuration.providers',{})
@@ -1139,11 +1159,17 @@ class Management:
                     if configuration_operation is not None:
                         operation_guard()
                     await self.service.runtime.start(session,self.service.on_runtime_event,
-                        **({'guard': operation_guard} if configuration_operation is not None else {}))
-                    inspected=await self.service.runtime.control(session['id'],'configuration.inspect',{})
-                    if configuration_operation is not None and not isinstance(inspected.get('plan'), dict):
+                        **({'guard': operation_guard} if configuration_operation is not None else {}),
+                        **({'preserve_configuration': True} if placement else {}))
+                    if placement:
+                        from .patch_placement import observe, verify_readback
+                        inspected = await observe(self.service, session, args['args']['config']['moduleId'])
+                        verify_readback(self, session, args['args']['config'], inspected)
+                    else:
+                        inspected=await self.service.runtime.control(session['id'],'configuration.inspect',{})
+                    if not placement and configuration_operation is not None and not isinstance(inspected.get('plan'), dict):
                         raise ValueError('Saved configuration has no confirmed loaded-plan readback.')
-                    if configuration_operation is not None:
+                    if not placement and configuration_operation is not None:
                         # The worker acknowledgement is evidence to check, not
                         # authority to replace the immutable requested plan.
                         expected = self.configuration_record(session['id'], configuration_operation)['request']['config']
@@ -1153,7 +1179,8 @@ class Management:
                             raise ValueError('Saved configuration acknowledgement does not match the original request. Its operation remains unresolved.')
                         if not self.configuration_readback_matches(expected, inspected['plan']):
                             raise ValueError('Saved configuration does not match loaded-plan readback. Its operation remains unresolved.')
-                    result['configuration']=inspected
+                    if not placement:
+                        result['configuration']=inspected
                     if configuration_operation is not None:
                         async with self.service.lock:
                             operation_guard()
@@ -1161,7 +1188,7 @@ class Management:
                                 stage='readback', effect='mounted')
                             self.service._publish_changes(sessions={session['id']})
                 refreshed={}
-                if result.get('requiresRestart'):refreshed['configuration.providers']=await self.service.runtime.control(session['id'],'configuration.providers',{})
+                if result.get('requiresRestart') and not placement:refreshed['configuration.providers']=await self.service.runtime.control(session['id'],'configuration.providers',{})
                 refresh={'native.compact':'native.status','mode.set':'mode.list','mode.clear':'mode.list','goals.set':'goals.get','goals.clear':'goals.get','budget.set':'budget.get','provider.select':'configuration.providers','provider.reset':'configuration.providers','configuration.toggle':'configuration.inspect'}.get(args['operation'])
                 if refresh:refreshed[refresh]=await self.service.runtime.control(session['id'],refresh,{})
                 async with self.service.lock:

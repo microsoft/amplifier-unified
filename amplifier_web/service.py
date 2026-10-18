@@ -372,6 +372,8 @@ from .profiling_host import DEFINITIONS as PROFILING_DEFINITIONS
 ACTION_DEFINITIONS.update(PROFILING_DEFINITIONS)
 from .configuration_recovery import definitions as configuration_recovery_definitions
 ACTION_DEFINITIONS.update(configuration_recovery_definitions(schema, string))
+from .patch_placement import definitions as patch_placement_definitions
+ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -383,6 +385,7 @@ for _access, _actions in {
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
         *configuration_recovery_definitions(schema, string),
+        *patch_placement_definitions(schema, string),
         "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
         "call.start", "permissions.save", "permissions.reset", "providers.save", "providers.finishSetup", "providers.configureImages",
         "providers.remove", "providers.move", "providers.reorder", "providers.login",
@@ -1857,6 +1860,12 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action == 'configuration.patchPlacement.read':
+            from .patch_placement import read
+            try:
+                return {'accepted': True, 'result': await read(self.management, args, origin, caller_session_id)}
+            except (ValueError, OSError, KeyError, TypeError):
+                raise AppError('Patch placement cannot be verified for this calling root. No worker was started.', 409) from None
         if action == 'configuration.operation.read':
             from .configuration_recovery import command as recovery_command
             async with self.lock:
@@ -3227,6 +3236,15 @@ class AppService:
                     SettingsStore(self.data_dir).update(workspace, 'local' if args['scope']=='workspace' else 'global', update_default)
                 self._shared_preferences_stamp = None
                 self._refresh_shared_preferences()
+            elif action == 'configuration.patchPlacement.bind':
+                from .patch_placement import admit
+                try:
+                    diagnostic_result = admit(self.management, args, origin, caller_session_id,
+                        command_id, configuration_authority)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                except (OSError, KeyError, TypeError):
+                    raise AppError('Patch configuration cannot be verified; no binding was admitted.', 409) from None
             elif action in {'configuration.operation.reconcile', 'configuration.operation.resume'}:
                 from .configuration_recovery import command as recovery_command
                 try:

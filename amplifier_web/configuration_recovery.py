@@ -40,6 +40,7 @@ def binding(record):
         "version": 1, "operationId": record["id"], "attemptId": str(uuid.uuid4()),
         "sessionId": record["request"]["sessionId"], "requestHash": record["requestHash"],
         "payloadHash": record["request"]["payloadHash"],
+        **({"action": record["request"]["source"]["action"]} if record["request"]["source"].get("action") else {}),
         "number": len(record.get("attempts", [])) + 1, "key": secrets.token_hex(32),
     }
 
@@ -84,14 +85,16 @@ def evidence(attempt, *, home=None):
     return body
 
 
-async def native_apply(controls, config, attempt, authorize, stop_epoch):
+async def native_apply(controls, config, attempt, authorize, stop_epoch, *, operation="configuration.apply"):
     """Called under the worker command lock, with no await after final admission.
 
     An exclusive claim prevents duplicate transport delivery (including after
     process restart) from entering the settings writer again. A crash during the
     claim/receipt writes is deliberately unknown, never a reusable no-effect.
     """
-    if (attempt["nativeSessionId"] != controls.session.session_id
+    if (operation not in {"configuration.apply", "configuration.patchPlacement.bind"}
+            or attempt.get("action", "configuration.apply") != operation
+            or attempt["nativeSessionId"] != controls.session.session_id
             or attempt.get("workerPid") not in {None, os.getpid()}
             or fingerprint(config) != attempt["payloadHash"]):
         raise ValueError("The configuration attempt does not match its native target or payload.")
@@ -109,15 +112,19 @@ async def native_apply(controls, config, attempt, authorize, stop_epoch):
         if not allowed.get("admitted") or epoch != stop_epoch():
             raise ValueError("Original configuration authority or Stop boundary changed.")
         controls.require_idle()
-        plan = controls.prepare_configuration(config)
+        placement = operation == "configuration.patchPlacement.bind"
+        plan = controls.prepare_patch_placement(config) if placement else controls.prepare_configuration(config)
     except BaseException:
         write_private(path, json.dumps(seal(attempt, "none", terminal=True)))
         raise
     # No suspension from authority/idle checks to the two synchronous writes.
     # A failure in either write leaves the durable unknown receipt unchanged.
-    controls.save_configuration(plan)
+    if placement:
+        controls.save_patch_placement(plan)
+    else:
+        controls.save_configuration(plan)
     write_private(path, json.dumps(seal(attempt, "saved_not_mounted", terminal=True)))
-    return {"requiresRestart": True, "configuration": public_config(plan)}
+    return {"requiresRestart": True} if placement else {"requiresRestart": True, "configuration": public_config(plan)}
 
 
 def prepare_attempt(management, session, operation):
@@ -141,6 +148,7 @@ def latest_attempt(record):
         return None
     attempt = attempts[-1]
     if (attempt.get("operationId") != record["id"] or attempt.get("requestHash") != record["requestHash"]
+            or attempt.get("action", "configuration.apply") != record["request"]["source"].get("action", "configuration.apply")
             or attempt.get("payloadHash") != record["request"]["payloadHash"]
             or attempt.get("sessionId") != record["request"]["sessionId"]
             or attempt.get("number") != len(attempts)

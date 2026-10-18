@@ -81,14 +81,14 @@ async def placement(tmp_path, monkeypatch):
                  runtimeSessionId='synthetic-placement-native')
     owner['collaborationGeneration'] = {
         'id': 'placement-generation', 'inputIds': ['operator-choice'], 'terminal': False}
-    owner['messages'].append({'id': 'operator-choice', 'role': 'user', 'text':
+    owner['messages'].append({'id': 'operator-choice', 'role': 'user', 'inputOrigin': 'ui', 'text':
         'Bind this root patch instance to its recorded execution folder, retaining all other settings.',
         'createdAt': time.time()})
     peer.update(workingDirectory=str(checkout), executionRevision=1,
                 runtimeSessionId='synthetic-placement-peer')
     peer['collaborationGeneration'] = {
         'id': 'peer-generation', 'inputIds': ['peer-choice'], 'terminal': False}
-    peer['messages'].append({'id': 'peer-choice', 'role': 'user', 'text':
+    peer['messages'].append({'id': 'peer-choice', 'role': 'user', 'inputOrigin': 'ui', 'text':
         'Bind this peer root patch instance to its recorded execution folder.',
         'createdAt': time.time()})
     app.state['sessions'] = [owner, peer]
@@ -616,3 +616,52 @@ async def test_lost_reply_preserves_unknown_and_read_or_duplicate_never_replays(
     assert b.path.stat().st_mtime_ns == stamp
     assert b.path.read_bytes() == before and stages(b) == trace
     assert b.owner['configurationBusy']
+
+
+@pytest.mark.parametrize('origin', [None, 'agent', 'system'])
+async def test_role_user_is_not_proof_of_human_binding_choice(placement, origin):
+    b = placement
+    snapshot = await read_placement(b)
+    await authorize(b)
+    next(row for row in b.owner['messages'] if row['id'] == 'operator-choice')['inputOrigin'] = origin
+    before = b.path.read_bytes()
+    with pytest.raises(AppError, match='(?i)human|choice|evidence'):
+        await submit(b, bind_args(b, snapshot), 'not-a-human-choice')
+    assert b.path.read_bytes() == before and stages(b) == []
+
+
+async def test_explicit_when_idle_waits_for_root_turn_without_weakening_write_fence(placement):
+    b = placement
+    snapshot = await read_placement(b)
+    await authorize(b)
+    b.owner['status'] = 'working'
+    before = b.path.read_bytes()
+    receipt = await submit(b, {**bind_args(b, snapshot), 'whenIdle': True})
+    assert receipt['accepted']
+    await asyncio.sleep(0)
+    assert b.owner['pendingConfiguration']['phase'] == 'queued'
+    assert b.path.read_bytes() == before and stages(b) == []
+    b.owner['status'] = 'idle'
+    assert (await finished(b.app, 'bind-placement'))['phase'] == 'ready'
+    assert json.loads(b.path.read_text())['tools'][1]['config']['working_dir'] == str(b.checkout)
+
+
+async def test_placement_controls_preserve_bytes_until_ordinary_persistence(placement):
+    from amplifier_core import ModuleCoordinator
+    from amplifier_web.runtime_controls import RuntimeControls
+    b = placement
+    session = SimpleNamespace(session_id=b.native, parent_id=None, config=copy.deepcopy(b.initial))
+    session.coordinator = ModuleCoordinator(session=session)
+    controls = RuntimeControls(session, SimpleNamespace(generation=None, queued_inputs=0),
+        preserve_configuration=True)
+    try:
+        controls.persist()
+        assert b.controls.read_bytes() == b.original_controls
+        assert not b.path.with_name('effective-configuration.json').exists()
+        controls.preserve_configuration = False
+        controls.persist()
+        assert b.path.with_name('effective-configuration.json').exists()
+        assert b.controls.read_bytes() != b.original_controls
+    finally:
+        await controls.close()
+        await session.coordinator.cleanup()

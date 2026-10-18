@@ -321,10 +321,11 @@ class RuntimeManager:
         except (ValueError, IndexError) as exc:
             raise RuntimeError("The runtime command does not identify a uv project.") from exc
 
-    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None):
+    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None, preserve_configuration=False):
         sid = session["id"]
         async with self._admission(sid):
-            await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard)
+            await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard,
+                **({'preserve_configuration': True} if preserve_configuration else {}))
 
     @asynccontextmanager
     async def _admission(self, sid):
@@ -362,8 +363,10 @@ class RuntimeManager:
             except TimeoutError as exc:
                 raise RuntimeError('Worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
-    async def _start_locked(self, session, emit, *, preserve_emit=False, guard=None):
+    async def _start_locked(self, session, emit, *, preserve_emit=False, guard=None, preserve_configuration=False):
         # Host callbacks only: no command argument can authorize a restart.
+        if preserve_configuration and guard is None:
+            raise ValueError('Placement-only startup requires the retained host operation guard.')
         if guard is not None: guard()
         if self._closed:
             raise RuntimeHostClosingError()
@@ -519,10 +522,13 @@ class RuntimeManager:
         # browser's execution logs, catalogs and attachment history is redundant.
         config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        if preserve_configuration:
+            config['_preserveConfiguration'] = True
         row['runtime_id'] = config['id']
         row['start_session'] = {**config, 'id': sid, 'runtimeSessionId': config['id']}
         row['start_session'].pop('replaceSavedSelection', None)
         row['start_session'].pop('bundleReplacement', None)
+        row['start_session'].pop('_preserveConfiguration', None)
         row['parked'] = False
         self.retention.wake()
         if session.get('forkContext'):
