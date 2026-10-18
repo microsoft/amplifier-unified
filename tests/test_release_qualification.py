@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 
 import pytest
 import yaml
@@ -393,6 +394,27 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     assert 'emptyOutDir:true' in vite and 'static/build.json' in vite
 
 
+def browser_runner_commands(steps):
+    invocation = r'(?m)^(?:uv run --no-sync )?python scripts/browser_check_runner\.py(?:[ \t]|$)'
+    return [step['run'] for step in steps if re.search(invocation, step.get('run', ''))]
+
+
+def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocations():
+    initialize = 'python scripts/browser_check_runner.py --initialize'
+    execute = 'uv run --no-sync python scripts/browser_check_runner.py --budget-seconds 1500'
+    decoys = [
+        'set -o pipefail\nuv run --no-sync pytest tests/test_browser_check_runner.py tests/test_release_qualification.py',
+        'echo python scripts/browser_check_runner.py',
+        'python scripts/browser_check_runner.py.backup',
+    ]
+    steps = [{'run': text} for text in (initialize, *decoys, execute)]
+    assert browser_runner_commands(steps) == [initialize, execute]
+    # A duplicate remains visible to the caller's exact two-command assertions.
+    assert browser_runner_commands([*steps, {'run': execute}]) == [initialize, execute, execute]
+    joined = initialize + '\n' + execute
+    assert browser_runner_commands([{'run': joined}]) == [joined]
+
+
 def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
@@ -405,7 +427,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     job = workflow['jobs']['browser']
     assert job['timeout-minutes'] == '30'
     steps = job['steps']
-    commands = [step['run'] for step in steps if 'browser_check_runner.py' in step.get('run', '')]
+    commands = browser_runner_commands(steps)
     assert len(commands) == 2
     flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
     assert all(command.count(flag) == 1 for command in commands)
