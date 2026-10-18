@@ -445,6 +445,7 @@ def _bind_complete_root(session, path, identity, items, facts, attested, guard):
         if not b.get('_eventFields', {}).get('output') and not b.get('_eventFields', {}).get('error'):
             continue
         node = {**b, 'turnId': first['turnId'], 'startedAt': started, 'endedAt': ended,
+            'rootSessionId': first['rootSessionId'],
             'phase': last['phase'], 'association': 'host-bound',
             'bindingProvenance': 'host-diagnostics-receipt',
             'sourceOccurrenceIds': [f['id'] for f in sorted(occurrences, key=lambda f: f['offset'])],
@@ -478,6 +479,7 @@ def _bind_complete_root(session, path, identity, items, facts, attested, guard):
         post = rows.get(ends[0]['id'])
         if post is not None:
             result.append({**post, 'turnId': first['turnId'], 'startedAt': started,
+                'rootSessionId': first['rootSessionId'],
                 'endedAt': ended, 'phase': last['phase'], 'association': 'host-bound',
                 'bindingProvenance': 'host-diagnostics-receipt',
                 'sourceOccurrenceIds': [starts[0]['id'], ends[0]['id']]})
