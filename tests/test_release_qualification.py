@@ -257,6 +257,120 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert 'git diff --exit-code -- amplifier_web/static' in frontend
 
 
+def test_installed_media_diagnostic_is_explicit_full_scenario_and_cannot_replace_readiness():
+    workflow = yaml.load((ROOT / '.github/workflows/public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
+    choice = workflow['on']['workflow_dispatch']['inputs']['installed_media_diagnostic']
+    assert choice['type'] == 'boolean' and choice['default'] == 'false'
+    assert set(workflow['on']['workflow_call']['inputs']) == {'revision'}
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert workflow['jobs']['critical']['if'] == '${{ !inputs.installed_media_diagnostic }}'
+    job = workflow['jobs']['installed-media-diagnostic']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.installed_media_diagnostic }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '30'
+    assert job['env'] == {'INLINE_MEDIA_MODE': 'installed'}
+    assert 'INLINE_MEDIA_PHASES' not in job['env']
+    steps = job['steps']
+    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'}
+    assert "'git', 'diff', '--name-only', '-z'" in steps[1]['run']
+    assert "'a5d1ab2397a00f76495c591835b5c9194e09f5a8', 'HEAD'" in steps[1]['run']
+    assert 'assert changed <= allowed' in steps[1]['run']
+    assert "'git', 'status', '--porcelain'" in steps[1]['run']
+    # runner context is unavailable in job-level env. Use the runner's shell
+    # variables in an ordinary step, before any path consumer executes.
+    initialize = next(i for i, step in enumerate(steps)
+                      if step.get('name') == 'Initialize owned diagnostic paths')
+    assert initialize == 2 and steps[initialize]['shell'] == 'bash'
+    assert steps[initialize]['run'].splitlines() == [
+        "printf '%s\\n' \\",
+        '  "INLINE_MEDIA_EVIDENCE_DIR=$RUNNER_TEMP/inline-media-diagnostic" \\',
+        '  "INLINE_MEDIA_MP4=$RUNNER_TEMP/inline-media-diagnostic/synthetic.mp4" >> "$GITHUB_ENV"',
+    ]
+    assert '${{' not in steps[initialize]['run']
+    commands = '\n'.join(step.get('run', '') for step in steps)
+    assert 'uv sync --locked --group dev --group artifacts' in commands
+    assert 'npm run build --prefix frontend' in commands
+    assert 'e4a71c46fd41ecf6' in commands and 'staticSha256' in commands
+    assert 'assert len(files) == 311' in commands
+    assert "assert payload.hexdigest() == '1b4c114ffe44d4c7a5dcf8a2136fb363847feb4ec4b27aa5bbc5fe2435deb337'" in commands
+    assert 'uv pip install --python .venv/bin/python --no-deps --reinstall .' in commands
+    assert commands.count('node frontend/tests/inline-media-browser.mjs') == 1
+    assert "result['fullScenario'] and result['coreChecks'] == 'PASS'" in commands
+    assert 'INLINE_MEDIA_PHASES' not in commands and 'secrets.' not in str(job)
+    upload = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@v4')
+    assert upload['if'] == "always() && steps.diagnostic-evidence.outcome == 'success'"
+    assert upload['with']['path'].splitlines() == [
+        '${{ runner.temp }}/inline-media-diagnostic/*.json',
+        '${{ runner.temp }}/inline-media-diagnostic/*.png']
+    assert upload['with']['if-no-files-found'] == 'error'
+
+
+@pytest.mark.parametrize('extra', [None, 'amplifier_outputs/__init__.py',
+                                  'frontend/index.html', 'assets/logo.svg', 'bundle.yaml'])
+def test_media_diagnostic_product_guard_rejects_unlisted_changes(monkeypatch, extra):
+    import subprocess
+    workflow = yaml.load((ROOT / '.github/workflows/public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
+    guard = workflow['jobs']['installed-media-diagnostic']['steps'][1]['run']
+    script = compile('\n'.join(guard.splitlines()[1:-1]), 'diagnostic-source-guard', 'exec')
+    changed = ['.github/workflows/public-readiness.yml',
+               'frontend/tests/inline-media-browser.mjs', 'tests/test_release_qualification.py']
+    if extra:
+        changed.append(extra)
+    def git(args, **kwargs):
+        assert args[:2] in (['git', 'diff'], ['git', 'status'])
+        return '\0'.join(changed) + '\0' if args[1] == 'diff' else ''
+    monkeypatch.setattr(subprocess, 'check_output', git)
+    if extra:
+        with pytest.raises(AssertionError):
+            exec(script, {})
+    else:
+        exec(script, {})
+
+
+@pytest.mark.parametrize(('click_attempted', 'primary_failed', 'click_settled', 'allowed'), [
+    (False, False, None, True),
+    (False, True, None, True),
+    (True, False, None, False),
+    (True, False, False, False),
+    (True, False, True, True),
+    (True, True, False, False),
+    (True, True, True, False),
+])
+def test_media_diagnostic_cleanup_refuses_unknown_ui_command(
+    click_attempted, primary_failed, click_settled, allowed,
+):
+    import re
+    import subprocess
+    source = (ROOT / 'frontend/tests/inline-media-browser.mjs').read_text()
+    helper = re.search(r'function gifCanvasCleanupAllowed\([^)]*\)\{\n.*?\n\}', source, re.S)
+    assert helper, 'Exercise the actual harness cleanup decision, not a copied predicate'
+    args = json.dumps([click_attempted, primary_failed, click_settled])
+    result = subprocess.run(
+        ['node', '--input-type=module', '-e',
+         helper.group(0) + '\nconsole.log(JSON.stringify(gifCanvasCleanupAllowed(...' + args + ')));'],
+        capture_output=True, text=True, check=True, timeout=10,
+    )
+    assert json.loads(result.stdout) is allowed
+
+
+def test_media_diagnostic_applies_ui_guard_before_cleanup_mutations():
+    source = (ROOT / 'frontend/tests/inline-media-browser.mjs').read_text()
+    phase = source.split("await phase('gif-canvas-errors',async()=>{", 1)[1].split(
+        "await phase('endpoints'", 1)[0]
+    click = "await inline.getByRole('button',{name:'Open in Canvas',exact:true}).click();"
+    assert phase.count(click) == 3
+    assert phase.count('clickAttempted=true;clickSettled=null;\n    ' + click) == 3
+    assert 'clickOwned:{attempted:clickAttempted,settled:clickSettled,primaryFailed:!!primaryError}' in phase
+    cleanup = phase.split('}finally{', 1)[1]
+    guard = cleanup.index('if(!gifCanvasCleanupAllowed(clickAttempted,!!primaryError,clickSettled))')
+    clear = cleanup.index("if(settled)settled=await cleanup('clear owned dirty view'")
+    unmount = cleanup.index("if(settled)settled=await cleanup('unmount and close owned client'")
+    assert guard < cleanup.index('blockedApplicationCleanup.add(page)') < clear < unmount
+    assert 'if(clickAttempted&&!primaryError)' in cleanup
+    assert "getByRole('button',{name:'Open in Canvas',exact:true})).toBeEnabled()" in cleanup
+    final = source.split("await phase('cleanup',async()=>{", 1)[1]
+    assert final.index('blockedApplicationCleanup.has(page)') < final.index("await action(page,'session.create'")
+
+
 def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
     workflows = ROOT / '.github/workflows'
     manual = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
