@@ -454,6 +454,76 @@ async def test_regular_work_details_observer_and_service_reopen(
         assert not service.runtime.sent and not service.runtime.started
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("later_calls", [0, 140], ids=["complete-recent", "partial-behind-tail"])
+async def test_live_resolver_proof_coverage_is_distinct_from_body_availability(
+        authenticated_client, tmp_path, later_calls):
+    """Association prerequisite, NOT acceptance of missing ordinary live fields.
+
+    Keep the failing observer acceptance cases above. Exact raw bytes and
+    resident ownership separately do not authorize a call-ID-only join.
+    """
+    from copy import deepcopy
+    from amplifier_web.event_window import MAX_ITEMS, MAX_EVENTS, MAX_BYTES
+
+    audit = {}
+    async with _scenario(authenticated_client, tmp_path, later_calls, False, audit) as (
+            service, client, calls, sid, user_id, interim_id, final_id):
+        await service.diagnostics.flush()
+        resident = service._session(sid, hydrate=False)["execution"]["nodes"]
+        before = deepcopy(resident)
+        assert len(before) == len(calls)
+        assert all(not BODY_FIELDS.intersection(row) for row in before)
+        page = await _get(client, {"sessionId": sid, "part": "groups"})
+        windows = service.event_log_view.windows
+        accepted = windows.pages[page["evidence"]["group"]]
+        bound = accepted["_boundWork"]
+        if later_calls == 0:
+            assert accepted["bindingCoverage"]["status"] == "complete-root"
+            assert accepted["coverage"]["rootExhausted"] and page["before"] is None
+            assert len(bound) == 4
+            for row in bound:
+                expected_ids = {
+                    identity for manifest in (audit["authored"], audit["diagnostic"])
+                    for identity, record in manifest.items()
+                    if record["call"] == row["toolCallId"]}
+                assert len(expected_ids) == 4
+                assert set(row["sourceOccurrenceIds"]) == expected_ids
+                assert row["turnId"] == INPUT_ID and row["rootSessionId"] == sid
+        else:
+            assert page["before"] is not None
+            assert accepted["bindingCoverage"]["status"] == "partial-source"
+            assert not accepted["coverage"]["rootExhausted"]
+            assert not bound  # No complete collision proof in this retained page.
+
+        raw = await _saved_observations(client, sid, len(calls))
+        by_id = {row["id"]: row for row in raw}
+        assert len(by_id) == len(raw)
+        assert len(audit["authored"]) == len(audit["diagnostic"]) == 2 * len(calls)
+        assert set(audit["authored"]).isdisjoint(audit["diagnostic"])
+        assert set(audit["authored"]) | set(audit["diagnostic"]) <= by_id.keys()
+        if later_calls:
+            assert len(audit["authored"]) + len(audit["diagnostic"]) > MAX_EVENTS
+            # Explicit older paging makes bytes available; it does not turn an
+            # older range's exhaustion into whole-source collision attestation.
+            assert 1 < len(windows.pages) <= 8
+            assert all(not value["_boundWork"] for value in windows.pages.values())
+        for value in windows.pages.values():
+            assert len(value["items"]) <= MAX_ITEMS
+            assert value["coverage"]["scannedEvents"] <= MAX_EVENTS
+            assert value["coverage"]["scannedBytes"] <= MAX_BYTES
+        targets = {call["call"]: call for call in calls[:4]}
+        for identity, receipt in audit["authored"].items():
+            if receipt["call"] not in targets:
+                continue
+            row = by_id[identity]
+            assert row["association"] == "unverified" and row["observationWindow"]
+            field = "input" if receipt["event"] == "tool:pre" else "output"
+            await _field(client, sid, row, field, targets[receipt["call"]][field])
+        assert service._session(sid, hydrate=False)["execution"]["nodes"] == before
+        assert not service.runtime.sent and not service.runtime.started
+
+
 @pytest.mark.parametrize("later_calls", [0, 140], ids=["recent", "behind-tail"])
 @pytest.mark.parametrize("reopen", [False, True], ids=["observer", "service-reopen"])
 async def test_regular_saved_observation_bodies(
