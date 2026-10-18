@@ -17,6 +17,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
+      - name: Record the checked-out build source
+        id: build-source
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Record intended coverage before dependency setup
         run: >-
           python scripts/browser_check_runner.py
@@ -34,6 +37,15 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
+        id: frontend-build
+      - name: Retain the successful production web build
+        if: ${{ steps.frontend-build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}
+          path: amplifier_web/static/
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Install browser dependencies
         working-directory: frontend
         run: npx playwright install --with-deps chromium
